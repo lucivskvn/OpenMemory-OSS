@@ -19,7 +19,7 @@ We take the security of OpenMemory seriously. If you believe you have found a se
 
 Instead, please report them via one of the following methods:
 
-1. **Email**: Send an email to bob@holacorp.net
+1. **Email**: Send an email to <bob@holacorp.net>
 2. **GitHub Security Advisories**: Use the [GitHub Security Advisory](https://github.com/CaviraOSS/OpenMemory/security/advisories) feature
 3. **Private disclosure**: Contact maintainers directly for sensitive issues
 
@@ -104,6 +104,6 @@ We aim to respond to security reports within the following timeframes:
 
 ## Questions?
 
-If you have any questions about this security policy, please contact us at security@cavira.app or create a GitHub discussion.
+If you have any questions about this security policy, please contact us at <security@cavira.app> or create a GitHub discussion.
 
 Thank you for helping keep OpenMemory and our users safe!

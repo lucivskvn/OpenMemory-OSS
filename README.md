@@ -206,7 +206,7 @@ OpenMemory uses Hierarchical Memory Decomposition (HMD):
 
 ## 5. API
 
-**Full API documentation:** https://openmemory.cavira.app
+**Full API documentation:** <https://openmemory.cavira.app>
 
 ### Quick Start
 
@@ -383,12 +383,12 @@ make build
 make test
 ```
 
-### Our Contributers:
+### Our Contributers
 
 <!-- readme: contributors -start -->
 <table>
-	<tbody>
-		<tr>
+ <tbody>
+  <tr>
             <td align="center">
                 <a href="https://github.com/nullure">
                     <img src="https://avatars.githubusercontent.com/u/81895400?v=4" width="100;" alt="nullure"/>
@@ -431,8 +431,8 @@ make test
                     <sub><b>Jason Kneen</b></sub>
                 </a>
             </td>
-		</tr>
-		<tr>
+  </tr>
+  <tr>
             <td align="center">
                 <a href="https://github.com/muhammad-fiaz">
                     <img src="https://avatars.githubusercontent.com/u/75434191?v=4" width="100;" alt="muhammad-fiaz"/>
@@ -475,8 +475,8 @@ make test
                     <sub><b>Lawrence Sinclair</b></sub>
                 </a>
             </td>
-		</tr>
-	<tbody>
+  </tr>
+ <tbody>
 </table>
 <!-- readme: contributors -end -->
 
@@ -497,6 +497,6 @@ Join our [Discord](https://discord.gg/P7HaRayqTh) to connect with other develope
 ## 12. Other Projects
 
 **PageLM** - Transform study materials into quizzes, flashcards, notes, and podcasts.  
-https://github.com/CaviraOSS/PageLM
+<https://github.com/CaviraOSS/PageLM>
 
 ---
