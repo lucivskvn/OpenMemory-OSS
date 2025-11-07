@@ -71,9 +71,11 @@ setInterval(async () => {
         console.error('[PRUNE] Failed:', error)
     }
 }, 7 * 24 * 60 * 60 * 1000)
-run_decay_process().then((result: any) => {
-    console.log(`[INIT] Initial decay: ${result.decayed}/${result.processed} memories updated`)
-}).catch(console.error)
+run_decay_process()
+    .then((result: any) => {
+        console.log(`[INIT] Initial decay: ${result.decayed}/${result.processed} memories updated`)
+    })
+    .catch(console.error)
 
 start_reflection()
 start_user_summary_reflection()
