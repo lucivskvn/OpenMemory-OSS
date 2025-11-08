@@ -8,11 +8,11 @@ OpenMemory v1.2 introduces per-user memory isolation with `user_id` fields. The 
 
 **OpenMemory includes an automatic migration script for safe database upgrades.**
 
-Run the migration before starting your server:
+Run the migration before starting your server (use Bun):
 
 ```bash
 cd backend
-npm run migrate
+bun run migrate
 ```
 
 **Console output:**
@@ -38,12 +38,12 @@ OpenMemory Database Migration Tool
 - ✅ Gracefully handles errors (skips duplicates)
 - ✅ Runs before database is initialized
 
-**After migration, start your server normally:**
+**After migration, start your server normally (Bun preferred):**
 
 ```bash
-npm run dev
+bun run dev
 # or
-npm start
+bun run start
 ```
 
 **Location:** `backend/src/core/migrate.ts`

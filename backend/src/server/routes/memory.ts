@@ -89,7 +89,7 @@ export function mem(app: any) {
         if (!id) return res.status(400).json({ err: 'id' });
         try {
             // Check if memory exists and user has permission
-            const m = await q.get_mem.get(id);
+            const m = await q.get_mem.get(id, b.user_id ?? null);
             if (!m) return res.status(404).json({ err: 'nf' });
 
             // Check user ownership if user_id is provided
@@ -116,7 +116,10 @@ export function mem(app: any) {
             const user_id = req.query.user_id;
 
             let r;
-            if (user_id) {
+            if (user_id && s) {
+                // Filter by sector and user
+                r = await q.all_mem_by_sector.all(s, l, u, user_id);
+            } else if (user_id) {
                 // Filter by user_id
                 r = await q.all_mem_by_user.all(user_id, l, u);
             } else if (s) {
@@ -151,7 +154,7 @@ export function mem(app: any) {
         try {
             const id = req.params.id;
             const user_id = req.query.user_id;
-            const m = await q.get_mem.get(id);
+            const m = await q.get_mem.get(id, user_id || null);
             if (!m) return res.status(404).json({ err: 'nf' });
 
             // Check user ownership if user_id is provided
@@ -159,7 +162,7 @@ export function mem(app: any) {
                 return res.status(403).json({ err: 'forbidden' });
             }
 
-            const v = await q.get_vecs_by_id.all(id);
+            const v = await q.get_vecs_by_id.all(id, user_id || null);
             const sec = v.map((x: any) => x.sector);
             res.json({
                 id: m.id,
@@ -185,7 +188,7 @@ export function mem(app: any) {
         try {
             const id = req.params.id;
             const user_id = req.query.user_id || req.body.user_id;
-            const m = await q.get_mem.get(id);
+            const m = await q.get_mem.get(id, user_id || null);
             if (!m) return res.status(404).json({ err: 'nf' });
 
             // Check user ownership if user_id is provided
@@ -193,9 +196,9 @@ export function mem(app: any) {
                 return res.status(403).json({ err: 'forbidden' });
             }
 
-            await q.del_mem.run(id);
-            await q.del_vec.run(id);
-            await q.del_waypoints.run(id, id);
+            await q.del_mem.run(id, user_id)
+            await q.del_vec.run(id, user_id)
+            await q.del_waypoints.run(id, id, user_id)
             res.json({ ok: true });
         } catch (e: any) {
             res.status(500).json({ err: 'internal' });

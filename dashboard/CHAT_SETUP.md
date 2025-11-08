@@ -14,12 +14,12 @@ The chat interface is now connected to the OpenMemory backend and can query memo
 
 ### 1. Start the Backend
 
-First, make sure the OpenMemory backend is running:
+First, make sure the OpenMemory backend is running (Bun recommended):
 
 ```bash
 cd backend
-npm install
-npm run dev
+bun install
+bun run dev
 ```
 
 The backend will start on `http://localhost:8080`
@@ -37,8 +37,8 @@ NEXT_PUBLIC_API_URL=http://localhost:8080
 
 ```bash
 cd dashboard
-npm install
-npm run dev
+bun install
+bun run dev
 ```
 
 The dashboard will start on `http://localhost:3000`
@@ -120,11 +120,7 @@ Clicking the **+** button on a memory card:
 - 🚧 Quiz generation from memories
 - 🚧 Podcast script generation
 
-## Troubleshooting
-
-### "Failed to query memories"
-
-- Ensure backend is running: `npm run dev` in `backend/`
+- Ensure backend is running: `bun run dev` in `backend/`
 - Check backend is on port 8080: `curl http://localhost:8080/health`
 - Verify CORS is enabled (already configured)
 

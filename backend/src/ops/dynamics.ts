@@ -113,7 +113,7 @@ export async function applyDualPhaseDecayToAllMemories(): Promise<void> {
         const td = tms / 86400000
         const rt = await calculateDualPhaseDecayMemoryRetention(td)
         const nsal = m.salience * rt
-        await run_async('update memories set salience=?,updated_at=? where id=?', [Math.max(0, nsal), ts, m.id])
+            await q.upd_seen.run(m.id, ts, Math.max(0, nsal), ts, null)
     })
     await Promise.all(ops)
     console.log(`[DECAY] Applied to ${mems.length} memories`)

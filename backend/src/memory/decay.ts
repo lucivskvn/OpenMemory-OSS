@@ -169,7 +169,7 @@ export const apply_decay = async () => {
 
     for (const seg of segments) {
         const segment = seg.segment
-        const rows = await all_async('select id,content,summary,salience,decay_lambda,last_seen_at,updated_at,primary_sector,coactivations from memories where segment=?', [segment])
+        const rows = await all_async('select id,content,summary,salience,decay_lambda,last_seen_at,updated_at,primary_sector,coactivations,user_id from memories where segment=?', [segment])
 
         const decay_ratio = env.decay_ratio
         const batch_sz = Math.max(1, Math.floor(rows.length * decay_ratio))
@@ -196,7 +196,7 @@ export const apply_decay = async () => {
 
                 if (f < 0.7) {
                     const sector = m.primary_sector || 'semantic'
-                    const vec_row = await q.get_vec.get(m.id, sector)
+                    const vec_row = await q.get_vec.get(m.id, sector, m.user_id || null)
 
                     if (vec_row && vec_row.vector) {
                         const vec = typeof vec_row.vector === 'string' ? JSON.parse(vec_row.vector) : vec_row.vector
@@ -207,14 +207,14 @@ export const apply_decay = async () => {
                             const new_summary = compress_summary(m.summary || m.content || '', f, cfg.summary_layers)
 
                             if (new_vec.length < before_len) {
-                                await run_async('update vectors set vector=? where id=? and sector=?', [JSON.stringify(new_vec), m.id, sector])
-                                compressed = true
-                                tot_comp++
-                            }
+                                    await q.ins_vec.run(m.id, sector, m.user_id || null, JSON.stringify(new_vec), new_vec.length)
+                                    compressed = true
+                                    tot_comp++
+                                }
 
                             if (new_summary !== (m.summary || '')) {
-                                await run_async('update memories set summary=? where id=?', [new_summary, m.id])
-                            }
+                                    await q.upd_summary.run(m.id, new_summary)
+                                }
                         }
                     }
                     changed = true
@@ -223,15 +223,15 @@ export const apply_decay = async () => {
                 if (f < Math.max(0.3, cfg.cold_threshold)) {
                     const sector = m.primary_sector || 'semantic'
                     const fp = fingerprint_mem(m)
-                    await run_async('update vectors set vector=? where id=? and sector=?', [JSON.stringify(fp.vector), m.id, sector])
-                    await run_async('update memories set summary=? where id=?', [fp.summary, m.id])
+                    await q.ins_vec.run(m.id, sector, m.user_id || null, JSON.stringify(fp.vector), fp.vector.length || 0)
+                    await q.upd_summary.run(m.id, fp.summary)
                     fingerprinted = true
                     tot_fp++
                     changed = true
                 }
 
                 if (changed) {
-                    await run_async('update memories set salience=?,updated_at=? where id=?', [new_sal, now(), m.id])
+                    await q.upd_seen.run(m.id, now(), new_sal, now(), m.user_id || null)
                     tot_chg++
                 }
 
@@ -258,14 +258,14 @@ export const on_query_hit = async (mem_id: string, sector: string, reembed?: (te
     let updated = false
 
     if (cfg.regeneration_enabled && reembed) {
-        const vec_row = await q.get_vec.get(mem_id, sector)
+        const vec_row = await q.get_vec.get(mem_id, sector, m?.user_id || null)
         if (vec_row && vec_row.vector) {
             const vec = typeof vec_row.vector === 'string' ? JSON.parse(vec_row.vector) : vec_row.vector
             if (Array.isArray(vec) && vec.length <= 64) {
                 try {
                     const base = m.summary || m.content || ''
                     const new_vec = await reembed(base)
-                    await run_async('update vectors set vector=? where id=? and sector=?', [JSON.stringify(new_vec), mem_id, sector])
+                    await q.ins_vec.run(mem_id, sector, null, JSON.stringify(new_vec), new_vec.length)
                     updated = true
                 } catch (e) {
                 }
@@ -275,7 +275,7 @@ export const on_query_hit = async (mem_id: string, sector: string, reembed?: (te
 
     if (cfg.reinforce_on_query) {
         const new_sal = clamp_f((m.salience || 0.5) + 0.5, 0, 1)
-        await run_async('update memories set salience=?,last_seen_at=? where id=?', [new_sal, now(), mem_id])
+        await q.upd_seen.run(mem_id, now(), new_sal, now(), null)
         updated = true
     }
 

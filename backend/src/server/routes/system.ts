@@ -1,4 +1,4 @@
-import { all_async } from '../../core/db'
+import { all_async, q } from '../../core/db'
 import { sector_configs } from '../../memory/hsg'
 import { getEmbeddingInfo } from '../../memory/embed'
 import { tier, env } from '../../core/cfg'
@@ -25,11 +25,7 @@ export function sys(app: any) {
 
     app.get('/sectors', async (incoming_http_request: any, outgoing_http_response: any) => {
         try {
-            const database_sector_statistics_rows = await all_async(`
-                select primary_sector as sector, count(*) as count, avg(salience) as avg_salience 
-                from memories 
-                group by primary_sector
-            `)
+            const database_sector_statistics_rows = await q.sector_counts.all()
             outgoing_http_response.json({
                 sectors: Object.keys(sector_configs),
                 configs: sector_configs,

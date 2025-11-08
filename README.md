@@ -131,7 +131,7 @@ Deploy OpenMemory to your favorite cloud platform:
 
 Requirements:
 
-- Node.js 20 or higher
+- Bun (recommended) or Node.js 20+ (Node supported for some client tooling)
 - SQLite 3.40 or higher (included)
 - Optional: OpenAI/Gemini API key or Ollama
 
@@ -139,8 +139,10 @@ Requirements:
 git clone https://github.com/caviraoss/openmemory.git
 cd openmemory/backend
 cp .env.example .env
-npm install
-npm run dev
+# Install dependencies (bun will create/refresh bun.lockb)
+bun install
+# Start backend in dev mode (hot reload)
+OM_TIER=hybrid bun run dev
 ```
 
 The server runs on `http://localhost:8080`.
@@ -159,13 +161,15 @@ The dashboard provides a web interface to visualize and manage your memories.
 
 Requirements:
 
-- Node.js 20 or higher
+- Bun (recommended) or Node.js 20+
 - Running OpenMemory backend (on port 8080)
 
 ```bash
 cd dashboard
-npm install
-npm run dev
+# Install dashboard deps
+bun install
+# Start the dashboard dev server
+bun run dev
 ```
 
 The dashboard runs on `http://localhost:3000`.
@@ -192,8 +196,8 @@ NEXT_PUBLIC_API_KEY=your_api_key_here
 **Production Build:**
 
 ```bash
-npm run build
-npm start
+bun run build
+bun run start
 ```
 
 # 💖 Support the Project
@@ -280,7 +284,7 @@ node index.js --from supermemory --api-key SM_KEY --rate-limit 25
 
 ---
 
-## 6. CLI Tool
+### CLI Tool
 
 OpenMemory includes a command-line tool for quick memory operations.
 
@@ -288,7 +292,8 @@ OpenMemory includes a command-line tool for quick memory operations.
 
 ```bash
 cd backend
-npm link
+# With bun you can link the package similarly to npm link
+bun link
 ```
 
 Now you can use `opm` from anywhere.
@@ -391,7 +396,8 @@ See [MCP_MIGRATION.md](./MCP_MIGRATION.md) for migration guide.
 For stdio mode (Claude Desktop):
 
 ```bash
-node backend/dist/ai/mcp.js
+# run the compiled MCP JS with Bun
+bun backend/dist/ai/mcp.js
 ```
 
 [![MseeP.ai Security Assessment Badge](https://mseep.net/pr/caviraoss-openmemory-badge.png)](https://mseep.ai/app/caviraoss-openmemory)

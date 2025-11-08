@@ -703,11 +703,11 @@ export async function add_hsg_memory(
     user_id?: string
 ): Promise<{ id: string, primary_sector: string, sectors: string[], chunks?: number, deduplicated?: boolean }> {
     const simhash = compute_simhash(content)
-    const existing = await q.get_mem_by_simhash.get(simhash)
+    const existing = await q.get_mem_by_simhash.get(simhash, user_id || null)
     if (existing && hamming_dist(simhash, existing.simhash) <= 3) {
         const now = Date.now()
         const boosted_sal = Math.min(1, existing.salience + 0.15)
-        await q.upd_seen.run(existing.id, now, boosted_sal, now)
+        await q.upd_seen.run(existing.id, now, boosted_sal, now, user_id || existing.user_id || null)
         return {
             id: existing.id,
             primary_sector: existing.primary_sector,
@@ -761,13 +761,13 @@ export async function add_hsg_memory(
         }
         const mean_vec = calc_mean_vec(emb_res, all_sectors)
         const mean_vec_buf = vectorToBuffer(mean_vec)
-        await q.upd_mean_vec.run(id, mean_vec.length, mean_vec_buf)
+        await q.upd_mean_vec.run(id, mean_vec.length, mean_vec_buf, user_id || null)
 
         // Store compressed vector for smart tier (for future query optimization)
         if (tier === 'smart' && mean_vec.length > 128) {
             const comp = compress_vec_for_storage(mean_vec, 128)
             const comp_buf = vectorToBuffer(comp)
-            await q.upd_compressed_vec.run(comp_buf, id)
+            await q.upd_compressed_vec.run(id, comp_buf, user_id || null)
         }
 
         await create_single_waypoint(id, mean_vec, now, user_id)
@@ -808,7 +808,7 @@ export async function update_memory(
             const use_chunking = chunks.length > 1
             const classification = classify_content(new_content, metadata)
             const all_sectors = [classification.primary, ...classification.additional]
-            await q.del_vec.run(id)
+            await q.del_vec.run(id, mem.user_id || null)
             const emb_res = await embedMultiSector(id, new_content, all_sectors, use_chunking ? chunks : undefined)
             for (const result of emb_res) {
                 const vec_buf = vectorToBuffer(result.vector)
@@ -816,10 +816,10 @@ export async function update_memory(
             }
             const mean_vec = calc_mean_vec(emb_res, all_sectors)
             const mean_vec_buf = vectorToBuffer(mean_vec)
-            await q.upd_mean_vec.run(id, mean_vec.length, mean_vec_buf)
-            await q.upd_mem_with_sector.run(new_content, classification.primary, new_tags, new_meta, Date.now(), id)
+            await q.upd_mean_vec.run(id, mean_vec.length, mean_vec_buf, mem.user_id || null)
+            await q.upd_mem_with_sector.run(new_content, classification.primary, new_tags, new_meta, Date.now(), id, mem.user_id || null)
         } else {
-            await q.upd_mem.run(new_content, new_tags, new_meta, Date.now(), id)
+            await q.upd_mem.run(new_content, new_tags, new_meta, Date.now(), id, mem.user_id || null)
         }
         await transaction.commit()
         return { id, updated: true }

@@ -129,7 +129,7 @@ export const create_mcp_srv = () => {
     })
 
     srv.resource('openmemory-config', 'openmemory://config', { mimeType: 'application/json', description: 'Runtime configuration snapshot for the OpenMemory MCP server' }, async () => {
-        const stats = await all_async(`select primary_sector as sector, count(*) as count, avg(salience) as avg_salience from ${memories_table} group by primary_sector`)
+        const stats = await q.sector_counts.all()
         const pay = { mode: env.mode, sectors: sector_configs, stats, embeddings: getEmbeddingInfo(), server: { version: '2.1.0', protocol: '2025-06-18' }, available_tools: ['openmemory_query', 'openmemory_store', 'openmemory_reinforce', 'openmemory_list', 'openmemory_get'] }
         return { contents: [{ uri: 'openmemory://config', text: JSON.stringify(pay, null, 2) }] }
     })

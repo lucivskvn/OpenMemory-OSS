@@ -67,14 +67,14 @@ async function get_db_version_sqlite(db: sqlite3.Database): Promise<string | nul
     return new Promise((ok, no) => {
         db.get(
             `SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'`,
-            (err, row: any) => {
+            (err: any, row: any) => {
                 if (err) return no(err)
                 if (!row) return ok(null)
-                db.get(`SELECT version FROM schema_version ORDER BY applied_at DESC LIMIT 1`, (e, v: any) => {
-                    if (e) return no(e)
-                    ok(v?.version || null)
-                })
-            }
+                    db.get(`SELECT version FROM schema_version ORDER BY applied_at DESC LIMIT 1`, (e: any, v: any) => {
+                        if (e) return no(e)
+                        ok(v?.version || null)
+                    })
+                }
         )
     })
 }
@@ -85,9 +85,9 @@ async function set_db_version_sqlite(db: sqlite3.Database, version: string): Pro
             `CREATE TABLE IF NOT EXISTS schema_version (
         version TEXT PRIMARY KEY, applied_at INTEGER
       )`,
-            (err) => {
+            (err: any) => {
                 if (err) return no(err)
-                db.run(`INSERT OR REPLACE INTO schema_version VALUES (?, ?)`, [version, Date.now()], (e) => {
+                db.run(`INSERT OR REPLACE INTO schema_version VALUES (?, ?)`, [version, Date.now()], (e: any) => {
                     if (e) return no(e)
                     ok()
                 })
@@ -102,7 +102,7 @@ async function check_column_exists_sqlite(
     column: string
 ): Promise<boolean> {
     return new Promise((ok, no) => {
-        db.all(`PRAGMA table_info(${table})`, (err, rows: any[]) => {
+        db.all(`PRAGMA table_info(${table})`, (err: any, rows: any[]) => {
             if (err) return no(err)
             ok(rows.some((r) => r.name === column))
         })
@@ -121,7 +121,7 @@ async function run_sqlite_migration(db: sqlite3.Database, m: Migration): Promise
 
     for (const sql of m.sqlite) {
         await new Promise<void>((ok, no) => {
-            db.run(sql, (err) => {
+            db.run(sql, (err: any) => {
                 if (err && !err.message.includes('duplicate column')) {
                     log(`ERROR: ${err.message}`)
                     return no(err)

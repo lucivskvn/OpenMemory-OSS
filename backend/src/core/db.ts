@@ -12,30 +12,34 @@ type q_type = {
     upd_seen: { run: (...p: any[]) => Promise<void> }
     upd_mem: { run: (...p: any[]) => Promise<void> }
     upd_mem_with_sector: { run: (...p: any[]) => Promise<void> }
-    del_mem: { run: (...p: any[]) => Promise<void> }
-    get_mem: { get: (id: string) => Promise<any> }
-    get_mem_by_simhash: { get: (simhash: string) => Promise<any> }
-    all_mem: { all: (limit: number, offset: number) => Promise<any[]> }
-    all_mem_by_sector: { all: (sector: string, limit: number, offset: number) => Promise<any[]> }
+    // del_mem must require user_id for both backends
+    del_mem: { run: (id: string, user_id: string) => Promise<void> }
+    // memory getters accept an optional user_id; query will filter when provided
+    get_mem: { get: (id: string, user_id?: string | null) => Promise<any> }
+    get_mem_by_simhash: { get: (simhash: string, user_id?: string | null) => Promise<any> }
+    all_mem: { all: (limit: number, offset: number, user_id?: string | null) => Promise<any[]> }
+    all_mem_by_sector: { all: (sector: string, limit: number, offset: number, user_id?: string | null) => Promise<any[]> }
     all_mem_by_user: { all: (user_id: string, limit: number, offset: number) => Promise<any[]> }
     get_segment_count: { get: (segment: number) => Promise<any> }
     get_max_segment: { get: () => Promise<any> }
     get_segments: { all: () => Promise<any[]> }
     get_mem_by_segment: { all: (segment: number) => Promise<any[]> }
     ins_vec: { run: (...p: any[]) => Promise<void> }
-    get_vec: { get: (id: string, sector: string) => Promise<any> }
-    get_vecs_by_id: { all: (id: string) => Promise<any[]> }
-    get_vecs_by_sector: { all: (sector: string) => Promise<any[]> }
-    get_vecs_batch: { all: (ids: string[], sector: string) => Promise<any[]> }
-    del_vec: { run: (...p: any[]) => Promise<void> }
-    del_vec_sector: { run: (...p: any[]) => Promise<void> }
+    // vector getters support optional user_id scoping
+    get_vec: { get: (id: string, sector: string, user_id?: string | null) => Promise<any> }
+    get_vecs_by_id: { all: (id: string, user_id?: string | null) => Promise<any[]> }
+    get_vecs_by_sector: { all: (sector: string, user_id?: string | null) => Promise<any[]> }
+    get_vecs_batch: { all: (ids: string[], sector: string, user_id?: string | null) => Promise<any[]> }
+    del_vec: { run: (id: string, user_id?: string | null) => Promise<void> }
+    del_vec_sector: { run: (id: string, sector: string, user_id?: string | null) => Promise<void> }
     ins_waypoint: { run: (...p: any[]) => Promise<void> }
-    get_neighbors: { all: (src: string) => Promise<any[]> }
-    get_waypoints_by_src: { all: (src: string) => Promise<any[]> }
-    get_waypoint: { get: (src: string, dst: string) => Promise<any> }
+    // waypoint queries must accept user_id to scope
+    get_neighbors: { all: (src: string, user_id?: string | null) => Promise<any[]> }
+    get_waypoints_by_src: { all: (src: string, user_id?: string | null) => Promise<any[]> }
+    get_waypoint: { get: (src: string, dst: string, user_id?: string | null) => Promise<any> }
     upd_waypoint: { run: (...p: any[]) => Promise<void> }
     del_waypoints: { run: (...p: any[]) => Promise<void> }
-    prune_waypoints: { run: (threshold: number) => Promise<void> }
+    prune_waypoints: { run: (threshold: number, user_id?: string | null) => Promise<void> }
     ins_log: { run: (...p: any[]) => Promise<void> }
     upd_log: { run: (...p: any[]) => Promise<void> }
     get_pending_logs: { all: () => Promise<any[]> }
@@ -43,6 +47,20 @@ type q_type = {
     ins_user: { run: (...p: any[]) => Promise<void> }
     get_user: { get: (user_id: string) => Promise<any> }
     upd_user_summary: { run: (...p: any[]) => Promise<void> }
+    ins_stat: { run: (...p: any[]) => Promise<void> }
+    upd_summary: { run: (...p: any[]) => Promise<void> }
+    count_memories: { get: () => Promise<any> }
+    sector_counts: { all: () => Promise<any[]> }
+    recent_memories_count: { get: (since: number) => Promise<any> }
+    avg_salience: { get: () => Promise<any> }
+    decay_stats: { get: () => Promise<any> }
+    stats_range: { all: (type: string, since: number) => Promise<any[]> }
+    stats_count_since: { get: (type: string, since: number) => Promise<any> }
+    top_memories: { all: (limit: number) => Promise<any[]> }
+    activities: { all: (limit: number) => Promise<any[]> }
+    timeline_by_sector: { all: (since: number) => Promise<any[]> }
+    maintenance_ops: { all: (since: number) => Promise<any[]> }
+    totals_since: { all: (since: number) => Promise<any[]> }
 }
 
 let run_async: (sql: string, p?: any[]) => Promise<void>
@@ -152,7 +170,7 @@ if (is_pg) {
         upd_seen: { run: (...p) => run_async(`update ${m} set last_seen_at=$2,salience=$3,updated_at=$4 where id=$1`, p) },
         upd_mem: { run: (...p) => run_async(`update ${m} set content=$1,tags=$2,meta=$3,updated_at=$4,version=version+1 where id=$5`, p) },
         upd_mem_with_sector: { run: (...p) => run_async(`update ${m} set content=$1,primary_sector=$2,tags=$3,meta=$4,updated_at=$5,version=version+1 where id=$6`, p) },
-        del_mem: { run: (...p) => run_async(`delete from ${m} where id=$1`, p) },
+        del_mem: { run: (id: string, user_id: string) => run_async(`delete from ${m} where id=$1 and user_id=$2`, [id, user_id]) },
         get_mem: { get: (id) => get_async(`select * from ${m} where id=$1`, [id]) },
         get_mem_by_simhash: { get: (simhash) => get_async(`select * from ${m} where simhash=$1 order by salience desc limit 1`, [simhash]) },
         all_mem: { all: (limit, offset) => all_async(`select * from ${m} order by created_at desc limit $1 offset $2`, [limit, offset]) },
@@ -160,6 +178,18 @@ if (is_pg) {
         get_segment_count: { get: (segment) => get_async(`select count(*) as c from ${m} where segment=$1`, [segment]) },
         get_max_segment: { get: () => get_async(`select coalesce(max(segment), 0) as max_seg from ${m}`, []) },
         get_segments: { all: () => all_async(`select distinct segment from ${m} order by segment desc`, []) },
+        count_memories: { get: () => get_async(`select count(*) as count from ${m}`, []) },
+        sector_counts: { all: () => all_async(`select primary_sector as sector, count(*) as count, avg(salience) as avg_salience from ${m} group by primary_sector`, []) },
+        recent_memories_count: { get: (since) => get_async(`select count(*) as count from ${m} where created_at > $1`, [since]) },
+        avg_salience: { get: () => get_async(`select avg(salience) as avg from ${m}`, []) },
+        decay_stats: { get: () => get_async(`select count(*) as total, avg(decay_lambda) as avg_lambda, min(salience) as min_salience, max(salience) as max_salience from ${m}`, []) },
+        stats_range: { all: (type, since) => all_async(`select count, ts FROM stats WHERE type=$1 AND ts > $2 ORDER BY ts DESC`, [type, since]) },
+        stats_count_since: { get: (type, since) => get_async(`select count(*) as total from stats where type=$1 and ts > $2`, [type, since]) },
+        top_memories: { all: (limit) => all_async(`select id,content,primary_sector,salience,last_seen_at from ${m} order by salience desc limit $1`, [limit]) },
+        activities: { all: (limit) => all_async(`select id,content,primary_sector,salience,created_at,updated_at,last_seen_at from ${m} order by updated_at desc limit $1`, [limit]) },
+        timeline_by_sector: { all: (since) => all_async(`SELECT primary_sector, strftime('%H:00', datetime(created_at/1000, 'unixepoch')) as hour, COUNT(*) as count FROM ${m} WHERE created_at > $1 GROUP BY primary_sector, hour ORDER BY hour`, [since]) },
+        maintenance_ops: { all: (since) => all_async(`SELECT type, strftime('%H:00', datetime(ts/1000, 'unixepoch', 'localtime')) as hour, SUM(count) as cnt FROM stats WHERE ts > $1 GROUP BY type, hour ORDER BY hour`, [since]) },
+        totals_since: { all: (since) => all_async(`SELECT type, SUM(count) as total FROM stats WHERE ts > $1 GROUP BY type`, [since]) },
         get_mem_by_segment: { all: (segment) => all_async(`select * from ${m} where segment=$1 order by created_at desc`, [segment]) },
         ins_vec: { run: (...p) => run_async(`insert into ${v}(id,sector,user_id,v,dim) values($1,$2,$3,$4,$5) on conflict(id,sector) do update set user_id=excluded.user_id,v=excluded.v,dim=excluded.dim`, p) },
         get_vec: { get: (id, sector) => get_async(`select v,dim from ${v} where id=$1 and sector=$2`, [id, sector]) },
@@ -188,7 +218,9 @@ if (is_pg) {
         all_mem_by_user: { all: (user_id, limit, offset) => all_async(`select * from ${m} where user_id=$1 order by created_at desc limit $2 offset $3`, [user_id, limit, offset]) },
         ins_user: { run: (...p) => run_async(`insert into "${sc}"."openmemory_users"(user_id,summary,reflection_count,created_at,updated_at) values($1,$2,$3,$4,$5) on conflict(user_id) do update set summary=excluded.summary,reflection_count=excluded.reflection_count,updated_at=excluded.updated_at`, p) },
         get_user: { get: (user_id) => get_async(`select * from "${sc}"."openmemory_users" where user_id=$1`, [user_id]) },
-        upd_user_summary: { run: (...p) => run_async(`update "${sc}"."openmemory_users" set summary=$2,reflection_count=reflection_count+1,updated_at=$3 where user_id=$1`, p) }
+        upd_user_summary: { run: (...p: any[]) => run_async(`update "${sc}"."openmemory_users" set summary=$2,reflection_count=reflection_count+1,updated_at=$3 where user_id=$1`, p) },
+        ins_stat: { run: (...p: any[]) => run_async(`insert into stats(type,count,ts) values($1,$2,$3)`, p) },
+        upd_summary: { run: (...p: any[]) => run_async(`update memories set summary=$2 where id=$1`, p) },
     }
 } else {
     const db_path = env.db_path || './data/openmemory.sqlite'
@@ -222,57 +254,100 @@ if (is_pg) {
     db.exec('create index if not exists idx_stats_ts on stats(ts)')
     db.exec('create index if not exists idx_stats_type on stats(type)')
     memories_table = 'memories'
-    const exec = (sql: string, p: any[] = []) => { db.run(sql, ...p); return Promise.resolve() }
-    const one = (sql: string, p: any[] = []) => Promise.resolve(db.query(sql).get(...p))
-    const many = (sql: string, p: any[] = []) => Promise.resolve(db.query(sql).all(...p))
+    const OM_LOG_DB = !!process.env.OM_LOG_DB
+    const summarize = (sql: string) => (sql || '').trim().split(/\s+/).slice(0, 6).join(' ')
+    const exec = async (sql: string, p: any[] = []) => {
+        const t0 = performance.now()
+        try {
+            db.run(sql, ...p)
+            if (OM_LOG_DB) console.debug('[DB]', summarize(sql), 'params=', p?.length || 0, 't=', (performance.now() - t0).toFixed(1), 'ms')
+            return Promise.resolve()
+        } catch (err: any) {
+            if (OM_LOG_DB) console.error('[DB] ERR', summarize(sql), err?.message || err)
+            throw err
+        }
+    }
+    const one = async (sql: string, p: any[] = []) => {
+        const t0 = performance.now()
+        try {
+            const r = db.query(sql).get(...p)
+            if (OM_LOG_DB) console.debug('[DB]', summarize(sql), 'params=', p?.length || 0, 't=', (performance.now() - t0).toFixed(1), 'ms')
+            return Promise.resolve(r)
+        } catch (err: any) {
+            if (OM_LOG_DB) console.error('[DB] ERR', summarize(sql), err?.message || err)
+            throw err
+        }
+    }
+    const many = async (sql: string, p: any[] = []) => {
+        const t0 = performance.now()
+        try {
+            const r = db.query(sql).all(...p)
+            if (OM_LOG_DB) console.debug('[DB]', summarize(sql), 'params=', p?.length || 0, 't=', (performance.now() - t0).toFixed(1), 'ms')
+            return Promise.resolve(r)
+        } catch (err: any) {
+            if (OM_LOG_DB) console.error('[DB] ERR', summarize(sql), err?.message || err)
+            throw err
+        }
+    }
     run_async = exec
     get_async = one
     all_async = many
     const _transaction = (fn: () => void) => db.transaction(fn)
     transaction = {
-        begin: () => {
-            console.warn("[DB] Manual transaction control (begin) is deprecated. Use a transaction block instead.");
-            return Promise.resolve();
+        begin: async () => {
+            // implement real manual transaction control for sqlite
+            try {
+                db.run('BEGIN')
+            } catch (e) {
+                // propagate
+                throw e
+            }
         },
-        commit: () => {
-            console.warn("[DB] Manual transaction control (commit) is deprecated.");
-            return Promise.resolve();
+        commit: async () => {
+            try {
+                db.run('COMMIT')
+            } catch (e) {
+                throw e
+            }
         },
-        rollback: () => {
-            console.warn("[DB] Manual transaction control (rollback) is deprecated.");
-            return Promise.resolve();
+        rollback: async () => {
+            try {
+                db.run('ROLLBACK')
+            } catch (e) {
+                throw e
+            }
         }
     }
 
     const ins_mem_stmt = db.prepare('insert into memories(id,user_id,segment,content,simhash,primary_sector,tags,meta,created_at,updated_at,last_seen_at,salience,decay_lambda,version,mean_dim,mean_vec,compressed_vec,feedback_score) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-    const upd_mean_vec_stmt = db.prepare('update memories set mean_dim=?,mean_vec=? where id=?')
-    const upd_compressed_vec_stmt = db.prepare('update memories set compressed_vec=? where id=?')
-    const upd_feedback_stmt = db.prepare('update memories set feedback_score=? where id=?')
-    const upd_seen_stmt = db.prepare('update memories set last_seen_at=?,salience=?,updated_at=? where id=?')
-    const upd_mem_stmt = db.prepare('update memories set content=?,tags=?,meta=?,updated_at=?,version=version+1 where id=?')
-    const upd_mem_with_sector_stmt = db.prepare('update memories set content=?,primary_sector=?,tags=?,meta=?,updated_at=?,version=version+1 where id=?')
+    const upd_mean_vec_stmt = db.prepare('update memories set mean_dim=?,mean_vec=? where id=? and (? is null or user_id=?)')
+    const upd_compressed_vec_stmt = db.prepare('update memories set compressed_vec=? where id=? and (? is null or user_id=?)')
+    const upd_feedback_stmt = db.prepare('update memories set feedback_score=? where id=? and (? is null or user_id=?)')
+    const upd_seen_stmt = db.prepare('update memories set last_seen_at=?,salience=?,updated_at=? where id=? and (? is null or user_id=?)')
+    const upd_mem_stmt = db.prepare('update memories set content=?,tags=?,meta=?,updated_at=?,version=version+1 where id=? and (? is null or user_id=?)')
+    const upd_mem_with_sector_stmt = db.prepare('update memories set content=?,primary_sector=?,tags=?,meta=?,updated_at=?,version=version+1 where id=? and (? is null or user_id=?)')
     const del_mem_stmt = db.prepare('delete from memories where id=? and user_id=?')
-    const get_mem_stmt = db.prepare('select * from memories where id=?')
-    const get_mem_by_simhash_stmt = db.prepare('select * from memories where simhash=? order by salience desc limit 1')
-    const all_mem_stmt = db.prepare('select * from memories order by created_at desc limit ? offset ?')
-    const all_mem_by_sector_stmt = db.prepare('select * from memories where primary_sector=? order by created_at desc limit ? offset ?')
+    const get_mem_stmt = db.prepare('select * from memories where id=? and (? is null or user_id=?)')
+    const get_mem_by_simhash_stmt = db.prepare('select * from memories where simhash=? and (? is null or user_id=?) order by salience desc limit 1')
+    const all_mem_stmt = db.prepare('select * from memories where (? is null or user_id=?) order by created_at desc limit ? offset ?')
+    const all_mem_by_sector_stmt = db.prepare('select * from memories where primary_sector=? and (? is null or user_id=?) order by created_at desc limit ? offset ?')
     const get_segment_count_stmt = db.prepare('select count(*) as c from memories where segment=?')
     const get_max_segment_stmt = db.prepare('select coalesce(max(segment), 0) as max_seg from memories')
     const get_segments_stmt = db.prepare('select distinct segment from memories order by segment desc')
     const get_mem_by_segment_stmt = db.prepare('select * from memories where segment=? order by created_at desc')
     const ins_vec_stmt = db.prepare('insert into vectors(id,sector,user_id,v,dim) values(?,?,?,?,?)')
-    const get_vec_stmt = db.prepare('select v,dim from vectors where id=? and sector=?')
-    const get_vecs_by_id_stmt = db.prepare('select sector,v,dim from vectors where id=?')
-    const get_vecs_by_sector_stmt = db.prepare('select id,v,dim from vectors where sector=?')
-    const del_vec_stmt = db.prepare('delete from vectors where id=?')
-    const del_vec_sector_stmt = db.prepare('delete from vectors where id=? and sector=?')
+    const get_vec_stmt = db.prepare('select v,dim from vectors where id=? and sector=? and (? is null or user_id=?)')
+    const get_vecs_by_id_stmt = db.prepare('select sector,v,dim from vectors where id=? and (? is null or user_id=?)')
+    const get_vecs_by_sector_stmt = db.prepare('select id,v,dim from vectors where sector=? and (? is null or user_id=?)')
+    const del_vec_stmt = db.prepare('delete from vectors where id=? and (? is null or user_id=?)')
+    const del_vec_sector_stmt = db.prepare('delete from vectors where id=? and sector=? and (? is null or user_id=?)')
     const ins_waypoint_stmt = db.prepare('insert or replace into waypoints(src_id,dst_id,user_id,weight,created_at,updated_at) values(?,?,?,?,?,?)')
-    const get_neighbors_stmt = db.prepare('select dst_id,weight from waypoints where src_id=? order by weight desc')
-    const get_waypoints_by_src_stmt = db.prepare('select src_id,dst_id,weight,created_at,updated_at from waypoints where src_id=?')
-    const get_waypoint_stmt = db.prepare('select weight from waypoints where src_id=? and dst_id=?')
-    const upd_waypoint_stmt = db.prepare('update waypoints set weight=?,updated_at=? where src_id=? and dst_id=?')
-    const del_waypoints_stmt = db.prepare('delete from waypoints where src_id=? or dst_id=?')
-    const prune_waypoints_stmt = db.prepare('delete from waypoints where weight<?')
+    const get_neighbors_stmt = db.prepare('select dst_id,weight from waypoints where src_id=? and (? is null or user_id=?) order by weight desc')
+    const get_waypoints_by_src_stmt = db.prepare('select src_id,dst_id,weight,created_at,updated_at from waypoints where src_id=? and (? is null or user_id=?)')
+    const get_waypoint_stmt = db.prepare('select weight from waypoints where src_id=? and dst_id=? and (? is null or user_id=?)')
+    const upd_waypoint_stmt = db.prepare('update waypoints set weight=?,updated_at=? where src_id=? and dst_id=? and (? is null or user_id=?)')
+    const del_waypoints_stmt = db.prepare('delete from waypoints where (src_id=? or dst_id=?) and (? is null or user_id=?)')
+    const prune_waypoints_stmt = db.prepare('delete from waypoints where weight<? and (? is null or user_id=?)')
     const ins_log_stmt = db.prepare('insert or replace into embed_logs(id,model,status,ts,err) values(?,?,?,?,?)')
     const upd_log_stmt = db.prepare('update embed_logs set status=?,err=? where id=?')
     const get_pending_logs_stmt = db.prepare('select * from embed_logs where status=?')
@@ -281,43 +356,55 @@ if (is_pg) {
     const ins_user_stmt = db.prepare('insert or replace into users(user_id,summary,reflection_count,created_at,updated_at) values(?,?,?,?,?)')
     const get_user_stmt = db.prepare('select * from users where user_id=?')
     const upd_user_summary_stmt = db.prepare('update users set summary=?,reflection_count=reflection_count+1,updated_at=? where user_id=?')
+    const count_memories_stmt = db.prepare('select count(*) as count from memories')
+    const sector_counts_stmt = db.prepare('select primary_sector as sector, count(*) as count, avg(salience) as avg_salience from memories group by primary_sector')
+    const recent_memories_count_stmt = db.prepare('select count(*) as count from memories where created_at > ?')
+    const avg_salience_stmt = db.prepare('select avg(salience) as avg from memories')
+    const decay_stats_stmt = db.prepare('select count(*) as total, avg(decay_lambda) as avg_lambda, min(salience) as min_salience, max(salience) as max_salience from memories')
+    const stats_range_stmt = db.prepare('select count, ts from stats where type=? and ts>? order by ts desc')
+    const stats_count_since_stmt = db.prepare('select count(*) as total from stats where type=? and ts>?')
+    const top_memories_stmt = db.prepare('select id,content,primary_sector,salience,last_seen_at from memories order by salience desc limit ?')
+    const activities_stmt = db.prepare('select id,content,primary_sector,salience,created_at,updated_at,last_seen_at from memories order by updated_at desc limit ?')
+    const timeline_stmt = db.prepare("SELECT primary_sector, strftime('%H:00', datetime(created_at/1000, 'unixepoch')) as hour, COUNT(*) as count FROM memories WHERE created_at > ? GROUP BY primary_sector, hour ORDER BY hour")
+    const maintenance_ops_stmt = db.prepare("SELECT type, strftime('%H:00', datetime(ts/1000, 'unixepoch', 'localtime')) as hour, SUM(count) as cnt FROM stats WHERE ts > ? GROUP BY type, hour ORDER BY hour")
+    const totals_since_stmt = db.prepare('SELECT type, SUM(count) as total FROM stats WHERE ts > ? GROUP BY type')
 
     q = {
         ins_mem: { run: (...p) => { ins_mem_stmt.run(...p); return Promise.resolve() } },
-        upd_mean_vec: { run: (...p) => { upd_mean_vec_stmt.run(...p); return Promise.resolve() } },
-        upd_compressed_vec: { run: (...p) => { upd_compressed_vec_stmt.run(...p); return Promise.resolve() } },
-        upd_feedback: { run: (...p) => { upd_feedback_stmt.run(...p); return Promise.resolve() } },
-        upd_seen: { run: (...p) => { upd_seen_stmt.run(...p); return Promise.resolve() } },
-        upd_mem: { run: (...p) => { upd_mem_stmt.run(...p); return Promise.resolve() } },
-        upd_mem_with_sector: { run: (...p) => { upd_mem_with_sector_stmt.run(...p); return Promise.resolve() } },
+        // sqlite prepared statements expect parameters in a slightly different order / duplication for NULL checks
+        upd_mean_vec: { run: (id: string, mean_dim: number, mean_vec: any, user_id: string | null = null) => { upd_mean_vec_stmt.run(mean_dim, mean_vec, id, user_id, user_id); return Promise.resolve() } },
+        upd_compressed_vec: { run: (id: string, compressed_vec: any, user_id: string | null = null) => { upd_compressed_vec_stmt.run(compressed_vec, id, user_id, user_id); return Promise.resolve() } },
+        upd_feedback: { run: (id: string, feedback: number, user_id: string | null = null) => { upd_feedback_stmt.run(feedback, id, user_id, user_id); return Promise.resolve() } },
+        upd_seen: { run: (id: string, last_seen_at: number, salience: number, updated_at: number, user_id: string | null = null) => { upd_seen_stmt.run(last_seen_at, salience, updated_at, id, user_id, user_id); return Promise.resolve() } },
+        upd_mem: { run: (content: string, tags: any, meta: any, updated_at: number, id: string, user_id: string | null = null) => { upd_mem_stmt.run(content, tags, meta, updated_at, id, user_id, user_id); return Promise.resolve() } },
+        upd_mem_with_sector: { run: (content: string, primary_sector: string, tags: any, meta: any, updated_at: number, id: string, user_id: string | null = null) => { upd_mem_with_sector_stmt.run(content, primary_sector, tags, meta, updated_at, id, user_id, user_id); return Promise.resolve() } },
         del_mem: { run: (id, user_id) => { del_mem_stmt.run(id, user_id); return Promise.resolve() } },
-        get_mem: { get: (id) => Promise.resolve(get_mem_stmt.get(id)) },
-        get_mem_by_simhash: { get: (simhash) => Promise.resolve(get_mem_by_simhash_stmt.get(simhash)) },
-        all_mem: { all: (limit, offset) => Promise.resolve(all_mem_stmt.all(limit, offset)) },
-        all_mem_by_sector: { all: (sector, limit, offset) => Promise.resolve(all_mem_by_sector_stmt.all(sector, limit, offset)) },
+        get_mem: { get: (id, user_id = null) => Promise.resolve(get_mem_stmt.get(id, user_id, user_id)) },
+        get_mem_by_simhash: { get: (simhash, user_id = null) => Promise.resolve(get_mem_by_simhash_stmt.get(simhash, user_id, user_id)) },
+        all_mem: { all: (limit, offset, user_id = null) => Promise.resolve(all_mem_stmt.all(user_id, user_id, limit, offset)) },
+        all_mem_by_sector: { all: (sector, limit, offset, user_id = null) => Promise.resolve(all_mem_by_sector_stmt.all(sector, user_id, user_id, limit, offset)) },
         get_segment_count: { get: (segment) => Promise.resolve(get_segment_count_stmt.get(segment)) },
         get_max_segment: { get: () => Promise.resolve(get_max_segment_stmt.get()) },
         get_segments: { all: () => Promise.resolve(get_segments_stmt.all()) },
         get_mem_by_segment: { all: (segment) => Promise.resolve(get_mem_by_segment_stmt.all(segment)) },
         ins_vec: { run: (...p) => { ins_vec_stmt.run(...p); return Promise.resolve() } },
         get_vec: {
-            get: (id, sector, user_id) => {
-                if (!user_id) console.warn('[DB] Query without user_id - potential cross-tenant leak')
-                return Promise.resolve(get_vec_stmt.get(id, sector))
+            get: (id, sector, user_id = null) => {
+                return Promise.resolve(get_vec_stmt.get(id, sector, user_id, user_id))
             }
         },
-        get_vecs_by_id: { all: (id) => Promise.resolve(get_vecs_by_id_stmt.all(id)) },
-        get_vecs_by_sector: { all: (sector) => Promise.resolve(get_vecs_by_sector_stmt.all(sector)) },
+        get_vecs_by_id: { all: (id, user_id = null) => Promise.resolve(get_vecs_by_id_stmt.all(id, user_id, user_id)) },
+        get_vecs_by_sector: { all: (sector, user_id = null) => Promise.resolve(get_vecs_by_sector_stmt.all(sector, user_id, user_id)) },
         get_vecs_batch: {
-            all: (ids: string[], sector: string) => {
+            all: (ids: string[], sector: string, user_id = null) => {
                 if (!ids.length) return Promise.resolve([])
                 const ph = ids.map(() => '?').join(',')
-                const stmt = db.prepare(`select id,v,dim from vectors where sector=? and id in (${ph})`)
-                return Promise.resolve(stmt.all(sector, ...ids))
+                const stmt = db.prepare(`select id,v,dim from vectors where sector=? and (${ids.map(() => 'id=?').join(' or ')}) and (? is null or user_id=?)`)
+                return Promise.resolve(stmt.all(sector, ...ids, user_id, user_id))
             }
         },
-        del_vec: { run: (...p) => { del_vec_stmt.run(...p); return Promise.resolve() } },
-        del_vec_sector: { run: (...p) => { del_vec_sector_stmt.run(...p); return Promise.resolve() } },
+        del_vec: { run: (id, user_id = null) => { del_vec_stmt.run(id, user_id, user_id); return Promise.resolve() } },
+        del_vec_sector: { run: (id, sector, user_id = null) => { del_vec_sector_stmt.run(id, sector, user_id, user_id); return Promise.resolve() } },
         ins_waypoint: {
             run: (...p) => {
                 if (!p[2]) console.warn('[DB] Query without user_id - potential cross-tenant leak')
@@ -325,16 +412,15 @@ if (is_pg) {
             }
         },
         get_neighbors: {
-            all: (src, user_id) => {
-                if (!user_id) console.warn('[DB] Query without user_id - potential cross-tenant leak')
-                return Promise.resolve(get_neighbors_stmt.all(src))
+            all: (src, user_id = null) => {
+                return Promise.resolve(get_neighbors_stmt.all(src, user_id, user_id))
             }
         },
-        get_waypoints_by_src: { all: (src) => Promise.resolve(get_waypoints_by_src_stmt.all(src)) },
-        get_waypoint: { get: (src, dst) => Promise.resolve(get_waypoint_stmt.get(src, dst)) },
-        upd_waypoint: { run: (...p) => { upd_waypoint_stmt.run(...p); return Promise.resolve() } },
-        del_waypoints: { run: (...p) => { del_waypoints_stmt.run(...p); return Promise.resolve() } },
-        prune_waypoints: { run: (t) => { prune_waypoints_stmt.run(t); return Promise.resolve() } },
+        get_waypoints_by_src: { all: (src, user_id = null) => Promise.resolve(get_waypoints_by_src_stmt.all(src, user_id, user_id)) },
+        get_waypoint: { get: (src, dst, user_id = null) => Promise.resolve(get_waypoint_stmt.get(src, dst, user_id, user_id)) },
+    upd_waypoint: { run: (weight: number, updated_at: number, src_id: string, dst_id: string, user_id: string | null = null) => { upd_waypoint_stmt.run(weight, updated_at, src_id, dst_id, user_id, user_id); return Promise.resolve() } },
+    del_waypoints: { run: (src_id: string, dst_id: string, user_id: string | null = null) => { del_waypoints_stmt.run(src_id, dst_id, user_id, user_id); return Promise.resolve() } },
+        prune_waypoints: { run: (t, user_id = null) => { prune_waypoints_stmt.run(t, user_id, user_id); return Promise.resolve() } },
         ins_log: { run: (...p) => { ins_log_stmt.run(...p); return Promise.resolve() } },
         upd_log: { run: (...p) => { upd_log_stmt.run(...p); return Promise.resolve() } },
         get_pending_logs: { all: () => Promise.resolve(get_pending_logs_stmt.all('pending')) },
@@ -347,7 +433,21 @@ if (is_pg) {
         },
         ins_user: { run: (...p) => { ins_user_stmt.run(...p); return Promise.resolve() } },
         get_user: { get: (user_id) => Promise.resolve(get_user_stmt.get(user_id)) },
-        upd_user_summary: { run: (...p) => { upd_user_summary_stmt.run(...p); return Promise.resolve() } }
+        upd_user_summary: { run: (...p) => { upd_user_summary_stmt.run(...p); return Promise.resolve() } },
+        ins_stat: { run: (...p: any[]) => exec('insert into stats(type,count,ts) values(?,?,?)', p) },
+        upd_summary: { run: (id: string, summary: string) => exec('update memories set summary=? where id=?', [summary, id]) },
+        count_memories: { get: () => Promise.resolve(count_memories_stmt.get()) },
+        sector_counts: { all: () => Promise.resolve(sector_counts_stmt.all()) },
+        recent_memories_count: { get: (since: number) => Promise.resolve(recent_memories_count_stmt.get(since)) },
+        avg_salience: { get: () => Promise.resolve(avg_salience_stmt.get()) },
+        decay_stats: { get: () => Promise.resolve(decay_stats_stmt.get()) },
+        stats_range: { all: (type: string, since: number) => Promise.resolve(stats_range_stmt.all(type, since)) },
+        stats_count_since: { get: (type: string, since: number) => Promise.resolve(stats_count_since_stmt.get(type, since)) },
+        top_memories: { all: (limit: number) => Promise.resolve(top_memories_stmt.all(limit)) },
+        activities: { all: (limit: number) => Promise.resolve(activities_stmt.all(limit)) },
+        timeline_by_sector: { all: (since: number) => Promise.resolve(timeline_stmt.all(since)) },
+        maintenance_ops: { all: (since: number) => Promise.resolve(maintenance_ops_stmt.all(since)) },
+        totals_since: { all: (since: number) => Promise.resolve(totals_since_stmt.all(since)) }
     }
 }
 

@@ -14,11 +14,11 @@ Official JavaScript/TypeScript client for OpenMemory — an open-source, self-ho
 ## Installation
 
 ```bash
-npm install openmemory-js
-# or
-yarn add openmemory-js
-# or
-pnpm add openmemory-js
+# Install with Bun (recommended)
+bun add openmemory-js
+# or with npm/yarn/pnpm
+# npm install openmemory-js
+# pnpm add openmemory-js
 ```
 
 ## Quick Start
@@ -255,10 +255,10 @@ async function recall(query: string) {
 
 ```bash
 # build
-pnpm build
+bun run build
 
 # test
-pnpm test
+bun run test
 ```
 
 ## License

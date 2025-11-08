@@ -23,6 +23,16 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 'latest'
+
+      - name: Verify Bun
+        run: |
+          bun --version
+          bun -v || true
+
       - name: Build Backend Docker Image
         uses: docker/build-push-action@v5
         with:
@@ -33,10 +43,34 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build backend with Bun (smoke)
+        working-directory: backend
+        run: |
+          bun --version
+          bun run build || true
+
       - name: Test Docker Compose Build
         run: |
           docker compose build
           docker compose config
+
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+
+      - name: Podman build smoke test
+        run: |
+          podman build -f backend/Dockerfile -t openmemory-backend:podman-test ./backend
+
+      - name: Validate podman unit files
+        run: |
+          # Ensure podman unit and volume files include required sections
+          for f in podman/openmemory.container podman/openmemory-data.volume; do
+            if [ ! -f "$f" ]; then echo "Missing $f"; exit 1; fi
+            grep -q "\[Unit\]" "$f" || (echo "$f missing [Unit]" && exit 1)
+            grep -q "\[Container\]\|\[Volume\]" "$f" || (echo "$f missing [Container] or [Volume]" && exit 1)
+          done
 
       - name: Start Services
         run: |

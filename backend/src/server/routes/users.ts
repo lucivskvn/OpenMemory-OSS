@@ -77,9 +77,9 @@ export const usr = (app: any) => {
             let deleted = 0
 
             for (const m of mems) {
-                await q.del_mem.run(m.id)
-                await q.del_vec.run(m.id)
-                await q.del_waypoints.run(m.id, m.id)
+                await q.del_mem.run(m.id, user_id)
+                await q.del_vec.run(m.id, user_id)
+                await q.del_waypoints.run(m.id, m.id, user_id)
                 deleted++
             }
 

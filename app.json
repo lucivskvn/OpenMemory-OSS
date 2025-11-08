@@ -22,6 +22,6 @@
         }
     },
     "scripts": {
-        "postdeploy": "npm run build"
+        "postdeploy": "bun run build"
     }
 }

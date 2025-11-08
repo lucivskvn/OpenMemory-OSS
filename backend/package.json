@@ -9,13 +9,14 @@
         "dev": "bun --hot src/server/index.ts",
         "build": "bun build src/server/index.ts --target=bun --outdir=dist",
         "start": "bun dist/server/index.js",
-        "migrate": "tsx src/migrate.ts",
+        "migrate": "bun run src/migrate.ts",
         "build:binary": "bun build --compile --minify --sourcemap src/server/index.ts --outfile openmemory",
         "type-check": "bun tsc --noEmit",
         "clean": "rm -rf dist/ node_modules/.cache/"
     },
     "dependencies": {
         "@modelcontextprotocol/sdk": "^1.20.2",
+        "better-sqlite3": "^12.4.1",
         "dotenv": "^16.4.5",
         "mammoth": "^1.11.0",
         "pdf-parse": "^2.4.3",

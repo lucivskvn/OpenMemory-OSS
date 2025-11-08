@@ -27,7 +27,7 @@ async function sectorExample() {
                 expectedSector: "semantic"
             },
             {
-                content: "First, open the terminal. Then, run npm install.",
+                content: "First, open the terminal. Then, run bun install.",
                 expectedSector: "procedural"
             },
             {

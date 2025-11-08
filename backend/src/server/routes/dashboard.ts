@@ -13,7 +13,7 @@ let reqz = {
 
 const log_metric = async (type: string, value: number) => {
     try {
-        await run_async('insert into stats(type,count,ts) values(?,?,?)', [type, value, Date.now()])
+        await q.ins_stat.run(type, value, Date.now())
     } catch (e) {
         console.error('[metrics] log err:', e)
     }
@@ -76,32 +76,18 @@ const get_db_sz = async (): Promise<number> => {
 export function dash(app: any) {
     app.get('/dashboard/stats', async (_req: any, res: any) => {
         try {
-            const totmem = await all_async('SELECT COUNT(*) as count FROM memories')
-            const sectcnt = await all_async(`
-                SELECT primary_sector, COUNT(*) as count 
-                FROM memories 
-                GROUP BY primary_sector
-            `)
+            const totmem = await q.count_memories.get()
+            const sectcnt = await q.sector_counts.all()
             const dayago = Date.now() - (24 * 60 * 60 * 1000)
-            const recmem = await all_async(
-                'SELECT COUNT(*) as count FROM memories WHERE created_at > ?',
-                [dayago]
-            )
-            const avgsal = await all_async('SELECT AVG(salience) as avg FROM memories')
-            const decst = await all_async(`
-                SELECT 
-                    COUNT(*) as total,
-                    AVG(decay_lambda) as avg_lambda,
-                    MIN(salience) as min_salience,
-                    MAX(salience) as max_salience
-                FROM memories
-            `)
+            const recmem = await q.recent_memories_count.get(dayago)
+            const avgsal = await q.avg_salience.get()
+            const decst = await q.decay_stats.get()
             const upt = process.uptime()
 
             // Calculate QPS stats from database (last hour)
             const hour_ago = Date.now() - (60 * 60 * 1000)
-            const qps_data = await all_async('SELECT count, ts FROM stats WHERE type=? AND ts > ? ORDER BY ts DESC', ['qps', hour_ago])
-            const err_data = await all_async('SELECT COUNT(*) as total FROM stats WHERE type=? AND ts > ?', ['error', hour_ago])
+            const qps_data = await q.stats_range.all('qps', hour_ago)
+            const err_data = await q.stats_count_since.get('error', hour_ago)
 
             const peak_qps = qps_data.length > 0 ? Math.max(...qps_data.map((d: any) => d.count)) : 0
             const avg_qps = reqz.qps_hist.length > 0
@@ -191,10 +177,7 @@ export function dash(app: any) {
     app.get('/dashboard/activity', async (req: any, res: any) => {
         try {
             const lim = parseInt(req.query.limit || '50')
-            const recmem = await all_async(`
-                SELECT id, content, primary_sector, salience, created_at, updated_at, last_seen_at
-                FROM memories ORDER BY updated_at DESC LIMIT ?
-            `, [lim])
+            const recmem = await q.activities.all(lim)
             res.json({
                 activities: recmem.map((m: any) => ({
                     id: m.id,
@@ -214,10 +197,7 @@ export function dash(app: any) {
         try {
             const hrs = parseInt(req.query.hours || '24')
             const strt = Date.now() - (hrs * 60 * 60 * 1000)
-            const tl = await all_async(`
-                SELECT primary_sector, strftime('%H:00', datetime(created_at/1000, 'unixepoch')) as hour, COUNT(*) as count
-                FROM memories WHERE created_at > ? GROUP BY primary_sector, hour ORDER BY hour
-            `, [strt])
+            const tl = await q.timeline_by_sector.all(strt)
             res.json({ timeline: tl })
         } catch (e: any) {
             res.status(500).json({ err: 'internal', message: e.message })
@@ -227,10 +207,7 @@ export function dash(app: any) {
     app.get('/dashboard/top-memories', async (req: any, res: any) => {
         try {
             const lim = parseInt(req.query.limit || '10')
-            const topm = await all_async(`
-                SELECT id, content, primary_sector, salience, last_seen_at
-                FROM memories ORDER BY salience DESC LIMIT ?
-            `, [lim])
+            const topm = await q.top_memories.all(lim)
             res.json({
                 memories: topm.map((m: any) => ({
                     id: m.id,
@@ -250,20 +227,9 @@ export function dash(app: any) {
             const hrs = parseInt(req.query.hours || '24')
             const strt = Date.now() - (hrs * 60 * 60 * 1000)
 
-            const ops = await all_async(`
-                SELECT 
-                    type,
-                    strftime('%H:00', datetime(ts/1000, 'unixepoch', 'localtime')) as hour,
-                    SUM(count) as cnt
-                FROM stats
-                WHERE ts > ?
-                GROUP BY type, hour
-                ORDER BY hour
-            `, [strt])
+            const ops = await q.maintenance_ops.all(strt)
 
-            const totals = await all_async(`
-                SELECT type, SUM(count) as total FROM stats WHERE ts > ? GROUP BY type
-            `, [strt])
+            const totals = await q.totals_since.all(strt)
 
             const by_hr: Record<string, any> = {}
             for (const op of ops) {

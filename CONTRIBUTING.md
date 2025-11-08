@@ -63,16 +63,16 @@ cd openmemory
 
 # Install backend dependencies
 cd backend
-npm install
+bun install
 
-# Start development server
-npm run dev
+# Start development server (Bun-first)
+bun run dev
 
 # Run tests
-npm test
+bun run test
 
 # Build for production
-npm run build
+bun run build
 ```
 
 ### JavaScript SDK Development
@@ -82,13 +82,14 @@ npm run build
 cd SDK/javascript
 
 # Install dependencies
-npm install
+
+bun install
 
 # Build the SDK
-npm run build
+bun run build
 
 # Run tests
-npm test
+bun run test
 
 # Run examples
 cd ../examples/js-sdk
@@ -178,9 +179,9 @@ docs(api): update HSG endpoint documentation
 
 ```bash
 cd backend
-npm test                 # Run all tests
-npm run test:watch      # Run tests in watch mode
-npm run test:coverage   # Run tests with coverage
+bun run test                 # Run all tests
+bun run test:watch      # Run tests in watch mode
+bun run test:coverage   # Run tests with coverage
 ```
 
 #### JavaScript SDK Tests
