@@ -1,0 +1,24 @@
+[install]
+frozen-lockfile = true
+production = false
+concurrent-scripts = 10
+network-concurrency = 96
+
+[install.cache]
+dir = ".bun-cache"
+disable = false
+
+[test]
+coverage = true
+timeout = 30000
+
+[run]
+hot = true
+watch = true
+
+[build]
+target = "bun"
+minify = true
+sourcemap = "external"
+
+telemetry = false

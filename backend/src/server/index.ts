@@ -20,9 +20,9 @@ const ASC = `   ____                   __  __
 const app = server({ max_payload_size: env.max_payload_size })
 
 console.log(ASC)
-console.log(`[CONFIG] Vector Dimension: ${env.vec_dim}`)
-console.log(`[CONFIG] Cache Segments: ${env.cache_segments}`)
-console.log(`[CONFIG] Max Active Queries: ${env.max_active}`)
+console.log(`[SERVER] Mode: ${env.mode}, Tier: ${tier}`)
+console.log(`[SERVER] Database: ${env.metadata_backend}, Vector: ${env.vector_backend}`)
+console.log(`[SERVER] Embeddings: ${env.emb_kind}, Dim: ${env.vec_dim}`)
 
 app.use(req_tracker_mw())
 

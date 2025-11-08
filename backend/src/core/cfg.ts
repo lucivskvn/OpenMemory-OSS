@@ -1,7 +1,9 @@
 import path from 'path'
 import dotenv from 'dotenv'
 
-dotenv.config({ path: path.resolve(__dirname, '../../../.env') })
+if (process.env.OM_LOAD_DOTENV === 'true') {
+  dotenv.config({ path: path.resolve(__dirname, '../../../.env') })
+}
 const num = (v: string | undefined, d: number) => Number(v) || d
 const str = (v: string | undefined, d: string) => v || d
 const bool = (v: string | undefined) => v === 'true'
