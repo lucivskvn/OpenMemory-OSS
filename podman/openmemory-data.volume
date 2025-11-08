@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenMemory persistent data volume
+Documentation=https://github.com/nullure/openmemory
+
+[Volume]
+VolumeName=openmemory-data
+Driver=local
+Label=app=openmemory
+Label=type=data
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+[Install]
+WantedBy=default.target

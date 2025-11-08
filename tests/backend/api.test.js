@@ -291,7 +291,7 @@ async function runBackendTests() {
       '❌ Server not available. Please start the server first:',
       error.message,
     );
-    console.error('   Run: cd backend && npm start');
+    console.error('   Run: cd backend && bun start');
     process.exit(1);
   }
 

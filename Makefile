@@ -12,69 +12,69 @@ help: ## Show this help message
 # Installation and Setup
 install: ## Install all dependencies
 	@echo "📦 Installing backend dependencies..."
-	cd backend && npm install
+	cd backend && bun install
 	@echo "📦 Installing JavaScript SDK dependencies..."
-	cd sdk-js && npm install
+	cd sdk-js && bun install
 	@echo "📦 Installing Python SDK dependencies..."
 	cd sdk-py && pip install -e .
 	@echo "✅ All dependencies installed!"
 
 install-dev: ## Install development dependencies
 	@echo "🛠️ Installing development dependencies..."
-	cd backend && npm install
-	cd sdk-js && npm install
+	cd backend && bun install
+	cd sdk-js && bun install
 	cd sdk-py && pip install -e .[dev]
 	@echo "✅ Development dependencies installed!"
 
 # Build
 build: ## Build all components
 	@echo "🏗️ Building backend..."
-	cd backend && npm run build
+	cd backend && bun run build
 	@echo "🏗️ Building JavaScript SDK..."
-	cd sdk-js && npm run build
+	cd sdk-js && bun run build
 	@echo "✅ All components built!"
 
 build-backend: ## Build backend only
-	cd backend && npm run build
+	cd backend && bun run build
 
 build-js-sdk: ## Build JavaScript SDK only
-	cd sdk-js && npm run build
+	cd sdk-js && bun run build
 
 # Development
 dev: ## Start development server
 	@echo "🚀 Starting development server..."
-	cd backend && npm run dev
+	cd backend && bun run dev
 
 dev-watch: ## Start development server with file watching
 	@echo "👀 Starting development server with watching..."
-	cd backend && npm run dev
+	cd backend && bun run dev
 
 # Production
 start: ## Start production server
 	@echo "🚀 Starting production server..."
-	cd backend && npm start
+	cd backend && bun run start
 
 stop: ## Stop server (if running as daemon)
 	@echo "🛑 Stopping server..."
-	@pkill -f "node.*openmemory" || echo "No server process found"
+	@pkill -f "bun.*index.js" || echo "No server process found"
 
 # Testing
 test: ## Run all tests
 	@echo "🧪 Running all tests..."
 	@echo "Testing backend API..."
-	node tests/backend/api-simple.test.js
+	bun test ./tests/backend/api.bun.test.js
 	@echo "Testing JavaScript SDK..."
-	node tests/js-sdk/sdk-simple.test.js
+	bun test ./tests/js-sdk/sdk-simple.test.js
 	@echo "Testing Python SDK..."
 	cd tests/py-sdk && python test-simple.py
 
 test-backend: ## Run backend tests only
 	@echo "🧪 Testing backend API..."
-	node tests/backend/api-simple.test.js
+	bun test ./tests/backend/api.bun.test.js
 
 test-js-sdk: ## Run JavaScript SDK tests only
 	@echo "🧪 Testing JavaScript SDK..."
-	node tests/js-sdk/sdk-simple.test.js
+	bun test ./tests/js-sdk/sdk-simple.test.js
 
 test-py-sdk: ## Run Python SDK tests only
 	@echo "🧪 Testing Python SDK..."
@@ -82,25 +82,25 @@ test-py-sdk: ## Run Python SDK tests only
 
 test-integration: ## Run integration tests
 	@echo "🔗 Running integration tests..."
-	node tests/backend/api.test.js
+	bun test ./tests/backend/api.bun.test.js
 
 # Code Quality
 lint: ## Run linters
 	@echo "🔍 Running linters..."
-	cd backend && npm run lint || echo "Backend linting completed"
-	cd sdk-js && npm run lint || echo "JS SDK linting completed"
+	cd backend && bun run lint || echo "Backend linting completed"
+	cd sdk-js && bun run lint || echo "JS SDK linting completed"
 	cd sdk-py && python -m flake8 . || echo "Python linting completed"
 
 format: ## Format code
 	@echo "🎨 Formatting code..."
-	cd backend && npm run format || echo "Backend formatting completed"
-	cd sdk-js && npm run format || echo "JS SDK formatting completed"
+	cd backend && bun run format || echo "Backend formatting completed"
+	cd sdk-js && bun run format || echo "JS SDK formatting completed"
 	cd sdk-py && python -m black . || echo "Python formatting completed"
 
 type-check: ## Run type checking
 	@echo "🏷️ Running type checks..."
-	cd backend && npx tsc --noEmit
-	cd sdk-js && npx tsc --noEmit
+	cd backend && bun tsc --noEmit
+	cd sdk-js && bun tsc --noEmit
 
 # Database
 db-reset: ## Reset database
@@ -132,6 +132,18 @@ docker-stop: ## Stop Docker containers
 	docker-compose down
 
 run: docker-dev ## Alias for docker-dev
+
+podman-dev: ## Run development environment with Podman
+	podman compose up --build
+
+podman-quadlet-install: ## Install Quadlet systemd files
+	mkdir -p ~/.config/containers/systemd && cp podman/*.{container,volume} ~/.config/containers/systemd/ && systemctl --user daemon-reload
+
+podman-start: ## Start Podman systemd service
+	systemctl --user start openmemory.service
+
+podman-logs: ## View Podman service logs
+	journalctl --user -u openmemory.service -f
 
 # Cleanup
 clean: ## Clean build artifacts

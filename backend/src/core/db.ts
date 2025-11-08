@@ -1,4 +1,4 @@
-import sqlite3 from 'sqlite3'
+import { Database } from 'bun:sqlite'
 import { Pool, PoolClient } from 'pg'
 import { env } from './cfg'
 import fs from 'node:fs'
@@ -194,92 +194,160 @@ if (is_pg) {
     const db_path = env.db_path || './data/openmemory.sqlite'
     const dir = path.dirname(db_path)
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-    const db = new sqlite3.Database(db_path)
-    db.serialize(() => {
-        db.run('PRAGMA journal_mode=WAL')
-        db.run('PRAGMA synchronous=NORMAL')
-        db.run('PRAGMA temp_store=MEMORY')
-        db.run('PRAGMA cache_size=-8000')
-        db.run('PRAGMA mmap_size=134217728')
-        db.run('PRAGMA foreign_keys=OFF')
-        db.run('PRAGMA wal_autocheckpoint=20000')
-        db.run('PRAGMA locking_mode=EXCLUSIVE')
-        db.run('PRAGMA busy_timeout=50')
-        db.run(`create table if not exists memories(id text primary key,user_id text,segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,meta text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0)`)
-        db.run(`create table if not exists vectors(id text not null,sector text not null,user_id text,v blob not null,dim integer not null,primary key(id,sector))`)
-        db.run(`create table if not exists waypoints(src_id text,dst_id text not null,user_id text,weight real not null,created_at integer,updated_at integer,primary key(src_id,user_id))`)
-        db.run(`create table if not exists embed_logs(id text primary key,model text,status text,ts integer,err text)`)
-        db.run(`create table if not exists users(user_id text primary key,summary text,reflection_count integer default 0,created_at integer,updated_at integer)`)
-        db.run(`create table if not exists stats(id integer primary key autoincrement,type text not null,count integer default 1,ts integer not null)`)
-        db.run('create index if not exists idx_memories_sector on memories(primary_sector)')
-        db.run('create index if not exists idx_memories_segment on memories(segment)')
-        db.run('create index if not exists idx_memories_simhash on memories(simhash)')
-        db.run('create index if not exists idx_memories_ts on memories(last_seen_at)')
-        db.run('create index if not exists idx_memories_user on memories(user_id)')
-        db.run('create index if not exists idx_vectors_user on vectors(user_id)')
-        db.run('create index if not exists idx_waypoints_src on waypoints(src_id)')
-        db.run('create index if not exists idx_waypoints_dst on waypoints(dst_id)')
-        db.run('create index if not exists idx_waypoints_user on waypoints(user_id)')
-        db.run('create index if not exists idx_stats_ts on stats(ts)')
-        db.run('create index if not exists idx_stats_type on stats(type)')
-    })
+    const db = new Database(db_path)
+    db.exec('PRAGMA journal_mode=WAL')
+    db.exec('PRAGMA synchronous=NORMAL')
+    db.exec('PRAGMA temp_store=MEMORY')
+    db.exec('PRAGMA cache_size=-8000')
+    db.exec('PRAGMA mmap_size=134217728')
+    db.exec('PRAGMA foreign_keys=OFF')
+    db.exec('PRAGMA wal_autocheckpoint=20000')
+    db.exec('PRAGMA locking_mode=EXCLUSIVE')
+    db.exec('PRAGMA busy_timeout=50')
+    db.exec(`create table if not exists memories(id text primary key,user_id text,segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,meta text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0)`)
+    db.exec(`create table if not exists vectors(id text not null,sector text not null,user_id text,v blob not null,dim integer not null,primary key(id,sector))`)
+    db.exec(`create table if not exists waypoints(src_id text,dst_id text not null,user_id text,weight real not null,created_at integer,updated_at integer,primary key(src_id,user_id))`)
+    db.exec(`create table if not exists embed_logs(id text primary key,model text,status text,ts integer,err text)`)
+    db.exec(`create table if not exists users(user_id text primary key,summary text,reflection_count integer default 0,created_at integer,updated_at integer)`)
+    db.exec(`create table if not exists stats(id integer primary key autoincrement,type text not null,count integer default 1,ts integer not null)`)
+    db.exec('create index if not exists idx_memories_sector on memories(primary_sector)')
+    db.exec('create index if not exists idx_memories_segment on memories(segment)')
+    db.exec('create index if not exists idx_memories_simhash on memories(simhash)')
+    db.exec('create index if not exists idx_memories_ts on memories(last_seen_at)')
+    db.exec('create index if not exists idx_memories_user on memories(user_id)')
+    db.exec('create index if not exists idx_vectors_user on vectors(user_id)')
+    db.exec('create index if not exists idx_waypoints_src on waypoints(src_id)')
+    db.exec('create index if not exists idx_waypoints_dst on waypoints(dst_id)')
+    db.exec('create index if not exists idx_waypoints_user on waypoints(user_id)')
+    db.exec('create index if not exists idx_stats_ts on stats(ts)')
+    db.exec('create index if not exists idx_stats_type on stats(type)')
     memories_table = 'memories'
-    const exec = (sql: string, p: any[] = []) => new Promise<void>((ok, no) => db.run(sql, p, err => err ? no(err) : ok()))
-    const one = (sql: string, p: any[] = []) => new Promise<any>((ok, no) => db.get(sql, p, (err, row) => err ? no(err) : ok(row)))
-    const many = (sql: string, p: any[] = []) => new Promise<any[]>((ok, no) => db.all(sql, p, (err, rows) => err ? no(err) : ok(rows)))
+    const exec = (sql: string, p: any[] = []) => { db.run(sql, ...p); return Promise.resolve() }
+    const one = (sql: string, p: any[] = []) => Promise.resolve(db.query(sql).get(...p))
+    const many = (sql: string, p: any[] = []) => Promise.resolve(db.query(sql).all(...p))
     run_async = exec
     get_async = one
     all_async = many
+    const _transaction = (fn: () => void) => db.transaction(fn)
     transaction = {
-        begin: () => exec('BEGIN TRANSACTION'),
-        commit: () => exec('COMMIT'),
-        rollback: () => exec('ROLLBACK')
+        begin: () => {
+            console.warn("[DB] Manual transaction control (begin) is deprecated. Use a transaction block instead.");
+            return Promise.resolve();
+        },
+        commit: () => {
+            console.warn("[DB] Manual transaction control (commit) is deprecated.");
+            return Promise.resolve();
+        },
+        rollback: () => {
+            console.warn("[DB] Manual transaction control (rollback) is deprecated.");
+            return Promise.resolve();
+        }
     }
+
+    const ins_mem_stmt = db.prepare('insert into memories(id,user_id,segment,content,simhash,primary_sector,tags,meta,created_at,updated_at,last_seen_at,salience,decay_lambda,version,mean_dim,mean_vec,compressed_vec,feedback_score) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+    const upd_mean_vec_stmt = db.prepare('update memories set mean_dim=?,mean_vec=? where id=?')
+    const upd_compressed_vec_stmt = db.prepare('update memories set compressed_vec=? where id=?')
+    const upd_feedback_stmt = db.prepare('update memories set feedback_score=? where id=?')
+    const upd_seen_stmt = db.prepare('update memories set last_seen_at=?,salience=?,updated_at=? where id=?')
+    const upd_mem_stmt = db.prepare('update memories set content=?,tags=?,meta=?,updated_at=?,version=version+1 where id=?')
+    const upd_mem_with_sector_stmt = db.prepare('update memories set content=?,primary_sector=?,tags=?,meta=?,updated_at=?,version=version+1 where id=?')
+    const del_mem_stmt = db.prepare('delete from memories where id=? and user_id=?')
+    const get_mem_stmt = db.prepare('select * from memories where id=?')
+    const get_mem_by_simhash_stmt = db.prepare('select * from memories where simhash=? order by salience desc limit 1')
+    const all_mem_stmt = db.prepare('select * from memories order by created_at desc limit ? offset ?')
+    const all_mem_by_sector_stmt = db.prepare('select * from memories where primary_sector=? order by created_at desc limit ? offset ?')
+    const get_segment_count_stmt = db.prepare('select count(*) as c from memories where segment=?')
+    const get_max_segment_stmt = db.prepare('select coalesce(max(segment), 0) as max_seg from memories')
+    const get_segments_stmt = db.prepare('select distinct segment from memories order by segment desc')
+    const get_mem_by_segment_stmt = db.prepare('select * from memories where segment=? order by created_at desc')
+    const ins_vec_stmt = db.prepare('insert into vectors(id,sector,user_id,v,dim) values(?,?,?,?,?)')
+    const get_vec_stmt = db.prepare('select v,dim from vectors where id=? and sector=?')
+    const get_vecs_by_id_stmt = db.prepare('select sector,v,dim from vectors where id=?')
+    const get_vecs_by_sector_stmt = db.prepare('select id,v,dim from vectors where sector=?')
+    const del_vec_stmt = db.prepare('delete from vectors where id=?')
+    const del_vec_sector_stmt = db.prepare('delete from vectors where id=? and sector=?')
+    const ins_waypoint_stmt = db.prepare('insert or replace into waypoints(src_id,dst_id,user_id,weight,created_at,updated_at) values(?,?,?,?,?,?)')
+    const get_neighbors_stmt = db.prepare('select dst_id,weight from waypoints where src_id=? order by weight desc')
+    const get_waypoints_by_src_stmt = db.prepare('select src_id,dst_id,weight,created_at,updated_at from waypoints where src_id=?')
+    const get_waypoint_stmt = db.prepare('select weight from waypoints where src_id=? and dst_id=?')
+    const upd_waypoint_stmt = db.prepare('update waypoints set weight=?,updated_at=? where src_id=? and dst_id=?')
+    const del_waypoints_stmt = db.prepare('delete from waypoints where src_id=? or dst_id=?')
+    const prune_waypoints_stmt = db.prepare('delete from waypoints where weight<?')
+    const ins_log_stmt = db.prepare('insert or replace into embed_logs(id,model,status,ts,err) values(?,?,?,?,?)')
+    const upd_log_stmt = db.prepare('update embed_logs set status=?,err=? where id=?')
+    const get_pending_logs_stmt = db.prepare('select * from embed_logs where status=?')
+    const get_failed_logs_stmt = db.prepare('select * from embed_logs where status=? order by ts desc limit 100')
+    const all_mem_by_user_stmt = db.prepare('select * from memories where user_id=? order by created_at desc limit ? offset ?')
+    const ins_user_stmt = db.prepare('insert or replace into users(user_id,summary,reflection_count,created_at,updated_at) values(?,?,?,?,?)')
+    const get_user_stmt = db.prepare('select * from users where user_id=?')
+    const upd_user_summary_stmt = db.prepare('update users set summary=?,reflection_count=reflection_count+1,updated_at=? where user_id=?')
+
     q = {
-        ins_mem: { run: (...p) => exec('insert into memories(id,user_id,segment,content,simhash,primary_sector,tags,meta,created_at,updated_at,last_seen_at,salience,decay_lambda,version,mean_dim,mean_vec,compressed_vec,feedback_score) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', p) },
-        upd_mean_vec: { run: (...p) => exec('update memories set mean_dim=?,mean_vec=? where id=?', p) },
-        upd_compressed_vec: { run: (...p) => exec('update memories set compressed_vec=? where id=?', p) },
-        upd_feedback: { run: (...p) => exec('update memories set feedback_score=? where id=?', p) },
-        upd_seen: { run: (...p) => exec('update memories set last_seen_at=?,salience=?,updated_at=? where id=?', p) },
-        upd_mem: { run: (...p) => exec('update memories set content=?,tags=?,meta=?,updated_at=?,version=version+1 where id=?', p) },
-        upd_mem_with_sector: { run: (...p) => exec('update memories set content=?,primary_sector=?,tags=?,meta=?,updated_at=?,version=version+1 where id=?', p) },
-        del_mem: { run: (...p) => exec('delete from memories where id=?', p) },
-        get_mem: { get: (id) => one('select * from memories where id=?', [id]) },
-        get_mem_by_simhash: { get: (simhash) => one('select * from memories where simhash=? order by salience desc limit 1', [simhash]) },
-        all_mem: { all: (limit, offset) => many('select * from memories order by created_at desc limit ? offset ?', [limit, offset]) },
-        all_mem_by_sector: { all: (sector, limit, offset) => many('select * from memories where primary_sector=? order by created_at desc limit ? offset ?', [sector, limit, offset]) },
-        get_segment_count: { get: (segment) => one('select count(*) as c from memories where segment=?', [segment]) },
-        get_max_segment: { get: () => one('select coalesce(max(segment), 0) as max_seg from memories', []) },
-        get_segments: { all: () => many('select distinct segment from memories order by segment desc', []) },
-        get_mem_by_segment: { all: (segment) => many('select * from memories where segment=? order by created_at desc', [segment]) },
-        ins_vec: { run: (...p) => exec('insert into vectors(id,sector,user_id,v,dim) values(?,?,?,?,?)', p) },
-        get_vec: { get: (id, sector) => one('select v,dim from vectors where id=? and sector=?', [id, sector]) },
-        get_vecs_by_id: { all: (id) => many('select sector,v,dim from vectors where id=?', [id]) },
-        get_vecs_by_sector: { all: (sector) => many('select id,v,dim from vectors where sector=?', [sector]) },
+        ins_mem: { run: (...p) => { ins_mem_stmt.run(...p); return Promise.resolve() } },
+        upd_mean_vec: { run: (...p) => { upd_mean_vec_stmt.run(...p); return Promise.resolve() } },
+        upd_compressed_vec: { run: (...p) => { upd_compressed_vec_stmt.run(...p); return Promise.resolve() } },
+        upd_feedback: { run: (...p) => { upd_feedback_stmt.run(...p); return Promise.resolve() } },
+        upd_seen: { run: (...p) => { upd_seen_stmt.run(...p); return Promise.resolve() } },
+        upd_mem: { run: (...p) => { upd_mem_stmt.run(...p); return Promise.resolve() } },
+        upd_mem_with_sector: { run: (...p) => { upd_mem_with_sector_stmt.run(...p); return Promise.resolve() } },
+        del_mem: { run: (id, user_id) => { del_mem_stmt.run(id, user_id); return Promise.resolve() } },
+        get_mem: { get: (id) => Promise.resolve(get_mem_stmt.get(id)) },
+        get_mem_by_simhash: { get: (simhash) => Promise.resolve(get_mem_by_simhash_stmt.get(simhash)) },
+        all_mem: { all: (limit, offset) => Promise.resolve(all_mem_stmt.all(limit, offset)) },
+        all_mem_by_sector: { all: (sector, limit, offset) => Promise.resolve(all_mem_by_sector_stmt.all(sector, limit, offset)) },
+        get_segment_count: { get: (segment) => Promise.resolve(get_segment_count_stmt.get(segment)) },
+        get_max_segment: { get: () => Promise.resolve(get_max_segment_stmt.get()) },
+        get_segments: { all: () => Promise.resolve(get_segments_stmt.all()) },
+        get_mem_by_segment: { all: (segment) => Promise.resolve(get_mem_by_segment_stmt.all(segment)) },
+        ins_vec: { run: (...p) => { ins_vec_stmt.run(...p); return Promise.resolve() } },
+        get_vec: {
+            get: (id, sector, user_id) => {
+                if (!user_id) console.warn('[DB] Query without user_id - potential cross-tenant leak')
+                return Promise.resolve(get_vec_stmt.get(id, sector))
+            }
+        },
+        get_vecs_by_id: { all: (id) => Promise.resolve(get_vecs_by_id_stmt.all(id)) },
+        get_vecs_by_sector: { all: (sector) => Promise.resolve(get_vecs_by_sector_stmt.all(sector)) },
         get_vecs_batch: {
             all: (ids: string[], sector: string) => {
                 if (!ids.length) return Promise.resolve([])
                 const ph = ids.map(() => '?').join(',')
-                return many(`select id,v,dim from vectors where sector=? and id in (${ph})`, [sector, ...ids])
+                const stmt = db.prepare(`select id,v,dim from vectors where sector=? and id in (${ph})`)
+                return Promise.resolve(stmt.all(sector, ...ids))
             }
         },
-        del_vec: { run: (...p) => exec('delete from vectors where id=?', p) },
-        del_vec_sector: { run: (...p) => exec('delete from vectors where id=? and sector=?', p) },
-        ins_waypoint: { run: (...p) => exec('insert or replace into waypoints(src_id,dst_id,user_id,weight,created_at,updated_at) values(?,?,?,?,?,?)', p) },
-        get_neighbors: { all: (src) => many('select dst_id,weight from waypoints where src_id=? order by weight desc', [src]) },
-        get_waypoints_by_src: { all: (src) => many('select src_id,dst_id,weight,created_at,updated_at from waypoints where src_id=?', [src]) },
-        get_waypoint: { get: (src, dst) => one('select weight from waypoints where src_id=? and dst_id=?', [src, dst]) },
-        upd_waypoint: { run: (...p) => exec('update waypoints set weight=?,updated_at=? where src_id=? and dst_id=?', p) },
-        del_waypoints: { run: (...p) => exec('delete from waypoints where src_id=? or dst_id=?', p) },
-        prune_waypoints: { run: (t) => exec('delete from waypoints where weight<?', [t]) },
-        ins_log: { run: (...p) => exec('insert or replace into embed_logs(id,model,status,ts,err) values(?,?,?,?,?)', p) },
-        upd_log: { run: (...p) => exec('update embed_logs set status=?,err=? where id=?', p) },
-        get_pending_logs: { all: () => many('select * from embed_logs where status=?', ['pending']) },
-        get_failed_logs: { all: () => many('select * from embed_logs where status=? order by ts desc limit 100', ['failed']) },
-        all_mem_by_user: { all: (user_id, limit, offset) => many('select * from memories where user_id=? order by created_at desc limit ? offset ?', [user_id, limit, offset]) },
-        ins_user: { run: (...p) => exec('insert or replace into users(user_id,summary,reflection_count,created_at,updated_at) values(?,?,?,?,?)', p) },
-        get_user: { get: (user_id) => one('select * from users where user_id=?', [user_id]) },
-        upd_user_summary: { run: (...p) => exec('update users set summary=?,reflection_count=reflection_count+1,updated_at=? where user_id=?', p) }
+        del_vec: { run: (...p) => { del_vec_stmt.run(...p); return Promise.resolve() } },
+        del_vec_sector: { run: (...p) => { del_vec_sector_stmt.run(...p); return Promise.resolve() } },
+        ins_waypoint: {
+            run: (...p) => {
+                if (!p[2]) console.warn('[DB] Query without user_id - potential cross-tenant leak')
+                ins_waypoint_stmt.run(...p); return Promise.resolve()
+            }
+        },
+        get_neighbors: {
+            all: (src, user_id) => {
+                if (!user_id) console.warn('[DB] Query without user_id - potential cross-tenant leak')
+                return Promise.resolve(get_neighbors_stmt.all(src))
+            }
+        },
+        get_waypoints_by_src: { all: (src) => Promise.resolve(get_waypoints_by_src_stmt.all(src)) },
+        get_waypoint: { get: (src, dst) => Promise.resolve(get_waypoint_stmt.get(src, dst)) },
+        upd_waypoint: { run: (...p) => { upd_waypoint_stmt.run(...p); return Promise.resolve() } },
+        del_waypoints: { run: (...p) => { del_waypoints_stmt.run(...p); return Promise.resolve() } },
+        prune_waypoints: { run: (t) => { prune_waypoints_stmt.run(t); return Promise.resolve() } },
+        ins_log: { run: (...p) => { ins_log_stmt.run(...p); return Promise.resolve() } },
+        upd_log: { run: (...p) => { upd_log_stmt.run(...p); return Promise.resolve() } },
+        get_pending_logs: { all: () => Promise.resolve(get_pending_logs_stmt.all('pending')) },
+        get_failed_logs: { all: () => Promise.resolve(get_failed_logs_stmt.all('failed')) },
+        all_mem_by_user: {
+            all: (user_id, limit, offset) => {
+                if (!user_id) console.warn('[DB] Query without user_id - potential cross-tenant leak')
+                return Promise.resolve(all_mem_by_user_stmt.all(user_id, limit, offset))
+            }
+        },
+        ins_user: { run: (...p) => { ins_user_stmt.run(...p); return Promise.resolve() } },
+        get_user: { get: (user_id) => Promise.resolve(get_user_stmt.get(user_id)) },
+        upd_user_summary: { run: (...p) => { upd_user_summary_stmt.run(...p); return Promise.resolve() } }
     }
 }
 

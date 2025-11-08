@@ -169,8 +169,10 @@ export function gen_syn_emb(t: string, s: string): number[] {
 
 const resize_vec = (v: number[], t: number) => { if (v.length === t) return v; if (v.length > t) return v.slice(0, t); return [...v, ...Array(t - v.length).fill(0)] }
 
-export async function embedMultiSector(id: string, txt: string, secs: string[], chunks?: Array<{ text: string }>): Promise<EmbeddingResult[]> {
+export async function embedMultiSector(id: string, txt: string, secs: string[], chunks?: Array<{ text: string }>, user_id?: string): Promise<EmbeddingResult[]> {
     const r: EmbeddingResult[] = []
+    const start = Date.now()
+    console.log('[EMBED] Embedding for user:', user_id || 'system', 'sectors:', secs.length)
     await q.ins_log.run(id, 'multi-sector', 'pending', Date.now(), null)
     for (let a = 0; a < 3; a++) {
         try {
@@ -202,8 +204,10 @@ export async function embedMultiSector(id: string, txt: string, secs: string[], 
                 }
             }
             await q.upd_log.run('completed', null, id)
+            console.log('[EMBED] Completed in', Date.now() - start, 'ms')
             return r
         } catch (e) {
+            console.error('[EMBED] Failed after', a + 1, 'attempts for user:', user_id || 'system', 'error:', e)
             if (a === 2) { await q.upd_log.run('failed', e instanceof Error ? e.message : String(e), id); throw e }
             await new Promise(x => setTimeout(x, 1000 * Math.pow(2, a)))
         }
