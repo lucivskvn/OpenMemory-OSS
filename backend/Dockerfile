@@ -7,7 +7,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install all dependencies (including devDependencies) using Bun
-RUN bun install --production=false
+RUN bun install --production=false --frozen-lockfile
 
 # Copy source code and build the application
 COPY src/ ./src/

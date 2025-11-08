@@ -188,8 +188,9 @@ bun run test:coverage   # Run tests with coverage
 
 ```bash
 cd SDK/javascript
-npm test                # Run Jest tests
-npm run test:e2e       # Run end-to-end tests
+# Run tests with Bun or fall back to npm
+bun run test                # Run Jest tests
+bun run test:e2e       # Run end-to-end tests
 ```
 
 #### Python SDK Tests

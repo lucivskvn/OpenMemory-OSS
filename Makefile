@@ -173,7 +173,7 @@ run-examples: ## Run example files
 	sleep 2
 	node examples/backend/api-test.mjs
 	@echo "JavaScript SDK examples:"
-	node examples/js-sdk/basic-usage.js
+	bun examples/js-sdk/basic-usage.js
 	@echo "Python SDK examples:"
 	cd examples/py-sdk && python basic_usage.py
 

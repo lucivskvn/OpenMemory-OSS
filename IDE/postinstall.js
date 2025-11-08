@@ -56,7 +56,7 @@ async function postInstall() {
   } else {
     console.log('⚠️  Backend not detected at', DEFAULT_URL);
     console.log('\nTo start the backend:');
-    console.log('  cd backend && npm start');
+  console.log('  cd backend && bun run start');
     console.log(
       '\nAuto-link will run automatically when you activate the extension.',
     );

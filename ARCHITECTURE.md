@@ -674,15 +674,15 @@ Ports:
 
 ```bash
 cd backend
-npm install
-npm run dev
+bun install
+bun run dev
 ```
 
 ### Production
 
 ```bash
-npm run build
-npm start
+bun run build
+bun run start
 ```
 
 **Systemd service:**
@@ -696,7 +696,7 @@ After=network.target
 Type=simple
 User=openmemory
 WorkingDirectory=/opt/openmemory/backend
-ExecStart=/usr/bin/node dist/server/index.js
+ExecStart=/usr/bin/bun dist/server/index.js
 Restart=always
 
 [Install]

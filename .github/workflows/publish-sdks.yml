@@ -47,11 +47,18 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Publishing @openmemory/sdk@$VERSION"
 
-      - name: install deps
-        run: cd sdk-js && npm ci
+      - name: Set up Bun (for build)
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 'latest'
 
-      - name: build
-        run: cd sdk-js && npm run build
+      - name: install deps (bun)
+        run: |
+          cd sdk-js
+          bun install
+
+      - name: build (bun)
+        run: cd sdk-js && bun run build
 
       - name: publish
         run: cd sdk-js && npm publish --access public
