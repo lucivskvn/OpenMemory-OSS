@@ -1,3 +1,4 @@
+await require('./_ensure_server')();
 const BASE_URL = 'http://localhost:8080';
 const API_KEY = 'your';
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));

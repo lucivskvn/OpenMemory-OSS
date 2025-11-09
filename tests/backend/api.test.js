@@ -1,3 +1,6 @@
+const __ensure_mod = await import('./_ensure_server.js')
+const ensureServer = __ensure_mod.default || __ensure_mod
+await ensureServer()
 const BASE_URL = 'http://localhost:8080';
 const API_KEY = 'your';
 let testResults = { passed: 0, failed: 0, total: 0, failures: [] };
@@ -320,11 +323,11 @@ async function runBackendTests() {
   process.exit(success ? 0 : 1);
 }
 
-if (require.main === module) {
+if (typeof import.meta !== 'undefined' && import.meta && import.meta.main) {
   runBackendTests().catch((error) => {
     console.error('❌ Test runner failed:', error);
     process.exit(1);
   });
 }
 
-module.exports = { runBackendTests };
+export { runBackendTests };

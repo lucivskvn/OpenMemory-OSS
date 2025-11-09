@@ -3,6 +3,10 @@
  * Tests handling of multi-thousand token documents
  */
 
+const __ensure_mod = await import('./_ensure_server.js')
+const ensureServer = __ensure_mod.default || __ensure_mod
+await ensureServer()
+
 const http = require('http');
 const API_KEY = 'your';
 

@@ -85,7 +85,7 @@ async function emb_gemini(txts: Record<string, string>): Promise<Record<string, 
                 if (!r.ok) {
                     if (r.status === 429) {
                         const d = Math.min(parseInt(r.headers.get('retry-after') || '2') * 1000, 1000 * Math.pow(2, a))
-                        console.warn(`[EMBED] Gemini rate limit (${a + 1}/3), waiting ${d}ms`)
+                        if (env.log_tenant) console.warn(`[EMBED] Gemini rate limit (${a + 1}/3), waiting ${d}ms`)
                         await new Promise(x => setTimeout(x, d))
                         continue
                     }
@@ -103,7 +103,7 @@ async function emb_gemini(txts: Record<string, string>): Promise<Record<string, 
                     for (const s of Object.keys(txts)) fb[s] = gen_syn_emb(txts[s], s)
                     return fb
                 }
-                console.warn(`[EMBED] Gemini error (${a + 1}/3): ${e instanceof Error ? e.message : String(e)}`)
+                if (env.log_tenant) console.warn(`[EMBED] Gemini error (${a + 1}/3): ${e instanceof Error ? e.message : String(e)}`)
                 await new Promise(x => setTimeout(x, 1000 * Math.pow(2, a)))
             }
         }
@@ -123,14 +123,14 @@ async function emb_ollama(t: string, s: string): Promise<number[]> {
 }
 
 async function emb_local(t: string, s: string): Promise<number[]> {
-    if (!env.local_model_path) { console.warn('[EMBED] Local model missing, using synthetic'); return gen_syn_emb(t, s) }
+    if (!env.local_model_path) { if (env.log_tenant) console.warn('[EMBED] Local model missing, using synthetic'); return gen_syn_emb(t, s) }
     try {
         const { createHash } = await import('crypto')
         const h = createHash('sha256').update(t + s).digest(), e: number[] = []
         for (let i = 0; i < env.vec_dim; i++) { const b1 = h[i % h.length], b2 = h[(i + 1) % h.length]; e.push((b1 * 256 + b2) / 65535 * 2 - 1) }
         const n = Math.sqrt(e.reduce((sum, v) => sum + v * v, 0))
         return e.map(v => v / n)
-    } catch { console.warn('[EMBED] Local embedding failed, using synthetic'); return gen_syn_emb(t, s) }
+    } catch { if (env.log_tenant) console.warn('[EMBED] Local embedding failed, using synthetic'); return gen_syn_emb(t, s) }
 }
 
 const h1 = (v: string) => { let h = 0x811c9dc5 | 0; for (let i = 0; i < v.length; i++) h = Math.imul(h ^ v.charCodeAt(i), 16777619); return h >>> 0 }
@@ -172,19 +172,19 @@ const resize_vec = (v: number[], t: number) => { if (v.length === t) return v; i
 export async function embedMultiSector(id: string, txt: string, secs: string[], chunks?: Array<{ text: string }>, user_id?: string): Promise<EmbeddingResult[]> {
     const r: EmbeddingResult[] = []
     const start = Date.now()
-    console.log('[EMBED] Embedding for user:', user_id || 'system', 'sectors:', secs.length)
+    if (env.log_embed) console.log('[EMBED] Embedding for user:', user_id || 'system', 'sectors:', secs.length)
     await q.ins_log.run(id, 'multi-sector', 'pending', Date.now(), null)
     for (let a = 0; a < 3; a++) {
         try {
             const simp = env.embed_mode === 'simple'
             if (simp && (env.emb_kind === 'gemini' || env.emb_kind === 'openai')) {
-                console.log(`[EMBED] Simple mode (1 batch for ${secs.length} sectors)`)
+                if (env.log_embed) console.log(`[EMBED] Simple mode (1 batch for ${secs.length} sectors)`)
                 const tb: Record<string, string> = {}
                 secs.forEach(s => tb[s] = txt)
                 const b = env.emb_kind === 'gemini' ? await emb_gemini(tb) : await emb_batch_openai(tb)
                 Object.entries(b).forEach(([s, v]) => r.push({ sector: s, vector: v, dim: v.length }))
             } else {
-                console.log(`[EMBED] Advanced mode (${secs.length} calls)`)
+                if (env.log_embed) console.log(`[EMBED] Advanced mode (${secs.length} calls)`)
                 const par = env.adv_embed_parallel && env.emb_kind !== 'gemini'
                 if (par) {
                     const p = secs.map(async s => {
@@ -204,7 +204,7 @@ export async function embedMultiSector(id: string, txt: string, secs: string[], 
                 }
             }
             await q.upd_log.run('completed', null, id)
-            console.log('[EMBED] Completed in', Date.now() - start, 'ms')
+            if (env.log_embed) console.log('[EMBED] Completed in', Date.now() - start, 'ms')
             return r
         } catch (e) {
             console.error('[EMBED] Failed after', a + 1, 'attempts for user:', user_id || 'system', 'error:', e)

@@ -11,8 +11,8 @@ type tier = 'fast' | 'smart' | 'deep' | 'hybrid'
 
 const get_tier = (): tier => {
     const man = process.env.OM_TIER as tier
-    if (man && ['fast', 'smart', 'deep', 'hybrid'].includes(man)) return man
-    console.warn('[OpenMemory] OM_TIER not set! Please set OM_TIER=hybrid|fast|smart|deep in .env')
+  if (man && ['fast', 'smart', 'deep', 'hybrid'].includes(man)) return man
+  console.info('[OpenMemory] OM_TIER not set! Please set OM_TIER=hybrid|fast|smart|deep in .env')
     return 'hybrid'
 }
 export const tier = get_tier()
@@ -73,4 +73,12 @@ export const env = {
     summary_layers: num(process.env.OM_SUMMARY_LAYERS, 3),
     keyword_boost: num(process.env.OM_KEYWORD_BOOST, 2.5),
     keyword_min_length: num(process.env.OM_KEYWORD_MIN_LENGTH, 3)
+  ,
+  log_db: bool(process.env.OM_LOG_DB)
+  ,
+  // When true, warn on queries that omit user_id (helps during debugging multi-tenant leaks)
+  log_tenant: bool(process.env.OM_LOG_TENANT)
+  ,
+  // When true, emit embedding-related debug logs (gated for production)
+  log_embed: bool(process.env.OM_LOG_EMBED)
 }

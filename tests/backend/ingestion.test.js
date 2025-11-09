@@ -1,3 +1,6 @@
+const __ensure_mod = await import('./_ensure_server.js')
+const ensureServer = __ensure_mod.default || __ensure_mod
+await ensureServer()
 const BASE = 'http://localhost:8080';
 const API_KEY = 'your';
 

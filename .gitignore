@@ -19,3 +19,6 @@ temp
 exports
 *.egg-info
 *.vsix
+# Prevent accidental commit of Bun shims used for local Node testing
+node_modules/bun:sqlite/
+backend/node_modules/bun:sqlite/

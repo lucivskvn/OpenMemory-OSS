@@ -1,0 +1,71 @@
+name: Bun CI - Tests
+
+on:
+  push:
+    branches: [main, next]
+  pull_request:
+    branches: [main, next]
+  workflow_dispatch:
+
+jobs:
+  bun-tests:
+    runs-on: ubuntu-latest
+    name: Run tests under Bun
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "latest"
+
+      - name: Verify Bun
+        run: |
+          bun --version
+
+      - name: Backend - install deps
+        working-directory: backend
+        run: |
+          bun install --frozen-lockfile || bun install
+
+      - name: Backend - typecheck
+        working-directory: backend
+        run: bun tsc --noEmit
+
+      - name: Backend - run tests
+        working-directory: backend
+        env:
+          OM_TESTING: "1"
+          # Use an in-memory SQLite DB for deterministic nested-transaction tests
+          OM_DB_PATH: ":memory:"
+        run: |
+          # Run backend tests serially under OM_TESTING=1 to avoid test harness races
+          # Prefer a package.json 'test' script if present, otherwise run bun test directly
+          if [ -f package.json ] && grep -q '"test"' package.json; then
+            bun run test -- --max-concurrency=1
+          else
+            bun test --max-concurrency=1
+          fi
+
+      - name: JS SDK - install deps
+        working-directory: sdk-js
+        run: |
+          bun install || true
+
+      - name: JS SDK - build
+        working-directory: sdk-js
+        run: bun run build || true
+
+      - name: JS SDK - tests
+        working-directory: sdk-js
+        run: bun run test || true
+
+      - name: Upload test logs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bun-test-logs
+          path: |
+            backend/test-results/**
+            sdk-js/test-results/**

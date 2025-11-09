@@ -1,9 +1,8 @@
 import { test, expect, describe, beforeAll, afterAll } from "bun:test";
-import { spawn } from "bun";
 
 const BASE_URL = "http://localhost:8080";
 const API_KEY = "your"; // As defined in .env.example
-let server;
+let serverHandle;
 
 // Helper to wait for the server to be ready
 const waitForServer = async (retries = 30, delay = 200) => {
@@ -23,36 +22,44 @@ const waitForServer = async (retries = 30, delay = 200) => {
 };
 
 beforeAll(async () => {
-  console.log("🧪 Starting backend server for tests...");
-  server = spawn(["bun", "run", "start"], {
-    cwd: "backend",
-    stdout: "pipe",
-    stderr: "pipe",
-    env: {
-      ...process.env,
-      OM_API_KEY: "your",
-      OM_EMBED_KIND: "local",
-      OM_DB_PATH: ":memory:",
-    },
-  });
+  console.log("🧪 Starting backend server for tests (in-process)...");
+  // Start the server in-process to avoid spawning external executables which can fail in CI/test environments.
+  // Import the server start helper from the backend source.
+  const { startServer } = require("../../backend/src/server/index.ts")
+
+  // Set minimal env overrides for tests
+  process.env.OM_API_KEY = process.env.OM_API_KEY || "your"
+  process.env.OM_EMBED_KIND = process.env.OM_EMBED_KIND || "local"
+  process.env.OM_DB_PATH = process.env.OM_DB_PATH || ":memory:"
+
+  try {
+    serverHandle = await startServer()
+  } catch (err) {
+    console.error("❌ Server startup failed:", err)
+    throw err
+  }
+
   try {
     await waitForServer();
   } catch (error) {
-    console.error("❌ Server startup failed:", error);
-    const stderr = await new Response(server.stderr).text();
-    console.error("Server stderr:", stderr);
-    server.kill();
-    process.exit(1);
+    console.error("❌ Server did not become ready:", error)
+    if (serverHandle && serverHandle.stop) await serverHandle.stop()
+    throw error
   }
 });
 
 afterAll(async () => {
   console.log("🛑 Stopping backend server...");
-  if (server) {
-    server.kill();
-    // Wait a moment to ensure the process is terminated
-    await new Promise(resolve => setTimeout(resolve, 500));
-    console.log("✅ Server stopped.");
+  if (serverHandle && serverHandle.stop) {
+    // Release one reference to the shared test server. The server will only
+    // actually stop when all callers have released their references.
+    if (serverHandle.release) {
+      await serverHandle.release()
+      console.log("✅ Released server reference.")
+    } else {
+      await serverHandle.stop()
+      console.log("✅ Server stopped (release not available).")
+    }
   } else {
     console.log("🤷 Server was not running, skipping shutdown.");
   }

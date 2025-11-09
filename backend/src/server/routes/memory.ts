@@ -1,4 +1,4 @@
-import { q } from '../../core/db';
+import { q, tx_info } from '../../core/db';
 import { now, rid, j, p } from '../../utils';
 import { add_hsg_memory, hsg_query, reinforce_memory, update_memory } from '../../memory/hsg';
 import { ingestDocument, ingestURL } from '../../ops/ingest';
@@ -18,6 +18,11 @@ export function mem(app: any) {
                 update_user_summary(b.user_id).catch(e => console.error('[mem] user summary update failed:', e));
             }
         } catch (e: any) {
+            try {
+                if (process.env.OM_DEBUG_TX === '1') console.error('[mem route] /memory/add error:', e, 'tx_info=', tx_info && tx_info())
+            } catch (er) {
+                if (process.env.OM_DEBUG_TX === '1') console.error('[mem route] /memory/add error (failed to get tx_info):', er)
+            }
             res.status(500).json({ err: e.message });
         }
     });

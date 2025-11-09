@@ -301,7 +301,7 @@ export function compute_hybrid_score(
         keyword_score
     return sigmoid(raw)
 }
-import { q, get_async, all_async, run_async, transaction, log_maint_op } from '../core/db'
+import { q, get_async, all_async, run_async, transaction, log_maint_op, tx_info } from '../core/db'
 export async function create_cross_sector_waypoints(
     prim_id: string,
     prim_sec: string,
@@ -368,7 +368,7 @@ export async function create_inter_mem_waypoints(
 ): Promise<void> {
     const thresh = 0.75
     const wt = 0.5
-    const vecs = await q.get_vecs_by_sector.all(prim_sec)
+    const vecs = await q.get_vecs_by_sector.all(prim_sec, user_id || null)
     for (const vr of vecs) {
         if (vr.id === new_id) continue
         const ex_vec = buf_to_vec(vr.v)
@@ -388,10 +388,10 @@ export async function create_contextual_waypoints(
     const now = Date.now()
     for (const rel_id of rel_ids) {
         if (mem_id === rel_id) continue
-        const existing = await q.get_waypoint.get(mem_id, rel_id)
+        const existing = await q.get_waypoint.get(mem_id, rel_id, user_id || null)
         if (existing) {
             const new_wt = Math.min(1.0, existing.weight + 0.1)
-            await q.upd_waypoint.run(new_wt, now, mem_id, rel_id)
+            await q.upd_waypoint.run(new_wt, now, mem_id, rel_id, user_id || null)
         } else {
             await q.ins_waypoint.run(mem_id, rel_id, user_id || null, base_wt, now, now)
         }
@@ -512,25 +512,41 @@ const get_segment = async (seg: number): Promise<any[]> => {
     }
     return rows
 }
-setInterval(async () => {
-    if (!coact_buf.length) return
-    const pairs = coact_buf.splice(0, 50)
-    const now = Date.now()
-    const tau_ms = hybrid_params.tau_hours * 3600000
-    for (const [a, b] of pairs) {
-        try {
-            const [memA, memB] = await Promise.all([q.get_mem.get(a), q.get_mem.get(b)])
-            if (!memA || !memB) continue
-            const time_diff = Math.abs(memA.last_seen_at - memB.last_seen_at)
-            const temp_fact = Math.exp(-time_diff / tau_ms)
-            const wp = await q.get_waypoint.get(a, b)
-            const cur_wt = wp?.weight || 0
-            const new_wt = Math.min(1, cur_wt + hybrid_params.eta * (1 - cur_wt) * temp_fact)
-            await q.ins_waypoint.run(a, b, new_wt, wp?.created_at || now, now)
-        } catch (e) {
+let __coact_timer: any = null
+const start_coact_timer = () => {
+    if (__coact_timer) return
+    __coact_timer = setInterval(async () => {
+        if (!coact_buf.length) return
+        const pairs = coact_buf.splice(0, 50)
+        const now = Date.now()
+        const tau_ms = hybrid_params.tau_hours * 3600000
+        for (const [a, b] of pairs) {
+            try {
+                const [memA, memB] = await Promise.all([q.get_mem.get(a), q.get_mem.get(b)])
+                if (!memA || !memB) continue
+                const time_diff = Math.abs(memA.last_seen_at - memB.last_seen_at)
+                const temp_fact = Math.exp(-time_diff / tau_ms)
+                const wp = await q.get_waypoint.get(a, b)
+                const cur_wt = wp?.weight || 0
+                const new_wt = Math.min(1, cur_wt + hybrid_params.eta * (1 - cur_wt) * temp_fact)
+                await q.ins_waypoint.run(a, b, new_wt, wp?.created_at || now, now)
+            } catch (e) {
+            }
         }
-    }
-}, 1000)
+    }, 1000)
+}
+
+// Start the co-activation buffer processor unless we're running tests.
+if (process.env.OM_TESTING !== '1') start_coact_timer()
+
+export const stop_coact_timer = () => {
+    try {
+        if (__coact_timer) {
+            clearInterval(__coact_timer)
+            __coact_timer = null
+        }
+    } catch (e) { }
+}
 const get_sal = async (id: string, def_sal: number): Promise<number> => {
     const c = sal_cache.get(id)
     if (c && Date.now() - c.t < TTL) return c.s
@@ -754,7 +770,7 @@ export async function add_hsg_memory(
             null,  // compressed_vec
             0      // feedback_score
         )
-        const emb_res = await embedMultiSector(id, content, all_sectors, use_chunking ? chunks : undefined)
+        const emb_res = await embedMultiSector(id, content, all_sectors, use_chunking ? chunks : undefined, user_id ?? undefined)
         for (const result of emb_res) {
             const vec_buf = vectorToBuffer(result.vector)
             await q.ins_vec.run(id, result.sector, user_id || null, vec_buf, result.dim)
@@ -779,6 +795,11 @@ export async function add_hsg_memory(
             chunks: chunks.length
         }
     } catch (error) {
+        try {
+            if (process.env.OM_DEBUG_TX === '1') console.error('[HSG] add_hsg_memory ERROR:', error, 'tx_info=', tx_info && tx_info())
+        } catch (e) {
+            if (process.env.OM_DEBUG_TX === '1') console.error('[HSG] add_hsg_memory ERROR (failed to get tx_info):', e)
+        }
         await transaction.rollback()
         throw error
     }
@@ -808,8 +829,9 @@ export async function update_memory(
             const use_chunking = chunks.length > 1
             const classification = classify_content(new_content, metadata)
             const all_sectors = [classification.primary, ...classification.additional]
-            await q.del_vec.run(id, mem.user_id || null)
-            const emb_res = await embedMultiSector(id, new_content, all_sectors, use_chunking ? chunks : undefined)
+            if (!mem.user_id) throw new Error('Cannot delete vectors for memory without user_id')
+            await q.del_vec.run(id, mem.user_id)
+            const emb_res = await embedMultiSector(id, new_content, all_sectors, use_chunking ? chunks : undefined, mem.user_id ?? undefined)
             for (const result of emb_res) {
                 const vec_buf = vectorToBuffer(result.vector)
                 await q.ins_vec.run(id, result.sector, mem.user_id || null, vec_buf, result.dim)
@@ -824,6 +846,11 @@ export async function update_memory(
         await transaction.commit()
         return { id, updated: true }
     } catch (error) {
+        try {
+            if (process.env.OM_DEBUG_TX === '1') console.error('[HSG] update_memory ERROR:', error, 'tx_info=', tx_info && tx_info())
+        } catch (e) {
+            if (process.env.OM_DEBUG_TX === '1') console.error('[HSG] update_memory ERROR (failed to get tx_info):', e)
+        }
         await transaction.rollback()
         throw error
     }

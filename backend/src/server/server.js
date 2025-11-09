@@ -112,7 +112,8 @@ function server(config = {}) {
     };
     const add = (a, b, c) => { ROUTES.push({ method: a.toUpperCase(), path: b, handler: c }); };
     const use = (a) => { WARES.push(a); };
-    const listen = (a, b) => { SERVER.setTimeout(10000); SERVER.listen(a, b); };
+    const listen = (a, b) => { SERVER.setTimeout(10000); return SERVER.listen(a, b); };
+    const close = (cb) => { try { return SERVER.close(cb); } catch (e) { if (cb) cb(e); } };
     const all = (a, b) => { add('ALL', a, b); };
     const getRoutes = () => ROUTES.reduce((acc, { method, path }) => ((acc[method] = acc[method] || []).push(path), acc), {});
     const serverStatic = (endpoint, dir) => {
@@ -196,7 +197,11 @@ function server(config = {}) {
         options: (a, b) => add('OPTIONS', a, b),
         head: (a, b) => add('HEAD', a, b),
         all: (a, b) => add('ALL', a, b),
-        ws: (a, b) => WS_ROUTES.push({ path: a, handler: b })
+        ws: (a, b) => WS_ROUTES.push({ path: a, handler: b }),
+        // expose a way to close the underlying server for in-process tests
+        _close: close,
+        // expose the raw http.Server instance via a getter (not enumerable)
+        _getServerInstance: () => SERVER,
     };
 }
 module.exports = server;

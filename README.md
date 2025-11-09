@@ -1,6 +1,6 @@
-<img width="1577" height="781" alt="image" src="https://github.com/user-attachments/assets/3baada32-1111-4c2c-bf13-558f2034e511" />
-
 # OpenMemory
+
+![OpenMemory Dashboard](https://github.com/user-attachments/assets/3baada32-1111-4c2c-bf13-558f2034e511)
 
 Long-term memory for AI systems. Open source, self-hosted, and explainable.
 
@@ -109,23 +109,7 @@ Its **multi-sector cognitive model** allows explainable recall paths, hybrid emb
 
 Deploy OpenMemory to your favorite cloud platform:
 
-<p align="center">
-  <a href="https://vercel.com/new/clone?repository-url=https://github.com/CaviraOSS/OpenMemory&root-directory=backend&build-command=npm%20install%20&&%20npm%20run%20build">
-    <img src="https://vercel.com/button" alt="Deploy with Vercel" height="32">
-  </a>
-  <a href="https://cloud.digitalocean.com/apps/new?repo=https://github.com/CaviraOSS/OpenMemory/tree/main">
-    <img src="https://www.deploytodo.com/do-btn-blue.svg" alt="Deploy to DigitalOcean" height="32">
-  </a>
-  <a href="https://railway.app/new/template?template=https://github.com/CaviraOSS/OpenMemory&rootDir=backend">
-    <img src="https://railway.app/button.svg" alt="Deploy on Railway" height="32">
-  </a>
-  <a href="https://render.com/deploy">
-    <img src="https://render.com/images/deploy-to-render-button.svg" alt="Deploy to Render" height="32">
-  </a>
-  <a href="https://heroku.com/deploy?template=https://github.com/CaviraOSS/OpenMemory">
-    <img src="https://www.herokucdn.com/deploy/button.svg" alt="Deploy to Heroku" height="32">
-  </a>
-</p>
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/CaviraOSS/OpenMemory&root-directory=backend&build-command=npm%20install%20&&%20npm%20run%20build) [![Deploy to DigitalOcean](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/CaviraOSS/OpenMemory/tree/main) [![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https://github.com/CaviraOSS/OpenMemory&rootDir=backend) [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy) [![Deploy to Heroku](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy?template=https://github.com/CaviraOSS/OpenMemory)
 
 ### Quick Start (Local Development)
 
@@ -146,6 +130,38 @@ OM_TIER=hybrid bun run dev
 ```
 
 The server runs on `http://localhost:8080`.
+
+### Running backend tests (Bun)
+
+The backend test harness runs under Bun. Tests disable long-running background jobs and use an in-process test server to avoid flakiness. When running tests locally or in CI, set the `OM_TESTING` environment variable and run tests serially (max concurrency = 1) to match CI behavior and prevent teardown races.
+
+From the repository root:
+
+```bash
+cd backend
+# disable background schedulers and run tests serially
+OM_TESTING=1 bun test tests/backend --max-concurrency=1
+```
+
+Notes:
+
+- `OM_TESTING=1` disables background jobs (decay/reflection/cron) so tests can control scheduling deterministically.
+- Tests use an in-process server helper (used by `tests/backend/_ensure_server.js`) to avoid spawning external processes and to keep tenant scoping deterministic.
+- CI also runs the backend tests with `OM_TESTING=1` and `--max-concurrency=1` to ensure stable, reproducible runs.
+
+Additional CI / test notes (important)
+
+- Some backend tests (for example `tests/backend/nested-transaction.test.js`) require an in-memory SQLite database to validate nested-savepoint behavior. To guarantee identical behavior locally and in CI, set the database path to in-memory when running tests:
+
+```bash
+# from repo root
+cd backend
+OM_TESTING=1 OM_DB_PATH=':memory:' bun test --max-concurrency=1
+```
+
+- The test harness now guards background schedulers: `OM_TESTING=1` prevents scheduled decay/prune/reflection jobs from starting. Tests also call `stop_coact_timer()` on server release as extra safety to ensure no lingering background timers (co-activation buffer) survive teardown. This avoids intermittent "Unable to connect" or late-request errors during test shutdown.
+
+- CI (GitHub Actions) is configured to run backend tests serially with `OM_TESTING=1`. We explicitly set `OM_DB_PATH=':memory:'` in CI to match local in-memory test behavior and to keep the nested-transaction tests deterministic.
 
 ### Docker Setup
 
@@ -204,13 +220,13 @@ bun run start
 
 If you find OpenMemory useful, please consider supporting:
 
-## Ethereum (ERC-20):
+## Ethereum (ERC-20)
 
 ```
 0x5a12e3f48b6d761a120bc3cd0977e208c362a74e
 ```
 
-## Your support helps fund ongoing development and hosting.
+## Your support helps fund ongoing development and hosting
 
 ## 4. Architecture
 
