@@ -124,12 +124,12 @@ docker-run: ## Run Docker container
 	docker run -p 8080:8080 openmemory
 
 docker-dev: ## Run development environment with Docker
-	@echo "🐳 Starting development environment..."
-	docker-compose up --build
+ 	@echo "🐳 Starting development environment..."
+ 	docker compose up --build
 
 docker-stop: ## Stop Docker containers
-	@echo "🐳 Stopping Docker containers..."
-	docker-compose down
+ 	@echo "🐳 Stopping Docker containers..."
+ 	docker compose down
 
 run: docker-dev ## Alias for docker-dev
 

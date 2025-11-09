@@ -71,9 +71,14 @@ jobs:
 
       - name: Podman Compose Build
         run: |
-          # Run podman compose build and config to validate the compose setup
-          podman compose build
-          podman compose config
+          # Run podman compose build and config to validate the compose setup.
+          # Guard execution in case the runner doesn't have the compose plugin.
+          if command -v podman >/dev/null 2>&1 && podman compose version >/dev/null 2>&1; then
+            podman compose build
+            podman compose config
+          else
+            echo "podman compose not available on this runner; skipping podman compose validation"
+          fi
 
       - name: Podman build smoke test
         run: |

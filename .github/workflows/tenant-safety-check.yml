@@ -1,0 +1,20 @@
+name: Tenant Safety Check
+
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+
+jobs:
+  tenant-safety:
+    name: Tenant-safety grep
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run tenant-safety AST-like checker
+        run: |
+          set -euo pipefail
+          echo "Running Node-based tenant safety checker (handles multi-line calls)"
+          node .github/scripts/tenant_safety_check.js

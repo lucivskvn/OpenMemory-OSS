@@ -24,8 +24,13 @@ test('per-user stats null user_id behaves like global', async () => {
 
     const totalsGlobal = await q.totals_since.all(now - 2000)
     const totalsNull = await q.totals_since_by_user.all(null, now - 2000)
-    const gTotal = (totalsGlobal && totalsGlobal[0] && Number(totalsGlobal[0].total)) || 0
-    const nTotal = (totalsNull && totalsNull[0] && Number(totalsNull[0].total)) || 0
+    // totals_since returns an array of { type, total } rows. Tests must not
+    // rely on array ordering because other tests may insert rows and change
+    // ordering; find the row for our test type explicitly.
+    const gRow = (totalsGlobal || []).find(r => r.type === 'globaltest')
+    const nRow = (totalsNull || []).find(r => r.type === 'globaltest')
+    const gTotal = gRow ? Number(gRow.total) : 0
+    const nTotal = nRow ? Number(nRow.total) : 0
     expect(gTotal).toBe(10)
     expect(nTotal).toBe(10)
 })

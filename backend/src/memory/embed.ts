@@ -172,19 +172,19 @@ const resize_vec = (v: number[], t: number) => { if (v.length === t) return v; i
 export async function embedMultiSector(id: string, txt: string, secs: string[], chunks?: Array<{ text: string }>, user_id?: string): Promise<EmbeddingResult[]> {
     const r: EmbeddingResult[] = []
     const start = Date.now()
-    if (env.log_embed) console.log('[SERVER] EMBED: Embedding for user:', user_id || 'system', 'sectors:', secs.length)
+    if (env.log_embed) console.log('[EMBED] Embedding for user:', user_id || 'system', 'sectors:', secs.length)
     await q.ins_log.run(id, 'multi-sector', 'pending', Date.now(), null)
     for (let a = 0; a < 3; a++) {
         try {
             const simp = env.embed_mode === 'simple'
             if (simp && (env.emb_kind === 'gemini' || env.emb_kind === 'openai')) {
-                if (env.log_embed) console.log(`[SERVER] EMBED: Simple mode (1 batch for ${secs.length} sectors)`)
+                if (env.log_embed) console.log('[EMBED] Simple mode (1 batch for', secs.length, 'sectors)')
                 const tb: Record<string, string> = {}
                 secs.forEach(s => tb[s] = txt)
                 const b = env.emb_kind === 'gemini' ? await emb_gemini(tb) : await emb_batch_openai(tb)
                 Object.entries(b).forEach(([s, v]) => r.push({ sector: s, vector: v, dim: v.length }))
             } else {
-                if (env.log_embed) console.log(`[SERVER] EMBED: Advanced mode (${secs.length} calls)`)
+                if (env.log_embed) console.log('[EMBED] Advanced mode (', secs.length, 'calls)')
                 const par = env.adv_embed_parallel && env.emb_kind !== 'gemini'
                 if (par) {
                     const p = secs.map(async s => {
@@ -204,10 +204,10 @@ export async function embedMultiSector(id: string, txt: string, secs: string[], 
                 }
             }
             await q.upd_log.run('completed', null, id)
-            if (env.log_embed) console.log('[SERVER] EMBED: Completed in', Date.now() - start, 'ms')
+            if (env.log_embed) console.log('[EMBED] Completed in', Date.now() - start, 'ms')
             return r
         } catch (e) {
-            console.error('[SERVER] EMBED: Failed after', a + 1, 'attempts for user:', user_id || 'system', 'error:', e)
+            console.error('[EMBED] Failed after', a + 1, 'attempts for user:', user_id || 'system', 'error:', e)
             if (a === 2) { await q.upd_log.run('failed', e instanceof Error ? e.message : String(e), id); throw e }
             await new Promise(x => setTimeout(x, 1000 * Math.pow(2, a)))
         }

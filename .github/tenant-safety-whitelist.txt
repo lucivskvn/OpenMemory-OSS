@@ -1,0 +1,11 @@
+# Tenant safety whitelist
+# One entry per line. Lines starting with '#' are ignored.
+# Entries are treated as substring matches against the file path.
+# Add files or directories that are intentionally allowed to use null/undefined
+# for testing or internal implementation details.
+
+# DB helper definitions (implementation file)
+backend/src/core/db.ts
+
+# Tests that intentionally assert error behavior by passing null/undefined
+tests/

@@ -27,6 +27,27 @@ export function createApp() {
 
     app.use(req_tracker_mw())
 
+    // Optional request-logging middleware for debugging. Enable by setting
+    // OM_LOG_REQUESTS=true in the environment. Logs method, path and (when
+    // available) a user_id or masked API key for quick inspection.
+    if (process.env.OM_LOG_REQUESTS === 'true') {
+        app.use((req: any, res: any, next: any) => {
+            let uid = req.user_id || (req.body && req.body.user_id) || (req.query && req.query.user_id) || null
+            let keyMask = ''
+            try {
+                const key = req.headers && (req.headers['x-api-key'] || req.headers['authorization'])
+                if (key) {
+                    // short masked fingerprint
+                    // eslint-disable-next-line @typescript-eslint/no-var-requires
+                    const crypto = require('crypto')
+                    keyMask = '[' + crypto.createHash('sha256').update(String(key)).digest('hex').slice(0, 8) + '...]'
+                }
+            } catch (e) { }
+            console.log('[SERVER] REQ', req.method, req.path || req.url, 'user_id=', uid || 'anon', keyMask)
+            next()
+        })
+    }
+
     app.use((req: any, res: any, next: any) => {
         res.setHeader('Access-Control-Allow-Origin', '*')
         res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS')

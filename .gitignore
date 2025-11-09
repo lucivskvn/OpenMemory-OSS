@@ -22,3 +22,49 @@ exports
 # Prevent accidental commit of Bun shims used for local Node testing
 node_modules/bun:sqlite/
 backend/node_modules/bun:sqlite/
+# Python virtual environments
+.venv/
+venv/
+env/
+**/.venv/
+# Specific SDK venvs
+sdk-py/.venv/
+backend/.venv/
+
+# Caches, build artifacts, and editor files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.python-version
+.pytest_cache/
+.mypy_cache/
+
+# Node / JS caches & build artifacts
+.cache/
+.pnpm-store/
+.npm/
+.npmrc
+.yarn-error.log*
+.yarn/
+.next/cache/
+.parcel-cache/
+dist/
+build/
+out/
+.cache-loader/
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+
+# Coverage and test output
+coverage/
+coverage-html/
+reports/
+test-results/
+
+# Bun lockfile: usually commit for reproducible installs. Keep commented
+# bun.lockb

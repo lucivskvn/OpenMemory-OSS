@@ -143,6 +143,8 @@ if (is_pg) {
     let pg = pool(db_name)
     let cli: PoolClient | null = null
     const sc = process.env.OM_PG_SCHEMA || 'public'
+    // Fully-qualified, quoted stats table name (preserve case in schema)
+    const s = '"' + sc + '"."stats"'
     const m = `"${sc}"."${process.env.OM_PG_TABLE || 'openmemory_memories'}"`
     memories_table = m
     const v = `"${sc}"."${process.env.OM_VECTOR_TABLE || 'openmemory_vectors'}"`
@@ -266,15 +268,42 @@ if (is_pg) {
         // in the code reference an unqualified "stats" table; we create it in the
         // configured schema so it's available via the default search_path (schema
         // defaults to 'public'). This mirrors the SQLite `stats` schema.
-        await pg.query(`create table if not exists ${sc}."stats"(type text not null, count integer default 1, ts bigint not null, user_id text)`)
-        await pg.query(`create index if not exists idx_stats_ts on ${sc}."stats"(ts)`)
-        await pg.query(`create index if not exists idx_stats_type on ${sc}."stats"(type)`)
-        await pg.query(`create index if not exists idx_stats_user_ts on ${sc}."stats"(user_id, ts)`)
-        await pg.query(`create index if not exists idx_stats_user_type on ${sc}."stats"(user_id, type)`) 
+        await pg.query(`create table if not exists ${s}(type text not null, count integer default 1, ts bigint not null, user_id text)`)
+        await pg.query(`create index if not exists idx_stats_ts on ${s}(ts)`)
+        await pg.query(`create index if not exists idx_stats_type on ${s}(type)`)
+        await pg.query(`create index if not exists idx_stats_user_ts on ${s}(user_id, ts)`)
+        await pg.query(`create index if not exists idx_stats_user_type on ${s}(user_id, type)`) 
         ready = true
     }
-    init().catch(err => {
-        console.error('[DB] Init failed:', err)
+    // Initialize once and chain verification on the same promise so we don't
+    // run init() twice (which caused redundant schema checks and queries).
+    // Chain a single catch to handle failures in either init or verification
+    // and exit with a helpful message.
+    init().then(async () => {
+        try {
+            const doVerify = !!((env as any).log_tenant) || process.env.OM_VERIFY_TENANCY === '1'
+            if (!doVerify) return
+            // perform lightweight counts of rows with NULL user_id to surface
+            // any global (unscoped) data that may need migration or review.
+            const tables: Array<{ name: string; sql: string }> = [
+                { name: 'memories', sql: `select count(*)::int as cnt from ${m} where user_id is null` },
+                { name: 'vectors', sql: `select count(*)::int as cnt from ${v} where user_id is null` },
+                { name: 'waypoints', sql: `select count(*)::int as cnt from ${w} where user_id is null` }
+            ]
+            for (const t of tables) {
+                try {
+                    const res = await pg.query(t.sql)
+                    const cnt = res && res.rows && res.rows[0] ? (res.rows[0].cnt ?? res.rows[0].count ?? 0) : 0
+                    console.warn('[DB] MIGRATION:', t.name, 'rows with NULL user_id =', cnt)
+                } catch (e) {
+                    console.warn('[DB] MIGRATION: failed to query', t.name, '-', (e as any)?.message || e)
+                }
+            }
+        } catch (e) {
+            console.warn('[DB] MIGRATION: tenancy verification failed:', (e as any)?.message || e)
+        }
+    }).catch(err => {
+        console.error('[DB] Init or verification failed:', err)
         process.exit(1)
     })
     const safe_exec = async (sql: string, p: any[] = []) => {
@@ -332,11 +361,11 @@ if (is_pg) {
         recent_memories_count: { get: (since) => get_async(`select count(*) as count from ${m} where created_at > $1`, [since]) },
         avg_salience: { get: () => get_async(`select avg(salience) as avg from ${m}`, []) },
         decay_stats: { get: () => get_async(`select count(*) as total, avg(decay_lambda) as avg_lambda, min(salience) as min_salience, max(salience) as max_salience from ${m}`, []) },
-        stats_range: { all: (type, since) => all_async(`select count, ts FROM ${sc}."stats" WHERE type=$1 AND ts > $2 ORDER BY ts DESC`, [type, since]) },
+        stats_range: { all: (type, since) => all_async(`select count, ts FROM ${s} WHERE type=$1 AND ts > $2 ORDER BY ts DESC`, [type, since]) },
         // per-user stats range: (type, user_id, since)
-        stats_range_by_user: { all: (type, user_id, since) => all_async(`select count, ts FROM ${sc}."stats" WHERE type=$1 AND ts > $3 AND ($2 is null or user_id = $2) ORDER BY ts DESC`, [type, user_id, since]) },
-        stats_count_since: { get: (type, since) => get_async(`select count(*) as total from ${sc}."stats" where type=$1 and ts > $2`, [type, since]) },
-        stats_count_since_by_user: { get: (type, user_id, since) => get_async(`select count(*) as total from ${sc}."stats" where type=$1 and ts > $3 and ($2 is null or user_id = $2)`, [type, user_id, since]) },
+        stats_range_by_user: { all: (type, user_id, since) => all_async(`select count, ts FROM ${s} WHERE type=$1 AND ts > $3 AND ($2 is null or user_id = $2) ORDER BY ts DESC`, [type, user_id, since]) },
+        stats_count_since: { get: (type, since) => get_async(`select count(*) as total from ${s} where type=$1 and ts > $2`, [type, since]) },
+        stats_count_since_by_user: { get: (type, user_id, since) => get_async(`select count(*) as total from ${s} where type=$1 and ts > $3 and ($2 is null or user_id = $2)`, [type, user_id, since]) },
         top_memories: { all: (limit) => all_async(`select id,content,primary_sector,salience,last_seen_at from ${m} order by salience desc limit $1`, [limit]) },
         activities: { all: (limit) => all_async(`select id,content,primary_sector,salience,created_at,updated_at,last_seen_at from ${m} order by updated_at desc limit $1`, [limit]) },
         // NOTE: timeline and maintenance ops are global (not scoped by user_id).
@@ -345,11 +374,11 @@ if (is_pg) {
         timeline_by_sector: { all: (since) => all_async(`SELECT primary_sector, to_char(date_trunc('hour', to_timestamp(created_at/1000)), 'HH24:00') as hour, COUNT(*) as count FROM ${m} WHERE created_at > $1 GROUP BY primary_sector, hour ORDER BY hour`, [since]) },
         // Per-user timeline: (user_id, since)
         timeline_by_sector_by_user: { all: (user_id, since) => all_async(`SELECT primary_sector, to_char(date_trunc('hour', to_timestamp(created_at/1000)), 'HH24:00') as hour, COUNT(*) as count FROM ${m} WHERE created_at > $2 AND ($1 is null or user_id = $1) GROUP BY primary_sector, hour ORDER BY hour`, [user_id, since]) },
-        maintenance_ops: { all: (since) => all_async(`SELECT type, to_char(date_trunc('hour', to_timestamp(ts/1000)), 'HH24:00') as hour, SUM(count) as cnt FROM ${sc}."stats" WHERE ts > $1 GROUP BY type, hour ORDER BY hour`, [since]) },
+        maintenance_ops: { all: (since) => all_async(`SELECT type, to_char(date_trunc('hour', to_timestamp(ts/1000)), 'HH24:00') as hour, SUM(count) as cnt FROM ${s} WHERE ts > $1 GROUP BY type, hour ORDER BY hour`, [since]) },
         // per-user maintenance ops: (user_id, since)
-        maintenance_ops_by_user: { all: (user_id, since) => all_async(`SELECT type, to_char(date_trunc('hour', to_timestamp(ts/1000)), 'HH24:00') as hour, SUM(count) as cnt FROM ${sc}."stats" WHERE ts > $2 AND ($1 is null or user_id = $1) GROUP BY type, hour ORDER BY hour`, [user_id, since]) },
-        totals_since: { all: (since) => all_async(`SELECT type, SUM(count) as total FROM ${sc}."stats" WHERE ts > $1 GROUP BY type`, [since]) },
-        totals_since_by_user: { all: (user_id, since) => all_async(`SELECT type, SUM(count) as total FROM ${sc}."stats" WHERE ts > $2 AND ($1 is null or user_id = $1) GROUP BY type`, [user_id, since]) },
+        maintenance_ops_by_user: { all: (user_id, since) => all_async(`SELECT type, to_char(date_trunc('hour', to_timestamp(ts/1000)), 'HH24:00') as hour, SUM(count) as cnt FROM ${s} WHERE ts > $2 AND ($1 is null or user_id = $1) GROUP BY type, hour ORDER BY hour`, [user_id, since]) },
+        totals_since: { all: (since) => all_async(`SELECT type, SUM(count) as total FROM ${s} WHERE ts > $1 GROUP BY type`, [since]) },
+        totals_since_by_user: { all: (user_id, since) => all_async(`SELECT type, SUM(count) as total FROM ${s} WHERE ts > $2 AND ($1 is null or user_id = $1) GROUP BY type`, [user_id, since]) },
         get_mem_by_segment: {
             all: (segment, user_id: string | null = null) => {
                 if (!user_id && (env as any).log_tenant) console.warn('[DB] Query without user_id - potential cross-tenant leak in method: get_mem_by_segment')
@@ -417,7 +446,7 @@ if (is_pg) {
         get_user: { get: (user_id) => get_async(`select * from "${sc}"."openmemory_users" where user_id=$1`, [user_id]) },
         upd_user_summary: { run: (...p: any[]) => run_async(`update "${sc}"."openmemory_users" set summary=$2,reflection_count=reflection_count+1,updated_at=$3 where user_id=$1`, p) },
         // ins_stat accepts optional user_id as the 4th parameter (nullable).
-        ins_stat: { run: (...p: any[]) => run_async(`insert into ${sc}."stats"(type,count,ts,user_id) values($1,$2,$3,$4)`, p) },
+        ins_stat: { run: (...p: any[]) => run_async(`insert into ${s}(type,count,ts,user_id) values($1,$2,$3,$4)`, p) },
         upd_summary: { run: (...p: any[]) => run_async(`update ${m} set summary=$2 where id=$1`, p) },
     }
 } else {
@@ -449,7 +478,10 @@ if (is_pg) {
     db.exec('PRAGMA foreign_keys=OFF')
     db.exec('PRAGMA wal_autocheckpoint=20000')
     db.exec('PRAGMA locking_mode=EXCLUSIVE')
-    db.exec('PRAGMA busy_timeout=50')
+    // Allow configuration of the sqlite busy timeout; increase default to
+    // reduce transient lock errors under write contention.
+    const busyTimeoutMs = process.env.OM_SQLITE_BUSY_TIMEOUT_MS ? Number(process.env.OM_SQLITE_BUSY_TIMEOUT_MS) : 800
+    db.exec(`PRAGMA busy_timeout=${busyTimeoutMs}`)
     db.exec(`create table if not exists memories(id text primary key,user_id text,segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,meta text,summary text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0)`)
     db.exec(`create table if not exists vectors(id text not null,sector text not null,user_id text,v blob not null,dim integer not null,primary key(id,sector))`)
     db.exec(`create table if not exists waypoints(src_id text,dst_id text not null,user_id text,weight real not null,created_at integer,updated_at integer,primary key(src_id,user_id))`)
@@ -469,7 +501,30 @@ if (is_pg) {
     db.exec('create index if not exists idx_stats_type on stats(type)')
     db.exec('create index if not exists idx_stats_user_ts on stats(user_id, ts)')
     db.exec('create index if not exists idx_stats_user_type on stats(user_id, type)')
-    memories_table = 'memories'
+    memories_table = 'memories';
+    // Optionally verify tenant-scoped data after sqlite schema creation. This
+    // mirrors the Postgres check above and is gated by OM_LOG_TENANT or
+    // OM_VERIFY_TENANCY=1. Run asynchronously and do not block startup.
+    (async () => {
+        try {
+            const doVerify = !!((env as any).log_tenant) || process.env.OM_VERIFY_TENANCY === '1'
+            if (!doVerify) return
+            const check = async (tbl: string) => {
+                try {
+                    const r = db.query(`select count(*) as c from ${tbl} where user_id is null`).get()
+                    const cnt = r?.c ?? 0
+                    console.warn('[DB] MIGRATION:', tbl, 'rows with NULL user_id =', cnt)
+                } catch (e) {
+                    console.warn('[DB] MIGRATION: failed to query', tbl, '-', (e as any)?.message || e)
+                }
+            }
+            await check('memories')
+            await check('vectors')
+            await check('waypoints')
+        } catch (e) {
+            console.warn('[DB] MIGRATION: sqlite tenancy verification failed:', (e as any)?.message || e)
+        }
+    })()
     // Use env.log_db (configured from OM_LOG_DB) for consistent logging flag
     const OM_LOG_DB = !!(env as any).log_db
     const summarize = (sql: string) => (sql || '').trim().split(/\s+/).slice(0, 6).join(' ')
