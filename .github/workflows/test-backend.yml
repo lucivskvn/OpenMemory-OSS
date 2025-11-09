@@ -1,0 +1,65 @@
+name: Backend Integration Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+jobs:
+  test-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install backend deps
+        working-directory: backend
+        run: |
+          npm ci
+
+      - name: Build backend
+        working-directory: backend
+        run: npm run build
+
+      - name: Start backend
+        working-directory: backend
+        run: |
+          # start server in background
+          nohup node dist/server/index.js > backend-server.log 2>&1 &
+          echo $! > backend.pid
+
+      - name: Wait for health
+        run: |
+          max_attempts=30
+          attempt=0
+          until curl -f http://localhost:8080/health || [ $attempt -eq $max_attempts ]; do
+            echo "Waiting for service to be healthy... (attempt $((attempt+1))/$max_attempts)"
+            sleep 2
+            attempt=$((attempt+1))
+          done
+          if [ $attempt -eq $max_attempts ]; then
+            echo "Service failed to become healthy"
+            cat backend/backend-server.log || true
+            exit 1
+          fi
+
+      - name: Run backend integration tests
+        run: |
+          node tests/backend/api.test.js
+
+      - name: Show server logs on failure
+        if: failure()
+        run: |
+          cat backend/backend-server.log || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          if [ -f backend.pid ]; then kill $(cat backend.pid) || true; fi

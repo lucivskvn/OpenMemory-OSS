@@ -3,11 +3,29 @@
 import sys
 import os
 import asyncio
-import aiohttp
 import time
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'sdk-py'))
-
-from openmemory import OpenMemory
+# Prefer using an installed `openmemory` package. If it's not available, try
+# to import it from the local `sdk-py` directory (useful for development).
+try:
+    # Keep `# type: ignore` so static analyzers don't flag unresolved imports when
+    # the local SDK isn't installed in the environment.
+    from openmemory import OpenMemory  # type: ignore
+except Exception:
+    sdk_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "sdk-py")
+    )
+    if sdk_dir not in sys.path:
+        sys.path.insert(0, sdk_dir)
+    try:
+        from openmemory import OpenMemory  # type: ignore
+    except Exception as e:
+        raise ImportError(
+            "Could not import the OpenMemory Python SDK.\n"
+            "Options to fix:\n"
+            "  1) Install the SDK into your environment: `pip install -e sdk-py` or `pip install openmemory`\n"
+            "  2) Run this script from the repo root so the local `sdk-py` path resolves correctly.\n"
+            "  3) Ensure the `sdk-py` folder exists at the repository root.\n"
+        ) from e
 
 async def performance_benchmark():
     print('⚡ OpenMemory Python SDK - Performance Benchmark')

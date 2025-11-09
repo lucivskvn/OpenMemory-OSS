@@ -2,9 +2,28 @@
 
 import sys
 import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'sdk-py'))
 
-from openmemory import OpenMemory, SECTORS
+# Prefer using an installed `openmemory` package; otherwise, fall back to the
+# local `sdk-py` folder for development. Keep `# type: ignore` so static
+# analyzers don't flag unresolved imports when the local SDK isn't installed.
+try:
+    from openmemory import OpenMemory, SECTORS  # type: ignore
+except Exception:
+    sdk_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "sdk-py")
+    )
+    if sdk_dir not in sys.path:
+        sys.path.insert(0, sdk_dir)
+    try:
+        from openmemory import OpenMemory, SECTORS  # type: ignore
+    except Exception as e:
+        raise ImportError(
+            "Could not import the OpenMemory Python SDK.\n"
+            "Options to fix:\n"
+            "  1) Install the SDK into your environment: `pip install -e sdk-py` or `pip install openmemory`\n"
+            "  2) Run this script from the repo root so the local `sdk-py` path resolves correctly.\n"
+            "  3) Ensure the `sdk-py` folder exists at the repository root.\n"
+        ) from e
 
 def basic_example():
     print('🧠 OpenMemory Python SDK - Basic Example')

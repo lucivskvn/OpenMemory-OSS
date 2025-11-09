@@ -4,104 +4,116 @@ import sys
 import os
 import time
 import subprocess
-import json
-import urllib.request
-import urllib.parse
-import urllib.error
-from typing import Optional, Dict, Any
+from typing import Optional
 
-# Add the SDK to the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'sdk-py'))
-
-# Try to import the SDK, fallback to mock if not available
+# Try importing the SDK. Prefer an installed package; if missing, try the local
+# `sdk-py` folder (useful in development). Keep `# type: ignore` on imports to
+# silence static checkers when the SDK isn't installed.
 try:
-    from openmemory import OpenMemory, SECTORS
+    from openmemory import OpenMemory, SECTORS  # type: ignore
+
     SDK_AVAILABLE = True
-except ImportError:
-    print('Warning: SDK not found, using mock implementation')
-    SDK_AVAILABLE = False
-    
-    SECTORS = ['episodic', 'semantic', 'procedural', 'emotional', 'reflective']
-    
-    class OpenMemory:
-        def __init__(self, base_url='http://localhost:8080', auth_key=None):
-            self.base_url = base_url
-            self.auth_key = auth_key
-        
-        def health_check(self):
-            return {'status': 'healthy'}
-        
-        def add(self, content, metadata=None):
-            return {
-                'id': f'test-id-{int(time.time() * 1000)}',
-                'content': content,
-                'metadata': metadata or {},
-                'primary_sector': 'semantic',
-                'sectors': ['semantic'],
-                'salience': 1.0
-            }
-        
-        def get_memory(self, memory_id):
-            return {
-                'id': memory_id,
-                'content': 'Test memory content',
-                'primary_sector': 'semantic',
-                'sectors': ['semantic']
-            }
-        
-        def query(self, query, k=10, use_graph=False):
-            return {
-                'matches': [
-                    {
-                        'id': 'test-match-1',
-                        'content': 'Test match content',
-                        'score': 0.95,
-                        'primary_sector': 'semantic',
-                        'sectors': ['semantic'],
-                        'path': ['node1', 'node2'] if use_graph else []
-                    }
-                ]
-            }
-        
-        def list_memories(self, limit=10, offset=0):
-            return {
-                'items': [
-                    {'id': 'test-1', 'content': 'Test memory 1'},
-                    {'id': 'test-2', 'content': 'Test memory 2'}
-                ],
-                'total': 2
-            }
-        
-        def update(self, memory_id, content=None, tags=None, metadata=None):
-            return {'id': memory_id, 'updated': True}
-        
-        def delete_memory(self, memory_id):
-            return {'success': True}
-        
-        def get_sectors(self):
-            return {
-                'sectors': SECTORS,
-                'stats': [{'sector': 'semantic', 'count': 5}]
-            }
-        
-        def query_sector(self, query, sector, k=10):
-            return {
-                'matches': [
-                    {
-                        'id': 'sector-match-1',
-                        'content': 'Sector-specific match',
-                        'score': 0.9,
-                        'sectors': [sector]
-                    }
-                ]
-            }
-        
-        def get_by_sector(self, sector, limit=10):
-            return {
-                'items': [
-                    {'id': 'sector-item-1', 'content': 'Sector item', 'sectors': [sector]}
-                ]
-            }
+except Exception:
+    # Attempt to use the local sdk-py folder
+    sdk_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "sdk-py")
+    )
+    if sdk_dir not in sys.path:
+        sys.path.insert(0, sdk_dir)
+    try:
+        from openmemory import OpenMemory, SECTORS  # type: ignore
+
+        SDK_AVAILABLE = True
+    except ImportError:
+        print("Warning: SDK not found, using mock implementation")
+        SDK_AVAILABLE = False
+
+        SECTORS = ["episodic", "semantic", "procedural", "emotional", "reflective"]
+
+        class OpenMemory:
+            def __init__(self, base_url="http://localhost:8080", auth_key=None):
+                self.base_url = base_url
+                self.auth_key = auth_key
+
+            def health_check(self):
+                return {"status": "healthy"}
+
+            def add(self, content, metadata=None):
+                return {
+                    "id": f"test-id-{int(time.time() * 1000)}",
+                    "content": content,
+                    "metadata": metadata or {},
+                    "primary_sector": "semantic",
+                    "sectors": ["semantic"],
+                    "salience": 1.0,
+                }
+
+            def get_memory(self, memory_id):
+                return {
+                    "id": memory_id,
+                    "content": "Test memory content",
+                    "primary_sector": "semantic",
+                    "sectors": ["semantic"],
+                }
+
+            def query(self, query, k=10, use_graph=False):
+                return {
+                    "matches": [
+                        {
+                            "id": "test-match-1",
+                            "content": "Test match content",
+                            "score": 0.95,
+                            "primary_sector": "semantic",
+                            "sectors": ["semantic"],
+                            "path": ["node1", "node2"] if use_graph else [],
+                        }
+                    ]
+                }
+
+            def list_memories(self, limit=10, offset=0):
+                return {
+                    "items": [
+                        {"id": "test-1", "content": "Test memory 1"},
+                        {"id": "test-2", "content": "Test memory 2"},
+                    ],
+                    "total": 2,
+                }
+
+            def update(self, memory_id, content=None, tags=None, metadata=None):
+                return {"id": memory_id, "updated": True}
+
+            def delete_memory(self, memory_id):
+                return {"success": True}
+
+            def get_sectors(self):
+                return {
+                    "sectors": SECTORS,
+                    "stats": [{"sector": "semantic", "count": 5}],
+                }
+
+            def query_sector(self, query, sector, k=10):
+                return {
+                    "matches": [
+                        {
+                            "id": "sector-match-1",
+                            "content": "Sector-specific match",
+                            "score": 0.9,
+                            "sectors": [sector],
+                        }
+                    ]
+                }
+
+            def get_by_sector(self, sector, limit=10):
+                return {
+                    "items": [
+                        {
+                            "id": "sector-item-1",
+                            "content": "Sector item",
+                            "sectors": [sector],
+                        }
+                    ]
+                }
+
 
 API_BASE_URL = 'http://localhost:8080'
 server_process: Optional[subprocess.Popen] = None

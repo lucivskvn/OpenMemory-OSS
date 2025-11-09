@@ -1,21 +1,80 @@
-node_modules
-.env
-dist
-data
-.vscode
-target/
-.pypirc
-logs
-*.log
+# -------------------------
+# Node / JavaScript
+# -------------------------
+node_modules/
+dist/
+build/
+.next/
+out/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-.next
-out
+
+# -------------------------
+# Python
+# -------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+env/
+ENV/
+pip-wheel-metadata/
+
+# Packaging / build artifacts
+*.egg-info/
+pip-wheel-metadata/
+
+# Coverage
+.coverage
+.coverage.*
+coverage/
+htmlcov/
+
+# -------------------------
+# Databases / test artifacts
+# -------------------------
+# SQLite runtime artifacts (WAL/SHM)
+*.sqlite-wal
+*.sqlite-shm
+
+# Common test DB artifacts (generated during tests)
+tests/**/verify_tenant_*.sqlite
+tests/**/verify_tenant_*.sqlite*
+
+# Persistent data directories (if you keep an on-disk DB in repo during development)
+data/
+
+# -------------------------
+# Environment & secrets
+# -------------------------
+.env
 .env.local
-coverage
-benchmark
-temp
-exports
-*.egg-info
+.env.*
+!.env.example
+
+# -------------------------
+# Editor / OS
+# -------------------------
+.DS_Store
+.idea/
+.vscode/
+
+# -------------------------
+# Caches, logs, misc
+# -------------------------
+.cache/
+tmp/
+tmp_restore/
+*.tmp
+logs/
+*.log
+benchmark/
+exports/
 *.vsix
+
+# Misc
+.pypirc
+target/
