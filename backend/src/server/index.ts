@@ -49,11 +49,11 @@ export function createApp() {
     }
 
     routes(app)
-    console.log('[SERVER] Routes registered')
+    console.log('[SERVER] ROUTES: Registered routes')
 
     mcp(app)
     if (env.mode === 'langgraph') {
-        console.log('[MODE] LangGraph integration enabled')
+        console.log('[SERVER] MODE: LangGraph integration enabled')
     }
 
     return app
@@ -86,10 +86,10 @@ export async function startServer() {
     if (isTestMode && !(globalThis as any).__OM_TEST_HANDLERS) {
         (globalThis as any).__OM_TEST_HANDLERS = true
         process.on('unhandledRejection', (reason) => {
-            try { console.error('[TEST-HOOK] unhandledRejection:', reason) } catch (e) { }
+            try { console.error('[SERVER] TEST-HOOK: unhandledRejection:', reason) } catch (e) { }
         })
         process.on('uncaughtException', (err) => {
-            try { console.error('[TEST-HOOK] uncaughtException:', err) } catch (e) { }
+            try { console.error('[SERVER] TEST-HOOK: uncaughtException:', err) } catch (e) { }
         })
     }
 
@@ -107,7 +107,7 @@ export async function startServer() {
                         return await origFetch.apply(globalThis, args)
                     } catch (err) {
                         try {
-                            console.error('[TEST-HOOK] fetch failed:', err, '\ncaller stack:', callerStack)
+                            console.error('[SERVER] TEST-HOOK: fetch failed:', err, '\ncaller stack:', callerStack)
                         } catch (e) { }
                         throw err
                     }
@@ -117,41 +117,41 @@ export async function startServer() {
     }
 
     const decayIntervalMs = env.decay_interval_minutes * 60 * 1000
-    console.log(`[DECAY] Interval: ${env.decay_interval_minutes} minutes (${decayIntervalMs / 1000}s)`)
+    console.log(`[SERVER] DECAY: Interval: ${env.decay_interval_minutes} minutes (${decayIntervalMs / 1000}s)`)
 
     let decayTimer: any = null
     let pruneTimer: any = null
     if (!isTestMode) {
         decayTimer = setInterval(async () => {
-            console.log('[DECAY] Running HSG decay process...')
+            console.log('[SERVER] DECAY: Running HSG decay process...')
             try {
                 const result = await run_decay_process()
-                console.log(`[DECAY] Completed: ${result.decayed}/${result.processed} memories updated`)
+                console.log(`[SERVER] DECAY: Completed: ${result.decayed}/${result.processed} memories updated`)
             } catch (error) {
-                console.error('[DECAY] Process failed:', error)
+                console.error('[SERVER] DECAY: Process failed:', error)
             }
         }, decayIntervalMs)
 
         pruneTimer = setInterval(async () => {
-            console.log('[PRUNE] Pruning weak waypoints...')
+            console.log('[SERVER] PRUNE: Pruning weak waypoints...')
             try {
                 const pruned = await prune_weak_waypoints()
-                console.log(`[PRUNE] Completed: ${pruned} waypoints removed`)
+                console.log(`[SERVER] PRUNE: Completed: ${pruned} waypoints removed`)
             } catch (error) {
-                console.error('[PRUNE] Failed:', error)
+                console.error('[SERVER] PRUNE: Failed:', error)
             }
         }, 7 * 24 * 60 * 60 * 1000)
 
         run_decay_process()
             .then((result: any) => {
-                console.log(`[INIT] Initial decay: ${result.decayed}/${result.processed} memories updated`)
+                console.log(`[SERVER] INIT: Initial decay: ${result.decayed}/${result.processed} memories updated`)
             })
-            .catch(console.error)
+            .catch((err) => { console.error('[SERVER] INIT: Initial decay failed:', err) })
 
         start_reflection()
         start_user_summary_reflection()
     } else {
-        console.log('[TEST MODE] Skipping background decay/prune/reflection tasks')
+        console.log('[SERVER] TEST MODE: Skipping background decay/prune/reflection tasks')
     }
 
     console.log(`[SERVER] Starting on port ${env.port}`)

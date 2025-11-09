@@ -9,7 +9,7 @@ Image=ghcr.io/nullure/openmemory:latest
 ContainerName=openmemory
 Network=pasta
 PublishPort=8080:8080
-Volume=openmemory-data.volume:/data:Z
+Volume=openmemory-data:/data:Z
 EnvironmentFile=%h/.config/openmemory/openmemory.env
 User=1001:1001
 HealthCmd=bun -e "fetch('http://localhost:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"

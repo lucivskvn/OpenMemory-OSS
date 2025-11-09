@@ -12,6 +12,8 @@
         "migrate": "bun run src/migrate.ts",
         "build:binary": "bun build --compile --minify --sourcemap src/server/index.ts --outfile openmemory",
         "type-check": "bun tsc --noEmit",
+        "test": "bun test --coverage",
+        "test:watch": "bun test --watch",
         "clean": "rm -rf dist/ node_modules/.cache/",
         "lint": "echo \"no linter configured\"",
         "format": "echo \"no formatter configured\""

@@ -143,18 +143,11 @@ cd backend
 OM_TESTING=1 bun test tests/backend --max-concurrency=1
 ```
 
-Notes:
-
-- `OM_TESTING=1` disables background jobs (decay/reflection/cron) so tests can control scheduling deterministically.
-- Tests use an in-process server helper (used by `tests/backend/_ensure_server.js`) to avoid spawning external processes and to keep tenant scoping deterministic.
-- CI also runs the backend tests with `OM_TESTING=1` and `--max-concurrency=1` to ensure stable, reproducible runs.
-
 Additional CI / test notes (important)
 
 - Some backend tests (for example `tests/backend/nested-transaction.test.js`) require an in-memory SQLite database to validate nested-savepoint behavior. To guarantee identical behavior locally and in CI, set the database path to in-memory when running tests:
 
 ```bash
-# from repo root
 cd backend
 OM_TESTING=1 OM_DB_PATH=':memory:' bun test --max-concurrency=1
 ```
@@ -163,14 +156,15 @@ OM_TESTING=1 OM_DB_PATH=':memory:' bun test --max-concurrency=1
 
 - CI (GitHub Actions) is configured to run backend tests serially with `OM_TESTING=1`. We explicitly set `OM_DB_PATH=':memory:'` in CI to match local in-memory test behavior and to keep the nested-transaction tests deterministic.
 
+### Developer transactions guide
+
+If you're working on transactional code in the backend, see the developer guide for recommended patterns and the exported `withTransaction` helper:
+
+- Backend transaction rules and examples: `backend/TRANSACTIONS.md`
+
 ### Docker Setup
 
 ```bash
-docker compose up --build -d
-```
-
-This starts OpenMemory on port 8080. Data persists in `/data/openmemory.sqlite`.
-
 ### Dashboard Setup
 
 The dashboard provides a web interface to visualize and manage your memories.

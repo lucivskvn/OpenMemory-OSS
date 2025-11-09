@@ -4,6 +4,7 @@
     "scripts": {
         "install": "cd backend && bun install",
         "build": "cd backend && bun run build",
-        "start": "cd backend && bun run start"
+        "start": "cd backend && bun run start",
+        "test": "cd backend && bun test --coverage"
     }
 }

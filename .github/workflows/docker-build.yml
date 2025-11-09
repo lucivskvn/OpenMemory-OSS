@@ -73,6 +73,45 @@ jobs:
         run: |
           podman build -f backend/Dockerfile -t openmemory-backend:podman-test ./backend
 
+      - name: Postgres smoke test (lightweight)
+        run: |
+          set -e
+          docker network create om-smoke-net || true
+          docker run -d --name om_pg --network om-smoke-net -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=openmemory postgres:15-alpine
+          # wait for postgres to accept connections
+          for i in $(seq 1 30); do
+            docker exec om_pg pg_isready -U postgres && break || sleep 1
+          done
+          # run the built backend image against the Postgres instance
+          docker run -d --name om_backend --network om-smoke-net -p 8081:8080 \
+            -e OM_METADATA_BACKEND=postgres \
+            -e OM_PG_HOST=om_pg \
+            -e OM_PG_PORT=5432 \
+            -e OM_PG_DB=openmemory \
+            -e OM_PG_USER=postgres \
+            -e OM_PG_PASSWORD=postgres \
+            -e OM_PORT=8080 \
+            openmemory-backend:test
+          # wait for backend health endpoint
+          max_attempts=30
+          attempt=0
+          until curl -fsS http://localhost:8081/health || [ $attempt -eq $max_attempts ]; do
+            echo "Waiting for backend (postgres mode) to be healthy... (attempt $((attempt+1))/$max_attempts)"
+            sleep 2
+            attempt=$((attempt+1))
+          done
+          if [ $attempt -eq $max_attempts ]; then
+            echo "Postgres-backed backend failed to become healthy"
+            docker logs om_backend || true
+            docker logs om_pg || true
+            docker rm -f om_backend om_pg || true
+            docker network rm om-smoke-net || true
+            exit 1
+          fi
+          echo "✅ Postgres smoke test: backend healthy"
+          docker rm -f om_backend om_pg || true
+          docker network rm om-smoke-net || true
+
       - name: Validate podman unit files
         run: |
           # Ensure podman unit and volume files include required sections

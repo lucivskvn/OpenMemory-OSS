@@ -125,6 +125,8 @@ docker-compose -f docker-compose.dev.yml up
 
 ## Development Guidelines
 
+**Backend transactions**: For patterns, savepoint usage, and the exported helper used across the backend, see `backend/TRANSACTIONS.md`.
+
 ### Code Style
 
 #### TypeScript/JavaScript

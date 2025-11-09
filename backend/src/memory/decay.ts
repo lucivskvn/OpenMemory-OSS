@@ -152,12 +152,12 @@ const top_keywords = (t: string, k = 5): string[] => {
 
 export const apply_decay = async () => {
     if (active_q > 0) {
-        console.log(`[decay] skipped - ${active_q} active queries`)
+        console.log(`[SERVER] DECAY: skipped - ${active_q} active queries`)
         return
     }
     const now_ts = Date.now()
     if (now_ts - last_decay < cooldown) {
-        console.log(`[decay] skipped - cooldown active (${((cooldown - (now_ts - last_decay)) / 1000).toFixed(0)}s remaining)`)
+        console.log(`[SERVER] DECAY: skipped - cooldown active (${((cooldown - (now_ts - last_decay)) / 1000).toFixed(0)}s remaining)`)
         return
     }
     last_decay = now_ts
@@ -246,7 +246,7 @@ export const apply_decay = async () => {
     }
 
     const tot = performance.now() - t0
-    console.log(`[decay-2.0] ${tot_chg}/${tot_proc} | tiers: hot=${tier_counts.hot} warm=${tier_counts.warm} cold=${tier_counts.cold} | compressed=${tot_comp} fingerprinted=${tot_fp} | ${tot.toFixed(1)}ms across ${segments.length} segments`)
+    console.log(`[SERVER] DECAY-2.0: ${tot_chg}/${tot_proc} | tiers: hot=${tier_counts.hot} warm=${tier_counts.warm} cold=${tier_counts.cold} | compressed=${tot_comp} fingerprinted=${tot_fp} | ${tot.toFixed(1)}ms across ${segments.length} segments`)
 }
 
 export const on_query_hit = async (mem_id: string, sector: string, reembed?: (text: string) => Promise<number[]>) => {
@@ -280,6 +280,6 @@ export const on_query_hit = async (mem_id: string, sector: string, reembed?: (te
     }
 
     if (updated) {
-        console.log(`[decay-2.0] regenerated/reinforced memory ${mem_id}`)
+        console.log(`[SERVER] DECAY-2.0: regenerated/reinforced memory ${mem_id}`)
     }
 }

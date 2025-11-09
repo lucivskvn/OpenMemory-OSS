@@ -1,12 +1,18 @@
+import { beforeAll, afterAll, test, expect } from 'bun:test'
 const __ensure_mod = await import('./_ensure_server.js')
 const ensureServer = __ensure_mod.default || __ensure_mod
-await ensureServer()
-const { q } = require('../../backend/src/core/db.ts')
-const BASE = 'http://localhost:8080'
+let handle, q
 
-console.log('\n🧪 per-user stats q helpers test (in-process)')
+beforeAll(async () => {
+    handle = await ensureServer()
+    const mod = await import('../../backend/src/core/db.ts')
+    q = mod.q
+})
+afterAll(async () => {
+    if (handle && typeof handle.release === 'function') await handle.release()
+})
 
-async function runTest() {
+test('per-user stats q helpers return expected results', async () => {
     const now = Date.now()
     await q.ins_stat.run('test', 1, now - 1000, 'userA')
     await q.ins_stat.run('test', 2, now - 900, 'userA')
@@ -19,20 +25,15 @@ async function runTest() {
     const totalsA = await q.totals_since_by_user.all('userA', now - 2000)
     const totalsB = await q.totals_since_by_user.all('userB', now - 2000)
 
-    // Row counts
-    if (Number(globalRowCount?.total || 0) !== 3) throw new Error('globalRowCount mismatch')
-    if (Number(aRowCount?.total || 0) !== 2) throw new Error('userA row count mismatch')
-    if (Number(bRowCount?.total || 0) !== 1) throw new Error('userB row count mismatch')
-    if (!Array.isArray(rangeA) || rangeA.length !== 2) throw new Error('rangeA rows mismatch')
+    expect(Number(globalRowCount?.total || 0)).toBe(3)
+    expect(Number(aRowCount?.total || 0)).toBe(2)
+    expect(Number(bRowCount?.total || 0)).toBe(1)
+    expect(Array.isArray(rangeA)).toBe(true)
+    expect(rangeA.length).toBe(2)
 
-    // Totals (sum of `count` column)
     const aTotal = (totalsA && totalsA[0] && Number(totalsA[0].total)) || 0
     const bTotal = (totalsB && totalsB[0] && Number(totalsB[0].total)) || 0
-    if (aTotal !== 3) throw new Error('userA total mismatch')
-    if (bTotal !== 5) throw new Error('userB total mismatch')
-
-    console.log('✅ per-user stats helpers returned expected results')
-}
-
-await runTest()
+    expect(aTotal).toBe(3)
+    expect(bTotal).toBe(5)
+})
 

@@ -1,27 +1,25 @@
+import { beforeAll, afterAll, test, expect } from 'bun:test'
 const __ensure_mod = await import('./_ensure_server.js')
 const ensureServer = __ensure_mod.default || __ensure_mod
-await ensureServer()
-const { q } = require('../../backend/src/core/db.ts')
+let handle, q
 
-console.log('\n🧪 delete_requires_user test')
+beforeAll(async () => {
+    handle = await ensureServer()
+    const mod = await import('../../backend/src/core/db.ts')
+    q = mod.q
+})
+afterAll(async () => {
+    if (handle && typeof handle.release === 'function') await handle.release()
+})
 
-async function runTest() {
+test('delete_requires_user behavior', async () => {
     // del_vec must throw when user_id is falsy
-    let threw = false
-    try {
-        await q.del_vec.run('nonexistent', null)
-    } catch (e) {
-        threw = true
-    }
-    if (!threw) throw new Error('del_vec did not throw when user_id was null')
+    await expect(q.del_vec.run('nonexistent', null)).rejects.toBeTruthy()
 
     // del_vec with explicit user_id should not throw
     await q.del_vec.run('nonexistent', 'testuser')
 
-    // del_mem requires user_id - call and ensure no throw (deleting non-existent id is ok)
+    // del_mem requires user_id - deleting non-existent id should be ok
     await q.del_mem.run('nonexistent', 'testuser')
-
-    console.log('✅ delete_requires_user behavior OK')
-}
-
-await runTest()
+    expect(true).toBe(true)
+})

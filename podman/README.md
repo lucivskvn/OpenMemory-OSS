@@ -31,7 +31,7 @@ This method is recommended for production deployments, while the `docker-compose
    cp podman/*.{container,volume} ~/.config/containers/systemd/
    ```
 
-Note: The Quadlet `.container` files reference volumes by their systemd unit names. Recent Podman/Quadlet versions expect the volume unit name with the `.volume` suffix (for example `openmemory-data.volume`). The provided `openmemory.container` file already uses `Volume=openmemory-data.volume:/data:Z`. If you encounter issues where Podman cannot find the volume, verify that `podman volume ls` shows `openmemory-data` and use the volume unit name when copying or troubleshooting.
+Note: The Quadlet `.container` files reference volumes by their unit names. Use the actual Podman volume name (for example `openmemory-data`) in the `Volume=` line. The provided `openmemory.container` uses `Volume=openmemory-data:/data:Z`. If you encounter issues where Podman cannot find the volume, verify that `podman volume ls` shows `openmemory-data` and that the `.container` file uses that same name.
 
 3. **Create the environment file**:
    ```bash
