@@ -66,20 +66,24 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: '3.12'
-      - name: Cache pip
+      - name: Cache pip and venv
         uses: actions/cache@v4
         with:
           path: |
             ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/sdk-py/pyproject.toml') }}
-      - name: Install pytest
+            sdk-py/.venv
+          key: ${{ runner.os }}-sdkpy-pip-${{ hashFiles('**/sdk-py/pyproject.toml') }}
+      - name: Create venv and install pytest
         run: |
+          python -m venv sdk-py/.venv
+          source sdk-py/.venv/bin/activate
           python -m pip install --upgrade pip
           pip install pytest pytest-cov
       - name: Run SDK-Py tests
         env:
           PYTHONPATH: ${{ github.workspace }}/sdk-py
         run: |
+          source sdk-py/.venv/bin/activate
           python -m pytest -q sdk-py
 
   backend-postgres-smoke:
