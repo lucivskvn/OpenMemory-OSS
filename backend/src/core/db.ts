@@ -425,6 +425,22 @@ if (is_pg) {
     const dir = path.dirname(db_path)
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
     const db = new Database(db_path)
+    // Ensure the sqlite file has secure permissions on platforms that support it.
+    // Wrap in try/catch to avoid failing on platforms where chmod may be unsupported
+    // (CI runners or Windows shims). This enforces 0600 when possible.
+    try {
+        if (fs.existsSync(db_path)) {
+            try {
+                fs.chmodSync(db_path, 0o600)
+                if ((env as any).log_db) console.debug('[DB] Set sqlite file permissions to 0600 for', db_path)
+            } catch (e) {
+                if ((env as any).log_db) console.warn('[DB] Unable to chmod sqlite file, continuing:', (e as any)?.message || e)
+            }
+        }
+    } catch (e) {
+        // If fs.existsSync itself fails for any reason, continue without blocking
+        if ((env as any).log_db) console.warn('[DB] fs.existsSync threw when checking sqlite file, continuing:', (e as any)?.message || e)
+    }
     db.exec('PRAGMA journal_mode=WAL')
     db.exec('PRAGMA synchronous=NORMAL')
     db.exec('PRAGMA temp_store=MEMORY')

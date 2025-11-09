@@ -69,6 +69,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y podman
 
+      - name: Podman Compose Build
+        run: |
+          # Run podman compose build and config to validate the compose setup
+          podman compose build
+          podman compose config
+
       - name: Podman build smoke test
         run: |
           podman build -f backend/Dockerfile -t openmemory-backend:podman-test ./backend

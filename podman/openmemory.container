@@ -3,6 +3,8 @@ Description=OpenMemory - Hierarchical Semantic Graph Memory System
 Documentation=https://github.com/nullure/openmemory
 After=network-online.target
 Wants=network-online.target
+Requires=openmemory-data.volume
+After=openmemory-data.volume
 
 [Container]
 Image=ghcr.io/nullure/openmemory:latest
