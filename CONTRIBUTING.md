@@ -49,7 +49,7 @@ People _love_ thorough bug reports. I'm not even kidding.
 
 ### Prerequisites
 
-- Node.js 21+ and npm
+- Bun v1.3.2 or higher
 - Python 3.8+ (for Python SDK development)
 - Git
 - Docker (optional, for containerized development)
@@ -63,16 +63,16 @@ cd openmemory
 
 # Install backend dependencies
 cd backend
-npm install
+bun install
 
 # Start development server
-npm run dev
+bun run dev
 
 # Run tests
-npm test
+bun test
 
 # Build for production
-npm run build
+bun run build
 ```
 
 ### JavaScript SDK Development
@@ -82,13 +82,13 @@ npm run build
 cd SDK/javascript
 
 # Install dependencies
-npm install
+bun install
 
 # Build the SDK
-npm run build
+bun run build
 
 # Run tests
-npm test
+bun test
 
 # Run examples
 cd ../examples/js-sdk
@@ -178,17 +178,17 @@ docs(api): update HSG endpoint documentation
 
 ```bash
 cd backend
-npm test                 # Run all tests
-npm run test:watch      # Run tests in watch mode
-npm run test:coverage   # Run tests with coverage
+bun test                 # Run all tests
+bun test --watch      # Run tests in watch mode
+bun test --coverage   # Run tests with coverage
 ```
 
 #### JavaScript SDK Tests
 
 ```bash
 cd SDK/javascript
-npm test                # Run Jest tests
-npm run test:e2e       # Run end-to-end tests
+bun test                # Run Jest tests
+bun test --e2e       # Run end-to-end tests
 ```
 
 #### Python SDK Tests

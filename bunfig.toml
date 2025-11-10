@@ -1,0 +1,8 @@
+# bunfig.toml
+# This file configures the Bun runtime for the OpenMemory project.
+
+[test]
+# Preload the setup script before running the test suite.
+# This script starts the backend server and waits for it to be healthy,
+# ensuring that integration tests can run reliably.
+preload = ["./tests/setup.ts"]

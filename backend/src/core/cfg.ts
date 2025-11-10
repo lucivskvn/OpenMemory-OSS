@@ -1,97 +1,99 @@
-import path from "path";
-import dotenv from "dotenv";
+import { z } from "zod";
 
-dotenv.config({ path: path.resolve(__dirname, "../../../.env") });
-const num = (v: string | undefined, d: number) => Number(v) || d;
-const str = (v: string | undefined, d: string) => v || d;
-const bool = (v: string | undefined) => v === "true";
-type tier = "fast" | "smart" | "deep" | "hybrid";
+const envSchema = z.object({
+    // Server configuration
+    OM_PORT: z.coerce.number().int().positive().default(8080),
+    OM_API_KEY: z.string().min(1).optional(),
+    OM_MODE: z.enum(["development", "production", "langgraph"]).default("development"),
 
-const get_tier = (): tier => {
-    const man = process.env.OM_TIER as tier;
-    if (man && ["fast", "smart", "deep", "hybrid"].includes(man)) return man;
-    console.warn(
-        "[OpenMemory] OM_TIER not set! Please set OM_TIER=hybrid|fast|smart|deep in .env",
-    );
-    return "hybrid";
-};
-export const tier = get_tier();
-const tier_dims = { fast: 256, smart: 384, deep: 1536, hybrid: 256 };
-const tier_cache = { fast: 2, smart: 3, deep: 5, hybrid: 3 };
-const tier_max_active = { fast: 32, smart: 64, deep: 128, hybrid: 64 };
+    // Database configuration
+    OM_METADATA_BACKEND: z.enum(["sqlite", "postgres"]).default("sqlite"),
+    OM_DB_PATH: z.string().default("./data/openmemory.sqlite"),
+
+    // PostgreSQL specific configuration (optional)
+    OM_PG_HOST: z.string().optional(),
+    OM_PG_PORT: z.coerce.number().int().positive().optional(),
+    OM_PG_DB: z.string().optional(),
+    OM_PG_USER: z.string().optional(),
+    OM_PG_PASSWORD: z.string().optional(),
+    OM_PG_SSL: z.enum(["disable", "require"]).optional(),
+    OM_PG_SCHEMA: z.string().optional(),
+    OM_PG_TABLE: z.string().optional(),
+
+    // Embedding and Vector configuration
+    OM_EMBED_KIND: z.enum(["openai", "gemini", "ollama", "local", "synthetic"]).default("synthetic"),
+    OM_VEC_DIM: z.coerce.number().int().positive().default(256),
+
+    // OpenAI specific
+    OM_OPENAI_KEY: z.string().optional(),
+    OM_OPENAI_BASE_URL: z.string().url().default("https://api.openai.com/v1"),
+    OM_OPENAI_MODEL: z.string().optional(),
+
+    // Gemini specific
+    OM_GEMINI_KEY: z.string().optional(),
+
+    // Ollama specific
+    OM_OLLAMA_URL: z.string().url().default("http://localhost:11434"),
+    OM_OLLAMA_DECLARATIVE_MODEL: z.string().optional(),
+    OM_OLLAMA_EPISODIC_MODEL: z.string().optional(),
+
+    // Rate limiting
+    OM_RATE_LIMIT_ENABLED: z.coerce.boolean().default(true),
+    OM_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
+    OM_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(100),
+
+    // Memory decay process
+    OM_DECAY_INTERVAL_MINUTES: z.coerce.number().int().positive().default(1440),
+
+    // Other settings
+    OM_MAX_PAYLOAD_SIZE: z.coerce.number().int().positive().default(1000000), // 1MB
+    OM_LOG_AUTH: z.enum(["true", "false"]).default("false").transform(v => v === "true"),
+});
+
+let parsedEnv;
+try {
+    parsedEnv = envSchema.parse(process.env);
+} catch (error) {
+    console.error("❌ Invalid environment variables:", error);
+    process.exit(1);
+}
 
 export const env = {
-    port: num(process.env.OM_PORT, 8080),
-    db_path: str(process.env.OM_DB_PATH, "./data/openmemory.sqlite"),
-    api_key: process.env.OM_API_KEY,
-    rate_limit_enabled: bool(process.env.OM_RATE_LIMIT_ENABLED),
-    rate_limit_window_ms: num(process.env.OM_RATE_LIMIT_WINDOW_MS, 60000),
-    rate_limit_max_requests: num(process.env.OM_RATE_LIMIT_MAX_REQUESTS, 100),
-    compression_enabled: bool(process.env.OM_COMPRESSION_ENABLED),
-    compression_algorithm: str(process.env.OM_COMPRESSION_ALGORITHM, "auto") as
-        | "semantic"
-        | "syntactic"
-        | "aggressive"
-        | "auto",
-    compression_min_length: num(process.env.OM_COMPRESSION_MIN_LENGTH, 100),
-    emb_kind: str(process.env.OM_EMBEDDINGS, "synthetic"),
-    embed_mode: str(process.env.OM_EMBED_MODE, "simple"),
-    adv_embed_parallel: bool(process.env.OM_ADV_EMBED_PARALLEL),
-    embed_delay_ms: num(process.env.OM_EMBED_DELAY_MS, 200),
-    openai_key:
-        process.env.OPENAI_API_KEY || process.env.OM_OPENAI_API_KEY || "",
-    openai_base_url: str(
-        process.env.OM_OPENAI_BASE_URL,
-        "https://api.openai.com/v1",
-    ),
-    openai_model: process.env.OM_OPENAI_MODEL,
-    gemini_key:
-        process.env.GEMINI_API_KEY || process.env.OM_GEMINI_API_KEY || "",
-    ollama_url: str(
-        process.env.OLLAMA_URL || process.env.OM_OLLAMA_URL,
-        "http://localhost:11434",
-    ),
-    local_model_path:
-        process.env.LOCAL_MODEL_PATH || process.env.OM_LOCAL_MODEL_PATH || "",
-    vec_dim: num(process.env.OM_VEC_DIM, tier_dims[tier]),
-    min_score: num(process.env.OM_MIN_SCORE, 0.3),
-    decay_lambda: num(process.env.OM_DECAY_LAMBDA, 0.02),
-    decay_interval_minutes: num(process.env.OM_DECAY_INTERVAL_MINUTES, 1440),
-    max_payload_size: num(process.env.OM_MAX_PAYLOAD_SIZE, 1_000_000),
-    mode: str(process.env.OM_MODE, "standard").toLowerCase(),
-    lg_namespace: str(process.env.OM_LG_NAMESPACE, "default"),
-    lg_max_context: num(process.env.OM_LG_MAX_CONTEXT, 50),
-    lg_reflective: (process.env.OM_LG_REFLECTIVE ?? "true") !== "false",
-    metadata_backend: str(
-        process.env.OM_METADATA_BACKEND,
-        "sqlite",
-    ).toLowerCase(),
-    vector_backend: str(process.env.OM_VECTOR_BACKEND, "sqlite").toLowerCase(),
-    ide_mode: bool(process.env.OM_IDE_MODE),
-    ide_allowed_origins: str(
-        process.env.OM_IDE_ALLOWED_ORIGINS,
-        "http://localhost:5173,http://localhost:3000",
-    ).split(","),
-    auto_reflect: bool(process.env.OM_AUTO_REFLECT),
-    reflect_interval: num(process.env.OM_REFLECT_INTERVAL, 10),
-    reflect_min: num(process.env.OM_REFLECT_MIN_MEMORIES, 20),
-    user_summary_interval: num(process.env.OM_USER_SUMMARY_INTERVAL, 30),
-    use_summary_only: (process.env.OM_USE_SUMMARY_ONLY ?? "true") !== "false",
-    summary_max_length: num(process.env.OM_SUMMARY_MAX_LENGTH, 200),
-    seg_size: num(process.env.OM_SEG_SIZE, 10000),
-    cache_segments: num(process.env.OM_CACHE_SEGMENTS, tier_cache[tier]),
-    max_active: num(process.env.OM_MAX_ACTIVE, tier_max_active[tier]),
-    decay_ratio: num(process.env.OM_DECAY_RATIO, 0.03),
-    decay_sleep_ms: num(process.env.OM_DECAY_SLEEP_MS, 200),
-    decay_threads: num(process.env.OM_DECAY_THREADS, 3),
-    decay_cold_threshold: num(process.env.OM_DECAY_COLD_THRESHOLD, 0.25),
-    decay_reinforce_on_query:
-        (process.env.OM_DECAY_REINFORCE_ON_QUERY ?? "true") !== "false",
-    regeneration_enabled:
-        (process.env.OM_REGENERATION_ENABLED ?? "true") !== "false",
-    max_vector_dim: num(process.env.OM_MAX_VECTOR_DIM, tier_dims[tier]),
-    min_vector_dim: num(process.env.OM_MIN_VECTOR_DIM, 64),
-    summary_layers: num(process.env.OM_SUMMARY_LAYERS, 3),
-    keyword_boost: num(process.env.OM_KEYWORD_BOOST, 2.5),
-    keyword_min_length: num(process.env.OM_KEYWORD_MIN_LENGTH, 3),
+    port: parsedEnv.OM_PORT,
+    api_key: parsedEnv.OM_API_KEY,
+    mode: parsedEnv.OM_MODE,
+
+    metadata_backend: parsedEnv.OM_METADATA_BACKEND,
+    db_path: parsedEnv.OM_DB_PATH,
+
+    embed_kind: parsedEnv.OM_EMBED_KIND,
+    vec_dim: parsedEnv.OM_VEC_DIM,
+
+    openai_key: parsedEnv.OM_OPENAI_KEY,
+    openai_base_url: parsedEnv.OM_OPENAI_BASE_URL,
+    openai_model: parsedEnv.OM_OPENAI_MODEL,
+
+    gemini_key: parsedEnv.OM_GEMINI_KEY,
+
+    ollama_url: parsedEnv.OM_OLLAMA_URL,
+    ollama_declarative_model: parsedEnv.OM_OLLAMA_DECLARATIVE_MODEL,
+    ollama_episodic_model: parsedEnv.OM_OLLAMA_EPISODIC_MODEL,
+
+    rate_limit_enabled: parsedEnv.OM_RATE_LIMIT_ENABLED,
+    rate_limit_window_ms: parsedEnv.OM_RATE_LIMIT_WINDOW_MS,
+    rate_limit_max_requests: parsedEnv.OM_RATE_LIMIT_MAX_REQUESTS,
+
+    decay_interval_minutes: parsedEnv.OM_DECAY_INTERVAL_MINUTES,
+
+    max_payload_size: parsedEnv.OM_MAX_PAYLOAD_SIZE,
+    log_auth: parsedEnv.OM_LOG_AUTH,
+
+    // Deprecated or less-used vars, kept for compatibility for now
+    cache_segments: 3,
+    max_active: 64,
 };
+
+export const tier = process.env.OM_TIER || "hybrid";
+export const host = process.env.OM_HOST || "localhost";
+export const protocol = env.mode === "development" ? "http" : "https";
+export const data_dir = process.env.OM_DATA_DIR || "./data";

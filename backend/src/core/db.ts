@@ -1,8 +1,9 @@
-import sqlite3 from "sqlite3";
+import { Database } from "bun:sqlite";
 import { Pool, PoolClient } from "pg";
 import { env } from "./cfg";
 import fs from "node:fs";
 import path from "node:path";
+import logger from "./logger";
 
 type q_type = {
     ins_mem: { run: (...p: any[]) => Promise<void> };
@@ -60,10 +61,12 @@ let transaction: {
 let q: q_type;
 let memories_table: string;
 
-const is_pg = env.metadata_backend === "postgres";
+export function initDb() {
+    const is_pg = env.metadata_backend === "postgres";
 
-if (is_pg) {
-    const ssl =
+    if (is_pg) {
+        // PRESERVED POSTGRESQL IMPLEMENTATION
+        const ssl =
         process.env.OM_PG_SSL === "require"
             ? { rejectUnauthorized: false }
             : process.env.OM_PG_SSL === "disable"
@@ -136,7 +139,7 @@ if (is_pg) {
                 const admin = pool("postgres");
                 try {
                     await admin.query(`CREATE DATABASE ${db_name}`);
-                    console.log(`[DB] Created ${db_name}`);
+                    logger.info({ component: "DB", db_name }, "PostgreSQL database created");
                 } catch (e: any) {
                     if (e.code !== "42P04") throw e;
                 } finally {
@@ -182,7 +185,7 @@ if (is_pg) {
         ready = true;
     };
     init().catch((err) => {
-        console.error("[DB] Init failed:", err);
+        logger.error({ component: "DB", err }, "Database initialization failed");
         process.exit(1);
     });
     const safe_exec = async (sql: string, p: any[] = []) => {
@@ -428,118 +431,134 @@ if (is_pg) {
                 ),
         },
     };
-} else {
-    const db_path = env.db_path || "./data/openmemory.sqlite";
-    const dir = path.dirname(db_path);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    const db = new sqlite3.Database(db_path);
-    db.serialize(() => {
-        db.run("PRAGMA journal_mode=WAL");
-        db.run("PRAGMA synchronous=NORMAL");
-        db.run("PRAGMA temp_store=MEMORY");
-        db.run("PRAGMA cache_size=-8000");
-        db.run("PRAGMA mmap_size=134217728");
-        db.run("PRAGMA foreign_keys=OFF");
-        db.run("PRAGMA wal_autocheckpoint=20000");
-        db.run("PRAGMA locking_mode=EXCLUSIVE");
-        db.run("PRAGMA busy_timeout=50");
-        db.run(
+    } else {
+        const db_path = env.db_path || "./data/openmemory.sqlite";
+        const dir = path.dirname(db_path);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+        const db = new Database(db_path);
+
+        db.exec("PRAGMA journal_mode=WAL");
+        db.exec("PRAGMA synchronous=NORMAL");
+        db.exec("PRAGMA temp_store=MEMORY");
+        db.exec("PRAGMA cache_size=-8000");
+        db.exec("PRAGMA mmap_size=134217728");
+        db.exec("PRAGMA foreign_keys=OFF");
+        db.exec("PRAGMA wal_autocheckpoint=20000");
+        db.exec("PRAGMA locking_mode=EXCLUSIVE");
+        db.exec("PRAGMA busy_timeout=50");
+        db.exec(
             `create table if not exists memories(id text primary key,user_id text,segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,meta text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0)`,
         );
-        db.run(
+        db.exec(
             `create table if not exists vectors(id text not null,sector text not null,user_id text,v blob not null,dim integer not null,primary key(id,sector))`,
         );
-        db.run(
+        db.exec(
             `create table if not exists waypoints(src_id text,dst_id text not null,user_id text,weight real not null,created_at integer,updated_at integer,primary key(src_id,user_id))`,
         );
-        db.run(
+        db.exec(
             `create table if not exists embed_logs(id text primary key,model text,status text,ts integer,err text)`,
         );
-        db.run(
+        db.exec(
             `create table if not exists users(user_id text primary key,summary text,reflection_count integer default 0,created_at integer,updated_at integer)`,
         );
-        db.run(
+        db.exec(
             `create table if not exists stats(id integer primary key autoincrement,type text not null,count integer default 1,ts integer not null)`,
         );
-        db.run(
+        db.exec(
             `create table if not exists temporal_facts(id text primary key,subject text not null,predicate text not null,object text not null,valid_from integer not null,valid_to integer,confidence real not null check(confidence >= 0 and confidence <= 1),last_updated integer not null,metadata text,unique(subject,predicate,object,valid_from))`,
         );
-        db.run(
+        db.exec(
             `create table if not exists temporal_edges(id text primary key,source_id text not null,target_id text not null,relation_type text not null,valid_from integer not null,valid_to integer,weight real not null,metadata text,foreign key(source_id) references temporal_facts(id),foreign key(target_id) references temporal_facts(id))`,
         );
-        db.run(
+        db.exec(
             "create index if not exists idx_memories_sector on memories(primary_sector)",
         );
-        db.run(
+        db.exec(
             "create index if not exists idx_memories_segment on memories(segment)",
         );
-        db.run(
+        db.exec(
             "create index if not exists idx_memories_simhash on memories(simhash)",
         );
-        db.run(
+        db.exec(
             "create index if not exists idx_memories_ts on memories(last_seen_at)",
         );
-        db.run(
+        db.exec(
             "create index if not exists idx_memories_user on memories(user_id)",
         );
-        db.run(
+        db.exec(
             "create index if not exists idx_vectors_user on vectors(user_id)",
         );
-        db.run(
+        db.exec(
             "create index if not exists idx_waypoints_src on waypoints(src_id)",
         );
-        db.run(
+        db.exec(
             "create index if not exists idx_waypoints_dst on waypoints(dst_id)",
         );
-        db.run(
+        db.exec(
             "create index if not exists idx_waypoints_user on waypoints(user_id)",
         );
-        db.run("create index if not exists idx_stats_ts on stats(ts)");
-        db.run("create index if not exists idx_stats_type on stats(type)");
-        db.run(
+        db.exec("create index if not exists idx_stats_ts on stats(ts)");
+        db.exec("create index if not exists idx_stats_type on stats(type)");
+        db.exec(
             "create index if not exists idx_temporal_subject on temporal_facts(subject)",
         );
-        db.run(
+        db.exec(
             "create index if not exists idx_temporal_predicate on temporal_facts(predicate)",
         );
-        db.run(
+        db.exec(
             "create index if not exists idx_temporal_validity on temporal_facts(valid_from,valid_to)",
         );
-        db.run(
+        db.exec(
             "create index if not exists idx_temporal_composite on temporal_facts(subject,predicate,valid_from,valid_to)",
         );
-        db.run(
+        db.exec(
             "create index if not exists idx_edges_source on temporal_edges(source_id)",
         );
-        db.run(
+        db.exec(
             "create index if not exists idx_edges_target on temporal_edges(target_id)",
         );
-        db.run(
+        db.exec(
             "create index if not exists idx_edges_validity on temporal_edges(valid_from,valid_to)",
         );
-    });
-    memories_table = "memories";
-    const exec = (sql: string, p: any[] = []) =>
-        new Promise<void>((ok, no) =>
-            db.run(sql, p, (err) => (err ? no(err) : ok())),
-        );
-    const one = (sql: string, p: any[] = []) =>
-        new Promise<any>((ok, no) =>
-            db.get(sql, p, (err, row) => (err ? no(err) : ok(row))),
-        );
-    const many = (sql: string, p: any[] = []) =>
-        new Promise<any[]>((ok, no) =>
-            db.all(sql, p, (err, rows) => (err ? no(err) : ok(rows))),
-        );
-    run_async = exec;
-    get_async = one;
-    all_async = many;
-    transaction = {
-        begin: () => exec("BEGIN TRANSACTION"),
-        commit: () => exec("COMMIT"),
-        rollback: () => exec("ROLLBACK"),
-    };
-    q = {
+
+        memories_table = "memories";
+        const exec = (sql: string, p: any[] = []) => {
+            try {
+                db.prepare(sql).run(...p);
+                return Promise.resolve();
+            } catch (e) {
+                return Promise.reject(e);
+            }
+        };
+
+        const one = (sql: string, p: any[] = []) => {
+            try {
+                const row = db.prepare(sql).get(...p);
+                return Promise.resolve(row);
+            } catch (e) {
+                return Promise.reject(e);
+            }
+        };
+
+        const many = (sql: string, p: any[] = []) => {
+            try {
+                const rows = db.prepare(sql).all(...p);
+                return Promise.resolve(rows as any[]);
+            } catch (e) {
+                return Promise.reject(e);
+            }
+        };
+
+        run_async = exec;
+        get_async = one;
+        all_async = many;
+        transaction = {
+            begin: () => exec("BEGIN TRANSACTION"),
+            commit: () => exec("COMMIT"),
+            rollback: () => exec("ROLLBACK"),
+        };
+        q = {
         ins_mem: {
             run: (...p) =>
                 exec(
@@ -759,7 +778,9 @@ if (is_pg) {
                 ),
         },
     };
+    }
 }
+
 
 export const log_maint_op = async (
     type: "decay" | "reflect" | "consolidate",
@@ -772,7 +793,7 @@ export const log_maint_op = async (
             Date.now(),
         ]);
     } catch (e) {
-        console.error("[DB] Maintenance log error:", e);
+        logger.error({ component: "DB", err: e, operation: "log_maint_op" }, "Maintenance log error");
     }
 };
 

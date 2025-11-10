@@ -1,6 +1,7 @@
 ﻿import { env, tier } from "../core/cfg";
 import { get_model } from "../core/models";
 import { sector_configs } from "./hsg";
+import { CryptoHasher } from "bun";
 import { q } from "../core/db";
 import { canonical_tokens_from_text, add_synonym_tokens } from "../utils/text";
 
@@ -229,8 +230,7 @@ async function emb_local(t: string, s: string): Promise<number[]> {
         return gen_syn_emb(t, s);
     }
     try {
-        const { createHash } = await import("crypto");
-        const h = createHash("sha256")
+        const h = new CryptoHasher("sha256")
                 .update(t + s)
                 .digest(),
             e: number[] = [];

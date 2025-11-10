@@ -2,6 +2,7 @@ import { q, all_async, run_async } from "../../core/db";
 import { env } from "../../core/cfg";
 import * as fs from "fs";
 import * as path from "path";
+import logger from "../../core/logger";
 
 const is_pg = env.metadata_backend === "postgres";
 
@@ -19,7 +20,7 @@ const log_metric = async (type: string, value: number) => {
             Date.now(),
         ]);
     } catch (e) {
-        console.error("[metrics] log err:", e);
+        logger.error({ component: "METRICS", err: e }, "Failed to log metric");
     }
 };
 
@@ -42,17 +43,18 @@ export function track_req(success: boolean) {
     }
 }
 
+import { Context } from "../server";
+
 export function req_tracker_mw() {
-    return (req: any, res: any, next: any) => {
-        if (req.url.startsWith("/dashboard") || req.url.startsWith("/health")) {
+    return async (req: Request, ctx: Context, next: () => Promise<Response>) => {
+        const url = new URL(req.url);
+        if (url.pathname.startsWith("/dashboard") || url.pathname.startsWith("/health")) {
             return next();
         }
-        const orig = res.json.bind(res);
-        res.json = (data: any) => {
-            track_req(res.statusCode < 400);
-            return orig(data);
-        };
-        next();
+
+        const response = await next();
+        track_req(response.status < 400);
+        return response;
     };
 }
 
@@ -76,13 +78,13 @@ const get_db_sz = async (): Promise<number> => {
             return 0;
         }
     } catch (e) {
-        console.error("[db_sz] err:", e);
+        logger.error({ component: "DB_SIZE", err: e }, "Failed to get database size");
         return 0;
     }
 };
 
 export function dash(app: any) {
-    app.get("/dashboard/stats", async (_req: any, res: any) => {
+    app.get("/dashboard/stats", async (req: Request, ctx: Context) => {
         try {
             const totmem = await all_async(
                 "SELECT COUNT(*) as count FROM memories",
@@ -110,7 +112,6 @@ export function dash(app: any) {
             `);
             const upt = process.uptime();
 
-            // Calculate QPS stats from database (last hour)
             const hour_ago = Date.now() - 60 * 60 * 1000;
             const qps_data = await all_async(
                 "SELECT count, ts FROM stats WHERE type=? AND ts > ? ORDER BY ts DESC",
@@ -155,7 +156,7 @@ export function dash(app: any) {
                       )
                     : 0;
 
-            res.json({
+            const data = {
                 totalMemories: totmem[0]?.count || 0,
                 recentMemories: recmem[0]?.count || 0,
                 sectorCounts: sectcnt.reduce((acc: any, row: any) => {
@@ -194,18 +195,19 @@ export function dash(app: any) {
                     decayInterval: env.decay_interval_minutes,
                     embedProvider: env.emb_kind,
                 },
-            });
+            };
+            return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
         } catch (e: any) {
-            console.error("[dash] stats err:", e);
-            res.status(500).json({ err: "internal", message: e.message });
+            logger.error({ component: "DASHBOARD", err: e }, "Failed to get stats");
+            return new Response(JSON.stringify({ err: "internal", message: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
         }
     });
 
-    app.get("/dashboard/health", async (_req: any, res: any) => {
+    app.get("/dashboard/health", async (req: Request, ctx: Context) => {
         try {
             const memusg = process.memoryUsage();
             const upt = process.uptime();
-            res.json({
+            const data = {
                 memory: {
                     heapUsed: Math.round(memusg.heapUsed / 1024 / 1024),
                     heapTotal: Math.round(memusg.heapTotal / 1024 / 1024),
@@ -222,15 +224,16 @@ export function dash(app: any) {
                     version: process.version,
                     platform: process.platform,
                 },
-            });
+            };
+            return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
         } catch (e: any) {
-            res.status(500).json({ err: "internal", message: e.message });
+            return new Response(JSON.stringify({ err: "internal", message: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
         }
     });
 
-    app.get("/dashboard/activity", async (req: any, res: any) => {
+    app.get("/dashboard/activity", async (req: Request, ctx: Context) => {
         try {
-            const lim = parseInt(req.query.limit || "50");
+            const lim = parseInt(ctx.query.get("limit") || "50");
             const recmem = await all_async(
                 `
                 SELECT id, content, primary_sector, salience, created_at, updated_at, last_seen_at
@@ -238,7 +241,7 @@ export function dash(app: any) {
             `,
                 [lim],
             );
-            res.json({
+            const data = {
                 activities: recmem.map((m: any) => ({
                     id: m.id,
                     type: "memory_updated",
@@ -247,15 +250,16 @@ export function dash(app: any) {
                     salience: m.salience,
                     timestamp: m.updated_at || m.created_at,
                 })),
-            });
+            };
+            return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
         } catch (e: any) {
-            res.status(500).json({ err: "internal", message: e.message });
+            return new Response(JSON.stringify({ err: "internal", message: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
         }
     });
 
-    app.get("/dashboard/sectors/timeline", async (req: any, res: any) => {
+    app.get("/dashboard/sectors/timeline", async (req: Request, ctx: Context) => {
         try {
-            const hrs = parseInt(req.query.hours || "24");
+            const hrs = parseInt(ctx.query.get("hours") || "24");
             const strt = Date.now() - hrs * 60 * 60 * 1000;
             const tl = await all_async(
                 `
@@ -264,15 +268,15 @@ export function dash(app: any) {
             `,
                 [strt],
             );
-            res.json({ timeline: tl });
+            return new Response(JSON.stringify({ timeline: tl }), { headers: { "Content-Type": "application/json" } });
         } catch (e: any) {
-            res.status(500).json({ err: "internal", message: e.message });
+            return new Response(JSON.stringify({ err: "internal", message: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
         }
     });
 
-    app.get("/dashboard/top-memories", async (req: any, res: any) => {
+    app.get("/dashboard/top-memories", async (req: Request, ctx: Context) => {
         try {
-            const lim = parseInt(req.query.limit || "10");
+            const lim = parseInt(ctx.query.get("limit") || "10");
             const topm = await all_async(
                 `
                 SELECT id, content, primary_sector, salience, last_seen_at
@@ -280,7 +284,7 @@ export function dash(app: any) {
             `,
                 [lim],
             );
-            res.json({
+            const data = {
                 memories: topm.map((m: any) => ({
                     id: m.id,
                     content: m.content,
@@ -288,15 +292,16 @@ export function dash(app: any) {
                     salience: m.salience,
                     lastSeen: m.last_seen_at,
                 })),
-            });
+            };
+            return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
         } catch (e: any) {
-            res.status(500).json({ err: "internal", message: e.message });
+            return new Response(JSON.stringify({ err: "internal", message: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
         }
     });
 
-    app.get("/dashboard/maintenance", async (req: any, res: any) => {
+    app.get("/dashboard/maintenance", async (req: Request, ctx: Context) => {
         try {
-            const hrs = parseInt(req.query.hours || "24");
+            const hrs = parseInt(ctx.query.get("hours") || "24");
             const strt = Date.now() - hrs * 60 * 60 * 1000;
 
             const ops = await all_async(
@@ -348,7 +353,7 @@ export function dash(app: any) {
                     ? Math.round(((tot_reflect + tot_consol) / tot_ops) * 100)
                     : 0;
 
-            res.json({
+            const data = {
                 operations: Object.values(by_hr),
                 totals: {
                     cycles: tot_decay,
@@ -356,9 +361,10 @@ export function dash(app: any) {
                     consolidations: tot_consol,
                     efficiency,
                 },
-            });
+            };
+            return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
         } catch (e: any) {
-            res.status(500).json({ err: "internal", message: e.message });
+            return new Response(JSON.stringify({ err: "internal", message: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
         }
     });
 }
