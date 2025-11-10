@@ -1,4 +1,4 @@
-import { q } from "../../core/db";
+import { q, all_async } from "../../core/db";
 import { now, rid, j, p } from "../../utils";
 import {
     add_hsg_memory,
@@ -9,17 +9,42 @@ import {
 import { ingestDocument, ingestURL } from "../../ops/ingest";
 import { env } from "../../core/cfg";
 import { update_user_summary } from "../../memory/user_summary";
-import type {
-    add_req,
-    q_req,
-    ingest_req,
-    ingest_url_req,
-} from "../../core/types";
+import { z } from "zod";
+import { Context } from "../server";
+
+const querySchema = z.object({
+    query: z.string().min(1),
+    k: z.number().int().positive().optional(),
+    filters: z.object({
+        sector: z.string().optional(),
+        min_score: z.number().optional(),
+        user_id: z.string().optional(),
+    }).optional(),
+});
+
+const addSchema = z.object({
+    content: z.string().min(1),
+    tags: z.array(z.string()).optional(),
+    metadata: z.record(z.any()).optional(),
+    user_id: z.string().optional(),
+});
+
+const ingestSchema = z.object({
+    content_type: z.string(),
+    data: z.string(), // Assuming base64 encoded string for data
+    metadata: z.record(z.any()).optional(),
+    config: z.record(z.any()).optional(),
+    user_id: z.string().optional(),
+});
 
 export function mem(app: any) {
-    app.post("/memory/add", async (req: any, res: any) => {
-        const b = req.body as add_req;
-        if (!b?.content) return res.status(400).json({ err: "content" });
+    app.post("/memory/add", async (req: Request, ctx: Context) => {
+        const validation = addSchema.safeParse(ctx.body);
+        if (!validation.success) {
+            return new Response(JSON.stringify({ error: "invalid_request", issues: validation.error.issues }),
+                { status: 400, headers: { "Content-Type": "application/json" } });
+        }
+        const b = validation.data;
         try {
             const m = await add_hsg_memory(
                 b.content,
@@ -27,22 +52,24 @@ export function mem(app: any) {
                 b.metadata,
                 b.user_id,
             );
-            res.json(m);
-
             if (b.user_id) {
                 update_user_summary(b.user_id).catch((e) =>
                     console.error("[mem] user summary update failed:", e),
                 );
             }
+            return new Response(JSON.stringify(m));
         } catch (e: any) {
-            res.status(500).json({ err: e.message });
+            return new Response(JSON.stringify({ err: e.message }), { status: 500 });
         }
     });
 
-    app.post("/memory/ingest", async (req: any, res: any) => {
-        const b = req.body as ingest_req;
-        if (!b?.content_type || !b?.data)
-            return res.status(400).json({ err: "missing" });
+    app.post("/memory/ingest", async (req: Request, ctx: Context) => {
+        const validation = ingestSchema.safeParse(ctx.body);
+        if (!validation.success) {
+            return new Response(JSON.stringify({ error: "invalid_request", issues: validation.error.issues }),
+                { status: 400, headers: { "Content-Type": "application/json" } });
+        }
+        const b = validation.data;
         try {
             const r = await ingestDocument(
                 b.content_type,
@@ -51,25 +78,31 @@ export function mem(app: any) {
                 b.config,
                 b.user_id,
             );
-            res.json(r);
+            return new Response(JSON.stringify(r));
         } catch (e: any) {
-            res.status(500).json({ err: "ingest_fail", msg: e.message });
+            return new Response(JSON.stringify({ err: "ingest_fail", msg: e.message }), { status: 500 });
         }
     });
 
-    app.post("/memory/ingest/url", async (req: any, res: any) => {
-        const b = req.body as ingest_url_req;
-        if (!b?.url) return res.status(400).json({ err: "no_url" });
+    app.post("/memory/ingest/url", async (req: Request, ctx: Context) => {
+        const b = ctx.body as any;
+        if (!b?.url) return new Response(JSON.stringify({ err: "no_url" }), { status: 400 });
         try {
             const r = await ingestURL(b.url, b.metadata, b.config, b.user_id);
-            res.json(r);
+            return new Response(JSON.stringify(r));
         } catch (e: any) {
-            res.status(500).json({ err: "url_fail", msg: e.message });
+            return new Response(JSON.stringify({ err: "url_fail", msg: e.message }), { status: 500 });
         }
     });
 
-    app.post("/memory/query", async (req: any, res: any) => {
-        const b = req.body as q_req;
+    app.post("/memory/query", async (req: Request, ctx: Context) => {
+        const validation = querySchema.safeParse(ctx.body);
+        if (!validation.success) {
+            return new Response(JSON.stringify({ error: "invalid_request", issues: validation.error.issues }),
+                { status: 400, headers: { "Content-Type": "application/json" } });
+        }
+
+        const b = validation.data;
         const k = b.k || 8;
         try {
             const f = {
@@ -78,7 +111,7 @@ export function mem(app: any) {
                 user_id: b.filters?.user_id,
             };
             const m = await hsg_query(b.query, k, f);
-            res.json({
+            const responseData = {
                 query: b.query,
                 matches: m.map((x: any) => ({
                     id: x.id,
@@ -90,69 +123,65 @@ export function mem(app: any) {
                     salience: x.salience,
                     last_seen_at: x.last_seen_at,
                 })),
-            });
+            };
+            return new Response(JSON.stringify(responseData), { headers: { "Content-Type": "application/json" } });
         } catch (e: any) {
-            res.json({ query: b.query, matches: [] });
+            return new Response(JSON.stringify({ query: b.query, matches: [] }), { headers: { "Content-Type": "application/json" } });
         }
     });
 
-    app.post("/memory/reinforce", async (req: any, res: any) => {
-        const b = req.body as { id: string; boost?: number };
-        if (!b?.id) return res.status(400).json({ err: "id" });
+    app.post("/memory/reinforce", async (req: Request, ctx: Context) => {
+        const b = ctx.body as { id: string; boost?: number };
+        if (!b?.id) return new Response(JSON.stringify({ err: "id" }), { status: 400 });
         try {
             await reinforce_memory(b.id, b.boost);
-            res.json({ ok: true });
+            return new Response(JSON.stringify({ ok: true }));
         } catch (e: any) {
-            res.status(404).json({ err: "nf" });
+            return new Response(JSON.stringify({ err: "nf" }), { status: 404 });
         }
     });
 
-    app.patch("/memory/:id", async (req: any, res: any) => {
-        const id = req.params.id;
-        const b = req.body as {
+    app.patch("/memory/:id", async (req: Request, ctx: Context) => {
+        const id = ctx.params.id;
+        const b = ctx.body as {
             content?: string;
             tags?: string[];
             metadata?: any;
             user_id?: string;
         };
-        if (!id) return res.status(400).json({ err: "id" });
+        if (!id) return new Response(JSON.stringify({ err: "id" }), { status: 400 });
         try {
-            // Check if memory exists and user has permission
             const m = await q.get_mem.get(id);
-            if (!m) return res.status(404).json({ err: "nf" });
+            if (!m) return new Response(JSON.stringify({ err: "nf" }), { status: 404 });
 
-            // Check user ownership if user_id is provided
             if (b.user_id && m.user_id !== b.user_id) {
-                return res.status(403).json({ err: "forbidden" });
+                return new Response(JSON.stringify({ err: "forbidden" }), { status: 403 });
             }
 
             const r = await update_memory(id, b.content, b.tags, b.metadata);
-            res.json(r);
+            return new Response(JSON.stringify(r));
         } catch (e: any) {
             if (e.message.includes("not found")) {
-                res.status(404).json({ err: "nf" });
+                return new Response(JSON.stringify({ err: "nf" }), { status: 404 });
             } else {
-                res.status(500).json({ err: "internal" });
+                return new Response(JSON.stringify({ err: "internal" }), { status: 500 });
             }
         }
     });
 
-    app.get("/memory/all", async (req: any, res: any) => {
+    app.get("/memory/all", async (req: Request, ctx: Context) => {
         try {
-            const u = req.query.u ? parseInt(req.query.u) : 0;
-            const l = req.query.l ? parseInt(req.query.l) : 100;
-            const s = req.query.sector;
-            const user_id = req.query.user_id;
+            const u = parseInt(ctx.query.get("u") || "0");
+            const l = parseInt(ctx.query.get("l") || "100");
+            const s = ctx.query.get("sector");
+            const user_id = ctx.query.get("user_id");
 
             let r;
             if (user_id) {
-                // Filter by user_id
                 r = await q.all_mem_by_user.all(user_id, l, u);
             } else if (s) {
-                // Filter by sector
                 r = await q.all_mem_by_sector.all(s, l, u);
             } else {
-                // No filter
                 r = await q.all_mem.all(l, u);
             }
 
@@ -170,27 +199,26 @@ export function mem(app: any) {
                 version: x.version,
                 user_id: x.user_id,
             }));
-            res.json({ items: i });
+            return new Response(JSON.stringify({ items: i }));
         } catch (e: any) {
-            res.status(500).json({ err: "internal" });
+            return new Response(JSON.stringify({ err: "internal" }), { status: 500 });
         }
     });
 
-    app.get("/memory/:id", async (req: any, res: any) => {
+    app.get("/memory/:id", async (req: Request, ctx: Context) => {
         try {
-            const id = req.params.id;
-            const user_id = req.query.user_id;
+            const id = ctx.params.id;
+            const user_id = ctx.query.get("user_id");
             const m = await q.get_mem.get(id);
-            if (!m) return res.status(404).json({ err: "nf" });
+            if (!m) return new Response(JSON.stringify({ err: "nf" }), { status: 404 });
 
-            // Check user ownership if user_id is provided
             if (user_id && m.user_id !== user_id) {
-                return res.status(403).json({ err: "forbidden" });
+                return new Response(JSON.stringify({ err: "forbidden" }), { status: 403 });
             }
 
             const v = await q.get_vecs_by_id.all(id);
             const sec = v.map((x: any) => x.sector);
-            res.json({
+            const data = {
                 id: m.id,
                 content: m.content,
                 primary_sector: m.primary_sector,
@@ -204,30 +232,30 @@ export function mem(app: any) {
                 decay_lambda: m.decay_lambda,
                 version: m.version,
                 user_id: m.user_id,
-            });
+            };
+            return new Response(JSON.stringify(data));
         } catch (e: any) {
-            res.status(500).json({ err: "internal" });
+            return new Response(JSON.stringify({ err: "internal" }), { status: 500 });
         }
     });
 
-    app.delete("/memory/:id", async (req: any, res: any) => {
+    app.delete("/memory/:id", async (req: Request, ctx: Context) => {
         try {
-            const id = req.params.id;
-            const user_id = req.query.user_id || req.body.user_id;
+            const id = ctx.params.id;
+            const user_id = ctx.query.get("user_id") || (ctx.body as any)?.user_id;
             const m = await q.get_mem.get(id);
-            if (!m) return res.status(404).json({ err: "nf" });
+            if (!m) return new Response(JSON.stringify({ err: "nf" }), { status: 404 });
 
-            // Check user ownership if user_id is provided
             if (user_id && m.user_id !== user_id) {
-                return res.status(403).json({ err: "forbidden" });
+                return new Response(JSON.stringify({ err: "forbidden" }), { status: 403 });
             }
 
             await q.del_mem.run(id);
             await q.del_vec.run(id);
             await q.del_waypoints.run(id, id);
-            res.json({ ok: true });
+            return new Response(JSON.stringify({ ok: true }));
         } catch (e: any) {
-            res.status(500).json({ err: "internal" });
+            return new Response(JSON.stringify({ err: "internal" }), { status: 500 });
         }
     });
 }

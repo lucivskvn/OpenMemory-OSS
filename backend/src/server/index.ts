@@ -1,5 +1,7 @@
-const server = require("./server.js");
+import { createServer } from "./server";
 import { env, tier } from "../core/cfg";
+import { initDb } from "../core/db";
+import logger from "../core/logger";
 import { run_decay_process, prune_weak_waypoints } from "../memory/hsg";
 import { mcp } from "../ai/mcp";
 import { routes } from "./routes";
@@ -20,12 +22,14 @@ const ASC = `   ____                   __  __
         | |                                                 __/ |
         |_|                                                |___/ `;
 
-const app = server({ max_payload_size: env.max_payload_size });
+initDb();
 
-console.log(ASC);
-console.log(`[CONFIG] Vector Dimension: ${env.vec_dim}`);
-console.log(`[CONFIG] Cache Segments: ${env.cache_segments}`);
-console.log(`[CONFIG] Max Active Queries: ${env.max_active}`);
+const app = createServer({ max_payload_size: env.max_payload_size });
+
+logger.info(ASC);
+logger.info({ component: "SERVER", runtime: `Bun v${Bun.version}` }, "Server starting...");
+logger.info({ component: "CONFIG", tier: tier, vector_dim: env.vec_dim, cache_segments: env.cache_segments, max_active_queries: env.max_active }, "Configuration loaded");
+
 
 app.use(req_tracker_mw());
 
@@ -56,49 +60,43 @@ routes(app);
 
 mcp(app);
 if (env.mode === "langgraph") {
-    console.log("[MODE] LangGraph integration enabled");
+    logger.info({ component: "MODE", mode: "langgraph" }, "LangGraph integration enabled");
 }
 
 const decayIntervalMs = env.decay_interval_minutes * 60 * 1000;
-console.log(
-    `[DECAY] Interval: ${env.decay_interval_minutes} minutes (${decayIntervalMs / 1000}s)`,
-);
+logger.info({ component: "DECAY", interval_minutes: env.decay_interval_minutes, interval_ms: decayIntervalMs }, "Decay process configured");
 
 setInterval(async () => {
-    console.log("[DECAY] Running HSG decay process...");
+    logger.info({ component: "DECAY" }, "Running HSG decay process...");
     try {
         const result = await run_decay_process();
-        console.log(
-            `[DECAY] Completed: ${result.decayed}/${result.processed} memories updated`,
-        );
+        logger.info({ component: "DECAY", decayed: result.decayed, processed: result.processed }, "Decay process completed");
     } catch (error) {
-        console.error("[DECAY] Process failed:", error);
+        logger.error({ component: "DECAY", err: error }, "Decay process failed");
     }
 }, decayIntervalMs);
 setInterval(
     async () => {
-        console.log("[PRUNE] Pruning weak waypoints...");
+        logger.info({ component: "PRUNE" }, "Pruning weak waypoints...");
         try {
             const pruned = await prune_weak_waypoints();
-            console.log(`[PRUNE] Completed: ${pruned} waypoints removed`);
+            logger.info({ component: "PRUNE", pruned_count: pruned }, "Pruning completed");
         } catch (error) {
-            console.error("[PRUNE] Failed:", error);
+            logger.error({ component: "PRUNE", err: error }, "Pruning failed");
         }
     },
     7 * 24 * 60 * 60 * 1000,
 );
 run_decay_process()
     .then((result: any) => {
-        console.log(
-            `[INIT] Initial decay: ${result.decayed}/${result.processed} memories updated`,
-        );
+        logger.info({ component: "INIT", decayed: result.decayed, processed: result.processed }, "Initial decay process completed");
     })
-    .catch(console.error);
+    .catch((err) => logger.error({ component: "INIT", err }, "Initial decay failed"));
 
 start_reflection();
 start_user_summary_reflection();
 
-console.log(`[SERVER] Starting on port ${env.port}`);
+logger.info({ component: "SERVER", port: env.port }, `Starting server...`);
 app.listen(env.port, () => {
-    console.log(`[SERVER] Running on http://localhost:${env.port}`);
+    logger.info({ component: "SERVER", url: `http://localhost:${env.port}` }, "Server running");
 });

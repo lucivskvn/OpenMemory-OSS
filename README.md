@@ -135,16 +135,25 @@ Deploy OpenMemory to your favorite cloud platform:
 
 Requirements:
 
-- Node.js 20 or higher
+- Bun v1.3.2 or higher
 - SQLite 3.40 or higher (included)
 - Optional: OpenAI/Gemini API key or Ollama
+
+> [!NOTE]
+> This project now uses Bun as its runtime.
 
 ```bash
 git clone https://github.com/caviraoss/openmemory.git
 cd openmemory/backend
 cp .env.example .env
-npm install
-npm run dev
+
+# Generate a secure hash for your API key
+bun run hash-key "your-secret-api-key"
+
+# Paste the generated hash into your .env file as OM_API_KEY
+
+bun install
+bun run dev
 ```
 
 The server runs on `http://localhost:8080`.

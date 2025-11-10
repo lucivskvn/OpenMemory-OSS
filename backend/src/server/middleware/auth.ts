@@ -1,5 +1,7 @@
 import { env } from "../../core/cfg";
-import crypto from "crypto";
+import { CryptoHasher } from "bun";
+import { Context } from "../server";
+import logger from "../../core/logger";
 
 const rate_limit_store = new Map<
     string,
@@ -25,10 +27,10 @@ function is_public_endpoint(path: string): boolean {
     );
 }
 
-function extract_api_key(req: any): string | null {
-    const x_api_key = req.headers[auth_config.api_key_header];
+function extract_api_key(req: Request): string | null {
+    const x_api_key = req.headers.get(auth_config.api_key_header);
     if (x_api_key) return x_api_key;
-    const auth_header = req.headers["authorization"];
+    const auth_header = req.headers.get("authorization");
     if (auth_header) {
         if (auth_header.startsWith("Bearer ")) return auth_header.slice(7);
         if (auth_header.startsWith("ApiKey ")) return auth_header.slice(7);
@@ -36,10 +38,11 @@ function extract_api_key(req: any): string | null {
     return null;
 }
 
-function validate_api_key(provided: string, expected: string): boolean {
-    if (!provided || !expected || provided.length !== expected.length)
-        return false;
-    return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+async function validate_api_key(provided: string, hashed_expected: string): Promise<boolean> {
+    if (!provided || !hashed_expected) return false;
+
+    // Securely verify the provided key against the stored hash.
+    return await Bun.password.verify(provided, hashed_expected);
 }
 
 function check_rate_limit(client_id: string): {
@@ -73,55 +76,66 @@ function check_rate_limit(client_id: string): {
     };
 }
 
-function get_client_id(req: any, api_key: string | null): string {
+function get_client_id(req: Request, api_key: string | null): string {
     if (api_key)
-        return crypto
-            .createHash("sha256")
+        return new CryptoHasher("sha256")
             .update(api_key)
             .digest("hex")
             .slice(0, 16);
-    return req.ip || req.connection.remoteAddress || "unknown";
+    return req.headers.get("x-forwarded-for") || "unknown";
 }
 
-export function authenticate_api_request(req: any, res: any, next: any) {
-    const path = req.path || req.url;
-    if (is_public_endpoint(path)) return next();
+export async function authenticate_api_request(req: Request, ctx: Context, next: () => Promise<Response>) {
+    const url = new URL(req.url);
+    if (is_public_endpoint(url.pathname)) return next();
+
     if (!auth_config.api_key || auth_config.api_key === "") {
-        console.warn("[AUTH] No API key configured");
+        logger.warn({ component: "AUTH" }, "No API key configured, allowing all requests.");
         return next();
     }
+
     const provided = extract_api_key(req);
-    if (!provided)
-        return res
-            .status(401)
-            .json({
-                error: "authentication_required",
-                message: "API key required",
-            });
-    if (!validate_api_key(provided, auth_config.api_key))
-        return res.status(403).json({ error: "invalid_api_key" });
+    if (!provided) {
+        return new Response(JSON.stringify({ error: "authentication_required", message: "API key required" }),
+            { status: 401, headers: { "Content-Type": "application/json" } });
+    }
+
+    if (!await validate_api_key(provided, auth_config.api_key)) {
+        return new Response(JSON.stringify({ error: "invalid_api_key" }),
+            { status: 403, headers: { "Content-Type": "application/json" } });
+    }
+
     const client_id = get_client_id(req, provided);
     const rl = check_rate_limit(client_id);
+
+    const response = await next();
+
     if (auth_config.rate_limit_enabled) {
-        res.setHeader("X-RateLimit-Limit", auth_config.rate_limit_max_requests);
-        res.setHeader("X-RateLimit-Remaining", rl.remaining);
-        res.setHeader("X-RateLimit-Reset", Math.floor(rl.reset_time / 1000));
+        response.headers.set("X-RateLimit-Limit", auth_config.rate_limit_max_requests.toString());
+        response.headers.set("X-RateLimit-Remaining", rl.remaining.toString());
+        response.headers.set("X-RateLimit-Reset", Math.floor(rl.reset_time / 1000).toString());
     }
-    if (!rl.allowed)
-        return res.status(429).json({
-            error: "rate_limit_exceeded",
-            retry_after: Math.ceil((rl.reset_time - Date.now()) / 1000),
-        });
-    next();
+
+    if (!rl.allowed) {
+        return new Response(JSON.stringify({ error: "rate_limit_exceeded", retry_after: Math.ceil((rl.reset_time - Date.now()) / 1000) }),
+            { status: 429, headers: { "Content-Type": "application/json" } });
+    }
+
+    return response;
 }
 
-export function log_authenticated_request(req: any, res: any, next: any) {
+export function log_authenticated_request(req: Request, ctx: Context, next: () => Promise<Response>) {
     const key = extract_api_key(req);
-    if (key)
-        console.log(
-            `[AUTH] ${req.method} ${req.path} [${crypto.createHash("sha256").update(key).digest("hex").slice(0, 8)}...]`,
-        );
-    next();
+    if (key) {
+        const url = new URL(req.url);
+        logger.info({
+            component: "AUTH",
+            method: req.method,
+            path: url.pathname,
+            key_hash: new CryptoHasher("sha256").update(key).digest("hex").slice(0, 8)
+        }, "Authenticated request");
+    }
+    return next();
 }
 
 setInterval(
