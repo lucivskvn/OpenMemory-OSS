@@ -11,7 +11,6 @@ jobs:
   # Deprecated: test-backend workflow is superseded by .github/workflows/ci.yml
   # Keep this file for historical reasons, but disable it to avoid duplicate runs.
   test-backend:
-    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

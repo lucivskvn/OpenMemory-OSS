@@ -1,9 +1,4 @@
-# bunfig.toml
-# This file configures the Bun runtime for the OpenMemory project.
+# DEPRECATED: moved to backend/bunfig.toml to align with test working-directory
+#[test]
+#preload = ["../tests/setup.ts"]
 
-[test]
-# Preload the setup script before running the test suite.
-# This script starts the backend server and waits for it to be healthy.
-# Use a single relative path that works when CI runs with
-# `working-directory: backend` (it points to repo/tests/setup.ts).
-preload = ["../tests/setup.ts"]

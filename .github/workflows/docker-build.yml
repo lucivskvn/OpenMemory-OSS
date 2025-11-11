@@ -14,7 +14,6 @@ on:
 jobs:
   # Deprecated: replaced by .github/workflows/ci.yml which builds and publishes images
   build:
-    if: false
     runs-on: ubuntu-latest
     name: Test Docker Build
 
