@@ -41,7 +41,7 @@ Agents should accept a single JSON or YAML instruction payload that follows this
 
 - files: list of file paths or directories to consider. If omitted, agent may inspect the repo to decide.
 - constraints: textual constraints (e.g., "no API breaking changes", "node=18").
-- tests: test names or commands to run after implementation (e.g., `node tests/backend/api.test.js`).
+  - tests: test names or commands to run after implementation (e.g., `bun test ../tests/backend/api.test.ts`).
 - priority: scheduling hint for humans/automation.
 - dry_run: if true, agent should produce a patch and tests but not commit or open a PR.
 
@@ -115,29 +115,30 @@ Agents should accept a single JSON or YAML instruction payload that follows this
 
 ## Key repo workflows & commands (copyable)
 
-- Backend dev: `cd backend && npm install && npm run dev`
-- Run migrations: `cd backend && npm run migrate`
-- Backend build: `cd backend && npm run build`
+- Backend dev: `cd backend && bun install && bun run dev`
+- Run migrations: `cd backend && bun run migrate`
+- Backend build: `cd backend && bun run build`
 - Dashboard dev: `cd dashboard && npm install && npm run dev`
 - Run tests: Python: `python -m pytest tests/`; JS: run test scripts under `backend/` or SDK folders.
 - Docker local: `docker-compose up --build` (see `docker-compose.yml` for env toggles)
 
 ## Tests (exact commands)
 
-- Backend integration tests are plain Node scripts and expect a running server. Run them like this:
+- Backend integration tests are run with Bun and expect a running server. Run them like this:
 
 ```bash
 # Start the backend in one terminal
 cd backend
-npm run dev   # or build + npm start for production server
+bun run dev   # or build + bun run start for production server
 
-# In another terminal run tests
-node tests/backend/api.test.js
-# other backend tests:
-node tests/backend/decay-reflection.test.js
+# In another terminal run the full backend test suite
+bun test ../tests/backend/
+
+# Or run a single test file
+bun test ../tests/backend/api.test.ts
 ```
 
-Note: `backend/package.json` currently does not include a `test` script. Agents should either run `node tests/...` directly or add a `test` script when introducing a test runner.
+Note: `backend/package.json` includes a `test` script which uses Bun. Use `bun run test` or `bun test` to run the suite.
 
 ## CI and automation notes
 

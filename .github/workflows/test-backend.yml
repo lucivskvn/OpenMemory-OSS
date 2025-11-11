@@ -28,39 +28,69 @@ jobs:
         working-directory: backend
         run: bun run build
 
-      - name: Start backend
+      - name: Run backend tests (in-process)
         working-directory: backend
         run: |
-          # start server in background
-          nohup bun run start > backend-server.log 2>&1 &
-          echo $! > backend.pid
-
-      - name: Wait for health
-        run: |
-          max_attempts=30
-          attempt=0
-          until curl -f http://localhost:8080/health || [ $attempt -eq $max_attempts ]; do
-            echo "Waiting for service to be healthy... (attempt $((attempt+1))/$max_attempts)"
-            sleep 2
-            attempt=$((attempt+1))
-          done
-          if [ $attempt -eq $max_attempts ]; then
-            echo "Service failed to become healthy"
-            cat backend/backend-server.log || true
-            exit 1
-          fi
-
-      - name: Run backend integration tests
-        working-directory: backend
-        run: |
+          # Run tests the same way we do locally. Tests start servers in-process
+          # and avoid DB lock contention that occurs when a separate background
+          # server opens the same SQLite file.
           bun test
 
-      - name: Show server logs on failure
-        if: failure()
-        run: |
-          cat backend/backend-server.log || true
+  # Postgres-backed job to validate Bun Postgres integration in CI.
+  test-backend-postgres:
+    runs-on: ubuntu-latest
+    needs: test-backend
+    env:
+      OM_METADATA_BACKEND: "postgres"
+      OM_PG_HOST: "127.0.0.1"
+      OM_PG_PORT: "5432"
+      OM_PG_DB: "openmemory"
+      OM_PG_USER: "om"
+      OM_PG_PASSWORD: "om_pass"
+      OM_PG_SCHEMA: "public"
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: openmemory
+          POSTGRES_USER: om
+          POSTGRES_PASSWORD: om_pass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready -U om
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Cleanup
-        if: always()
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.2"
+
+      - name: Wait for Postgres
         run: |
-          if [ -f backend.pid ]; then kill $(cat backend.pid) || true; fi
+          sudo apt-get update -y
+          sudo apt-get install -y postgresql-client
+          echo "Waiting for Postgres to be ready..."
+          for i in {1..60}; do
+            pg_isready -h 127.0.0.1 -p 5432 -U om && break || sleep 1
+          done
+
+      - name: Install backend deps
+        working-directory: backend
+        run: |
+          bun install --frozen-lockfile || bun install
+
+      - name: Build backend
+        working-directory: backend
+        run: bun run build
+
+      - name: Run backend tests (Postgres)
+        working-directory: backend
+        run: |
+          # Run tests with OM_METADATA_BACKEND=postgres to exercise Bun Postgres path
+          OM_METADATA_BACKEND=postgres OM_PG_HOST=127.0.0.1 OM_PG_PORT=5432 OM_PG_DB=openmemory OM_PG_USER=om OM_PG_PASSWORD=om_pass bun test

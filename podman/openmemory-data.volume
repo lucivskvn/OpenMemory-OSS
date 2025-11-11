@@ -1,0 +1,21 @@
+[Unit]
+Description=OpenMemory data volume (quadlet)
+
+[Volume]
+# Path on host
+Path=/var/lib/openmemory
+# Create the directory if it doesn't exist
+Create=yes
+# Use local driver and set ownership to the non-root container user (matches Dockerfile UID/GID)
+Driver=local
+# Recommended owner (container non-root user)
+User=1001
+Group=1001
+# Optional explicit volume name for clarity with quadlets
+VolumeName=openmemory-data
+# SELinux labeling; when mounting use :Z on the bind mount to relabel on SELinux hosts.
+# If you need a specific label uncomment and adjust the value below.
+#SELinuxLabel=system_u:object_r:container_file_t:s0
+
+[Install]
+WantedBy=multi-user.target

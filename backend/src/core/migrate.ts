@@ -1,6 +1,6 @@
 import { env } from "./cfg";
 import sqlite3 from "sqlite3";
-import { Pool } from "pg";
+import { initDb, run_async, all_async } from "./db";
 
 const is_pg = env.metadata_backend === "postgres";
 
@@ -156,35 +156,35 @@ async function run_sqlite_migration(
     log(`Migration ${m.version} completed successfully`);
 }
 
-async function get_db_version_pg(pool: Pool): Promise<string | null> {
+async function get_db_version_pg(): Promise<string | null> {
     try {
         const sc = process.env.OM_PG_SCHEMA || "public";
-        const check = await pool.query(
+        const check = await all_async(
             `SELECT EXISTS (
         SELECT FROM information_schema.tables 
         WHERE table_schema = $1 AND table_name = 'schema_version'
       )`,
             [sc],
         );
-        if (!check.rows[0].exists) return null;
+        if (!check || !check[0] || !check[0].exists) return null;
 
-        const ver = await pool.query(
+        const ver = await all_async(
             `SELECT version FROM "${sc}"."schema_version" ORDER BY applied_at DESC LIMIT 1`,
         );
-        return ver.rows[0]?.version || null;
+        return ver[0]?.version || null;
     } catch (e) {
         return null;
     }
 }
 
-async function set_db_version_pg(pool: Pool, version: string): Promise<void> {
+async function set_db_version_pg(version: string): Promise<void> {
     const sc = process.env.OM_PG_SCHEMA || "public";
-    await pool.query(
+    await run_async(
         `CREATE TABLE IF NOT EXISTS "${sc}"."schema_version" (
       version TEXT PRIMARY KEY, applied_at BIGINT
     )`,
     );
-    await pool.query(
+    await run_async(
         `INSERT INTO "${sc}"."schema_version" VALUES ($1, $2) 
      ON CONFLICT (version) DO UPDATE SET applied_at = EXCLUDED.applied_at`,
         [version, Date.now()],
@@ -192,34 +192,33 @@ async function set_db_version_pg(pool: Pool, version: string): Promise<void> {
 }
 
 async function check_column_exists_pg(
-    pool: Pool,
     table: string,
     column: string,
 ): Promise<boolean> {
     const sc = process.env.OM_PG_SCHEMA || "public";
     const tbl = table.replace(/"/g, "").split(".").pop() || table;
-    const res = await pool.query(
+    const res = await all_async(
         `SELECT EXISTS (
       SELECT FROM information_schema.columns 
       WHERE table_schema = $1 AND table_name = $2 AND column_name = $3
     )`,
         [sc, tbl, column],
     );
-    return res.rows[0].exists;
+    return !!(res && res[0] && res[0].exists);
 }
 
-async function run_pg_migration(pool: Pool, m: Migration): Promise<void> {
+async function run_pg_migration(m: Migration): Promise<void> {
     log(`Running migration: ${m.version} - ${m.desc}`);
 
     const sc = process.env.OM_PG_SCHEMA || "public";
     const mt = process.env.OM_PG_TABLE || "openmemory_memories";
-    const has_user_id = await check_column_exists_pg(pool, mt, "user_id");
+    const has_user_id = await check_column_exists_pg(mt, "user_id");
 
     if (has_user_id) {
         log(
             `Migration ${m.version} already applied (user_id exists), skipping`,
         );
-        await set_db_version_pg(pool, m.version);
+        await set_db_version_pg(m.version);
         return;
     }
 
@@ -236,7 +235,7 @@ async function run_pg_migration(pool: Pool, m: Migration): Promise<void> {
         }
 
         try {
-            await pool.query(sql);
+            await run_async(sql);
         } catch (e: any) {
             if (
                 !e.message.includes("already exists") &&
@@ -248,7 +247,7 @@ async function run_pg_migration(pool: Pool, m: Migration): Promise<void> {
         }
     }
 
-    await set_db_version_pg(pool, m.version);
+    await set_db_version_pg(m.version);
     log(`Migration ${m.version} completed successfully`);
 }
 
@@ -256,32 +255,19 @@ export async function run_migrations() {
     log("Checking for pending migrations...");
 
     if (is_pg) {
-        const ssl =
-            process.env.OM_PG_SSL === "require"
-                ? { rejectUnauthorized: false }
-                : process.env.OM_PG_SSL === "disable"
-                  ? false
-                  : undefined;
+        // Initialize DB helpers (this will use Bun Postgres client when
+        // OM_METADATA_BACKEND=postgres). We rely on the exported async
+        // helpers from ./db so migrations run under the same client.
+        initDb();
 
-        const pool = new Pool({
-            host: process.env.OM_PG_HOST,
-            port: process.env.OM_PG_PORT ? +process.env.OM_PG_PORT : undefined,
-            database: process.env.OM_PG_DB || "openmemory",
-            user: process.env.OM_PG_USER,
-            password: process.env.OM_PG_PASSWORD,
-            ssl,
-        });
-
-        const current = await get_db_version_pg(pool);
+        const current = await get_db_version_pg();
         log(`Current database version: ${current || "none"}`);
 
         for (const m of migrations) {
             if (!current || m.version > current) {
-                await run_pg_migration(pool, m);
+                await run_pg_migration(m);
             }
         }
-
-        await pool.end();
     } else {
         const db_path = process.env.OM_DB_PATH || "./data/openmemory.sqlite";
         const db = new sqlite3.Database(db_path);

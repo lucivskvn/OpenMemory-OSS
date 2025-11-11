@@ -4,6 +4,7 @@ import { sector_configs } from "./hsg";
 import { CryptoHasher } from "bun";
 import { q } from "../core/db";
 import { canonical_tokens_from_text, add_synonym_tokens } from "../utils/text";
+import logger from "../core/logger";
 
 let gem_q: Promise<any> = Promise.resolve();
 export const emb_dim = () => env.vec_dim;
@@ -35,7 +36,7 @@ const compress_vec = (v: number[], td: number): number[] => {
     return Array.from(c);
 };
 
-const fuse_vecs = (syn: number[], sem: number[]): number[] => {
+export const fuse_vecs = (syn: number[], sem: number[]): number[] => {
     const synLength = syn.length;
     const semLength = sem.length;
     const totalLength = synLength + semLength;
@@ -62,8 +63,18 @@ const fuse_vecs = (syn: number[], sem: number[]): number[] => {
 
 export async function embedForSector(t: string, s: string): Promise<number[]> {
     if (!sector_configs[s]) throw new Error(`Unknown sector: ${s}`);
-    if (tier === "hybrid") return gen_syn_emb(t, s);
-    if (tier === "smart" && env.emb_kind !== "synthetic") {
+    // Hybrid tier: optionally fuse synthetic + semantic vectors when configured
+    if (tier === "hybrid") {
+        if (env.hybrid_fusion && env.embed_kind !== "synthetic") {
+            const syn = gen_syn_emb(t, s);
+            const sem = await get_sem_emb(t, s);
+            const comp = compress_vec(sem, 128);
+            logger.info({ component: "EMBED", sector: s }, `[EMBED] Fusing hybrid vectors for sector: ${s}, syn_dim=${syn.length}, comp_dim=${comp.length}`);
+            return fuse_vecs(syn, comp);
+        }
+        return gen_syn_emb(t, s);
+    }
+    if (tier === "smart" && env.embed_kind !== "synthetic") {
         const syn = gen_syn_emb(t, s),
             sem = await get_sem_emb(t, s),
             comp = compress_vec(sem, 128);
@@ -74,7 +85,7 @@ export async function embedForSector(t: string, s: string): Promise<number[]> {
 }
 
 async function get_sem_emb(t: string, s: string): Promise<number[]> {
-    switch (env.emb_kind) {
+    switch (env.embed_kind) {
         case "openai":
             return await emb_openai(t, s);
         case "gemini":
@@ -369,15 +380,18 @@ export async function embedMultiSector(
     txt: string,
     secs: string[],
     chunks?: Array<{ text: string }>,
+    user_id?: string | null,
 ): Promise<EmbeddingResult[]> {
     const r: EmbeddingResult[] = [];
+    // Record pending status and include user_id in logs for observability.
     await q.ins_log.run(id, "multi-sector", "pending", Date.now(), null);
+    logger.info({ component: "embed", id, user_id, sectors: secs.length }, "[EMBED] multi-sector pending");
     for (let a = 0; a < 3; a++) {
         try {
             const simp = env.embed_mode === "simple";
             if (
                 simp &&
-                (env.emb_kind === "gemini" || env.emb_kind === "openai")
+                (env.embed_kind === "gemini" || env.embed_kind === "openai")
             ) {
                 console.log(
                     `[EMBED] Simple mode (1 batch for ${secs.length} sectors)`,
@@ -385,7 +399,7 @@ export async function embedMultiSector(
                 const tb: Record<string, string> = {};
                 secs.forEach((s) => (tb[s] = txt));
                 const b =
-                    env.emb_kind === "gemini"
+                    env.embed_kind === "gemini"
                         ? await emb_gemini(tb)
                         : await emb_batch_openai(tb);
                 Object.entries(b).forEach(([s, v]) =>
@@ -393,7 +407,7 @@ export async function embedMultiSector(
                 );
             } else {
                 console.log(`[EMBED] Advanced mode (${secs.length} calls)`);
-                const par = env.adv_embed_parallel && env.emb_kind !== "gemini";
+                const par = env.adv_embed_parallel && env.embed_kind !== "gemini";
                 if (par) {
                     const p = secs.map(async (s) => {
                         let v: number[];
@@ -425,6 +439,7 @@ export async function embedMultiSector(
                 }
             }
             await q.upd_log.run("completed", null, id);
+            logger.info({ component: "embed", id, user_id }, "[EMBED] multi-sector completed");
             return r;
         } catch (e) {
             if (a === 2) {
@@ -433,6 +448,7 @@ export async function embedMultiSector(
                     e instanceof Error ? e.message : String(e),
                     id,
                 );
+                logger.error({ component: "embed", id, user_id, err: e instanceof Error ? e.message : String(e) }, "[EMBED] multi-sector failed");
                 throw e;
             }
             await new Promise((x) => setTimeout(x, 1000 * Math.pow(2, a)));
@@ -474,20 +490,20 @@ export const bufferToVector = (b: Buffer) => {
     return v;
 };
 export const embed = (t: string) => embedForSector(t, "semantic");
-export const getEmbeddingProvider = () => env.emb_kind;
+export const getEmbeddingProvider = () => env.embed_kind;
 
 export const getEmbeddingInfo = () => {
     const i: Record<string, any> = {
-        provider: env.emb_kind,
+        provider: env.embed_kind,
         dimensions: env.vec_dim,
         mode: env.embed_mode,
         batch_support:
             env.embed_mode === "simple" &&
-            (env.emb_kind === "gemini" || env.emb_kind === "openai"),
+            (env.embed_kind === "gemini" || env.embed_kind === "openai"),
         advanced_parallel: env.adv_embed_parallel,
         embed_delay_ms: env.embed_delay_ms,
     };
-    if (env.emb_kind === "openai") {
+    if (env.embed_kind === "openai") {
         i.configured = !!env.openai_key;
         i.base_url = env.openai_base_url;
         i.model_override = env.openai_model || null;
@@ -499,11 +515,11 @@ export const getEmbeddingInfo = () => {
             emotional: get_model("emotional", "openai"),
             reflective: get_model("reflective", "openai"),
         };
-    } else if (env.emb_kind === "gemini") {
+    } else if (env.embed_kind === "gemini") {
         i.configured = !!env.gemini_key;
         i.batch_api = env.embed_mode === "simple";
         i.model = "embedding-001";
-    } else if (env.emb_kind === "ollama") {
+    } else if (env.embed_kind === "ollama") {
         i.configured = true;
         i.url = env.ollama_url;
         i.models = {
@@ -513,7 +529,7 @@ export const getEmbeddingInfo = () => {
             emotional: get_model("emotional", "ollama"),
             reflective: get_model("reflective", "ollama"),
         };
-    } else if (env.emb_kind === "local") {
+    } else if (env.embed_kind === "local") {
         i.configured = !!env.local_model_path;
         i.path = env.local_model_path;
     } else {

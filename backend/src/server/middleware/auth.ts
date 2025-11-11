@@ -41,8 +41,28 @@ function extract_api_key(req: Request): string | null {
 async function validate_api_key(provided: string, hashed_expected: string): Promise<boolean> {
     if (!provided || !hashed_expected) return false;
 
-    // Securely verify the provided key against the stored hash.
-    return await Bun.password.verify(provided, hashed_expected);
+    try {
+        // If the stored key looks like a hash (contains $ or common hash prefixes), prefer verify.
+        if (hashed_expected.includes("$") || hashed_expected.startsWith("argon2") || hashed_expected.startsWith("$argon2")) {
+            return await Bun.password.verify(provided, hashed_expected);
+        }
+    } catch (e) {
+        // Fall through to constant-time compare on error
+        logger.warn({ component: "AUTH", err: e }, "Password verify failed, falling back to constant-time compare");
+    }
+
+    // Fallback for plaintext-stored API keys (deprecated). Use constant-time comparison.
+    const safeCompare = (a: string, b: string) => {
+        if (!a || !b) return false;
+        if (a.length !== b.length) return false;
+        let res = 0;
+        for (let i = 0; i < a.length; i++) res |= a.charCodeAt(i) ^ b.charCodeAt(i);
+        return res === 0;
+    };
+
+    const ok = safeCompare(provided, hashed_expected);
+    if (ok) logger.warn({ component: "AUTH" }, "Using plaintext API key (deprecated). Please migrate to hashed API keys using backend/scripts/hash-api-key.ts");
+    return ok;
 }
 
 function check_rate_limit(client_id: string): {
@@ -108,17 +128,42 @@ export async function authenticate_api_request(req: Request, ctx: Context, next:
     const client_id = get_client_id(req, provided);
     const rl = check_rate_limit(client_id);
 
+    // If not allowed, immediately return 429 with rate-limit headers.
+    if (!rl.allowed) {
+        const headers = new Headers({ "Content-Type": "application/json" });
+        if (auth_config.rate_limit_enabled) {
+            headers.set("X-RateLimit-Limit", auth_config.rate_limit_max_requests.toString());
+            headers.set("X-RateLimit-Remaining", rl.remaining.toString());
+            headers.set("X-RateLimit-Reset", Math.floor(rl.reset_time / 1000).toString());
+            headers.set("Retry-After", Math.ceil((rl.reset_time - Date.now()) / 1000).toString());
+        }
+        return new Response(JSON.stringify({ error: "rate_limit_exceeded", retry_after: Math.ceil((rl.reset_time - Date.now()) / 1000) }),
+            { status: 429, headers });
+    }
+
+    // Allowed: call next and then attach rate-limit headers to the response.
     const response = await next();
 
     if (auth_config.rate_limit_enabled) {
-        response.headers.set("X-RateLimit-Limit", auth_config.rate_limit_max_requests.toString());
-        response.headers.set("X-RateLimit-Remaining", rl.remaining.toString());
-        response.headers.set("X-RateLimit-Reset", Math.floor(rl.reset_time / 1000).toString());
-    }
-
-    if (!rl.allowed) {
-        return new Response(JSON.stringify({ error: "rate_limit_exceeded", retry_after: Math.ceil((rl.reset_time - Date.now()) / 1000) }),
-            { status: 429, headers: { "Content-Type": "application/json" } });
+        try {
+            // Avoid mutating possibly-immutable Response.headers. Create a new
+            // Headers instance from the existing response, set the rate-limit
+            // fields, and return a fresh Response preserving the body and status.
+            const merged = new Headers(response.headers);
+            merged.set("X-RateLimit-Limit", auth_config.rate_limit_max_requests.toString());
+            merged.set("X-RateLimit-Remaining", rl.remaining.toString());
+            merged.set("X-RateLimit-Reset", Math.floor(rl.reset_time / 1000).toString());
+            merged.set("Retry-After", Math.ceil((rl.reset_time - Date.now()) / 1000).toString());
+            return new Response(response.body, {
+                status: response.status,
+                statusText: (response as any).statusText,
+                headers: merged,
+            });
+        } catch (e) {
+            // If constructing a new Response fails for any reason, fall back to
+            // returning the original response to avoid breaking the request.
+            return response;
+        }
     }
 
     return response;

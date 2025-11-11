@@ -12,7 +12,7 @@ Run the migration before starting your server:
 
 ```bash
 cd backend
-npm run migrate
+bun run migrate
 ```
 
 **Console output:**
@@ -41,9 +41,9 @@ OpenMemory Database Migration Tool
 **After migration, start your server normally:**
 
 ```bash
-npm run dev
+bun run dev
 # or
-npm start
+bun run start
 ```
 
 **Location:** `backend/src/core/migrate.ts`
@@ -141,6 +141,78 @@ CREATE TABLE schema.openmemory_users (
   updated_at BIGINT
 );
 ```
+
+## Bun Runtime Migration (v1.2 → v1.3)
+
+OpenMemory now supports running on the Bun runtime (recommended: Bun v1.3.2+).
+
+Overview:
+
+  hybrid backend. This section describes steps to migrate from Node to Bun.
+
+Steps:
+
+1. Install Bun on your machine (follow Bun installation instructions):
+
+```bash
+curl -fsSL https://bun.sh/install | bash
+export PATH="$HOME/.bun/bin:$PATH"
+```
+
+1. From the backend directory, refresh dependencies and run migrations:
+
+```bash
+cd backend
+bun install
+bun run build
+bun run migrate
+bun run start
+```
+
+1. Verify the health endpoint:
+
+```bash
+curl http://localhost:8080/health
+```
+
+Rollback:
+
+  use your previous release tag, then `npm install` and run the old server.
+
+Testing:
+
+```bash
+cd backend
+bun test ../tests/backend/
+```
+
+Notes:
+
+  retains the `pg` implementation as a compatibility fallback. See
+  `backend/src/core/db.ts` for migration guidance.
+
+Note about WebSocket dependency:
+
+  Node-based HTTP/WebSocket server (`backend/src/server/server.js`). The
+  Bun-based server (`backend/src/server/server.ts`) uses Bun's native
+  WebSocket handling. If you plan to run only on Bun and remove the Node
+  server, you can remove the `ws` dependency from `backend/package.json`.
+  Until that migration is completed, `ws` remains as a compatibility
+  dependency and should not be removed.
+
+Postgres / legacy Node support
+------------------------------
+
+As of the `next` branch changes on 2025-11-11, the backend now requires Bun's native Postgres client when `OM_METADATA_BACKEND=postgres`.
+
+- The legacy Node `pg` client fallback and the previous `ws`/Node server compatibility path were removed to simplify the runtime and reduce maintenance burden.
+- If you need to run the code with the legacy `pg` client (Node), set up a pinned branch before this change or revert the commit — this repository no longer ships `pg` in `backend/package.json` on the `next` branch.
+- To run Postgres-backed tests and services, ensure your CI or local environment provides a Bun runtime with Postgres support (e.g., Bun >=1.3.x with Postgres bindings) and the env vars: `OM_PG_HOST`, `OM_PG_PORT`, `OM_PG_USER`, `OM_PG_PASSWORD`, `OM_PG_DB`.
+
+Recommended migration steps
+
+1. Add a CI job that starts Postgres and runs `bun test` against the `backend` package. Validate migrations and table creation under Bun's Postgres client.
+2. Remove any lingering Node-only server artifacts if you no longer need them (search for `server.js` or `ws`-based code paths) and update docs accordingly.
 
 ---
 

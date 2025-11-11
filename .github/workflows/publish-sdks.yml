@@ -39,11 +39,16 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
+      - name: setup bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: 'latest'
+
       - name: get version
         id: version
         run: |
           cd sdk-js
-          VERSION=$(node -p "require('./package.json').version")
+          VERSION=$(bun -p "require('./package.json').version")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Publishing @openmemory/sdk@$VERSION"
 

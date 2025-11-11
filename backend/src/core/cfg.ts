@@ -23,6 +23,17 @@ const envSchema = z.object({
     // Embedding and Vector configuration
     OM_EMBED_KIND: z.enum(["openai", "gemini", "ollama", "local", "synthetic"]).default("synthetic"),
     OM_VEC_DIM: z.coerce.number().int().positive().default(256),
+    OM_EMBED_MODE: z.enum(["simple", "advanced"]).default("advanced"),
+    OM_ADV_EMBED_PARALLEL: z.coerce.boolean().default(false),
+    OM_EMBED_DELAY_MS: z.coerce.number().int().nonnegative().default(0),
+    OM_LOCAL_MODEL_PATH: z.string().optional(),
+    OM_HYBRID_FUSION: z.coerce.boolean().default(true),
+    OM_KEYWORD_BOOST: z.coerce.number().default(1.0),
+    OM_SEG_SIZE: z.coerce.number().int().positive().default(10000),
+    OM_SUMMARY_MAX_LENGTH: z.coerce.number().int().positive().default(1024),
+    OM_USE_SUMMARY_ONLY: z.coerce.boolean().default(false),
+    OM_CACHE_SEGMENTS: z.coerce.number().int().positive().default(3),
+    OM_MAX_ACTIVE: z.coerce.number().int().positive().default(64),
 
     // OpenAI specific
     OM_OPENAI_KEY: z.string().optional(),
@@ -68,6 +79,17 @@ export const env = {
 
     embed_kind: parsedEnv.OM_EMBED_KIND,
     vec_dim: parsedEnv.OM_VEC_DIM,
+    embed_mode: parsedEnv.OM_EMBED_MODE,
+    adv_embed_parallel: parsedEnv.OM_ADV_EMBED_PARALLEL,
+    embed_delay_ms: parsedEnv.OM_EMBED_DELAY_MS,
+    local_model_path: parsedEnv.OM_LOCAL_MODEL_PATH,
+    hybrid_fusion: parsedEnv.OM_HYBRID_FUSION,
+    keyword_boost: parsedEnv.OM_KEYWORD_BOOST,
+    seg_size: parsedEnv.OM_SEG_SIZE,
+    summary_max_length: parsedEnv.OM_SUMMARY_MAX_LENGTH,
+    use_summary_only: parsedEnv.OM_USE_SUMMARY_ONLY,
+    cache_segments: parsedEnv.OM_CACHE_SEGMENTS,
+    max_active: parsedEnv.OM_MAX_ACTIVE,
 
     openai_key: parsedEnv.OM_OPENAI_KEY,
     openai_base_url: parsedEnv.OM_OPENAI_BASE_URL,
@@ -88,9 +110,7 @@ export const env = {
     max_payload_size: parsedEnv.OM_MAX_PAYLOAD_SIZE,
     log_auth: parsedEnv.OM_LOG_AUTH,
 
-    // Deprecated or less-used vars, kept for compatibility for now
-    cache_segments: 3,
-    max_active: 64,
+    // Deprecated or less-used vars kept for compatibility are now read from env schema
 };
 
 export const tier = process.env.OM_TIER || "hybrid";

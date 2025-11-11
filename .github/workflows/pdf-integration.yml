@@ -25,4 +25,4 @@ jobs:
             -v "${{ github.workspace }}:/workspace" \
             -w /workspace/backend \
             openmemory-backend:pdf-test \
-            /bin/sh -c "bun install && node scripts/generate_sample_pdf.js && bun test ../tests/backend/extract-pdf-integration.test.ts"
+            /bin/sh -c "bun install && bun scripts/generate_sample_pdf.js && bun test ../tests/backend/extract-pdf-integration.test.ts"

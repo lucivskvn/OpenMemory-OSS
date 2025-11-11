@@ -1,5 +1,8 @@
 #!/usr/bin/env node
-import { run_async, all_async } from "./core/db";
+import { initDb, run_async, all_async } from "./core/db";
+
+// Ensure DB helpers are initialized before running migrations (sets up SQLite or PG helpers)
+initDb();
 
 const SCHEMA_DEFINITIONS = {
     memories: `create table if not exists memories(id text primary key,user_id text,segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,meta text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0)`,
@@ -47,7 +50,7 @@ async function get_existing_indexes(): Promise<Set<string>> {
     return new Set(indexes.map((i) => i.name));
 }
 
-async function run_migrations() {
+export async function run_migrations() {
     console.log("[MIGRATE] Starting automatic migration...");
 
     const existing_tables = await get_existing_tables();
@@ -88,7 +91,23 @@ async function run_migrations() {
     console.log(`[MIGRATE] Tables: ${Array.from(final_tables).join(", ")}`);
 }
 
-run_migrations().catch((err) => {
-    console.error("[MIGRATE] Error:", err);
-    process.exit(1);
-});
+// If this module is executed directly (CLI), run migrations and exit with
+// appropriate status. When imported, callers can explicitly call and await
+// `run_migrations()` to ensure migrations complete before proceeding.
+// If this file is executed directly (e.g. `node migrate.js` or `bun run`),
+// run migrations and exit with an appropriate status code. We avoid
+// top-level await and import.meta checks to remain compatible with the
+// project's TS compilation settings; instead inspect process.argv.
+try {
+    const maybeScript = typeof process !== "undefined" && process.argv && process.argv[1] && /migrate(\.ts|\.js)$/.test(process.argv[1]);
+    if (maybeScript) {
+        run_migrations()
+            .then(() => process.exit(0))
+            .catch((err) => {
+                console.error("[MIGRATE] Error:", err);
+                process.exit(1);
+            });
+    }
+} catch (e) {
+    // defensive: if anything goes wrong inspecting argv, do not crash on import
+}

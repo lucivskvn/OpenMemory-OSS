@@ -987,6 +987,7 @@ export async function add_hsg_memory(
             content,
             all_sectors,
             use_chunking ? chunks : undefined,
+            user_id ?? undefined,
         );
         for (const result of emb_res) {
             const vec_buf = vectorToBuffer(result.vector);
@@ -1059,6 +1060,7 @@ export async function update_memory(
                 new_content,
                 all_sectors,
                 use_chunking ? chunks : undefined,
+                mem.user_id ?? undefined,
             );
             for (const result of emb_res) {
                 const vec_buf = vectorToBuffer(result.vector);

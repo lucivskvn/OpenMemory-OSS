@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.3.0] - 2025-11-09
+
+### Added
+
+- Bun runtime support and migration guide (Bun v1.3.2+)
+- Podman Quadlet deployment files for rootless systemd
+- Optional hybrid embedding fusion (semantic + synthetic) for improved recall/perf
+
+### Changed
+
+- Backend runtime: Node -> Bun (opt-in). See MIGRATION.md for steps.
+
+### Performance
+
+- Bun runtime brings improved startup times and query performance in many cases.
+
 ## 1.2
 
 ### Added
@@ -91,7 +107,7 @@
 - Streamlined memory routes with integrated compression
 - Ultra-compact compression implementation (<100 lines core logic)
 
-### Fixed
+### Fixed (continued)
 
 - **MCP Tool Names (Breaking Change)**: Changed from dot notation to underscores for Windsurf IDE compatibility
 

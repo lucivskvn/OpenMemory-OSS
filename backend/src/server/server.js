@@ -24,13 +24,33 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
-const WebSocket = require('ws');
+// Removed direct dependency on the `ws` package for Bun-only runtime.
+// Use Bun's native WebSocket handling (`Bun.serve` and its `websocket` option)
+// in modern deployments. If `ws` is available at runtime, it will be
+// loaded; otherwise we provide a conservative no-op upgrade handler.
+let WebSocket;
+try {
+    WebSocket = require('ws');
+} catch (e) {
+    WebSocket = null;
+}
 const { parse } = require('url');
 function server(config = {}) {
     const ROUTES = [];
     const WARES = [];
     const WS_ROUTES = [];
-    const wss = new WebSocket.Server({ noServer: true });
+    const wss = WebSocket ? new WebSocket.Server({ noServer: true }) : {
+        handleUpgrade: (_req, _socket, _head, cb) => {
+            // Unable to perform WebSocket upgrades in this environment.
+            // Call cb with a minimal dummy socket so callers fail-fast.
+            const dummy = {
+                send: () => { },
+                on: () => { },
+                close: () => { },
+            };
+            cb(dummy);
+        },
+    };
     const SERVER = http.createServer((req, res) => {
         let u = parse(req.url, true);
         req.query = u.query || {};
