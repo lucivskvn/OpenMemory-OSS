@@ -22,6 +22,8 @@ const envSchema = z.object({
 
     // Embedding and Vector configuration
     OM_EMBED_KIND: z.enum(["openai", "gemini", "ollama", "local", "synthetic"]).default("synthetic"),
+    // Backwards-compatible alias: some deploys use OM_EMBEDDINGS
+    OM_EMBEDDINGS: z.enum(["openai", "gemini", "ollama", "local", "synthetic"]).optional(),
     OM_VEC_DIM: z.coerce.number().int().positive().default(256),
     OM_EMBED_MODE: z.enum(["simple", "advanced"]).default("advanced"),
     OM_ADV_EMBED_PARALLEL: z.coerce.boolean().default(false),
@@ -77,7 +79,8 @@ export const env = {
     metadata_backend: parsedEnv.OM_METADATA_BACKEND,
     db_path: parsedEnv.OM_DB_PATH,
 
-    embed_kind: parsedEnv.OM_EMBED_KIND,
+    // Support legacy OM_EMBEDDINGS env var: prefer it when present
+    embed_kind: parsedEnv.OM_EMBEDDINGS ?? parsedEnv.OM_EMBED_KIND,
     vec_dim: parsedEnv.OM_VEC_DIM,
     embed_mode: parsedEnv.OM_EMBED_MODE,
     adv_embed_parallel: parsedEnv.OM_ADV_EMBED_PARALLEL,
