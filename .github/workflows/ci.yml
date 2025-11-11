@@ -38,8 +38,29 @@ jobs:
       - name: Run backend tests (SQLite)
         working-directory: backend
         run: |
+          # Start a background server bound to $OM_PORT so endpoint tests that
+          # expect a running server at OM_PORT (e.g. /health) succeed reliably
+          echo "Starting background server on port $OM_PORT"
+          bun run start &
+          SERVER_PID=$!
+          # give server a brief moment to come up and verify /health
+          for i in {1..40}; do
+            if curl -sSf "http://127.0.0.1:$OM_PORT/health" >/dev/null 2>&1; then
+              echo "Server responded on port $OM_PORT"
+              break
+            fi
+            sleep 0.25
+          done
+
+          # Run the test suite (tests may also start programmatic servers on other ports)
+          # Keep the background server running so tests that expect OM_PORT to be served work.
           # Use package.json test script for consistent invocation
           bun run test
+          # Ensure background server is stopped after tests finish
+          if ps -p $SERVER_PID >/dev/null 2>&1; then
+            echo "Stopping background server (pid=$SERVER_PID)"
+            kill $SERVER_PID || true
+          fi
 
   test-backend-postgres:
     name: Backend tests (Postgres)
