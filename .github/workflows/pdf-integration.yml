@@ -1,0 +1,34 @@
+name: PDF Integration Tests
+
+# Run the (guarded) PDF integration test manually or on a schedule so it doesn't block regular CI
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '0 3 * * 0' # weekly on Sunday at 03:00 UTC
+
+jobs:
+  run-pdf-integration:
+    name: Run PDF integration (guarded)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Bun
+        run: |
+          curl -fsSL https://bun.sh/install | bash
+          echo "export BUN_INSTALL="$HOME/.bun/bin"" >> $GITHUB_ENV
+          echo "PATH=$HOME/.bun/bin:$PATH" >> $GITHUB_ENV
+
+      - name: Show Bun version
+        run: $HOME/.bun/bin/bun --version
+
+      - name: Install backend deps
+        working-directory: backend
+        run: $HOME/.bun/bin/bun install
+
+      - name: Run PDF integration test (guarded)
+        working-directory: backend
+        env:
+          RUN_PDF_INTEGRATION: '1'
+        run: $HOME/.bun/bin/bun test ../tests/backend/extract-pdf-integration.test.ts
