@@ -1,0 +1,33 @@
+name: PDF Integration on Push
+
+# Non-blocking run of the PDF integration test on pushes to main
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  run-pdf-integration-on-push:
+    name: Run PDF integration on push to main
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Bun
+        run: |
+          curl -fsSL https://bun.sh/install | bash
+          echo "export BUN_INSTALL="$HOME/.bun/bin"" >> $GITHUB_ENV
+          echo "PATH=$HOME/.bun/bin:$PATH" >> $GITHUB_ENV
+
+      - name: Show Bun version
+        run: $HOME/.bun/bin/bun --version
+
+      - name: Install backend deps
+        working-directory: backend
+        run: $HOME/.bun/bin/bun install
+
+      - name: Run guarded PDF integration test
+        working-directory: backend
+        env:
+          RUN_PDF_INTEGRATION: '1'
+        run: $HOME/.bun/bin/bun test ../tests/backend/extract-pdf-integration.test.ts
