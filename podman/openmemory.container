@@ -1,0 +1,46 @@
+[Unit]
+Description=OpenMemory container (quadlet)
+After=network.target
+
+[Container]
+# Image to use (replace with your registry/image tag). Use the Bun runtime base or your built image.
+# For local builds the recommended base image is oven/bun:1.3.2-alpine or docker.io/yourrepo/openmemory:latest
+Image=ghcr.io/caviraoss/openmemory-backend:latest
+# Expose port and map to host (use PublishPort for quadlet compatibility)
+PublishPort=8080:8080
+# Restart policy
+Restart=on-failure
+# Use user namespace remapping for rootless compatibility
+UserNS=keep-id
+# Environment variables (comma-separated)
+Env=OM_PORT=8080,OM_DB_PATH=/data/openmemory.sqlite
+# Exec command to start the Bun application from the built image
+Exec=bun run start
+
+# Optional: load environment variables from a user-specific file (recommended for rootless).
+# Use a per-user file under the user's home to avoid leaking secrets between accounts.
+EnvironmentFile=%h/.config/openmemory/openmemory.env
+
+# Health check executed inside the container (uses Bun's fetch). Podman/systemd will use this
+# to determine container health and restart if necessary.
+HealthCmd=bun -e 'fetch("http://localhost:8080/health").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))'
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=3
+HealthStartPeriod=30s
+
+# Auto-update policy (optional): registry polling for new image tags
+AutoUpdate=registry
+
+# Allow longer startup time for first-run migrations or image pulls
+TimeoutStartSec=900
+
+# Use a named volume declared in openmemory-data.volume
+# Keep a single volume declaration to avoid conflicting host mount definitions.
+# Append :Z to ensure SELinux relabeling is applied for rootless/SELinux hosts
+Volume=openmemory-data.volume:/data:Z
+
+[Install]
+WantedBy=default.target
+# Optionally attach to a user-level rootless network
+# Network=pasta

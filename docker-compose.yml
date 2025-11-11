@@ -1,5 +1,10 @@
 version: '3.8'
 
+# Podman compatibility notes:
+# - Podman supports docker-compose via podman-compose or `podman play kube` after conversion.
+# - When using Podman on SELinux hosts, append `:Z` to bind mounts (see podman/README.md).
+# - Some CI environments expect Docker; for Podman use the Podman-compatible invocation in podman/README.md.
+
 services:
   openmemory:
     build:
@@ -12,6 +17,7 @@ services:
       - OM_PORT=${OM_PORT:-8080}
       - OM_MODE=${OM_MODE:-standard}
       - OM_TIER=${OM_TIER:-hybrid}
+      - OM_HYBRID_FUSION=${OM_HYBRID_FUSION:-true}
       - OM_DB_PATH=${OM_DB_PATH:-/data/openmemory.sqlite}
       - OM_API_KEY=${OM_API_KEY:-}
       - OM_IDE_MODE=${OM_IDE_MODE:-false}
@@ -113,10 +119,13 @@ services:
       - OM_KEYWORD_BOOST=${OM_KEYWORD_BOOST:-2.5}
       - OM_KEYWORD_MIN_LENGTH=${OM_KEYWORD_MIN_LENGTH:-3}
     volumes:
-      - openmemory_data:/data
+      - openmemory_data:/data:Z
+    userns_mode: keep-id
+    init: true
+    stop_grace_period: 30s
     restart: unless-stopped
     healthcheck:
-      test: ['CMD', 'curl', '-f', 'http://localhost:8080/health']
+      test: ['CMD', 'bun', '-e', 'fetch("http://localhost:8080/health").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))']
       interval: 30s
       timeout: 10s
       retries: 3

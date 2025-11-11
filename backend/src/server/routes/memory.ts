@@ -25,15 +25,15 @@ const querySchema = z.object({
 const addSchema = z.object({
     content: z.string().min(1),
     tags: z.array(z.string()).optional(),
-    metadata: z.record(z.any()).optional(),
+    metadata: z.record(z.string(), z.any()).optional(),
     user_id: z.string().optional(),
 });
 
 const ingestSchema = z.object({
     content_type: z.string(),
     data: z.string(), // Assuming base64 encoded string for data
-    metadata: z.record(z.any()).optional(),
-    config: z.record(z.any()).optional(),
+    metadata: z.record(z.string(), z.any()).optional(),
+    config: z.record(z.string(), z.any()).optional(),
     user_id: z.string().optional(),
 });
 

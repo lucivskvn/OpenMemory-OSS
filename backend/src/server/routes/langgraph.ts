@@ -13,59 +13,59 @@ import type {
 } from "../../core/types";
 
 export function lg(app: any) {
-    app.get("/lgm/config", (_req: any, res: any) => {
-        res.json(get_lg_cfg());
+    app.get("/lgm/config", (_req: any) => {
+        return new Response(JSON.stringify(get_lg_cfg()), { status: 200, headers: { "Content-Type": "application/json" } });
     });
 
-    app.post("/lgm/store", async (req: any, res: any) => {
+    app.post("/lgm/store", async (req: any) => {
         try {
             const r = await store_node_mem(req.body as lgm_store_req);
-            res.json(r);
+            return new Response(JSON.stringify(r), { status: 200, headers: { "Content-Type": "application/json" } });
         } catch (e) {
             console.error("[LGM] store error:", e);
-            res.status(400).json({
+            return new Response(JSON.stringify({
                 err: "lgm_store_failed",
                 message: (e as Error).message,
-            });
+            }), { status: 400, headers: { "Content-Type": "application/json" } });
         }
     });
 
-    app.post("/lgm/retrieve", async (req: any, res: any) => {
+    app.post("/lgm/retrieve", async (req: any) => {
         try {
             const r = await retrieve_node_mems(req.body as lgm_retrieve_req);
-            res.json(r);
+            return new Response(JSON.stringify(r), { status: 200, headers: { "Content-Type": "application/json" } });
         } catch (e) {
             console.error("[LGM] retrieve error:", e);
-            res.status(400).json({
+            return new Response(JSON.stringify({
                 err: "lgm_retrieve_failed",
                 message: (e as Error).message,
-            });
+            }), { status: 400, headers: { "Content-Type": "application/json" } });
         }
     });
 
-    app.post("/lgm/context", async (req: any, res: any) => {
+    app.post("/lgm/context", async (req: any) => {
         try {
             const r = await get_graph_ctx(req.body as lgm_context_req);
-            res.json(r);
+            return new Response(JSON.stringify(r), { status: 200, headers: { "Content-Type": "application/json" } });
         } catch (e) {
             console.error("[LGM] context error:", e);
-            res.status(400).json({
+            return new Response(JSON.stringify({
                 err: "lgm_context_failed",
                 message: (e as Error).message,
-            });
+            }), { status: 400, headers: { "Content-Type": "application/json" } });
         }
     });
 
-    app.post("/lgm/reflection", async (req: any, res: any) => {
+    app.post("/lgm/reflection", async (req: any) => {
         try {
             const r = await create_refl(req.body as lgm_reflection_req);
-            res.json(r);
+            return new Response(JSON.stringify(r), { status: 200, headers: { "Content-Type": "application/json" } });
         } catch (e) {
             console.error("[LGM] reflection error:", e);
-            res.status(400).json({
+            return new Response(JSON.stringify({
                 err: "lgm_reflection_failed",
                 message: (e as Error).message,
-            });
+            }), { status: 400, headers: { "Content-Type": "application/json" } });
         }
     });
 }

@@ -1,0 +1,19 @@
+[Unit]
+Description=OpenMemory (podman)
+After=network.target
+
+[Service]
+Environment=OM_MODE=production
+Environment=OM_PORT=8080
+Restart=on-failure
+# Use user namespace remapping for rootless containers
+UserNS=keep-id
+ExecStart=/usr/bin/podman run --rm --name openmemory -p 8080:8080 -e OM_PORT=8080 -v /var/lib/openmemory:/data:Z docker.io/yourrepo/openmemory:latest
+# Note: systemd ExecStart runs the pod; podman manages container health via the image's HEALTHCHECK
+# For quadlet-based container units prefer the `.container` quadlet variant which includes HealthCmd.
+# If you want a systemd-level health probe, use ExecStartPost to run a host-side probe against localhost.
+ExecStartPost=/bin/sh -c 'for i in 1 2 3; do sleep 1; /usr/bin/curl --fail http://localhost:8080/health && exit 0 || true; done; exit 1'
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

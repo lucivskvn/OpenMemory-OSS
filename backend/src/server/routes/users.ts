@@ -6,63 +6,58 @@ import {
 } from "../../memory/user_summary";
 
 export const usr = (app: any) => {
-    app.get("/users/:user_id/summary", async (req: any, res: any) => {
+    app.get("/users/:user_id/summary", async (req: any) => {
         try {
             const { user_id } = req.params;
             if (!user_id)
-                return res.status(400).json({ error: "user_id required" });
+                return new Response(JSON.stringify({ error: "user_id required" }), { status: 400, headers: { "Content-Type": "application/json" } });
 
             const user = await q.get_user.get(user_id);
-            if (!user) return res.status(404).json({ error: "user not found" });
+            if (!user) return new Response(JSON.stringify({ error: "user not found" }), { status: 404, headers: { "Content-Type": "application/json" } });
 
-            res.json({
+            return new Response(JSON.stringify({
                 user_id: user.user_id,
                 summary: user.summary,
                 reflection_count: user.reflection_count,
                 updated_at: user.updated_at,
-            });
+            }), { status: 200, headers: { "Content-Type": "application/json" } });
         } catch (err: any) {
-            res.status(500).json({ error: err.message });
+            return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: { "Content-Type": "application/json" } });
         }
     });
 
-    app.post(
-        "/users/:user_id/summary/regenerate",
-        async (req: any, res: any) => {
-            try {
-                const { user_id } = req.params;
-                if (!user_id)
-                    return res.status(400).json({ err: "user_id required" });
-
-                await update_user_summary(user_id);
-                const user = await q.get_user.get(user_id);
-
-                res.json({
-                    ok: true,
-                    user_id,
-                    summary: user?.summary,
-                    reflection_count: user?.reflection_count,
-                });
-            } catch (err: any) {
-                res.status(500).json({ err: err.message });
-            }
-        },
-    );
-
-    app.post("/users/summaries/regenerate-all", async (req: any, res: any) => {
-        try {
-            const result = await auto_update_user_summaries();
-            res.json({ ok: true, updated: result.updated });
-        } catch (err: any) {
-            res.status(500).json({ err: err.message });
-        }
-    });
-
-    app.get("/users/:user_id/memories", async (req: any, res: any) => {
+    app.post("/users/:user_id/summary/regenerate", async (req: any) => {
         try {
             const { user_id } = req.params;
-            if (!user_id)
-                return res.status(400).json({ err: "user_id required" });
+            if (!user_id) return new Response(JSON.stringify({ err: "user_id required" }), { status: 400, headers: { "Content-Type": "application/json" } });
+
+            await update_user_summary(user_id);
+            const user = await q.get_user.get(user_id);
+
+            return new Response(JSON.stringify({
+                ok: true,
+                user_id,
+                summary: user?.summary,
+                reflection_count: user?.reflection_count,
+            }), { status: 200, headers: { "Content-Type": "application/json" } });
+        } catch (err: any) {
+            return new Response(JSON.stringify({ err: err.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+        }
+    });
+
+    app.post("/users/summaries/regenerate-all", async () => {
+        try {
+            const result = await auto_update_user_summaries();
+            return new Response(JSON.stringify({ ok: true, updated: result.updated }), { status: 200, headers: { "Content-Type": "application/json" } });
+        } catch (err: any) {
+            return new Response(JSON.stringify({ err: err.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+        }
+    });
+
+    app.get("/users/:user_id/memories", async (req: any) => {
+        try {
+            const { user_id } = req.params;
+            if (!user_id) return new Response(JSON.stringify({ err: "user_id required" }), { status: 400, headers: { "Content-Type": "application/json" } });
 
             const l = req.query.l ? parseInt(req.query.l) : 100;
             const u = req.query.u ? parseInt(req.query.u) : 0;
@@ -81,17 +76,16 @@ export const usr = (app: any) => {
                 primary_sector: x.primary_sector,
                 version: x.version,
             }));
-            res.json({ user_id, items: i });
+            return new Response(JSON.stringify({ user_id, items: i }), { status: 200, headers: { "Content-Type": "application/json" } });
         } catch (err: any) {
-            res.status(500).json({ err: err.message });
+            return new Response(JSON.stringify({ err: err.message }), { status: 500, headers: { "Content-Type": "application/json" } });
         }
     });
 
-    app.delete("/users/:user_id/memories", async (req: any, res: any) => {
+    app.delete("/users/:user_id/memories", async (req: any) => {
         try {
             const { user_id } = req.params;
-            if (!user_id)
-                return res.status(400).json({ err: "user_id required" });
+            if (!user_id) return new Response(JSON.stringify({ err: "user_id required" }), { status: 400, headers: { "Content-Type": "application/json" } });
 
             const mems = await q.all_mem_by_user.all(user_id, 10000, 0);
             let deleted = 0;
@@ -103,9 +97,9 @@ export const usr = (app: any) => {
                 deleted++;
             }
 
-            res.json({ ok: true, deleted });
+            return new Response(JSON.stringify({ ok: true, deleted }), { status: 200, headers: { "Content-Type": "application/json" } });
         } catch (err: any) {
-            res.status(500).json({ err: err.message });
+            return new Response(JSON.stringify({ err: err.message }), { status: 500, headers: { "Content-Type": "application/json" } });
         }
     });
 };

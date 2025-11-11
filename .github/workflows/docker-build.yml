@@ -12,7 +12,9 @@ on:
   workflow_dispatch:
 
 jobs:
-  docker-build-test:
+  # Deprecated: replaced by .github/workflows/ci.yml which builds and publishes images
+  build:
+    if: false
     runs-on: ubuntu-latest
     name: Test Docker Build
 
@@ -32,6 +34,32 @@ jobs:
           tags: openmemory-backend:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Setup Podman (for Podman/Quadlet validation)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y podman
+
+      - name: Test Podman Build
+        run: |
+          podman build -t openmemory:test -f backend/Dockerfile backend/
+
+      - name: Validate Quadlet Files
+        run: |
+          for f in podman/*.{container,volume}; do
+            echo "Validating $f";
+            grep -q '\[Unit\]' "$f" || (echo "Missing [Unit] in $f" && exit 1);
+            grep -q '\[Container\]\|\[Volume\]' "$f" || (echo "Missing [Container] or [Volume] in $f" && exit 1);
+          done
+
+      - name: Test Podman Compose
+        run: |
+          podman-compose -v || true
+          podman-compose -f docker-compose.yml build || podman compose -f docker-compose.yml build
+
+      - name: Podman image sanity check
+        run: |
+          podman run --rm openmemory:test bun --version || true
 
       - name: Test Docker Compose Build
         run: |

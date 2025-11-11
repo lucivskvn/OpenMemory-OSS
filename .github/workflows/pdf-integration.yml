@@ -1,0 +1,28 @@
+name: PDF Integration Tests
+
+# Run the (guarded) PDF integration test manually or on a schedule so it doesn't block regular CI
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '0 3 * * 0' # weekly on Sunday at 03:00 UTC
+
+jobs:
+  run-pdf-integration:
+    name: Run PDF integration (guarded)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: |
+          docker build -f backend/Dockerfile -t openmemory-backend:pdf-test .
+
+      - name: Run generator and guarded PDF integration test inside container
+        run: |
+          docker run --rm \
+            -e RUN_PDF_INTEGRATION=1 \
+            -v "${{ github.workspace }}:/workspace" \
+            -w /workspace/backend \
+            openmemory-backend:pdf-test \
+            /bin/sh -c "bun install && bun scripts/generate_sample_pdf.js && bun test ../tests/backend/extract-pdf-integration.test.ts"

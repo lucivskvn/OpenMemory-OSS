@@ -3,7 +3,7 @@ import { add_hsg_memory, hsg_query } from "../../memory/hsg";
 import { j, p } from "../../utils";
 import * as crypto from "crypto";
 export function ide(app: any) {
-    app.post("/api/ide/events", async (req: any, res: any) => {
+    app.post("/api/ide/events", async (req: any) => {
         try {
             const event_type = req.body.event_type;
             const file_path = req.body.file_path || "unknown";
@@ -12,7 +12,7 @@ export function ide(app: any) {
             const metadata = req.body.metadata || {};
 
             if (!event_type)
-                return res.status(400).json({ err: "event_type_required" });
+                return new Response(JSON.stringify({ err: "event_type_required" }), { status: 400, headers: { "Content-Type": "application/json" } });
 
             const memory_content =
                 `[${event_type}] ${file_path}\n${content}`.trim();
@@ -32,26 +32,26 @@ export function ide(app: any) {
                 full_metadata,
             );
 
-            res.json({
+            return new Response(JSON.stringify({
                 success: true,
                 memory_id: result.id,
                 primary_sector: result.primary_sector,
                 sectors: result.sectors,
-            });
+            }), { status: 200, headers: { "Content-Type": "application/json" } });
         } catch (err) {
             console.error("[IDE] Error storing IDE event:", err);
-            res.status(500).json({ err: "internal" });
+            return new Response(JSON.stringify({ err: "internal" }), { status: 500, headers: { "Content-Type": "application/json" } });
         }
     });
 
-    app.post("/api/ide/context", async (req: any, res: any) => {
+    app.post("/api/ide/context", async (req: any) => {
         try {
             const query = req.body.query;
             const k = req.body.k || req.body.limit || 5;
             const session_id = req.body.session_id;
             const file_path = req.body.file_path;
 
-            if (!query) return res.status(400).json({ err: "query_required" });
+            if (!query) return new Response(JSON.stringify({ err: "query_required" }), { status: 400, headers: { "Content-Type": "application/json" } });
 
             const results = await hsg_query(query, k);
 
@@ -87,19 +87,19 @@ export function ide(app: any) {
                 path: r.path,
             }));
 
-            res.json({
+            return new Response(JSON.stringify({
                 success: true,
                 memories: formatted,
                 total: formatted.length,
                 query: query,
-            });
+            }), { status: 200, headers: { "Content-Type": "application/json" } });
         } catch (err) {
             console.error("[IDE] Error retrieving IDE context:", err);
-            res.status(500).json({ err: "internal" });
+            return new Response(JSON.stringify({ err: "internal" }), { status: 500, headers: { "Content-Type": "application/json" } });
         }
     });
 
-    app.post("/api/ide/session/start", async (req: any, res: any) => {
+    app.post("/api/ide/session/start", async (req: any) => {
         try {
             const user_id = req.body.user_id || "anonymous";
             const project_name = req.body.project_name || "unknown";
@@ -122,7 +122,7 @@ export function ide(app: any) {
 
             const result = await add_hsg_memory(content, undefined, metadata);
 
-            res.json({
+            return new Response(JSON.stringify({
                 success: true,
                 session_id: session_id,
                 memory_id: result.id,
@@ -130,19 +130,19 @@ export function ide(app: any) {
                 user_id: user_id,
                 project_name: project_name,
                 ide_name: ide_name,
-            });
+            }), { status: 200, headers: { "Content-Type": "application/json" } });
         } catch (err) {
             console.error("[IDE] Error starting IDE session:", err);
-            res.status(500).json({ err: "internal" });
+            return new Response(JSON.stringify({ err: "internal" }), { status: 500, headers: { "Content-Type": "application/json" } });
         }
     });
 
-    app.post("/api/ide/session/end", async (req: any, res: any) => {
+    app.post("/api/ide/session/end", async (req: any) => {
         try {
             const session_id = req.body.session_id;
 
             if (!session_id)
-                return res.status(400).json({ err: "session_id_required" });
+                return new Response(JSON.stringify({ err: "session_id_required" }), { status: 400, headers: { "Content-Type": "application/json" } });
 
             const now_ts = Date.now();
 
@@ -189,7 +189,7 @@ export function ide(app: any) {
 
             const result = await add_hsg_memory(summary, undefined, metadata);
 
-            res.json({
+            return new Response(JSON.stringify({
                 success: true,
                 session_id: session_id,
                 ended_at: now_ts,
@@ -200,19 +200,19 @@ export function ide(app: any) {
                     unique_files: files.size,
                     files: Array.from(files),
                 },
-            });
+            }), { status: 200, headers: { "Content-Type": "application/json" } });
         } catch (err) {
             console.error("[IDE] Error ending IDE session:", err);
-            res.status(500).json({ err: "internal" });
+            return new Response(JSON.stringify({ err: "internal" }), { status: 500, headers: { "Content-Type": "application/json" } });
         }
     });
 
-    app.get("/api/ide/patterns/:session_id", async (req: any, res: any) => {
+    app.get("/api/ide/patterns/:session_id", async (req: any) => {
         try {
             const session_id = req.params.session_id;
 
             if (!session_id)
-                return res.status(400).json({ err: "session_id_required" });
+                return new Response(JSON.stringify({ err: "session_id_required" }), { status: 400, headers: { "Content-Type": "application/json" } });
 
             const all_memories = await q.all_mem.all(10000, 0);
 
@@ -234,15 +234,15 @@ export function ide(app: any) {
                 last_reinforced: m.last_seen_at,
             }));
 
-            res.json({
+            return new Response(JSON.stringify({
                 success: true,
                 session_id: session_id,
                 pattern_count: patterns.length,
                 patterns: patterns,
-            });
+            }), { status: 200, headers: { "Content-Type": "application/json" } });
         } catch (err) {
             console.error("[IDE] Error detecting patterns:", err);
-            res.status(500).json({ err: "internal" });
+            return new Response(JSON.stringify({ err: "internal" }), { status: 500, headers: { "Content-Type": "application/json" } });
         }
     });
 }

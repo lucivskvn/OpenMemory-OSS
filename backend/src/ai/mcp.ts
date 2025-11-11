@@ -44,35 +44,21 @@ const fmt_matches = (matches: Awaited<ReturnType<typeof hsg_query>>) =>
         })
         .join("\n\n");
 
-const set_hdrs = (res: ServerResponse) => {
-    res.setHeader("Content-Type", "application/json");
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
-    res.setHeader(
-        "Access-Control-Allow-Headers",
-        "Content-Type,Authorization,Mcp-Session-Id",
-    );
+// Header setter that works with both Node-style ServerResponse and the
+// server response adapter (which exposes setHeader/set/json/end).
+const set_hdrs = (res: any) => {
+    const set = (k: string, v: string) => {
+        if (typeof res.setHeader === "function") res.setHeader(k, v);
+        else if (typeof res.set === "function") res.set(k, v);
+        else if (res.headers && typeof res.headers.set === "function") res.headers.set(k, v);
+    };
+    set("Content-Type", "application/json");
+    set("Access-Control-Allow-Origin", "*");
+    set("Access-Control-Allow-Methods", "POST,OPTIONS");
+    set("Access-Control-Allow-Headers", "Content-Type,Authorization,Mcp-Session-Id");
 };
 
-const send_err = (
-    res: ServerResponse,
-    code: rpc_err_code,
-    msg: string,
-    id: number | string | null = null,
-    status = 400,
-) => {
-    if (!res.headersSent) {
-        res.statusCode = status;
-        set_hdrs(res);
-        res.end(
-            JSON.stringify({
-                jsonrpc: "2.0",
-                error: { code, message: msg },
-                id,
-            }),
-        );
-    }
-};
+// send_err removed: MCP handler now returns Fetch Responses directly.
 
 const uid = (val?: string | null) => (val?.trim() ? val.trim() : undefined);
 
@@ -164,7 +150,7 @@ export const create_mcp_srv = () => {
             content: z.string().min(1).describe("Raw memory text to store"),
             tags: z.array(z.string()).optional().describe("Optional tag list"),
             metadata: z
-                .record(z.any())
+                .record(z.string(), z.any())
                 .optional()
                 .describe("Arbitrary metadata blob"),
             user_id: z
@@ -389,7 +375,23 @@ export const create_mcp_srv = () => {
     return srv;
 };
 
-const extract_pay = async (req: IncomingMessage & { body?: any }) => {
+const extract_pay = async (req: any) => {
+    // Support both Fetch Request (Bun) and Node IncomingMessage
+    try {
+        if (typeof Request !== "undefined" && req instanceof Request) {
+            // Fetch Request
+            try {
+                const txt = await req.text();
+                if (!txt || !txt.trim()) return undefined;
+                return JSON.parse(txt);
+            } catch (e) {
+                return undefined;
+            }
+        }
+    } catch (e) {
+        // ignore
+    }
+
     if (req.body !== undefined) {
         if (typeof req.body === "string") {
             if (!req.body.trim()) return undefined;
@@ -398,9 +400,10 @@ const extract_pay = async (req: IncomingMessage & { body?: any }) => {
         if (typeof req.body === "object" && req.body !== null) return req.body;
         return undefined;
     }
+
     const raw = await new Promise<string>((resolve, reject) => {
         let buf = "";
-        req.on("data", (chunk) => {
+        req.on("data", (chunk: any) => {
             buf += chunk;
         });
         req.on("end", () => resolve(buf));
@@ -426,51 +429,68 @@ export const mcp = (app: any) => {
             throw error;
         });
 
-    const handle_req = async (req: any, res: any) => {
+    const handle_req = async (req: any): Promise<Response | void> => {
         try {
             await srv_ready;
             const pay = await extract_pay(req);
             if (!pay || typeof pay !== "object") {
-                send_err(res, -32600, "Request body must be a JSON object");
-                return;
+                // Return a Fetch Response representing a JSON-RPC error
+                return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32600, message: "Request body must be a JSON object" }, id: null }), { status: 400, headers: { "Content-Type": "application/json" } });
             }
             console.log("[MCP] Incoming request:", JSON.stringify(pay));
-            set_hdrs(res);
-            await trans.handleRequest(req, res, pay);
+
+            // Build a shim sink compatible with the transport's expectations and
+            // capture output into a string, then convert to a Fetch Response.
+            const headers = new Map<string, string>();
+            let statusCode = 200;
+            let bodyBuf = "";
+            const sink: any = {
+                headersSent: false,
+                setHeader(k: string, v: string) {
+                    headers.set(k, v as string);
+                },
+                write(chunk: any) {
+                    bodyBuf += typeof chunk === "string" ? chunk : chunk.toString();
+                },
+                end(chunk?: any) {
+                    if (chunk) this.write(chunk);
+                    this.headersSent = true;
+                },
+                // support statusCode assignment
+                get statusCode() {
+                    return statusCode;
+                },
+                set statusCode(v: number) {
+                    statusCode = v;
+                },
+            };
+
+            await trans.handleRequest(req, sink, pay);
+
+            // Build Response from captured sink
+            const hdrs = new Headers();
+            for (const [k, v] of headers.entries()) hdrs.set(k, v);
+            if (!hdrs.has("Content-Type")) hdrs.set("Content-Type", "application/json");
+            return new Response(bodyBuf || null, { status: statusCode, headers: hdrs });
         } catch (error) {
             console.error("[MCP] Error handling request:", error);
             if (error instanceof SyntaxError) {
-                send_err(res, -32600, "Invalid JSON payload");
-                return;
+                return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32600, message: "Invalid JSON payload" }, id: null }), { status: 400, headers: { "Content-Type": "application/json" } });
             }
-            if (!res.headersSent)
-                send_err(
-                    res,
-                    -32603,
-                    "Internal server error",
-                    (error as any)?.id ?? null,
-                    500,
-                );
+            return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32603, message: "Internal server error" }, id: (error as any)?.id ?? null }), { status: 500, headers: { "Content-Type": "application/json" } });
         }
     };
 
-    app.post("/mcp", (req: any, res: any) => {
-        void handle_req(req, res);
+    app.post("/mcp", async (req: any) => {
+        const resp = await handle_req(req);
+        return resp ?? new Response(null, { status: 204 });
     });
-    app.options("/mcp", (_req: any, res: any) => {
-        res.statusCode = 204;
-        set_hdrs(res);
-        res.end();
+    app.options("/mcp", async (_req: any) => {
+        return new Response(null, { status: 204, headers: { "Content-Type": "application/json" } });
     });
 
-    const method_not_allowed = (_req: IncomingMessage, res: ServerResponse) => {
-        send_err(
-            res,
-            -32600,
-            "Method not supported. Use POST  /mcp with JSON payload.",
-            null,
-            405,
-        );
+    const method_not_allowed = async (_req: any) => {
+        return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32600, message: "Method not supported. Use POST /mcp with JSON payload." }, id: null }), { status: 405, headers: { "Content-Type": "application/json" } });
     };
     app.get("/mcp", method_not_allowed);
     app.delete("/mcp", method_not_allowed);

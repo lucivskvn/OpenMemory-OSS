@@ -6,6 +6,7 @@ WORKDIR /app
 
 # Copy package manifests to install dependencies
 COPY package*.json ./
+COPY bun.lockb ./
 
 # Install all dependencies (including devDependencies) using Bun
 RUN bun install --frozen-lockfile

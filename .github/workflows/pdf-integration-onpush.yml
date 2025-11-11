@@ -1,0 +1,27 @@
+name: PDF Integration on Push
+
+# Non-blocking run of the PDF integration test on pushes to main
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  run-pdf-integration-on-push:
+    name: Run PDF integration on push to main
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: |
+          docker build -f backend/Dockerfile -t openmemory-backend:pdf-test .
+
+      - name: Run generator and guarded PDF integration test inside container
+        run: |
+          docker run --rm \
+            -e RUN_PDF_INTEGRATION=1 \
+            -v "${{ github.workspace }}:/workspace" \
+            -w /workspace/backend \
+            openmemory-backend:pdf-test \
+            /bin/sh -c "bun install && bun scripts/generate_sample_pdf.js && bun test ../tests/backend/extract-pdf-integration.test.ts"

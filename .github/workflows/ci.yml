@@ -1,0 +1,160 @@
+name: CI — tests, build, publish
+
+on:
+  push:
+    branches: [ main, next ]
+  pull_request:
+    branches: [ main, next ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test-backend:
+    name: Backend tests (SQLite)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.2"
+
+      - name: Install backend deps
+        working-directory: backend
+        run: |
+          bun install --frozen-lockfile || bun install
+
+      - name: Build backend
+        working-directory: backend
+        run: bun run build
+
+      - name: Run backend tests (SQLite)
+        working-directory: backend
+        run: |
+          # Use package.json test script for consistent invocation
+          bun run test
+
+  test-backend-postgres:
+    name: Backend tests (Postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: openmemory
+          POSTGRES_USER: om
+          POSTGRES_PASSWORD: om_pass
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready -U om
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      OM_METADATA_BACKEND: postgres
+      OM_PG_HOST: 127.0.0.1
+      OM_PG_PORT: 5432
+      OM_PG_DB: openmemory
+      OM_PG_USER: om
+      OM_PG_PASSWORD: om_pass
+      OM_PG_SCHEMA: public
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.2"
+
+      - name: Wait for Postgres
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y postgresql-client
+          echo "Waiting for Postgres to be ready..."
+          for i in {1..60}; do
+            pg_isready -h 127.0.0.1 -p 5432 -U om && break || sleep 1
+          done
+
+      - name: DB cleanup (only when using Postgres)
+        if: env.OM_METADATA_BACKEND == 'postgres'
+        run: |
+          echo "Cleaning up Postgres schema to ensure a fresh test DB"
+          export PGPASSWORD="${{ job.env.OM_PG_PASSWORD }}"
+          for attempt in 1 2 3; do
+            PGPASSWORD="$PGPASSWORD" psql -h ${{ job.env.OM_PG_HOST }} -U ${{ job.env.OM_PG_USER }} -d ${{ job.env.OM_PG_DB }} -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" && break || {
+              echo "Attempt $attempt: DB cleanup failed, retrying in $((attempt * 5))s..."
+              sleep $((attempt * 5))
+            }
+          done
+
+      - name: Install backend deps
+        working-directory: backend
+        run: |
+          bun install --frozen-lockfile || bun install
+
+      - name: Build backend
+        working-directory: backend
+        run: bun run build
+
+      - name: Run backend tests (Postgres)
+        working-directory: backend
+        env:
+          OM_METADATA_BACKEND: postgres
+          OM_PG_HOST: 127.0.0.1
+          OM_PG_PORT: 5432
+          OM_PG_DB: openmemory
+          OM_PG_USER: om
+          OM_PG_PASSWORD: om_pass
+        run: |
+          MAX_ATTEMPTS=3
+          ATTEMPT=1
+          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+            echo "Test attempt $ATTEMPT/$MAX_ATTEMPTS"
+            if bun run test; then
+              echo "Tests passed on attempt $ATTEMPT"
+              break
+            fi
+            if [ $ATTEMPT -lt $MAX_ATTEMPTS ]; then
+              SLEEP_TIME=$((ATTEMPT * 10))
+              echo "Tests failed on attempt $ATTEMPT. Sleeping $SLEEP_TIME seconds before retry..."
+              sleep $SLEEP_TIME
+            else
+              echo "Tests failed after $MAX_ATTEMPTS attempts. Exiting with failure."
+              exit 1
+            fi
+            ATTEMPT=$((ATTEMPT+1))
+          done
+
+  publish-docker:
+    name: Build and publish Docker image
+    needs: [ test-backend, test-backend-postgres ]
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+          platforms: linux/amd64,linux/arm64

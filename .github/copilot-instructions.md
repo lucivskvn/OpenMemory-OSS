@@ -12,10 +12,11 @@ Quick architecture (big picture)
 
 Essential workflows & commands (run these exactly)
 - Backend development:
-  - Install & run: `cd backend && npm install && npm run dev` (uses `tsx` to run TypeScript directly).
-  - Build: `cd backend && npm run build` (runs `tsc -p tsconfig.json`).
-  - Start (production): `cd backend && npm start` -> runs `node dist/server/index.js`.
-  - Run DB migrations: `cd backend && npm run migrate` (executes `backend/src/migrate.ts`).
+ - Backend development:
+  - Install & run: `cd backend && bun install && bun run dev`.
+  - Build: `cd backend && bun run build`.
+  - Start (production): `cd backend && bun run start` -> runs `bun dist/server/index.js`.
+  - Run DB migrations: `cd backend && bun run migrate` (executes `backend/src/migrate.ts`).
 - Dashboard (frontend): `cd dashboard && npm install && npm run dev` / `npm run build` / `npm start`.
 - Repo-level shortcuts: root `package.json` forwards to the backend: `npm run build` and `npm start` from repo root run backend equivalents.
 - Docker: `docker-compose up --build` (see `docker-compose.yml` for many env variables, e.g. `OM_DB_PATH`).
@@ -24,20 +25,20 @@ Tests (exact commands)
 - Backend integration tests are run as plain Node scripts (they expect a running server):
   1. Start the backend (dev or production build):
     ```bash
-    cd backend
-    npm run dev    # development (tsx)
-    # or for a built server:
-    npm run build
-    npm start
+  cd backend
+  bun run dev    # development (hot)
+  # or for a built server:
+  bun run build
+  bun run start
     ```
-  2. In another shell, run the test runner(s):
-    ```bash
-    # run a single test file
-    node tests/backend/api.test.js
+  # In another shell, run the test runner(s):
+  ```bash
+  # run the full backend test suite
+  bun test ../tests/backend/
 
-    # run other backend tests similarly, e.g.:
-    node tests/backend/decay-reflection.test.js
-    ```
+  # or run a single test file
+  bun test ../tests/backend/api.test.ts
+  ```
 
 Note: `backend/package.json` currently does not define a `test` script. Agents should run test files directly (node ...) or add a `test` script if they introduce a test runner.
 

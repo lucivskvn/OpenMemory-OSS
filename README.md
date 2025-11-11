@@ -236,6 +236,7 @@ OpenMemory uses Hierarchical Memory Decomposition (HMD):
 - Storage: SQLite or PostgreSQL
 - Embeddings: E5/BGE/OpenAI/Gemini/Ollama
 - Scheduler: node-cron for decay and maintenance
+- Scheduler: Bun timers (setInterval) for decay and maintenance
 
 **Query flow:**
 
@@ -373,7 +374,7 @@ OpenMemory includes a command-line tool for quick memory operations.
 
 ```bash
 cd backend
-npm link
+bun link
 ```
 
 Now you can use `opm` from anywhere.

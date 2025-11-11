@@ -193,7 +193,7 @@ export function dash(app: any) {
                     cacheSegments: env.cache_segments,
                     maxActive: env.max_active,
                     decayInterval: env.decay_interval_minutes,
-                    embedProvider: env.emb_kind,
+                    embedProvider: env.embed_kind,
                 },
             };
             return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });

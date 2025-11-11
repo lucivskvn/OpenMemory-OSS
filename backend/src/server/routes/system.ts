@@ -31,38 +31,40 @@ const TIER_BENEFITS = {
 };
 
 export function sys(app: any) {
-    app.get(
-        "/health",
-        async (incoming_http_request: any, outgoing_http_response: any) => {
-            outgoing_http_response.json({
-                ok: true,
-                version: "2.0-hsg-tiered",
-                embedding: getEmbeddingInfo(),
-                tier,
-                dim: env.vec_dim,
-                cache: env.cache_segments,
-                expected: TIER_BENEFITS[tier],
-            });
-        },
-    );
+    app.get("/health", async (req: any, ctx: any) => {
+        const payload = {
+            ok: true,
+            version: "2.0-hsg-tiered",
+            embedding: getEmbeddingInfo(),
+            tier,
+            dim: env.vec_dim,
+            cache: env.cache_segments,
+            expected: TIER_BENEFITS[tier],
+        };
+        return new Response(JSON.stringify(payload), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+        });
+    });
 
-    app.get(
-        "/sectors",
-        async (incoming_http_request: any, outgoing_http_response: any) => {
-            try {
-                const database_sector_statistics_rows = await all_async(`
+    app.get("/sectors", async (req: any, ctx: any) => {
+        try {
+            const database_sector_statistics_rows = await all_async(`
                 select primary_sector as sector, count(*) as count, avg(salience) as avg_salience 
                 from memories 
                 group by primary_sector
             `);
-                outgoing_http_response.json({
-                    sectors: Object.keys(sector_configs),
-                    configs: sector_configs,
-                    stats: database_sector_statistics_rows,
-                });
-            } catch (unexpected_error_fetching_sectors) {
-                outgoing_http_response.status(500).json({ err: "internal" });
-            }
-        },
-    );
+            const payload = {
+                sectors: Object.keys(sector_configs),
+                configs: sector_configs,
+                stats: database_sector_statistics_rows,
+            };
+            return new Response(JSON.stringify(payload), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            });
+        } catch (unexpected_error_fetching_sectors) {
+            return new Response(JSON.stringify({ err: "internal" }), { status: 500, headers: { "Content-Type": "application/json" } });
+        }
+    });
 }
