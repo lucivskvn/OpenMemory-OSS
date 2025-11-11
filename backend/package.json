@@ -17,7 +17,6 @@
     "dependencies": {
         "@modelcontextprotocol/sdk": "^1.20.2",
         "mammoth": "^1.11.0",
-        "pdfkit": "^0.13.0",
         "pdf-parse": "^2.4.3",
         "pg": "^8.16.3",
         "pino": "^10.1.0",
@@ -26,6 +25,7 @@
         "zod": "^4.1.12"
     },
     "devDependencies": {
+        "pdfkit": "^0.13.0",
         "@types/bun": "latest",
         "@types/node": "^20.10.5",
         "@types/pg": "^8.15.5",
