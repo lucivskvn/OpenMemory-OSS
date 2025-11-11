@@ -159,7 +159,15 @@ export function createServer(config: { max_payload_size?: number } = {}) {
                     } catch (e) {
                         throw e;
                     }
-                    if (ret !== undefined && ret !== null) return ret;
+                    // Normalize any non-Response return value into a Response
+                    if (ret !== undefined && ret !== null) {
+                        if (ret instanceof Response) return ret;
+                        try {
+                            return new Response(JSON.stringify(ret), { status: 200, headers: { "Content-Type": "application/json" } });
+                        } catch (e) {
+                            return new Response(String(ret), { status: 200 });
+                        }
+                    }
 
                     // Handler returned undefined. As a temporary migration aid,
                     // invoke the handler once with the legacy res shim and return

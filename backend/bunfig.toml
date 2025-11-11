@@ -1,0 +1,9 @@
+# bunfig.toml (backend)
+# This file configures the Bun runtime for tests when run from the backend
+
+[test]
+# Preload the setup script before running the test suite. When running with
+# working-directory=backend, this relative path points to the repository's
+# tests/setup.ts helper used to start a test server and provide deterministic
+# environment for integration tests.
+preload = ["../tests/setup.ts"]
