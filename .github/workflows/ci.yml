@@ -1,17 +1,19 @@
-name: Backend Integration Tests
+name: CI — tests, build, publish
 
 on:
   push:
-    branches: [main, develop]
+    branches: [ main, next ]
   pull_request:
-    branches: [main, develop]
+    branches: [ main, next ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
-  # Deprecated: test-backend workflow is superseded by .github/workflows/ci.yml
-  # Keep this file for historical reasons, but disable it to avoid duplicate runs.
   test-backend:
-    if: false
+    name: Backend tests (SQLite)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -25,33 +27,21 @@ jobs:
       - name: Install backend deps
         working-directory: backend
         run: |
-          bun install --frozen-lockfile
+          bun install --frozen-lockfile || bun install
 
       - name: Build backend
         working-directory: backend
         run: bun run build
 
-      - name: Run backend tests (in-process)
+      - name: Run backend tests (SQLite)
         working-directory: backend
         run: |
-          # Run tests the same way we do locally. Tests start servers in-process
-          # and avoid DB lock contention that occurs when a separate background
-          # server opens the same SQLite file.
-          # Use the package.json test script so path resolution is consistent.
+          # Use package.json test script for consistent invocation
           bun run test
 
-  # Postgres-backed job to validate Bun Postgres integration in CI.
   test-backend-postgres:
+    name: Backend tests (Postgres)
     runs-on: ubuntu-latest
-    needs: test-backend
-    env:
-      OM_METADATA_BACKEND: "postgres"
-      OM_PG_HOST: "127.0.0.1"
-      OM_PG_PORT: "5432"
-      OM_PG_DB: "openmemory"
-      OM_PG_USER: "om"
-      OM_PG_PASSWORD: "om_pass"
-      OM_PG_SCHEMA: "public"
     services:
       postgres:
         image: postgres:15
@@ -66,6 +56,14 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+    env:
+      OM_METADATA_BACKEND: postgres
+      OM_PG_HOST: 127.0.0.1
+      OM_PG_PORT: 5432
+      OM_PG_DB: openmemory
+      OM_PG_USER: om
+      OM_PG_PASSWORD: om_pass
+      OM_PG_SCHEMA: public
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -87,12 +85,8 @@ jobs:
       - name: DB cleanup (only when using Postgres)
         if: env.OM_METADATA_BACKEND == 'postgres'
         run: |
-          echo "Installing psql client for DB cleanup..."
-          sudo apt-get update -y
-          sudo apt-get install -y postgresql-client
           echo "Cleaning up Postgres schema to ensure a fresh test DB"
           export PGPASSWORD="${{ job.env.OM_PG_PASSWORD }}"
-          # Retry drop/create if Postgres is still warming up
           for attempt in 1 2 3; do
             PGPASSWORD="$PGPASSWORD" psql -h ${{ job.env.OM_PG_HOST }} -U ${{ job.env.OM_PG_USER }} -d ${{ job.env.OM_PG_DB }} -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" && break || {
               echo "Attempt $attempt: DB cleanup failed, retrying in $((attempt * 5))s..."
@@ -111,21 +105,18 @@ jobs:
 
       - name: Run backend tests (Postgres)
         working-directory: backend
+        env:
+          OM_METADATA_BACKEND: postgres
+          OM_PG_HOST: 127.0.0.1
+          OM_PG_PORT: 5432
+          OM_PG_DB: openmemory
+          OM_PG_USER: om
+          OM_PG_PASSWORD: om_pass
         run: |
-          # Run tests with OM_METADATA_BACKEND=postgres to exercise Bun Postgres path
-          # Retries: attempt the test up to 3 times on transient CI failures
-          export OM_METADATA_BACKEND=postgres
-          export OM_PG_HOST=127.0.0.1
-          export OM_PG_PORT=5432
-          export OM_PG_DB=openmemory
-          export OM_PG_USER=om
-          export OM_PG_PASSWORD=om_pass
-
           MAX_ATTEMPTS=3
           ATTEMPT=1
           while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
             echo "Test attempt $ATTEMPT/$MAX_ATTEMPTS"
-            # Use package script so the test invocation is consistent with local runs
             if bun run test; then
               echo "Tests passed on attempt $ATTEMPT"
               break
@@ -140,3 +131,30 @@ jobs:
             fi
             ATTEMPT=$((ATTEMPT+1))
           done
+
+  publish-docker:
+    name: Build and publish Docker image
+    needs: [ test-backend, test-backend-postgres ]
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+          platforms: linux/amd64,linux/arm64

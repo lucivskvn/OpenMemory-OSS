@@ -193,12 +193,11 @@ Notes:
 
 Note about WebSocket dependency:
 
-  Node-based HTTP/WebSocket server (`backend/src/server/server.js`). The
-  Bun-based server (`backend/src/server/server.ts`) uses Bun's native
-  WebSocket handling. If you plan to run only on Bun and remove the Node
-  server, you can remove the `ws` dependency from `backend/package.json`.
-  Until that migration is completed, `ws` remains as a compatibility
-  dependency and should not be removed.
+  The legacy Node-based HTTP/WebSocket server (`backend/src/server/server.js`)
+  has been removed in favor of the Bun-native server (`backend/src/server/server.ts`).
+  The repository no longer ships the Node `ws` runtime dependency for the
+  `next` branch. If your deployment still expects a Node `ws` server, update
+  your runtime to Bun or pin an earlier branch that retained Node artifacts.
 
 Postgres / legacy Node support
 ------------------------------
@@ -213,6 +212,25 @@ Recommended migration steps
 
 1. Add a CI job that starts Postgres and runs `bun test` against the `backend` package. Validate migrations and table creation under Bun's Postgres client.
 2. Remove any lingering Node-only server artifacts if you no longer need them (search for `server.js` or `ws`-based code paths) and update docs accordingly.
+
+C
+
+## CI validation (added)
+
+A GitHub Actions job named `test-backend-postgres` has been added to the consolidated CI workflow `.github/workflows/ci.yml`. It starts a Postgres service and runs the backend test script with `OM_METADATA_BACKEND=postgres` to validate the Bun Postgres integration in CI. Use this job as the canonical way to verify Postgres-backed changes under the Bun runtime.
+
+Additionally, the consolidated CI pipeline builds and publishes a multi-platform Docker image to GitHub Container Registry (GHCR) after tests pass. The published image tags are:
+
+- `ghcr.io/<owner>/<repo>:latest`
+- `ghcr.io/<owner>/<repo>:<commit-sha>`
+
+Replace `<owner>/<repo>` with your repository owner/name when pulling the image. If you prefer Docker Hub or another registry, update the workflow and provide credentials via repository secrets.
+
+## Configuration additions
+
+- `OM_HYBRID_FUSION` (boolean, default: true): Toggle hybrid fusion behavior when the backend runs in hybrid tier. This variable is available in `docker-compose.yml` and is mapped to `env.hybrid_fusion` in `backend/src/core/cfg.ts`.
+
+- `OM_EMBEDDINGS` (legacy alias): Some deploys historically used `OM_EMBEDDINGS`. The backend now prefers `OM_EMBEDDINGS` when present for backwards compatibility, but `OM_EMBED_KIND` is the canonical variable. To avoid ambiguity, set `OM_EMBED_KIND` in new deployments.
 
 ---
 

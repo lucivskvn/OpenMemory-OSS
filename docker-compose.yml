@@ -17,6 +17,7 @@ services:
       - OM_PORT=${OM_PORT:-8080}
       - OM_MODE=${OM_MODE:-standard}
       - OM_TIER=${OM_TIER:-hybrid}
+      - OM_HYBRID_FUSION=${OM_HYBRID_FUSION:-true}
       - OM_DB_PATH=${OM_DB_PATH:-/data/openmemory.sqlite}
       - OM_API_KEY=${OM_API_KEY:-}
       - OM_IDE_MODE=${OM_IDE_MODE:-false}

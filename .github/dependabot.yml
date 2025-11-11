@@ -1,0 +1,13 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # Optionally limit to images used by the repo (left open to catch Dockerfile base image updates)
+    # allow:
+    #   - dependency-type: "all"

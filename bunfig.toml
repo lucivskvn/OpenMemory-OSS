@@ -3,7 +3,7 @@
 
 [test]
 # Preload the setup script before running the test suite.
-# This script starts the backend server and waits for it to be healthy,
-# ensuring that integration tests can run reliably. Include both root and
-# backend-relative paths to support running tests from either directory.
-preload = ["./tests/setup.ts", "../tests/setup.ts"]
+# This script starts the backend server and waits for it to be healthy.
+# Use a single relative path that works when CI runs with
+# `working-directory: backend` (it points to repo/tests/setup.ts).
+preload = ["../tests/setup.ts"]
