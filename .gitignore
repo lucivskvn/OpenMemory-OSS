@@ -1,4 +1,22 @@
-# -------------------------
+.DS_Store
+*.bak
+*~
+*.orig
+*.backup
+*.tmp
+*.swp
+/.env
+/.env.local
+/.vscode/
+/.idea/
+backend/dist/
+node_modules/
+tmp/
+tmp_restore/
+data/*.sqlite-shm
+data/*.sqlite-wal
+backend/data/*.sqlite-shm
+backend/data/*.sqlite-wal# -------------------------
 # Node / JavaScript
 # -------------------------
 node_modules/
@@ -78,3 +96,15 @@ exports/
 # Misc
 .pypirc
 target/
+
+# Ignore editor/backup files
+*.bak
+# Ignore npm lockfiles now that Bun is canonical
+package-lock.json
+
+# Local IDE / environment artifacts
+IDE/.openmemory/
+IDE/bun.lock
+
+# Bun lock backup files sometimes present from local runs
+**/*.lockb
