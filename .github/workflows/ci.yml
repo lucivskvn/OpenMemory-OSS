@@ -2,38 +2,129 @@ name: CI — tests, build, publish
 
 on:
   push:
-    branches: [ main, next ]
+    branches: [main, next]
   pull_request:
-    branches: [ main, next ]
+    branches: [main, next]
   workflow_dispatch:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
+  detect-changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      dashboard_changed: ${{ steps.filter.outputs.dashboard }}
+      ide_changed: ${{ steps.filter.outputs.ide }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Filter paths
+        id: filter
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        with:
+          filters: |
+            dashboard:
+              - 'dashboard/app/**'
+              - 'dashboard/package.json'
+              - 'dashboard/app/**/*'
+            ide:
+              - 'IDE/src/**'
+              - 'IDE/package.json'
+              - 'IDE/**/src/**'
+
+    # (detect-changes job steps above)
+
+  # Prettier job moved to top-level (not nested under detect-changes)
+  prettier_format:
+    name: Prettier format check (repo-wide)
+    runs-on: ubuntu-latest
+    # Run early to fail fast on formatting issues across backend, dashboard, IDE
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.1
+        with:
+          bun-version: "1.3.2"
+
+      - name: Run Prettier check (repo root)
+        # Use bunx to run a pinned Prettier quickly; will fail the job if formatting issues exist
+        run: |
+          echo "Running Prettier check across repository (pinned)"
+          bunx -p prettier@3.3.3 prettier --check . || (echo "Prettier formatting issues found. Run 'bunx -p prettier@3.3.3 prettier --write .' locally to fix." && exit 1)
+
   test-backend:
+    needs: [prettier_format]
     name: Backend tests (SQLite)
     runs-on: ubuntu-latest
     env:
       OM_PORT: 8080
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.1
         with:
           bun-version: "1.3.2"
 
       - name: Install backend deps
         working-directory: backend
         run: |
-          bun install --frozen-lockfile || bun install
+          # Enforce frozen lockfile in CI for reproducible installs
+          bun install --frozen-lockfile --no-save
+
+      - name: Log resolved backend deps
+        working-directory: backend
+        run: |
+          # Log resolved dependency tree for observability in CI logs
+          bun pm ls --all || bun list --all || echo "bun list not available"
+
+      - name: Prettier format
+        working-directory: backend
+        run: |
+          bunx -p prettier@3.3.3 prettier --check . || true
+
+      - name: Dependency security scan
+        working-directory: backend
+        run: |
+          bun run security:scan || true
 
       - name: Build backend
         working-directory: backend
         run: bun run build
+
+      - name: Optional: CPU profiling (backend)
+        if: env.ENABLE_PROFILING == 'true'
+        working-directory: backend
+        run: |
+          echo "Starting server briefly with CPU profiling"
+          mkdir -p profiling || true
+          bun --cpu-prof dist/server/index.js &
+          SERVER_PID=$!
+          for i in {1..40}; do
+            if curl -sSf "http://127.0.0.1:$OM_PORT/health" >/dev/null 2>&1; then
+              echo "Server responded"
+              break
+            fi
+            sleep 0.25
+          done
+          if ps -p $SERVER_PID >/dev/null 2>&1; then
+            kill $SERVER_PID || true
+          fi
+          mv cpu-* profiling/ 2>/dev/null || true
+
+      - name: Upload CPU profile (backend)
+        if: env.ENABLE_PROFILING == 'true'
+        uses: actions/upload-artifact@v3
+        with:
+          name: backend-cpu-profiles
+          path: backend/profiling/
+          retention-days: 7
 
       - name: Run backend tests (SQLite)
         working-directory: backend
@@ -63,6 +154,7 @@ jobs:
           fi
 
   test-backend-postgres:
+    needs: [prettier_format]
     name: Backend tests (Postgres)
     runs-on: ubuntu-latest
     services:
@@ -89,10 +181,10 @@ jobs:
       OM_PG_SCHEMA: public
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.1
         with:
           bun-version: "1.3.2"
 
@@ -120,11 +212,57 @@ jobs:
       - name: Install backend deps
         working-directory: backend
         run: |
-          bun install --frozen-lockfile || bun install
+          bun install --frozen-lockfile --no-save
+
+      - name: Log resolved backend deps
+        working-directory: backend
+        run: |
+          bun pm ls --all || bun list --all || echo "bun list not available"
+
+      - name: Prettier format
+        working-directory: backend
+        run: |
+          bunx -p prettier@3.3.3 prettier --check . || true
+
+      - name: Dependency security scan
+        working-directory: backend
+        run: |
+          bun run security:scan || true
 
       - name: Build backend
         working-directory: backend
         run: bun run build
+
+      - name: Optional: CPU profiling (backend)
+        if: env.ENABLE_PROFILING == 'true'
+        working-directory: backend
+        run: |
+          echo "Starting server briefly with CPU profiling"
+          mkdir -p profiling || true
+          # Start server with CPU profiler enabled; profile files will be emitted by Bun in working dir
+          bun --cpu-prof dist/server/index.js &
+          SERVER_PID=$!
+          for i in {1..40}; do
+            if curl -sSf "http://127.0.0.1:$OM_PORT/health" >/dev/null 2>&1; then
+              echo "Server responded"
+              break
+            fi
+            sleep 0.25
+          done
+          # Stop the server to flush the profile
+          if ps -p $SERVER_PID >/dev/null 2>&1; then
+            kill $SERVER_PID || true
+          fi
+          # Move cpu profile files (if any) into profiling/ directory
+          mv cpu-* profiling/ 2>/dev/null || true
+
+      - name: Upload CPU profile (backend)
+        if: env.ENABLE_PROFILING == 'true'
+        uses: actions/upload-artifact@v3
+        with:
+          name: backend-cpu-profiles
+          path: backend/profiling/
+          retention-days: 7
 
       - name: Run backend tests (Postgres)
         working-directory: backend
@@ -157,22 +295,28 @@ jobs:
 
   publish-docker:
     name: Build and publish Docker image
-    needs: [ test-backend, test-backend-postgres ]
+    needs: [test-backend, test-backend-postgres]
     runs-on: ubuntu-latest
     environment: production
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v2
+        uses: docker/login-action@343f7c4344506bcbf9b4de18042ae17996df046d # v3.0.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push image
-        uses: docker/build-push-action@v4
+        id: build-and-push
+        uses: docker/build-push-action@4a13e500e55cf31b7a5d59a38ab2040ab0f42f56 # v5.1.0
         with:
           context: ./backend
           file: ./backend/Dockerfile
@@ -181,3 +325,133 @@ jobs:
             ghcr.io/${{ github.repository }}:latest
             ghcr.io/${{ github.repository }}:${{ github.sha }}
           platforms: linux/amd64,linux/arm64
+
+      # SLSA provenance enables supply-chain verification; use
+      # `gh attestation verify oci://ghcr.io/${{ github.repository }}:${{ github.sha }}` to validate builds.
+      - name: Attest Build Provenance
+        uses: actions/attest-build-provenance@f8d5ea8082b0d9f5ab855907be308fbd7eefb155 # v1.1.0
+        with:
+          subject-name: ghcr.io/${{ github.repository }}
+          subject-digest: ${{ steps.build-and-push.outputs.digest }}
+  security-scan:
+    name: Security scan
+    runs-on: ubuntu-latest
+    # Scoped permissions: top-level permissions remain minimal; this job
+    # requires `security-events: write` to upload SARIF to the Security tab.
+    # We explicitly scope `contents: read` here for clarity.
+    permissions:
+      contents: read
+      security-events: write
+    # Depend only on postgres-backed tests. We build a local image for
+    # scanning so PRs (where publishing is gated) still get image scans.
+    needs: [test-backend-postgres]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.1
+        with:
+          bun-version: "1.3.2"
+      - name: Install deps
+        working-directory: backend
+        run: bun install --frozen-lockfile --no-save
+
+      - name: Log resolved backend deps
+        working-directory: backend
+        run: bun pm ls --all || bun list --all || echo "bun list not available"
+
+      - name: Prepare local Docker builder
+        uses: docker/setup-buildx-action@988b5a0280414f521da01fcc63a27aeeb4b104db # v3.6.1
+
+      - name: Build local image for scanning (no push)
+        id: build-local-image
+        uses: docker/build-push-action@4a13e500e55cf31b7a5d59a38ab2040ab0f42f56 # v5.1.0
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: false
+          load: true
+          tags: |
+            openmemory:scan
+          platforms: linux/amd64
+
+      - name: Trivy scan filesystem
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8caedf20eb0281bf5b81
+        with:
+          scan-type: filesystem
+          format: sarif
+          output: trivy-filesystem.sarif
+
+      - name: Trivy scan local image
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8caedf20eb0281bf5b81
+        with:
+          image-ref: openmemory:scan
+          format: sarif
+          output: trivy-image.sarif
+      - name: Upload SARIF (image)
+        uses: github/codeql-action/upload-sarif@768cb5b63a66678bd6d9b69f0e3e3a6b7b1b4b4e # v3.0.0
+        with:
+          sarif_file: trivy-image.sarif
+
+      - name: Upload SARIF (filesystem)
+        uses: github/codeql-action/upload-sarif@768cb5b63a66678bd6d9b69f0e3e3a6b7b1b4b4e # v3.0.0
+        with:
+          sarif_file: trivy-filesystem.sarif
+
+  build_dashboard:
+    name: Build Dashboard (Next.js)
+    runs-on: ubuntu-latest
+    needs: [detect-changes, prettier_format]
+    if: needs.detect-changes.outputs.dashboard_changed == 'true' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.1
+        with:
+          bun-version: "1.3.2"
+
+      - name: Install dashboard deps
+        working-directory: dashboard
+        run: |
+          bun install --frozen-lockfile --no-save
+
+      - name: Log resolved dashboard deps
+        working-directory: dashboard
+        run: |
+          bun pm ls --all || bun list --all || echo "bun list not available"
+
+      - name: Build dashboard
+        working-directory: dashboard
+        run: |
+          bun run build
+
+  build_ide:
+    name: Build IDE Extension
+    runs-on: ubuntu-latest
+    needs: [detect-changes, prettier_format]
+    if: needs.detect-changes.outputs.ide_changed == 'true' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.1
+        with:
+          bun-version: "1.3.2"
+
+      - name: Install IDE deps
+        working-directory: IDE
+        run: |
+          bun install --frozen-lockfile --no-save
+
+      - name: Log resolved IDE deps
+        working-directory: IDE
+        run: |
+          bun pm ls --all || bun list --all || echo "bun list not available"
+
+      - name: Compile IDE extension
+        working-directory: IDE
+        run: |
+          bun run compile

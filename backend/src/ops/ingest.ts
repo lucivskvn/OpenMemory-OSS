@@ -2,6 +2,8 @@ import { add_hsg_memory } from "../memory/hsg";
 import { q, transaction } from "../core/db";
 import { rid, now, j } from "../utils";
 import { extractText, ExtractionResult } from "./extract";
+import logger from "../core/logger";
+import fs from 'fs';
 
 const LG = 8000,
     SEC = 3000;
@@ -10,6 +12,8 @@ export interface ingestion_cfg {
     force_root?: boolean;
     sec_sz?: number;
     lg_thresh?: number;
+    // Optional override for max ingest size in megabytes
+    max_size_mb?: number;
 }
 export interface IngestionResult {
     root_memory_id: string;
@@ -44,9 +48,11 @@ const mkRoot = async (
     const cnt = `[Document: ${ex.metadata.content_type.toUpperCase()}]\n\n${sum}\n\n[Full content split across ${Math.ceil(txt.length / SEC)} sections]`;
     const id = rid(),
         ts = now();
-    await transaction.begin();
+    const _transaction = (ingestDocument as any)._transaction || transaction;
+    const _q = (ingestDocument as any)._q || q;
+    await _transaction.begin();
     try {
-        await q.ins_mem.run(
+        await _q.ins_mem.run(
             id,
             cnt,
             "reflective",
@@ -67,11 +73,11 @@ const mkRoot = async (
             user_id || null,
             null,
         );
-        await transaction.commit();
+        await _transaction.commit();
         return id;
     } catch (e) {
-        console.error("[ERROR] Root failed:", e);
-        await transaction.rollback();
+        logger.error({ component: "INGEST", err: e }, "[INGEST] Root failed: %o", e);
+        await _transaction.rollback();
         throw e;
     }
 };
@@ -106,16 +112,16 @@ const link = async (
     user_id?: string | null,
 ) => {
     const ts = now();
-    await transaction.begin();
+    const _transaction = (ingestDocument as any)._transaction || transaction;
+    const _q = (ingestDocument as any)._q || q;
+    await _transaction.begin();
     try {
-        await q.ins_waypoint.run(rid, cid, user_id || null, 1.0, ts, ts);
-        await transaction.commit();
-        console.log(
-            `[INGEST] Linked: ${rid.slice(0, 8)} -> ${cid.slice(0, 8)} (section ${idx})`,
-        );
+        await _q.ins_waypoint.run(rid, cid, user_id || null, 1.0, ts, ts);
+        await _transaction.commit();
+        logger.info({ component: "INGEST" }, "[INGEST] Linked: %s -> %s (section %d)", rid.slice(0, 8), cid.slice(0, 8), idx);
     } catch (e) {
-        await transaction.rollback();
-        console.error(`[INGEST] Link failed for section ${idx}:`, e);
+        await _transaction.rollback();
+        logger.error({ component: "INGEST", err: e }, "[INGEST] Link failed for section %d: %o", idx, e);
         throw e;
     }
 };
@@ -134,7 +140,9 @@ export async function ingestDocument(
     const useRC = cfg?.force_root || exMeta.estimated_tokens > th;
 
     if (!useRC) {
-        const r = await add_hsg_memory(
+        // allow tests to override the HSG insertion logic via a seam
+        const _add_hsg_memory = (ingestDocument as any)._add_hsg_memory || add_hsg_memory;
+        const r = await _add_hsg_memory(
             text,
             j([]),
             {
@@ -155,15 +163,15 @@ export async function ingestDocument(
     }
 
     const secs = split(text, sz);
-    console.log(`[INGEST] Document: ${exMeta.estimated_tokens} tokens`);
-    console.log(`[INGEST] Splitting into ${secs.length} sections`);
+    logger.info({ component: "INGEST", tokens: exMeta.estimated_tokens }, "[INGEST] Document: %d tokens", exMeta.estimated_tokens);
+    logger.info({ component: "INGEST", sections: secs.length }, "[INGEST] Splitting into %d sections", secs.length);
 
     let rid: string;
     const cids: string[] = [];
 
     try {
         rid = await mkRoot(text, ex, meta, user_id);
-        console.log(`[INGEST] Root memory created: ${rid}`);
+        logger.info({ component: "INGEST", root: rid }, "[INGEST] Root memory created: %s", rid);
         for (let i = 0; i < secs.length; i++) {
             try {
                 const cid = await mkChild(
@@ -176,20 +184,13 @@ export async function ingestDocument(
                 );
                 cids.push(cid);
                 await link(rid, cid, i, user_id);
-                console.log(
-                    `[INGEST] Section ${i + 1}/${secs.length} processed: ${cid}`,
-                );
+                logger.info({ component: "INGEST", section: i + 1, total_sections: secs.length, id: cid }, "[INGEST] Section %d/%d processed: %s", i + 1, secs.length, cid);
             } catch (e) {
-                console.error(
-                    `[INGEST] Section ${i + 1}/${secs.length} failed:`,
-                    e,
-                );
+                logger.error({ component: "INGEST", err: e }, "[INGEST] Section %d/%d failed: %o", i + 1, secs.length, e);
                 throw e;
             }
         }
-        console.log(
-            `[INGEST] Completed: ${cids.length} sections linked to ${rid}`,
-        );
+        logger.info({ component: "INGEST", root: rid, linked: cids.length }, "[INGEST] Completed: %d sections linked to %s", cids.length, rid);
         return {
             root_memory_id: rid,
             child_count: secs.length,
@@ -198,7 +199,90 @@ export async function ingestDocument(
             extraction: exMeta,
         };
     } catch (e) {
-        console.error("[INGEST] Document ingestion failed:", e);
+        logger.error({ component: "INGEST", err: e }, "[INGEST] Document ingestion failed: %o", e);
+        throw e;
+    }
+}
+
+// File-based ingestion helper that uses Bun.file() for faster I/O
+export async function ingestDocumentFromFile(
+    filePath: string,
+    contentType: string,
+    meta?: Record<string, unknown>,
+    cfg?: ingestion_cfg,
+    user_id?: string | null,
+): Promise<IngestionResult> {
+    const start = Date.now();
+    try {
+        // Prefer non-blocking Bun.file() operations instead of synchronous fs calls.
+        const f = Bun.file(filePath);
+        const exists = await f.exists();
+        if (!exists) throw new Error('File not found');
+        // Try to obtain a size without reading the whole file when possible.
+        let fileSize: number | undefined = undefined;
+        try {
+            // Bun may expose a numeric `size` property; handle Promise or number.
+            const maybeSize: any = (f as any).size;
+            if (typeof maybeSize === 'number') fileSize = maybeSize;
+            else if (maybeSize && typeof maybeSize.then === 'function') fileSize = await maybeSize;
+        } catch (_) {
+            // ignore, we'll fallback to detecting size later
+        }
+        // Bun.file().type is best-effort; call it now
+        const mimeType = (f as any).type;
+        // Determine max size: priority: cfg param -> env var -> default 200 MB
+        const envMax = Number(process.env.OM_INGEST_MAX_SIZE_MB || '') || undefined;
+        const maxMb = cfg?.max_size_mb ?? envMax ?? 200;
+        const maxBytes = maxMb * 1024 * 1024;
+        if (fileSize && fileSize > maxBytes) {
+            const err: any = new Error('File too large');
+            err.code = 'ERR_FILE_TOO_LARGE';
+            err.name = 'FileTooLargeError';
+            throw err;
+        }
+        // If fileSize wasn't available above, we will get the ArrayBuffer and infer size.
+        const arr = await f.arrayBuffer();
+        const buffer = Buffer.from(arr);
+        if (fileSize === undefined) fileSize = arr.byteLength;
+        // Enforce max size after inferring size from the array buffer
+        if (fileSize > maxBytes) {
+            const err: any = new Error('File too large');
+            err.code = 'ERR_FILE_TOO_LARGE';
+            err.name = 'FileTooLargeError';
+            throw err;
+        }
+        // Log detected MIME type from Bun.file() to aid debugging and validation
+        logger.info({ component: 'INGEST', file: filePath, size: fileSize, mime: mimeType }, `[INGEST] Processing file: ${filePath} size: ${fileSize} mime: ${mimeType}`);
+        // Optional quick validation: if a contentType was provided and it disagrees with Bun's
+        // detected type, log a warning so callers can see potential mismatches. Compare
+        // normalized MIME types (split on ';') to avoid false positives when charsets are present.
+        const normProvided = (contentType || '').split(';')[0].trim().toLowerCase();
+        const normDetected = (mimeType || '').split(';')[0].trim().toLowerCase();
+        if (normProvided && normDetected && normProvided !== normDetected) {
+            logger.info({ component: 'INGEST', file: filePath, provided: contentType, detected: mimeType }, `[INGEST] Provided contentType '%s' differs from detected mime '%s'`, contentType, mimeType);
+        }
+        // If contentType is missing or generic, prefer the detected mime type from Bun.file()
+        let effectiveType = contentType;
+        if (!effectiveType || effectiveType === 'application/octet-stream') {
+            effectiveType = mimeType || effectiveType;
+        }
+        // If both provided contentType and Bun.file().type are absent, try to infer from extension
+        if (!effectiveType) {
+            const p = filePath.toLowerCase();
+            if (p.endsWith('.pdf')) effectiveType = 'application/pdf';
+            else if (p.endsWith('.docx')) effectiveType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+            else if (p.endsWith('.doc')) effectiveType = 'application/msword';
+            else if (p.endsWith('.html') || p.endsWith('.htm')) effectiveType = 'text/html';
+            else if (p.endsWith('.md') || p.endsWith('.markdown')) effectiveType = 'text/markdown';
+            else if (p.endsWith('.txt')) effectiveType = 'text/plain';
+            else effectiveType = 'application/octet-stream';
+        }
+        // Keep existing mismatch warning when both are present and differ
+        const result = await ingestDocument(effectiveType, buffer, meta, cfg, user_id);
+        logger.info({ component: 'INGEST', file: filePath, duration: Date.now() - start }, `[INGEST] Completed ingestion for ${filePath} in ${Date.now() - start}ms`);
+        return result;
+    } catch (e) {
+        logger.error({ component: 'INGEST', file: filePath, err: e }, `[INGEST] File ingestion failed for ${filePath}: %o`, e);
         throw e;
     }
 }
@@ -237,15 +321,15 @@ export async function ingestURL(
     }
 
     const secs = split(ex.text, sz);
-    console.log(`[INGEST] URL: ${ex.metadata.estimated_tokens} tokens`);
-    console.log(`[INGEST] Splitting into ${secs.length} sections`);
+    logger.info({ component: "INGEST", tokens: ex.metadata.estimated_tokens }, "[INGEST] URL: %d tokens", ex.metadata.estimated_tokens);
+    logger.info({ component: "INGEST", sections: secs.length }, "[INGEST] Splitting into %d sections", secs.length);
 
     let rid: string;
     const cids: string[] = [];
 
     try {
         rid = await mkRoot(ex.text, ex, { ...meta, source_url: url }, user_id);
-        console.log(`[INGEST] Root memory for URL: ${rid}`);
+        logger.info({ component: "INGEST", root: rid }, "[INGEST] Root memory for URL: %s", rid);
         for (let i = 0; i < secs.length; i++) {
             try {
                 const cid = await mkChild(
@@ -258,20 +342,13 @@ export async function ingestURL(
                 );
                 cids.push(cid);
                 await link(rid, cid, i, user_id);
-                console.log(
-                    `[INGEST] URL section ${i + 1}/${secs.length} processed: ${cid}`,
-                );
+                logger.info({ component: "INGEST", section: i + 1, total_sections: secs.length, id: cid }, "[INGEST] URL section %d/%d processed: %s", i + 1, secs.length, cid);
             } catch (e) {
-                console.error(
-                    `[INGEST] URL section ${i + 1}/${secs.length} failed:`,
-                    e,
-                );
+                logger.error({ component: "INGEST", err: e }, "[INGEST] URL section %d/%d failed: %o", i + 1, secs.length, e);
                 throw e;
             }
         }
-        console.log(
-            `[INGEST] URL completed: ${cids.length} sections linked to ${rid}`,
-        );
+        logger.info({ component: "INGEST", root: rid, linked: cids.length }, "[INGEST] URL completed: %d sections linked to %s", cids.length, rid);
         return {
             root_memory_id: rid,
             child_count: secs.length,
@@ -280,7 +357,7 @@ export async function ingestURL(
             extraction: ex.metadata,
         };
     } catch (e) {
-        console.error("[INGEST] URL ingestion failed:", e);
+        logger.error({ component: "INGEST", err: e }, "[INGEST] URL ingestion failed: %o", e);
         throw e;
     }
 }

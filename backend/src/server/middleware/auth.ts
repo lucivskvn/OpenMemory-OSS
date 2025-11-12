@@ -1,5 +1,5 @@
 import { env } from "../../core/cfg";
-import { CryptoHasher } from "bun";
+import { verifyPassword, hashString, isHashedKey } from "../../utils/crypto";
 import { Context } from "../server";
 import logger from "../../core/logger";
 
@@ -42,27 +42,20 @@ async function validate_api_key(provided: string, hashed_expected: string): Prom
     if (!provided || !hashed_expected) return false;
 
     try {
-        // If the stored key looks like a hash (contains $ or common hash prefixes), prefer verify.
-        if (hashed_expected.includes("$") || hashed_expected.startsWith("argon2") || hashed_expected.startsWith("$argon2")) {
-            return await Bun.password.verify(provided, hashed_expected);
+        // If the stored key looks like a hash, prefer verify.
+        if (isHashedKey(hashed_expected) || hashed_expected.startsWith("argon2") || hashed_expected.startsWith("$argon2")) {
+            const ok = await verifyPassword(provided, hashed_expected);
+            if (!ok) logger.warn({ component: "AUTH", event: "auth_failure" }, "API key hash verification failed");
+            return ok;
         }
+        // If the stored value does not look like a hash, reject. This enforces
+        // that operators must configure a hashed OM_API_KEY for security.
+        logger.error({ component: "AUTH", event: "plaintext_key_detected" }, "Plaintext API key detected in configuration; plaintext API keys are not accepted. Please set OM_API_KEY to a hashed value (use backend/scripts/hash-api-key.ts) and restart.");
+        return false;
     } catch (e) {
-        // Fall through to constant-time compare on error
-        logger.warn({ component: "AUTH", err: e }, "Password verify failed, falling back to constant-time compare");
+        logger.warn({ component: "AUTH", event: "verify_error", err: e }, "Password verify failed for API key; rejecting authentication");
+        return false;
     }
-
-    // Fallback for plaintext-stored API keys (deprecated). Use constant-time comparison.
-    const safeCompare = (a: string, b: string) => {
-        if (!a || !b) return false;
-        if (a.length !== b.length) return false;
-        let res = 0;
-        for (let i = 0; i < a.length; i++) res |= a.charCodeAt(i) ^ b.charCodeAt(i);
-        return res === 0;
-    };
-
-    const ok = safeCompare(provided, hashed_expected);
-    if (ok) logger.warn({ component: "AUTH" }, "Using plaintext API key (deprecated). Please migrate to hashed API keys using backend/scripts/hash-api-key.ts");
-    return ok;
 }
 
 function check_rate_limit(client_id: string): {
@@ -98,10 +91,7 @@ function check_rate_limit(client_id: string): {
 
 function get_client_id(req: Request, api_key: string | null): string {
     if (api_key)
-        return new CryptoHasher("sha256")
-            .update(api_key)
-            .digest("hex")
-            .slice(0, 16);
+        return hashString(api_key).slice(0, 16);
     return req.headers.get("x-forwarded-for") || "unknown";
 }
 
@@ -146,14 +136,26 @@ export async function authenticate_api_request(req: Request, ctx: Context, next:
 
     if (auth_config.rate_limit_enabled) {
         try {
-            // Avoid mutating possibly-immutable Response.headers. Create a new
-            // Headers instance from the existing response, set the rate-limit
-            // fields, and return a fresh Response preserving the body and status.
+            // If the response body has already been used/read, avoid constructing
+            // a new Response with the same body as this may break streaming
+            // responses (SSE/WS) or throw. In that case, return the original
+            // response without header augmentation.
+            if ((response as any).bodyUsed || !response.body) {
+                const merged = new Headers(response.headers);
+                merged.set("X-RateLimit-Limit", auth_config.rate_limit_max_requests.toString());
+                merged.set("X-RateLimit-Remaining", rl.remaining.toString());
+                merged.set("X-RateLimit-Reset", Math.floor(rl.reset_time / 1000).toString());
+                // Can't safely attach headers to a used/streamed body; return original response
+                logger.debug({ component: 'AUTH' }, 'Response body already used or null; skipping header merge to preserve streaming behavior');
+                return response;
+            }
+            // Always construct a new Response with merged headers instead of
+            // attempting to mutate the original. This avoids runtime errors in
+            // environments where Response.headers might be immutable.
             const merged = new Headers(response.headers);
             merged.set("X-RateLimit-Limit", auth_config.rate_limit_max_requests.toString());
             merged.set("X-RateLimit-Remaining", rl.remaining.toString());
             merged.set("X-RateLimit-Reset", Math.floor(rl.reset_time / 1000).toString());
-            merged.set("Retry-After", Math.ceil((rl.reset_time - Date.now()) / 1000).toString());
             return new Response(response.body, {
                 status: response.status,
                 statusText: (response as any).statusText,
@@ -162,6 +164,7 @@ export async function authenticate_api_request(req: Request, ctx: Context, next:
         } catch (e) {
             // If constructing a new Response fails for any reason, fall back to
             // returning the original response to avoid breaking the request.
+            logger.warn({ component: "AUTH", err: e }, "Failed to attach rate-limit headers by constructing a new Response; returning original response");
             return response;
         }
     }
@@ -177,7 +180,7 @@ export function log_authenticated_request(req: Request, ctx: Context, next: () =
             component: "AUTH",
             method: req.method,
             path: url.pathname,
-            key_hash: new CryptoHasher("sha256").update(key).digest("hex").slice(0, 8)
+            key_hash: hashString(key).slice(0, 8)
         }, "Authenticated request");
     }
     return next();
