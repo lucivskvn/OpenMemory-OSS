@@ -108,3 +108,6 @@ IDE/bun.lock
 
 # Bun lock backup files sometimes present from local runs
 **/*.lockb
+# Dashboard / backend bun locks (local)
+dashboard/bun.lock
+backend/*.lockb
