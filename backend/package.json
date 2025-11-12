@@ -9,7 +9,7 @@
         "dev": "bun --hot src/server/index.ts",
         "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
         "build": "bun build src/server/index.ts --target=bun --outfile dist/server/index.js",
-        "build:binary": "bun build src/server/index.ts --compile --minify --sourcemap --target=bun --outfile=../../dist/openmemory",
+    "build:binary": "bun build src/server/index.ts --compile --minify --sourcemap --target=bun --outfile=./dist/openmemory",
         "start": "bun dist/server/index.js",
         "migrate": "bun src/migrate.ts",
         "test": "bun test ../tests/backend/",
