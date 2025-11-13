@@ -20,7 +20,7 @@ type Middleware = (
 // RouteHandler accepts (req, ctx) and must return a Response (or Promise<Response>).
 type RouteHandler = (req: Request, ctx: Context) => Response | Promise<Response>;
 
-type WebSocketRouteHandler = WebSocketHandler<{url: URL}>;
+type WebSocketRouteHandler = WebSocketHandler<{ url: URL }>;
 
 type Route = {
     method: string;
@@ -50,7 +50,7 @@ export function createServer(config: { max_payload_size?: number } = {}) {
             middlewares.push(middleware);
         },
         add(method: string, path: string, handler: RouteHandler) {
-             routes.push({ method: method.toUpperCase(), path, handler });
+            routes.push({ method: method.toUpperCase(), path, handler });
         },
         get(path: string, handler: RouteHandler) { this.add("GET", path, handler) },
         post(path: string, handler: RouteHandler) { this.add("POST", path, handler) },
@@ -67,21 +67,25 @@ export function createServer(config: { max_payload_size?: number } = {}) {
             const fetch = async (req: Request): Promise<Response> => {
                 const url = new URL(req.url);
 
-                // WebSocket upgrade
+                // WebSocket upgrade: support dynamic routes (e.g., /ws/:room)
                 if (req.headers.get("upgrade") === "websocket") {
-                    const ws_route = ws_routes.find((r) => r.path === url.pathname);
-                    if (ws_route) {
+                    const { route, params } = (app as any).matchWsRoute(url.pathname);
+                    if (route) {
                         // Let Bun perform the 101 handshake implicitly when upgrade succeeds.
-                        // server.upgrade returns true on success. In that case return
-                        // undefined so Bun completes the upgrade. On failure return 500.
-                        if ((server as any).upgrade(req, { data: { url } })) {
+                        // Include the parsed params in the upgrade data so handlers
+                        // that inspect ws.data immediately can access them. server.upgrade
+                        // returns true on success. In that case return undefined so Bun
+                        // completes the upgrade. On failure return 500 and log.
+                        if ((server as any).upgrade(req, { data: { url, params } })) {
+                            logger.info({ component: "SERVER", path: url.pathname, params }, `WS upgraded for ${url.pathname}`);
                             return undefined as any;
                         }
+                        logger.error({ component: "SERVER", path: url.pathname }, `WS upgrade failed for path: ${url.pathname}`);
                         return new Response("WebSocket upgrade failed", { status: 500 });
                     }
                 }
 
-                const { handler, params } = this.matchRoute(req.method, url.pathname);
+                const { handler, params } = (app as any).matchRoute(req.method, url.pathname);
 
                 if (!handler) {
                     return new Response("Not Found", { status: 404 });
@@ -92,19 +96,84 @@ export function createServer(config: { max_payload_size?: number } = {}) {
                     query: url.searchParams,
                 };
 
+                // Backward compatibility: some legacy handlers and middleware read
+                // `req.params` and `req.query`. Populate them here before calling
+                // middleware so both styles work.
+                try {
+                    (req as any).params = params;
+                    (req as any).query = url.searchParams;
+                } catch (e) {
+                    // ignore failures assigning shim properties
+                }
+
                 // Call handlers with (req, ctx). Handlers must return a Response.
 
                 // Body parsing middleware: parse JSON when Content-Type indicates JSON.
+                // Enforce max payload size even when Content-Length is absent by streaming
                 const contentType = (req.headers.get("content-type") || "").toLowerCase();
                 if (contentType.includes("application/json")) {
-                    const len = Number(req.headers.get("content-length") || 0);
-                    if (config.max_payload_size && len > config.max_payload_size) {
-                        return new Response("Payload Too Large", { status: 413 });
+                    const maxSize = config.max_payload_size || (env && (env.max_payload_size as any)) || 1000000;
+                    const lenHeader = req.headers.get("content-length");
+                    if (lenHeader) {
+                        const len = Number(lenHeader || 0);
+                        if (maxSize && len > maxSize) {
+                            return new Response(JSON.stringify({ error: "payload_too_large", message: "Payload Too Large" }), { status: 413, headers: { "Content-Type": "application/json" } });
+                        }
                     }
+
+                    // Read the request body as a stream and enforce maxSize
                     try {
-                        ctx.body = await req.json();
+                        const reader: any = (req as any).body?.getReader?.();
+                        if (reader) {
+                            const chunks: Uint8Array[] = [];
+                            let received = 0;
+                            while (true) {
+                                const { done, value } = await reader.read();
+                                if (done) break;
+                                if (value) {
+                                    received += value.byteLength || value.length || 0;
+                                    if (maxSize && received > maxSize) {
+                                        return new Response(JSON.stringify({ error: "payload_too_large", message: "Payload Too Large" }), { status: 413, headers: { "Content-Type": "application/json" } });
+                                    }
+                                    chunks.push(value instanceof Uint8Array ? value : new Uint8Array(value));
+                                }
+                            }
+                            // Concatenate chunks
+                            const total = new Uint8Array(received);
+                            let offset = 0;
+                            for (const c of chunks) {
+                                total.set(c, offset);
+                                offset += c.length;
+                            }
+                            const text = new TextDecoder().decode(total);
+                            try {
+                                ctx.body = JSON.parse(text);
+                                // Preserve legacy Express-style expectation of req.body for
+                                // handlers that read the body directly from the request
+                                // object (OM_LEGACY_HANDLER_MODE compatibility).
+                                try { (req as any).body = ctx.body; } catch (e) { /* ignore assignment failures */ }
+                            } catch (e) {
+                                return new Response(JSON.stringify({ error: "invalid_json", message: "Invalid JSON payload" }), { status: 400, headers: { "Content-Type": "application/json" } });
+                            }
+                        } else {
+                            // Fallback: read text and enforce size
+                            const text = await req.text();
+                            // Enforce payload size in bytes to correctly account for
+                            // multi-byte UTF-8 characters (avoid using text.length).
+                            const byteLen = typeof TextEncoder !== 'undefined' ? new TextEncoder().encode(text).byteLength : Buffer.byteLength(text, 'utf8');
+                            if (maxSize && byteLen > maxSize) {
+                                return new Response(JSON.stringify({ error: "payload_too_large", message: "Payload Too Large" }), { status: 413, headers: { "Content-Type": "application/json" } });
+                            }
+                            try {
+                                ctx.body = JSON.parse(text);
+                                // Preserve legacy Express-style expectation of req.body
+                                try { (req as any).body = ctx.body; } catch (e) { /* ignore assignment failures */ }
+                            } catch (e) {
+                                return new Response(JSON.stringify({ error: "invalid_json", message: "Invalid JSON payload" }), { status: 400, headers: { "Content-Type": "application/json" } });
+                            }
+                        }
                     } catch (e) {
-                        return new Response("Invalid JSON", { status: 400 });
+                        return new Response(JSON.stringify({ error: "invalid_json", message: "Invalid JSON payload" }), { status: 400, headers: { "Content-Type": "application/json" } });
                     }
                 }
 
@@ -117,7 +186,12 @@ export function createServer(config: { max_payload_size?: number } = {}) {
                     // To avoid re-invoking route code, only call the handler in legacy
                     // mode if it's explicitly marked or the global migration flag is set.
                     const isExplicitLegacy = (handler as any).__legacy === true;
-                    const globalLegacyMode = process.env.OM_LEGACY_HANDLER_MODE === 'true';
+                    // Default to legacy-compatible behavior during the migration window.
+                    // Operators can explicitly opt out of legacy compatibility by
+                    // setting OM_LEGACY_HANDLER_MODE=false. When unset or set to
+                    // any value other than 'false' the server will run in legacy
+                    // compatible mode to avoid 500s for handlers that return undefined.
+                    const globalLegacyMode = process.env.OM_LEGACY_HANDLER_MODE !== 'false';
 
                     // Legacy res shim (used only when legacy mode is enabled)
                     const makeResShim = () => {
@@ -135,33 +209,63 @@ export function createServer(config: { max_payload_size?: number } = {}) {
                         return { resShim, headers, getStatusBody: () => ({ status, body }) };
                     };
 
-                    // If explicit legacy marker or global mode enabled, call as legacy once.
-                    if (isExplicitLegacy || globalLegacyMode) {
+                    // Decide invocation mode up-front. If handler is explicitly
+                    // marked as legacy (handler.__legacy === true) or the global
+                    // legacy mode is enabled, call the handler once in legacy
+                    // mode. Otherwise prefer the modern (req, ctx) signature and
+                    // require a non-undefined return value. Returning `undefined`
+                    // from a modern handler is considered an error and will result
+                    // in a 500 response with guidance for migration.
+                    const isLegacyMode = isExplicitLegacy || globalLegacyMode;
+
+                    if (isLegacyMode) {
                         const { resShim, headers, getStatusBody } = makeResShim();
                         try {
                             const maybe = (handler as any)(req, resShim);
-                            if (maybe instanceof Response) return maybe;
+                            if (maybe && typeof maybe.then === "function") {
+                                const awaited = await maybe;
+                                if (awaited instanceof Response) return awaited;
+                            } else {
+                                if (maybe instanceof Response) return maybe;
+                            }
                         } catch (e) {
                             throw e;
                         }
                         const { status, body } = getStatusBody();
                         const bodyStream = body === null ? null : body;
+                        // Mark request to skip CORS handling for streaming/legacy body
+                        try { (ctx as any).skipCors = true; } catch (e) { /* ignore */ }
                         return new Response(bodyStream, { status, headers });
                     }
 
-                    // Prefer the modern (req, ctx) signature. If it returns undefined,
-                    // fall back to a one-shot legacy shim invocation for one release
-                    // cycle to ease migration. This avoids returning 500s while still
-                    // providing a clear migration path.
+                    // Modern invocation path: call the handler once with (req, ctx)
+                    // and require it to return a Response (or serializable value).
                     let ret: any;
                     try {
                         ret = await handler(req, ctx as Context);
                     } catch (e) {
                         throw e;
                     }
-                    // Normalize any non-Response return value into a Response
+
+                    // If the handler returned a Response or a serializable value,
+                    // normalize and return. If it returned undefined, treat this
+                    // as an error and instruct the developer how to proceed.
                     if (ret !== undefined && ret !== null) {
-                        if (ret instanceof Response) return ret;
+                        if (ret instanceof Response) {
+                            try {
+                                // If the returned Response contains a streaming body or
+                                // is likely a stream-based payload, mark ctx.skipCors
+                                // so downstream CORS middleware doesn't attempt to
+                                // clone/rewrap locked body streams.
+                                const body = (ret as any).body;
+                                const isStream = body && typeof body.getReader === 'function';
+                                const contentType = ret.headers?.get?.('content-type') || '';
+                                if (isStream || (typeof contentType === 'string' && contentType.includes('stream'))) {
+                                    try { (ctx as any).skipCors = true; } catch (e) { }
+                                }
+                            } catch (e) { }
+                            return ret;
+                        }
                         try {
                             return new Response(JSON.stringify(ret), { status: 200, headers: { "Content-Type": "application/json" } });
                         } catch (e) {
@@ -169,23 +273,11 @@ export function createServer(config: { max_payload_size?: number } = {}) {
                         }
                     }
 
-                    // Handler returned undefined. As a temporary migration aid,
-                    // invoke the handler once with the legacy res shim and return
-                    // its produced response. Do NOT re-invoke the handler elsewhere
-                    // to avoid side-effect duplication.
-                    logger.warn({ component: "SERVER", path: url.pathname }, "Handler returned undefined. Falling back to legacy res shim once. Mark legacy handlers with handler.__legacy = true or set OM_LEGACY_HANDLER_MODE to keep legacy behavior.");
-                    const { resShim, headers, getStatusBody } = makeResShim();
-                    try {
-                        // Call as legacy (req, res) once
-                        const maybe = (handler as any)(req, resShim);
-                        // If handler returned a Response directly, use it
-                        if (maybe instanceof Response) return maybe;
-                    } catch (e) {
-                        throw e;
-                    }
-                    const { status, body } = getStatusBody();
-                    const bodyStream = body === null ? null : body;
-                    return new Response(bodyStream, { status, headers });
+                    // Handler returned undefined in modern mode: fail fast and
+                    // provide a clear migration message rather than attempting to
+                    // re-invoke the handler (which can cause duplicate side-effects).
+                    logger.error({ component: "SERVER", path: url.pathname }, "Handler returned undefined in modern mode. To maintain compatibility mark legacy handlers with handler.__legacy = true or set OM_LEGACY_HANDLER_MODE=true. Otherwise ensure handlers return a Response or serializable value.");
+                    return new Response(JSON.stringify({ error: "handler_returned_undefined", message: "Handler returned undefined in modern (req, ctx) mode. Mark legacy handlers with handler.__legacy = true or set OM_LEGACY_HANDLER_MODE=true to opt-in to legacy (req, res) behavior, or update the handler to return a Response or a serializable value." }), { status: 500, headers: { "Content-Type": "application/json" } });
                 };
 
                 try {
@@ -210,18 +302,31 @@ export function createServer(config: { max_payload_size?: number } = {}) {
             // selection is performed inside each handler by inspecting
             // ws.data.url.pathname so we don't attempt to construct a dynamic
             // map of path -> handler (which does not match the expected type).
+            // The canonical route matcher is exposed as `app.matchWsRoute` below.
             const websocket: any = {
                 open(ws: any) {
-                    const route = ws_routes.find((r) => r.path === ws.data.url.pathname);
-                    if (route && typeof route.handler.open === "function") route.handler.open(ws);
+                    const { route, params } = (app as any).matchWsRoute(ws.data.url.pathname);
+                    if (route) {
+                        // Expose matched params to the handler via ws.data.params
+                        try { ws.data.params = { ...(ws.data.params || {}), ...params }; } catch (e) { /* ignore */ }
+                        if (typeof route.handler.open === "function") {
+                            try { route.handler.open(ws); } catch (e) { /* ignore errors from handler */ }
+                        }
+                    }
                 },
                 message(ws: any, msg: any) {
-                    const route = ws_routes.find((r) => r.path === ws.data.url.pathname);
-                    if (route && typeof route.handler.message === "function") route.handler.message(ws, msg);
+                    const { route, params } = (app as any).matchWsRoute(ws.data.url.pathname);
+                    if (route) {
+                        try { ws.data.params = { ...(ws.data.params || {}), ...params }; } catch (e) { /* ignore */ }
+                        if (typeof route.handler.message === "function") route.handler.message(ws, msg);
+                    }
                 },
                 close(ws: any, code: any, reason: any) {
-                    const route = ws_routes.find((r) => r.path === ws.data.url.pathname);
-                    if (route && typeof route.handler.close === "function") route.handler.close(ws, code, reason);
+                    const { route, params } = (app as any).matchWsRoute(ws.data.url.pathname);
+                    if (route) {
+                        try { ws.data.params = { ...(ws.data.params || {}), ...params }; } catch (e) { /* ignore */ }
+                        if (typeof route.handler.close === "function") route.handler.close(ws, code, reason);
+                    }
                 },
             } as any;
 
@@ -231,8 +336,11 @@ export function createServer(config: { max_payload_size?: number } = {}) {
                 websocket,
                 development: env.mode === "development",
             });
-
             if (callback) callback();
+
+            // Return the underlying server instance to callers so they can
+            // inspect runtime details (bound port when using port 0, etc.).
+            return server;
         },
 
         matchRoute(method: string, path: string) {
@@ -257,6 +365,29 @@ export function createServer(config: { max_payload_size?: number } = {}) {
                 if (match) return { handler: route.handler, params };
             }
             return { handler: null, params: {} };
+        },
+
+        // Match websocket routes supporting dynamic parameters similar to
+        // HTTP route matching. Returns { route, params } where `route` is the
+        // matched WebSocketRoute or null when no route matches.
+        matchWsRoute(pathname: string) {
+            for (const r of ws_routes) {
+                const routeParts = r.path.split("/").filter(Boolean);
+                const pathParts = pathname.split("/").filter(Boolean);
+                if (routeParts.length !== pathParts.length) continue;
+                const params: Record<string, string> = {};
+                let match = true;
+                for (let i = 0; i < routeParts.length; i++) {
+                    if (routeParts[i].startsWith(":")) {
+                        params[routeParts[i].slice(1)] = decodeURIComponent(pathParts[i]);
+                    } else if (routeParts[i] !== pathParts[i]) {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match) return { route: r, params };
+            }
+            return { route: null, params: {} };
         },
 
         stop() {

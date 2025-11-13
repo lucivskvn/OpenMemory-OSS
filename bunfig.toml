@@ -1,4 +1,10 @@
 # DEPRECATED: moved to backend/bunfig.toml to align with test working-directory
-#[test]
-#preload = ["../tests/setup.ts"]
+# This file is intentionally left as a stub to avoid accidental pickup by
+# older environments. The canonical bun configuration for the backend now
+# lives at `backend/bunfig.toml`. Keep this file only to avoid accidental
+# discovery by older Bun versions or tools that expect a root bunfig.
+
+# See `backend/bunfig.toml` for the authoritative configuration used by
+# CI and local development. Remove this stub when all developer tooling
+# and CI pipelines have been updated to reference the backend bunfig.
 

@@ -2,6 +2,7 @@ import { q } from "../../core/db";
 import { add_hsg_memory, hsg_query } from "../../memory/hsg";
 import { j, p } from "../../utils";
 import * as crypto from "crypto";
+import logger from "../../core/logger";
 export function ide(app: any) {
     app.post("/api/ide/events", async (req: any) => {
         try {
@@ -26,10 +27,12 @@ export function ide(app: any) {
                 ide_mode: true,
             };
 
+            const provided_user = req.body.user_id || undefined;
             const result = await add_hsg_memory(
                 memory_content,
                 undefined,
                 full_metadata,
+                provided_user,
             );
 
             return new Response(JSON.stringify({
@@ -39,7 +42,7 @@ export function ide(app: any) {
                 sectors: result.sectors,
             }), { status: 200, headers: { "Content-Type": "application/json" } });
         } catch (err) {
-            console.error("[IDE] Error storing IDE event:", err);
+            logger.error({ component: "IDE" }, "[IDE] Error storing IDE event: %o", err);
             return new Response(JSON.stringify({ err: "internal" }), { status: 500, headers: { "Content-Type": "application/json" } });
         }
     });
@@ -94,7 +97,7 @@ export function ide(app: any) {
                 query: query,
             }), { status: 200, headers: { "Content-Type": "application/json" } });
         } catch (err) {
-            console.error("[IDE] Error retrieving IDE context:", err);
+            logger.error({ component: "IDE" }, "[IDE] Error retrieving IDE context: %o", err);
             return new Response(JSON.stringify({ err: "internal" }), { status: 500, headers: { "Content-Type": "application/json" } });
         }
     });
@@ -120,7 +123,7 @@ export function ide(app: any) {
                 ide_mode: true,
             };
 
-            const result = await add_hsg_memory(content, undefined, metadata);
+            const result = await add_hsg_memory(content, undefined, metadata, user_id);
 
             return new Response(JSON.stringify({
                 success: true,
@@ -132,7 +135,7 @@ export function ide(app: any) {
                 ide_name: ide_name,
             }), { status: 200, headers: { "Content-Type": "application/json" } });
         } catch (err) {
-            console.error("[IDE] Error starting IDE session:", err);
+            logger.error({ component: "IDE" }, "[IDE] Error starting IDE session: %o", err);
             return new Response(JSON.stringify({ err: "internal" }), { status: 500, headers: { "Content-Type": "application/json" } });
         }
     });
@@ -146,7 +149,31 @@ export function ide(app: any) {
 
             const now_ts = Date.now();
 
-            const all_memories = await q.all_mem.all(10000, 0);
+            // Prefer tenant-scoped listing when possible. If the caller did not
+            // supply a user_id, attempt a lightweight lookup to infer the user
+            // associated with this session by scanning until the first match.
+            const provided_user_id = req.body.user_id || req.query?.user_id;
+            let user_id = provided_user_id;
+
+            if (!user_id) {
+                // Try to discover the user for this session by scanning a limited
+                // set of memories and stopping early when a matching session is found.
+                const maybe = await q.all_mem.all(10000, 0);
+                for (const m of maybe) {
+                    try {
+                        const meta = p(m.meta);
+                        if (meta && meta.ide_session_id === session_id && meta.ide_user_id) {
+                            user_id = meta.ide_user_id;
+                            break;
+                        }
+                    } catch { }
+                }
+            }
+
+            const all_memories = user_id
+                ? await q.all_mem_by_user.all(user_id, 10000, 0)
+                : await q.all_mem.all(10000, 0);
+
             const session_memories = all_memories.filter((m: any) => {
                 try {
                     const meta = p(m.meta);
@@ -187,7 +214,7 @@ export function ide(app: any) {
                 ide_mode: true,
             };
 
-            const result = await add_hsg_memory(summary, undefined, metadata);
+            const result = await add_hsg_memory(summary, undefined, metadata, user_id);
 
             return new Response(JSON.stringify({
                 success: true,
@@ -202,7 +229,7 @@ export function ide(app: any) {
                 },
             }), { status: 200, headers: { "Content-Type": "application/json" } });
         } catch (err) {
-            console.error("[IDE] Error ending IDE session:", err);
+            logger.error({ component: "IDE" }, "[IDE] Error ending IDE session: %o", err);
             return new Response(JSON.stringify({ err: "internal" }), { status: 500, headers: { "Content-Type": "application/json" } });
         }
     });
@@ -214,7 +241,24 @@ export function ide(app: any) {
             if (!session_id)
                 return new Response(JSON.stringify({ err: "session_id_required" }), { status: 400, headers: { "Content-Type": "application/json" } });
 
-            const all_memories = await q.all_mem.all(10000, 0);
+            const provided_user_id = req.query?.user_id || req.body?.user_id;
+            let user_id = provided_user_id;
+            if (!user_id) {
+                const maybe = await q.all_mem.all(10000, 0);
+                for (const m of maybe) {
+                    try {
+                        const meta = p(m.meta);
+                        if (meta && meta.ide_session_id === session_id && meta.ide_user_id) {
+                            user_id = meta.ide_user_id;
+                            break;
+                        }
+                    } catch { }
+                }
+            }
+
+            const all_memories = user_id
+                ? await q.all_mem_by_user.all(user_id, 10000, 0)
+                : await q.all_mem.all(10000, 0);
 
             const procedural = all_memories.filter((m: any) => {
                 if (m.primary_sector !== "procedural") return false;
@@ -241,7 +285,7 @@ export function ide(app: any) {
                 patterns: patterns,
             }), { status: 200, headers: { "Content-Type": "application/json" } });
         } catch (err) {
-            console.error("[IDE] Error detecting patterns:", err);
+            logger.error({ component: "IDE" }, "[IDE] Error detecting patterns: %o", err);
             return new Response(JSON.stringify({ err: "internal" }), { status: 500, headers: { "Content-Type": "application/json" } });
         }
     });

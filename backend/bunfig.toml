@@ -1,9 +1,26 @@
-# bunfig.toml (backend)
-# This file configures the Bun runtime for tests when run from the backend
+# bunfig.toml
+# Configuration for Bun install behavior and tooling.
+# We opt for reproducible, isolated installs in CI by using --frozen-lockfile and --no-save.
+
+[install]
+# When running `bun install` in CI, prefer reproducible, cached installs.
+# Merged settings: keep isolated, frozen-lockfile and cache enabled.
+isolated = true
+frozen-lockfile = true
+cache = true
+
+[run]
+# Development hot entry
+hot = "src/server/index.ts"
 
 [test]
-# Preload the setup script before running the test suite. When running with
-# working-directory=backend, this relative path points to the repository's
-# tests/setup.ts helper used to start a test server and provide deterministic
-# environment for integration tests.
-preload = ["../tests/setup.ts"]
+# Default test timeout (ms)
+timeout = 10000
+# Enable coverage collection by default for CI runs
+coverage = true
+# Reporters configuration omitted to allow Bun to use its default reporter.
+# No preload configured; add 'preload' entries here if you need test setup files
+
+[build]
+# Build output directory
+outdir = "dist"

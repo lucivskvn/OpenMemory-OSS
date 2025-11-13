@@ -23,7 +23,7 @@ describe(`Database Layer (${is_pg ? 'PostgreSQL' : 'SQLite'})`, () => {
         // but for these tests, we'll just ensure data isolation via user_id.
         if (!is_pg) {
             // Re-initialize the database for each test to ensure isolation for SQLite.
-            initDb();
+            await initDb();
         }
     });
 

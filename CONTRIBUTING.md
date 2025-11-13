@@ -1,377 +1,123 @@
 # Contributing to OpenMemory
 
-We love your input! We want to make contributing to OpenMemory as easy and transparent as possible, whether it's:
+<!-- markdownlint-disable MD040 -->
 
-- Reporting a bug
-- Discussing the current state of the code
-- Submitting a fix
-- Proposing new features
-- Becoming a maintainer
+We welcome contributions of all kinds: bug reports, patches, docs, and feature proposals.
 
-## We Develop with Github
+## Quick workflow
 
-We use GitHub to host code, to track issues and feature requests, as well as accept pull requests.
+1. Fork the repo and create a branch from `main`.
+2. Add tests when you add behavior.
+3. Keep changes focused and open a PR explaining the rationale.
+4. Ensure the test suite passes and linting is clean.
 
-## We Use [Github Flow](https://guides.github.com/introduction/flow/index.html)
-
-Pull requests are the best way to propose changes to the codebase. We actively welcome your pull requests:
-
-1. Fork the repo and create your branch from `main`.
-2. If you've added code that should be tested, add tests.
-3. If you've changed APIs, update the documentation.
-4. Ensure the test suite passes.
-5. Make sure your code lints.
-6. Issue that pull request!
-
-## Any contributions you make will be under the MIT Software License
-
-In short, when you submit code changes, your submissions are understood to be under the same [MIT License](http://choosealicense.com/licenses/mit/) that covers the project. Feel free to contact the maintainers if that's a concern.
-
-## Report bugs using Github's [issues](https://github.com/CaviraOSS/OpenMemory/issues)
-
-We use GitHub issues to track public bugs. Report a bug by [opening a new issue](https://github.com/CaviraOSS/OpenMemory/issues/new).
-
-## Write bug reports with detail, background, and sample code
-
-**Great Bug Reports** tend to have:
-
-- A quick summary and/or background
-- Steps to reproduce
-  - Be specific!
-  - Give sample code if you can
-- What you expected would happen
-- What actually happens
-- Notes (possibly including why you think this might be happening, or stuff you tried that didn't work)
-
-People _love_ thorough bug reports. I'm not even kidding.
-
-## Development Setup
+## Development setup
 
 ### Prerequisites
 
-- Bun v1.3.2 or higher
-- Python 3.8+ (for Python SDK development)
-- Git
-- Docker (optional, for containerized development)
+- Bun v1.3.2 or higher (recommended)
+- Node (for local tooling only, if needed)
+- Python 3.8+ (for Python SDK work)
+- Docker (optional for containerized development)
 
-### Backend Development
+### Backend (TypeScript + Bun)
 
 ```bash
-# Clone the repository
-git clone https://github.com/CaviraOSS/OpenMemory.git
-cd openmemory
-
-# Install backend dependencies
 cd backend
-bun install
-
-# Start development server
+bun install --frozen-lockfile
 bun run dev
-
-# Run tests
-bun test
-
-# Build for production
-bun run build
 ```
 
-### JavaScript SDK Development
-
-```bash
-# Navigate to JS SDK
-cd SDK/javascript
-
-# Install dependencies
-bun install
-
-# Build the SDK
-bun run build
-
-# Run tests
-bun test
-
-# Run examples
-cd ../examples/js-sdk
-node basic-usage.js
-```
-
-### Python SDK Development
-
-```bash
-# Navigate to Python SDK
-cd SDK/python
-
-# Install development dependencies (optional)
-pip install -e .[dev]
-
-# Run tests
-python -m pytest tests/
-
-# Run examples
-cd ../examples/py-sdk
-python basic_usage.py
-```
-
-### Docker Development
-
-```bash
-# Build and run with Docker Compose
-docker-compose up --build
-
-# Run in development mode
-docker-compose -f docker-compose.dev.yml up
-```
-
-## Development Guidelines
-
-### Code Style
-
-#### TypeScript/JavaScript
-
-- Use TypeScript for all new code
-- Follow ESLint configuration
-- Use Prettier for formatting
-- 2-space indentation
-- Semicolons required
-
-#### Python
-
-- Follow PEP 8 style guide
-- Use black for formatting
-- 4-space indentation
-- Type hints for all public functions
-- Docstrings for all modules, classes, and functions
-
-### Commit Messages
-
-Use conventional commits format:
-
-```
-type(scope): description
-
-[optional body]
-
-[optional footer(s)]
-```
-
-Types:
-
-- `feat`: New feature
-- `fix`: Bug fix
-- `docs`: Documentation changes
-- `style`: Code style changes (formatting, etc.)
-- `refactor`: Code refactoring
-- `test`: Adding or updating tests
-- `chore`: Maintenance tasks
-
-Examples:
-
-```
-feat(embedding): add Google Gemini embedding provider
-fix(database): resolve memory leak in connection pooling
-docs(api): update HSG endpoint documentation
-```
-
-### Testing
-
-#### Backend Tests
+Run tests:
 
 ```bash
 cd backend
-bun test                 # Run all tests
-bun test --watch      # Run tests in watch mode
-bun test --coverage   # Run tests with coverage
+bun test
 ```
 
-#### JavaScript SDK Tests
+### Extract DNS checks (SSRF protection)
+
+The backend supports an optional DNS-based safety check for URL extraction and ingestion flows. Set the following environment variable in production to enable conservative DNS checks that block hosts resolving to private or loopback IP ranges:
 
 ```bash
-cd SDK/javascript
-bun test                # Run Jest tests
-bun test --e2e       # Run end-to-end tests
+OM_EXTRACT_DNS_CHECK=true
 ```
 
-#### Python SDK Tests
+We recommend enabling `OM_EXTRACT_DNS_CHECK=true` in production deployments (and CI runs that exercise URL extraction) to reduce SSRF risk. If your runtime does not expose a DNS resolver, the code will fall back to literal host checks unless this feature is explicitly enabled — in that case DNS resolution failures are treated as blocked to preserve safety.
+
+## Code style and commits
+
+- Use TypeScript for new backend code.
+- Follow ESLint and Prettier rules.
+- Use conventional commits: `type(scope): summary` (e.g., `fix(db): avoid NULL insert`).
+
+## Bun-native development (recommended)
+
+When editing the backend we encourage Bun-native patterns to gain runtime advantages:
+
+- Prefer `Bun.file()` for large file reads/writes (ingest, extraction).
+- Use `Bun.password.hash` / `Bun.password.verify` for API key and credential hashing; prefer centralized helpers in `backend/src/utils/crypto.ts`.
+- Convert `ArrayBuffer`/`Uint8Array` to Node `Buffer` only at shim boundaries when third-party libs require it: `Buffer.from(arrayBuffer)`.
+- Add `@types/bun` to devDependencies and include Bun typings in `tsconfig.json` (e.g., `"types": ["@types/node","@types/bun"]`) to avoid editor/CI type warnings.
+- In CI use `bun install --frozen-lockfile` and pin Bun setup actions/images.
+
+### Bun Native Best Practices
+
+The project follows a Bun-first development model. Please follow these patterns to keep code consistent, performant, and secure:
+
+- I/O: prefer `Bun.file()` for large file reads and writes (ingest/extract paths). Use `Bun.file(path).arrayBuffer()` and convert to `Buffer` only when a third-party library requires Node buffers.
+- SQL: prefer parameterized queries and the Bun-native database clients when available. Avoid exposing raw query strings; use prepared statements and transactions where appropriate.
+- Passwords & Secrets: use `Bun.password.hash` and `Bun.password.verify` or the centralized helper at `backend/src/utils/crypto.ts` for hashing and verification.
+- Files: enforce size guards on uploads (example: 200 MB max for ingestion) and validate content types before processing.
+- Tests: use `bun:test` and prefer in-memory or temp-file based tests. Tests that require Bun-only APIs should be gated or run under Bun CI.
+- Build: use `bun run build` and ensure any generated artifacts are listed in `.gitignore`.
+
+### Security Guidelines for GitHub Workflows
+
+- SHA pin all `uses:` entries to a specific commit SHA and add a human-readable comment with the tag version (e.g., `actions/checkout@<sha> # v4.1.1`).
+- Use OIDC for cloud provider authentication: set `permissions: id-token: write` only at the job level that needs to assume a cloud role.
+- Generate SLSA provenance attestations for production image builds and publish them alongside images. Use `actions/attest-build-provenance` and ensure `attestations: write` is granted only to jobs that create attestations.
+- Run vulnerability scanning (Trivy) for images and filesystem SARIF uploads to the Security tab. Keep `security-events: write` scoped to the scanning job.
+
+### Bun install / CI install mode
+
+- CI should perform isolated installs to avoid accidental lockfile mutations or transitive update behavior. Use `bun install --frozen-lockfile --no-save` in CI to preserve lockfile fidelity and avoid writing package manifests from CI runs.
+- To document this preference, add a `backend/bunfig.toml` file with `isolated = true` in the `[install]` section (this repo includes such a file). Local developers can omit `--no-save` when intentionally updating dependencies, but always run `bun pm outdated` and `bun update` locally and open a PR for lockfile changes.
+
+**Dependency pinning rule:** New runtime dependencies MUST be pinned to a specific semver (for example, `^2.17.2`). Do not add wildcard `*` entries for production/runtime dependencies; wildcards are only acceptable for ephemeral dev tooling where reproducibility is not required. Open a Dependabot or manual PR to upgrade pinned dependencies and update the lockfile.
+
+Example commit messages:
+
+- `perf(bun): use Bun.file() for large payload read in ingest`
+- `security(workflow): SHA-pin actions and add SLSA attestation to publish job`
+
+### Podman development
+
+- For rootless development and systemd integration, provide Quadlet files under `podman/` and validate using `podman build --userns=keep-id` and `podman run` with non-root user namespaces.
+- When using Podman compose, prefer `podman compose` (libpod) over `docker-compose` for rootless environments.
+
+
+## Testing
+
+Backend tests (Bun):
 
 ```bash
-cd SDK/python
-python -m pytest tests/              # Run all tests
-python -m pytest tests/ -v          # Verbose output
-python -m pytest tests/ --cov       # With coverage
+cd backend
+bun test                # run tests
+bun test --watch        # watch mode
 ```
 
-### Architecture Guidelines
+## Documentation and releases
 
-#### HSG (Hybrid Sector Graph) Development
+- Update `CHANGELOG.md` (Unreleased) for any user-visible changes.
+- Small doc edits should go as focused PRs to reduce merge conflicts.
 
-When working on HSG features:
+## Security
 
-1. **Sector Classification**: Ensure new content types are properly classified
-2. **Waypoint Management**: Consider graph traversal implications
-3. **Memory Decay**: Account for temporal aspects in new features
-4. **Cross-Sector Queries**: Test functionality across all brain sectors
+- Never commit secrets. Use environment variables and update `docker-compose.yml` when necessary.
 
-#### Database Changes
+## Need help?
 
-1. Create migration scripts for schema changes
-2. Test with existing data
-3. Update both TypeScript types and documentation
-4. Consider impact on all embedding providers
+- Open an issue or join the project Discord.
 
-#### API Changes
-
-1. Maintain backwards compatibility when possible
-2. Version new endpoints appropriately
-3. Update OpenAPI documentation
-4. Test with all SDK implementations
-
-## Feature Development Process
-
-### 1. Design Phase
-
-- Create GitHub issue with detailed proposal
-- Discuss architecture implications
-- Consider HSG impact and sector routing
-- Plan testing strategy
-
-### 2. Implementation Phase
-
-- Create feature branch from `main`
-- Implement core functionality
-- Add comprehensive tests
-- Update documentation
-
-### 3. Review Phase
-
-- Submit pull request
-- Address code review feedback
-- Ensure all tests pass
-- Update changelog
-
-### 4. Integration Phase
-
-- Merge to main branch
-- Deploy to staging environment
-- Verify functionality
-- Update release notes
-
-## Embedding Provider Development
-
-When adding new embedding providers:
-
-1. **Provider Interface**: Implement the standard embedding interface
-2. **Error Handling**: Add appropriate fallback mechanisms
-3. **Configuration**: Add provider-specific configuration options
-4. **Testing**: Create comprehensive tests for the new provider
-5. **Documentation**: Update configuration documentation
-6. **Examples**: Add examples demonstrating the new provider
-
-Example provider structure:
-
-```typescript
-interface EmbeddingProvider {
-  name: string;
-  embed(text: string, options?: any): Promise<number[]>;
-  getDimensions(): number;
-  isAvailable(): Promise<boolean>;
-}
-```
-
-## Documentation
-
-### API Documentation
-
-- Update OpenAPI specs for new endpoints
-- Include request/response examples
-- Document error conditions
-- Update SDK documentation
-
-### Code Documentation
-
-- Use TSDoc for TypeScript code
-- Use docstrings for Python code
-- Include usage examples
-- Document complex algorithms
-
-### User Documentation
-
-- Update README files
-- Create tutorial content
-- Update example code
-- Document configuration options
-
-## Performance Considerations
-
-### Backend Performance
-
-- Profile database queries
-- Monitor memory usage
-- Test with large datasets
-- Consider async operations
-
-### SDK Performance
-
-- Minimize bundle size
-- Optimize API calls
-- Consider caching strategies
-- Test network conditions
-
-## Security Guidelines
-
-### Input Validation
-
-- Sanitize all user inputs
-- Validate API parameters
-- Check authentication tokens
-- Rate limit requests
-
-### Data Protection
-
-- Encrypt sensitive data
-- Secure API endpoints
-- Validate file uploads
-- Monitor access patterns
-
-## Release Process
-
-### Version Numbering
-
-We follow [Semantic Versioning](https://semver.org/):
-
-- **MAJOR**: Breaking changes
-- **MINOR**: New features (backwards compatible)
-- **PATCH**: Bug fixes (backwards compatible)
-
-### Release Checklist
-
-1. Update version numbers
-2. Update CHANGELOG.md
-3. Run full test suite
-4. Build all packages
-5. Create GitHub release
-6. Deploy to production
-7. Update documentation
-
-## Community
-
-### Getting Help
-
-- GitHub Discussions for questions
-- GitHub Issues for bug reports
-- Discord server for real-time chat
-- Stack Overflow with `openmemory` tag
-
-### Code of Conduct
-
-Please note that this project is released with a [Contributor Code of Conduct](CODE_OF_CONDUCT.md). By participating in this project you agree to abide by its terms.
-
-## Recognition
-
-Contributors will be recognized in:
-
-- CONTRIBUTORS.md file
-- GitHub contributors page
-- Release notes
-- Project documentation
-
-Thank you for contributing to OpenMemory! 🧠✨
+Thank you for contributing! 🎉

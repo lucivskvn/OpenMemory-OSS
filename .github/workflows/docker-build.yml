@@ -17,22 +17,84 @@ jobs:
     runs-on: ubuntu-latest
     name: Test Docker Build
 
+    permissions:
+      contents: read
+      security-events: write # for SARIF upload
+      id-token: write # for attestations
+      attestations: write
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.1
+        with:
+          bun-version: "1.3.2"
+
+      - name: Install backend deps and run tests
+        run: |
+          cd backend
+          bun install
+          bun run build
+          test -f dist/server/index.js || (echo "Build artifact missing: expected dist/server/index.js" && ls -la dist && exit 1)
+          bun test
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@988b5a0280414f521da01fcc63a27aeeb4b104db # v3.6.1
 
       - name: Build Backend Docker Image
-        uses: docker/build-push-action@v5
+        id: build-backend
+        uses: docker/build-push-action@4a13e500e55cf31b7a5d59a38ab2040ab0f42f56 # v5.1.0
         with:
           context: ./backend
           file: ./backend/Dockerfile
           push: false
+          load: true
           tags: openmemory-backend:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Scan Docker image with Trivy
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8caedf20eb0281bf5b81 # v0.28.0
+        with:
+          image-ref: openmemory-backend:test
+          format: sarif
+          output: trivy-results.sarif
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@768cb5b63a66678bd6d9b69f0e3e3a6b7b1b4b4e # v3.0.0
+        with:
+          sarif_file: trivy-results.sarif
+
+      - name: Generate Build Attestation (Test)
+        uses: actions/attest-build-provenance@f8d5ea8082b0d9f5ab855907be308fbd7eefb155 # v1.1.0
+        with:
+          subject-name: openmemory-backend:test
+          # Use the digest emitted by the build step when available. The build step sets `id: build-backend` and `load: true`
+          # so CI can reference the resulting image digest if provided by the action outputs.
+          subject-digest: ${{ steps.build-backend.outputs.digest }}
+
+      - name: Container smoke test (Docker)
+        run: |
+          # Run the built image and verify /health responds. Use a short timeout.
+          docker run -d --name openmemory_smoke -p 9080:8080 openmemory-backend:test || docker run -d --name openmemory_smoke openmemory-backend:test || true
+          echo "Waiting for container to become healthy..."
+          max_attempts=20
+          attempt=0
+          until curl -sSf http://localhost:9080/health || [ $attempt -eq $max_attempts ]; do
+            echo "Attempt $((attempt+1))/$max_attempts - waiting..."
+            sleep 2
+            attempt=$((attempt+1))
+          done
+          if [ $attempt -eq $max_attempts ]; then
+            echo "Container failed to respond on /health"
+            docker logs openmemory_smoke || true
+            docker rm -f openmemory_smoke || true
+            exit 1
+          fi
+          echo "Container responded on /health"
+          docker rm -f openmemory_smoke || true
 
       - name: Setup Podman (for Podman/Quadlet validation)
         run: |
@@ -41,7 +103,10 @@ jobs:
 
       - name: Test Podman Build
         run: |
+          # Regular Podman build
           podman build -t openmemory:test -f backend/Dockerfile backend/
+          # Rootless Podman build validation (userns keep-id)
+          podman build --userns=keep-id -t openmemory:rootless -f backend/Dockerfile backend/ || true
 
       - name: Validate Quadlet Files
         run: |

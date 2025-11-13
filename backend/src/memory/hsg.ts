@@ -358,6 +358,7 @@ import {
     transaction,
     log_maint_op,
 } from "../core/db";
+import logger from "../core/logger";
 export async function create_cross_sector_waypoints(
     prim_id: string,
     prim_sec: string,
@@ -453,7 +454,7 @@ export async function create_inter_mem_waypoints(
 ): Promise<void> {
     const thresh = 0.75;
     const wt = 0.5;
-    const vecs = await q.get_vecs_by_sector.all(prim_sec);
+    const vecs = await q.get_vecs_by_sector.all(prim_sec, user_id ?? null);
     for (const vr of vecs) {
         if (vr.id === new_id) continue;
         const ex_vec = buf_to_vec(vr.v);
@@ -487,10 +488,10 @@ export async function create_contextual_waypoints(
     const now = Date.now();
     for (const rel_id of rel_ids) {
         if (mem_id === rel_id) continue;
-        const existing = await q.get_waypoint.get(mem_id, rel_id);
+        const existing = await q.get_waypoint.get(mem_id, rel_id, user_id ?? null);
         if (existing) {
             const new_wt = Math.min(1.0, existing.weight + 0.1);
-            await q.upd_waypoint.run(new_wt, now, mem_id, rel_id);
+            await q.upd_waypoint.run(mem_id, rel_id, new_wt, now, user_id ?? null);
         } else {
             await q.ins_waypoint.run(
                 mem_id,
@@ -506,6 +507,7 @@ export async function create_contextual_waypoints(
 export async function expand_via_waypoints(
     init_res: string[],
     max_exp: number = 10,
+    user_id?: string | null,
 ): Promise<Array<{ id: string; weight: number; path: string[] }>> {
     const exp: Array<{ id: string; weight: number; path: string[] }> = [];
     const vis = new Set<string>();
@@ -517,7 +519,7 @@ export async function expand_via_waypoints(
     let exp_cnt = 0;
     while (q_arr.length > 0 && exp_cnt < max_exp) {
         const cur = q_arr.shift()!;
-        const neighs = await q.get_neighbors.all(cur.id);
+        const neighs = await q.get_neighbors.all(cur.id, user_id ?? null);
         for (const neigh of neighs) {
             if (vis.has(neigh.dst_id)) continue;
             const exp_wt = cur.weight * neigh.weight * 0.8;
@@ -535,18 +537,19 @@ export async function expand_via_waypoints(
     }
     return exp;
 }
-export async function reinforce_waypoints(trav_path: string[]): Promise<void> {
+export async function reinforce_waypoints(trav_path: string[], user_id?: string | null): Promise<void> {
     const now = Date.now();
     for (let i = 0; i < trav_path.length - 1; i++) {
         const src_id = trav_path[i];
         const dst_id = trav_path[i + 1];
-        const wp = await q.get_waypoint.get(src_id, dst_id);
+        const wp = await q.get_waypoint.get(src_id, dst_id, user_id ?? null);
         if (wp) {
             const new_wt = Math.min(
                 reinforcement.max_waypoint_weight,
                 wp.weight + reinforcement.waypoint_boost,
             );
-            await q.upd_waypoint.run(new_wt, now, src_id, dst_id);
+            // use normalized parameter order (src,dst,weight,updated_at,user_id)
+            await q.upd_waypoint.run(src_id, dst_id, new_wt, now, user_id ?? null);
         }
     }
 }
@@ -583,8 +586,9 @@ export async function calc_multi_vec_fusion_score(
     mid: string,
     qe: Record<string, number[]>,
     w: multi_vec_fusion_weights,
+    user_id?: string | null,
 ): Promise<number> {
-    const vecs = await q.get_vecs_by_id.all(mid);
+    const vecs = await q.get_vecs_by_id.all(mid, user_id ?? null);
     let sum = 0,
         tot = 0;
     const wm: Record<string, number> = {
@@ -608,7 +612,7 @@ export async function calc_multi_vec_fusion_score(
 const cache = new Map<string, { r: hsg_q_result[]; t: number }>();
 const sal_cache = new Map<string, { s: number; t: number }>();
 const vec_cache = new Map<string, { v: number[]; t: number }>();
-const seg_cache = new Map<number, any[]>();
+const seg_cache = new Map<string, any[]>();
 const coact_buf: Array<[string, string]> = [];
 const TTL = 60000;
 const VEC_CACHE_MAX = 1000;
@@ -624,15 +628,18 @@ const get_vec = (id: string, v: Buffer): number[] => {
     }
     return vec;
 };
-const get_segment = async (seg: number): Promise<any[]> => {
-    if (seg_cache.has(seg)) return seg_cache.get(seg)!;
+const get_segment = async (seg: number, user_id?: string | null): Promise<any[]> => {
+    const key = `${seg}:${user_id ?? "all"}`;
+    if (seg_cache.has(key)) return seg_cache.get(key)!;
     const rows = await q.get_mem_by_segment.all(seg);
-    seg_cache.set(seg, rows);
+    // If a user_id was provided, filter in-memory as the SQL helper doesn't accept a user_id param
+    const filtered = user_id ? rows.filter((r: any) => r.user_id === user_id) : rows;
+    seg_cache.set(key, filtered);
     if (seg_cache.size > env.cache_segments) {
         const first = seg_cache.keys().next().value;
         if (first !== undefined) seg_cache.delete(first);
     }
-    return rows;
+    return filtered;
 };
 setInterval(async () => {
     if (!coact_buf.length) return;
@@ -648,14 +655,16 @@ setInterval(async () => {
             if (!memA || !memB) continue;
             const time_diff = Math.abs(memA.last_seen_at - memB.last_seen_at);
             const temp_fact = Math.exp(-time_diff / tau_ms);
-            const wp = await q.get_waypoint.get(a, b);
+            const wp = await q.get_waypoint.get(a, b, memA.user_id ?? null);
             const cur_wt = wp?.weight || 0;
             const new_wt = Math.min(
                 1,
                 cur_wt + hybrid_params.eta * (1 - cur_wt) * temp_fact,
             );
-            await q.ins_waypoint.run(a, b, new_wt, wp?.created_at || now, now);
-        } catch (e) {}
+            await q.ins_waypoint.run(a, b, memA.user_id || null, new_wt, wp?.created_at || now, now);
+        } catch (e) {
+            logger.error({ component: "HSG", err: e }, "[HSG] coact update failed");
+        }
     }
 }, 1000);
 const get_sal = async (id: string, def_sal: number): Promise<number> => {
@@ -706,7 +715,7 @@ export async function hsg_query(
         > = {};
         for (const s of ss) {
             const qv = qe[s];
-            const vecs = await q.get_vecs_by_sector.all(s);
+            const vecs = await q.get_vecs_by_sector.all(s, f?.user_id ?? null);
             const sims: Array<{ id: string; similarity: number }> = [];
             for (const vr of vecs) {
                 const mv = get_vec(vr.id, vr.v);
@@ -729,7 +738,7 @@ export async function hsg_query(
         for (const r of Object.values(sr)) for (const x of r) ids.add(x.id);
         const exp = high_conf
             ? []
-            : await expand_via_waypoints(Array.from(ids), k * 2);
+            : await expand_via_waypoints(Array.from(ids), k * 2, f?.user_id ?? null);
         for (const e of exp) ids.add(e.id);
 
         let keyword_scores = new Map<string, number>();
@@ -737,7 +746,10 @@ export async function hsg_query(
             const all_mems = await Promise.all(
                 Array.from(ids).map(async (id) => {
                     const m = await q.get_mem.get(id);
-                    return m ? { id, content: m.content } : null;
+                    if (!m) return null;
+                    // Respect an explicit user_id filter when collecting candidate memory texts
+                    if (f?.user_id && m.user_id !== f.user_id) return null;
+                    return { id, content: m.content };
                 }),
             );
             const valid_mems = all_mems.filter((m) => m !== null) as Array<{
@@ -756,7 +768,7 @@ export async function hsg_query(
             const m = await q.get_mem.get(mid);
             if (!m || (f?.minSalience && m.salience < f.minSalience)) continue;
             if (f?.user_id && m.user_id !== f.user_id) continue;
-            const mvf = await calc_multi_vec_fusion_score(mid, qe, w);
+            const mvf = await calc_multi_vec_fusion_score(mid, qe, w, f?.user_id ?? null);
             const csr = await calculateCrossSectorResonanceScore(
                 m.primary_sector,
                 qc.primary,
@@ -790,7 +802,7 @@ export async function hsg_query(
                 rec_sc,
                 keyword_boost,
             );
-            const msec = await q.get_vecs_by_id.all(mid);
+            const msec = await q.get_vecs_by_id.all(mid, f?.user_id ?? null);
             const sl = msec.map((v) => v.sector);
             res.push({
                 id: mid,
@@ -840,8 +852,10 @@ export async function hsg_query(
             );
             await q.upd_seen.run(r.id, Date.now(), rsal, Date.now());
             if (r.path.length > 1) {
-                await reinforce_waypoints(r.path);
-                const wps = await q.get_waypoints_by_src.all(r.id);
+                const memR = await q.get_mem.get(r.id);
+                const userForR = memR?.user_id ?? null;
+                await reinforce_waypoints(r.path, userForR);
+                const wps = await q.get_waypoints_by_src.all(r.id, userForR);
                 const lns = wps.map((wp: any) => ({
                     target_id: wp.dst_id,
                     weight: wp.weight,
@@ -948,9 +962,7 @@ export async function add_hsg_memory(
         const seg_cnt = seg_cnt_res?.c ?? 0;
         if (seg_cnt >= env.seg_size) {
             cur_seg++;
-            console.log(
-                `[HSG] Rotated to segment ${cur_seg} (previous segment full: ${seg_cnt} memories)`,
-            );
+            logger.info({ component: "HSG" }, `[HSG] Rotated to segment ${cur_seg} (previous segment full: ${seg_cnt} memories)`);
         }
         const stored_content = extract_essence(
             content,
@@ -1054,7 +1066,8 @@ export async function update_memory(
                 classification.primary,
                 ...classification.additional,
             ];
-            await q.del_vec.run(id);
+            // Ensure vector deletion is tenant-scoped by passing the memory owner
+            await q.del_vec.run(id, mem.user_id ?? null);
             const emb_res = await embedMultiSector(
                 id,
                 new_content,

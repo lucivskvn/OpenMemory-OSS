@@ -1,11 +1,57 @@
-#!/usr/bin/env node
-const { detectBackend } = require('./out/detectors/openmemory');
-const { writeMCPConfig } = require('./out/mcp/generator');
-const { writeCursorConfig } = require('./out/writers/cursor');
-const { writeClaudeConfig } = require('./out/writers/claude');
-const { writeWindsurfConfig } = require('./out/writers/windsurf');
-const { writeCopilotConfig } = require('./out/writers/copilot');
-const { writeCodexConfig } = require('./out/writers/codex');
+#!/usr/bin/env bun
+// Postinstall is best-effort: some build artifacts may not exist when installing
+// from source. Require compiled modules defensively so `bun install` or `npm
+// install` won't fail during local development.
+let detectBackend;
+let writeMCPConfig;
+let writeCursorConfig;
+let writeClaudeConfig;
+let writeWindsurfConfig;
+let writeCopilotConfig;
+let writeCodexConfig;
+
+try {
+  detectBackend = require('./out/detectors/openmemory').detectBackend;
+} catch (e) {
+  // fallback stub: assume backend is not present
+  detectBackend = async () => false;
+}
+
+try {
+  writeMCPConfig = require('./out/mcp/generator').writeMCPConfig;
+} catch (e) {
+  writeMCPConfig = async () => { throw new Error('mcp generator not built'); };
+}
+
+try {
+  writeCursorConfig = require('./out/writers/cursor').writeCursorConfig;
+} catch (e) {
+  writeCursorConfig = async () => { throw new Error('cursor writer not built'); };
+}
+
+try {
+  writeClaudeConfig = require('./out/writers/claude').writeClaudeConfig;
+} catch (e) {
+  writeClaudeConfig = async () => { throw new Error('claude writer not built'); };
+}
+
+try {
+  writeWindsurfConfig = require('./out/writers/windsurf').writeWindsurfConfig;
+} catch (e) {
+  writeWindsurfConfig = async () => { throw new Error('windsurf writer not built'); };
+}
+
+try {
+  writeCopilotConfig = require('./out/writers/copilot').writeCopilotConfig;
+} catch (e) {
+  writeCopilotConfig = async () => { throw new Error('copilot writer not built'); };
+}
+
+try {
+  writeCodexConfig = require('./out/writers/codex').writeCodexConfig;
+} catch (e) {
+  writeCodexConfig = async () => { throw new Error('codex writer not built'); };
+}
 
 const DEFAULT_URL = 'http://localhost:8080';
 
@@ -56,7 +102,7 @@ async function postInstall() {
   } else {
     console.log('⚠️  Backend not detected at', DEFAULT_URL);
     console.log('\nTo start the backend:');
-    console.log('  cd backend && npm start');
+    console.log('  cd backend && bun run start');
     console.log(
       '\nAuto-link will run automatically when you activate the extension.',
     );

@@ -9,8 +9,8 @@ process.env.OM_DB_PATH = path.join(tmpDir, `openmemory-mkroot-${process.pid}-${D
 import { test, expect, beforeAll } from "bun:test";
 import { initDb, q, transaction } from "../../backend/src/core/db";
 
-beforeAll(() => {
-    initDb();
+beforeAll(async () => {
+    await initDb();
 });
 
 test("legacy ins_mem parameter order creates a memory row", async () => {

@@ -117,7 +117,7 @@ db-backup: ## Backup database
 # Docker
 docker-build: ## Build Docker image
 	@echo "🐳 Building Docker image..."
-	docker build -t openmemory .
+	docker build -t openmemory -f backend/Dockerfile backend/
 
 docker-run: ## Run Docker container
 	@echo "🐳 Running Docker container..."

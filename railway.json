@@ -3,10 +3,10 @@
     "build": {
         "builder": "NIXPACKS",
         "rootDir": "backend",
-        "buildCommand": "npm install && npm run build"
+    "buildCommand": "bun install && bun run build"
     },
     "deploy": {
-        "startCommand": "npm start",
+        "startCommand": "bun run start",
         "restartPolicyType": "ON_FAILURE",
         "healthcheckPath": "/"
     },

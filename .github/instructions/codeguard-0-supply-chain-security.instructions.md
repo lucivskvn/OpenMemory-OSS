@@ -12,9 +12,9 @@ Control third‑party risk across ecosystems, from selection and pinning to prov
 - Require lockfiles and version pinning; prefer digest pinning for images and vendored assets.
 - Generate SBOMs for apps/images; store with artifacts; attest provenance (SLSA, Sigstore).
 
-### Package Hygiene (npm focus applicable to others)
-- Regularly audit (`npm audit`, ecosystem SCA) and patch; enforce SLAs by severity.
-- Use deterministic builds: `npm ci` (not `npm install`) in CI/CD; maintain lockfile consistency.
+### Package Hygiene (Bun focus)
+- Regularly audit (ecosystem SCA) and patch; enforce SLAs by severity.
+- Use deterministic builds: `bun install --frozen-lockfile` in CI/CD; maintain lockfile consistency.
 - Avoid install scripts that execute on install when possible; review for risk.
 - Use `.npmrc` to scope private registries; avoid wildcard registries; enable integrity verification.
 - Enable account 2FA for publishing
@@ -35,7 +35,7 @@ Control third‑party risk across ecosystems, from selection and pinning to prov
 
 ### Incident Response
 - Maintain rapid rollback; isolate compromised packages; throttle rollouts; notify stakeholders.
-- Monitor threat intel feeds (e.g., npm advisories); auto‑open tickets for critical CVEs.
+	- Monitor threat intel feeds (registry advisories such as npm advisories, GitHub security alerts, or other SCA feeds); auto‑open tickets for critical CVEs.
 
 ### Implementation Checklist
 - Lockfiles present; integrity checks on; private registries configured.

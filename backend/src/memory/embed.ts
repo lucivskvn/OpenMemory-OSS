@@ -6,6 +6,21 @@ import { q } from "../core/db";
 import { canonical_tokens_from_text, add_synonym_tokens } from "../utils/text";
 import logger from "../core/logger";
 
+// Temporary resolution check for @xenova/transformers. Set RUN_TRANSFORMERS_RESOLVE_TEST=1
+// in CI or locally to dynamically import and log the installed version. This is a
+// non-invasive check that doesn't affect normal runtime and can be removed after
+// verification.
+if (process.env.RUN_TRANSFORMERS_RESOLVE_TEST === "1") {
+    import("@xenova/transformers")
+        .then((T) => {
+            const v = (T && ((T as any).default?.version || (T as any).version)) || "unknown";
+            logger.info({ component: "EMBED", transformers_version: v }, "[EMBED] Transformers resolved: %s", v);
+        })
+        .catch((e) => {
+            logger.warn({ component: "EMBED", err: e }, "[EMBED] Transformers resolution failed: %s", e instanceof Error ? e.message : String(e));
+        });
+}
+
 let gem_q: Promise<any> = Promise.resolve();
 export const emb_dim = () => env.vec_dim;
 export interface EmbeddingResult {
@@ -178,41 +193,30 @@ async function emb_gemini(
                 if (!r.ok) {
                     if (r.status === 429) {
                         const d = Math.min(
-                            parseInt(r.headers.get("retry-after") || "2") *
-                                1000,
+                            parseInt(r.headers.get("retry-after") || "2") * 1000,
                             1000 * Math.pow(2, a),
                         );
-                        console.warn(
-                            `[EMBED] Gemini rate limit (${a + 1}/3), waiting ${d}ms`,
-                        );
+                        logger.warn({ component: "EMBED", attempt: a + 1, wait_ms: d }, `[EMBED] Gemini rate limit (${a + 1}/3), waiting ${d}ms`);
                         await new Promise((x) => setTimeout(x, d));
                         continue;
                     }
                     throw new Error(`Gemini: ${r.status}`);
                 }
-                const data = (await r.json()) as any,
-                    out: Record<string, number[]> = {};
+                const data = (await r.json()) as any;
+                const out: Record<string, number[]> = {};
                 let i = 0;
                 for (const s of Object.keys(txts))
-                    out[s] = resize_vec(
-                        data.embeddings[i++].values,
-                        env.vec_dim,
-                    );
+                    out[s] = resize_vec(data.embeddings[i++].values, env.vec_dim);
                 await new Promise((x) => setTimeout(x, 1500));
                 return out;
             } catch (e) {
                 if (a === 2) {
-                    console.error(
-                        `[EMBED] Gemini failed after 3 attempts, using synthetic`,
-                    );
+                    logger.error({ component: "EMBED", attempt: a + 1, err: e }, `[EMBED] Gemini failed after 3 attempts, using synthetic`);
                     const fb: Record<string, number[]> = {};
-                    for (const s of Object.keys(txts))
-                        fb[s] = gen_syn_emb(txts[s], s);
+                    for (const s of Object.keys(txts)) fb[s] = gen_syn_emb(txts[s], s);
                     return fb;
                 }
-                console.warn(
-                    `[EMBED] Gemini error (${a + 1}/3): ${e instanceof Error ? e.message : String(e)}`,
-                );
+                logger.warn({ component: "EMBED", attempt: a + 1, err: e }, `[EMBED] Gemini error (${a + 1}/3): %s`, e instanceof Error ? e.message : String(e));
                 await new Promise((x) => setTimeout(x, 1000 * Math.pow(2, a)));
             }
         }
@@ -237,7 +241,7 @@ async function emb_ollama(t: string, s: string): Promise<number[]> {
 
 async function emb_local(t: string, s: string): Promise<number[]> {
     if (!env.local_model_path) {
-        console.warn("[EMBED] Local model missing, using synthetic");
+        logger.warn({ component: "EMBED", sector: s }, "[EMBED] Local model missing, using synthetic");
         return gen_syn_emb(t, s);
     }
     try {
@@ -252,8 +256,8 @@ async function emb_local(t: string, s: string): Promise<number[]> {
         }
         const n = Math.sqrt(e.reduce((sum, v) => sum + v * v, 0));
         return e.map((v) => v / n);
-    } catch {
-        console.warn("[EMBED] Local embedding failed, using synthetic");
+    } catch (e) {
+        logger.warn({ component: "EMBED", sector: s, err: e }, "[EMBED] Local embedding failed, using synthetic");
         return gen_syn_emb(t, s);
     }
 }
@@ -385,7 +389,7 @@ export async function embedMultiSector(
     const r: EmbeddingResult[] = [];
     // Record pending status and include user_id in logs for observability.
     await q.ins_log.run(id, "multi-sector", "pending", Date.now(), null);
-    logger.info({ component: "embed", id, user_id, sectors: secs.length }, "[EMBED] multi-sector pending");
+    logger.info({ component: "EMBED", id, user_id, sectors: secs.length }, "[EMBED] multi-sector pending");
     for (let a = 0; a < 3; a++) {
         try {
             const simp = env.embed_mode === "simple";
@@ -393,9 +397,7 @@ export async function embedMultiSector(
                 simp &&
                 (env.embed_kind === "gemini" || env.embed_kind === "openai")
             ) {
-                console.log(
-                    `[EMBED] Simple mode (1 batch for ${secs.length} sectors)`,
-                );
+                logger.info({ component: "EMBED", id, user_id, sectors: secs.length }, `[EMBED] Simple mode (1 batch for ${secs.length} sectors)`);
                 const tb: Record<string, string> = {};
                 secs.forEach((s) => (tb[s] = txt));
                 const b =
@@ -406,7 +408,7 @@ export async function embedMultiSector(
                     r.push({ sector: s, vector: v, dim: v.length }),
                 );
             } else {
-                console.log(`[EMBED] Advanced mode (${secs.length} calls)`);
+                logger.info({ component: "EMBED", id, user_id, sectors: secs.length }, `[EMBED] Advanced mode (${secs.length} calls)`);
                 const par = env.adv_embed_parallel && env.embed_kind !== "gemini";
                 if (par) {
                     const p = secs.map(async (s) => {
@@ -439,7 +441,7 @@ export async function embedMultiSector(
                 }
             }
             await q.upd_log.run("completed", null, id);
-            logger.info({ component: "embed", id, user_id }, "[EMBED] multi-sector completed");
+            logger.info({ component: "EMBED", id, user_id }, "[EMBED] multi-sector completed");
             return r;
         } catch (e) {
             if (a === 2) {
@@ -448,7 +450,7 @@ export async function embedMultiSector(
                     e instanceof Error ? e.message : String(e),
                     id,
                 );
-                logger.error({ component: "embed", id, user_id, err: e instanceof Error ? e.message : String(e) }, "[EMBED] multi-sector failed");
+                logger.error({ component: "EMBED", id, user_id, err: e instanceof Error ? e.message : String(e) }, "[EMBED] multi-sector failed");
                 throw e;
             }
             await new Promise((x) => setTimeout(x, 1000 * Math.pow(2, a)));

@@ -6,9 +6,9 @@ import {
 } from "../../memory/user_summary";
 
 export const usr = (app: any) => {
-    app.get("/users/:user_id/summary", async (req: any) => {
+    app.get("/users/:user_id/summary", async (req: any, ctx: any) => {
         try {
-            const { user_id } = req.params;
+            const { user_id } = ctx.params || {};
             if (!user_id)
                 return new Response(JSON.stringify({ error: "user_id required" }), { status: 400, headers: { "Content-Type": "application/json" } });
 
@@ -26,9 +26,9 @@ export const usr = (app: any) => {
         }
     });
 
-    app.post("/users/:user_id/summary/regenerate", async (req: any) => {
+    app.post("/users/:user_id/summary/regenerate", async (req: any, ctx: any) => {
         try {
-            const { user_id } = req.params;
+            const { user_id } = ctx.params || {};
             if (!user_id) return new Response(JSON.stringify({ err: "user_id required" }), { status: 400, headers: { "Content-Type": "application/json" } });
 
             await update_user_summary(user_id);
@@ -45,7 +45,7 @@ export const usr = (app: any) => {
         }
     });
 
-    app.post("/users/summaries/regenerate-all", async () => {
+    app.post("/users/summaries/regenerate-all", async (req: any, ctx: any) => {
         try {
             const result = await auto_update_user_summaries();
             return new Response(JSON.stringify({ ok: true, updated: result.updated }), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -54,13 +54,13 @@ export const usr = (app: any) => {
         }
     });
 
-    app.get("/users/:user_id/memories", async (req: any) => {
+    app.get("/users/:user_id/memories", async (req: any, ctx: any) => {
         try {
-            const { user_id } = req.params;
+            const { user_id } = ctx.params || {};
             if (!user_id) return new Response(JSON.stringify({ err: "user_id required" }), { status: 400, headers: { "Content-Type": "application/json" } });
 
-            const l = req.query.l ? parseInt(req.query.l) : 100;
-            const u = req.query.u ? parseInt(req.query.u) : 0;
+            const l = ctx.query?.get ? parseInt(ctx.query.get('l') || '100') : 100;
+            const u = ctx.query?.get ? parseInt(ctx.query.get('u') || '0') : 0;
 
             const r = await q.all_mem_by_user.all(user_id, l, u);
             const i = r.map((x: any) => ({
@@ -82,9 +82,9 @@ export const usr = (app: any) => {
         }
     });
 
-    app.delete("/users/:user_id/memories", async (req: any) => {
+    app.delete("/users/:user_id/memories", async (req: any, ctx: any) => {
         try {
-            const { user_id } = req.params;
+            const { user_id } = ctx.params || {};
             if (!user_id) return new Response(JSON.stringify({ err: "user_id required" }), { status: 400, headers: { "Content-Type": "application/json" } });
 
             const mems = await q.all_mem_by_user.all(user_id, 10000, 0);
@@ -92,8 +92,9 @@ export const usr = (app: any) => {
 
             for (const m of mems) {
                 await q.del_mem.run(m.id);
-                await q.del_vec.run(m.id);
-                await q.del_waypoints.run(m.id, m.id);
+                // Pass explicit user_id to vector delete so DB helpers can scope the deletion
+                await q.del_vec.run(m.id, user_id);
+                await q.del_waypoints.run(m.id, m.id, user_id);
                 deleted++;
             }
 

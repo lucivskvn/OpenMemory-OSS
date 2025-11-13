@@ -1,4 +1,5 @@
 import { all_async, run_async, q } from "../core/db";
+import logger from "../core/logger";
 import { now } from "../utils";
 import { env } from "../core/cfg";
 
@@ -218,14 +219,12 @@ const top_keywords = (t: string, k = 5): string[] => {
 
 export const apply_decay = async () => {
     if (active_q > 0) {
-        console.log(`[decay] skipped - ${active_q} active queries`);
+        logger.info({ component: "DECAY" }, `[DECAY] skipped - ${active_q} active queries`);
         return;
     }
     const now_ts = Date.now();
     if (now_ts - last_decay < cooldown) {
-        console.log(
-            `[decay] skipped - cooldown active (${((cooldown - (now_ts - last_decay)) / 1000).toFixed(0)}s remaining)`,
-        );
+        logger.info({ component: "DECAY" }, `[DECAY] skipped - cooldown active (${((cooldown - (now_ts - last_decay)) / 1000).toFixed(0)}s remaining)`);
         return;
     }
     last_decay = now_ts;
@@ -264,12 +263,12 @@ export const apply_decay = async () => {
                         tier === "hot"
                             ? cfg.lambda_hot
                             : tier === "warm"
-                              ? cfg.lambda_warm
-                              : cfg.lambda_cold;
+                                ? cfg.lambda_warm
+                                : cfg.lambda_cold;
                     const dt = Math.max(
                         0,
                         (now_ts - (m.last_seen_at || m.updated_at)) /
-                            cfg.time_unit_ms,
+                        cfg.time_unit_ms,
                     );
                     const act = Math.max(0, m.coactivations || 0);
                     const sal = clamp_f(
@@ -286,7 +285,7 @@ export const apply_decay = async () => {
 
                     if (f < 0.7) {
                         const sector = m.primary_sector || "semantic";
-                        const vec_row = await q.get_vec.get(m.id, sector);
+                        const vec_row = await q.get_vec.get(m.id, sector, m.user_id ?? null);
 
                         if (vec_row && vec_row.vector) {
                             const vec =
@@ -312,8 +311,8 @@ export const apply_decay = async () => {
 
                                 if (new_vec.length < before_len) {
                                     await run_async(
-                                        "update vectors set vector=? where id=? and sector=?",
-                                        [JSON.stringify(new_vec), m.id, sector],
+                                        "update vectors set vector=? where id=? and sector=? and (? is null or user_id=?)",
+                                        [JSON.stringify(new_vec), m.id, sector, m.user_id ?? null, m.user_id ?? null],
                                     );
                                     compressed = true;
                                     tot_comp++;
@@ -334,8 +333,8 @@ export const apply_decay = async () => {
                         const sector = m.primary_sector || "semantic";
                         const fp = fingerprint_mem(m);
                         await run_async(
-                            "update vectors set vector=? where id=? and sector=?",
-                            [JSON.stringify(fp.vector), m.id, sector],
+                            "update vectors set vector=? where id=? and sector=? and (? is null or user_id=?)",
+                            [JSON.stringify(fp.vector), m.id, sector, m.user_id ?? null, m.user_id ?? null],
                         );
                         await run_async(
                             "update memories set summary=? where id=?",
@@ -366,9 +365,7 @@ export const apply_decay = async () => {
     }
 
     const tot = performance.now() - t0;
-    console.log(
-        `[decay-2.0] ${tot_chg}/${tot_proc} | tiers: hot=${tier_counts.hot} warm=${tier_counts.warm} cold=${tier_counts.cold} | compressed=${tot_comp} fingerprinted=${tot_fp} | ${tot.toFixed(1)}ms across ${segments.length} segments`,
-    );
+    logger.info({ component: "DECAY" }, `[DECAY-2.0] ${tot_chg}/${tot_proc} | tiers: hot=${tier_counts.hot} warm=${tier_counts.warm} cold=${tier_counts.cold} | compressed=${tot_comp} fingerprinted=${tot_fp} | ${tot.toFixed(1)}ms across ${segments.length} segments`);
 };
 
 export const on_query_hit = async (
@@ -384,7 +381,7 @@ export const on_query_hit = async (
     let updated = false;
 
     if (cfg.regeneration_enabled && reembed) {
-        const vec_row = await q.get_vec.get(mem_id, sector);
+        const vec_row = await q.get_vec.get(mem_id, sector, m.user_id ?? null);
         if (vec_row && vec_row.vector) {
             const vec =
                 typeof vec_row.vector === "string"
@@ -395,11 +392,11 @@ export const on_query_hit = async (
                     const base = m.summary || m.content || "";
                     const new_vec = await reembed(base);
                     await run_async(
-                        "update vectors set vector=? where id=? and sector=?",
-                        [JSON.stringify(new_vec), mem_id, sector],
+                        "update vectors set vector=? where id=? and sector=? and (? is null or user_id=?)",
+                        [JSON.stringify(new_vec), mem_id, sector, m.user_id ?? null, m.user_id ?? null],
                     );
                     updated = true;
-                } catch (e) {}
+                } catch (e) { }
             }
         }
     }
@@ -414,6 +411,6 @@ export const on_query_hit = async (
     }
 
     if (updated) {
-        console.log(`[decay-2.0] regenerated/reinforced memory ${mem_id}`);
+        logger.info({ component: "DECAY" }, `[DECAY-2.0] regenerated/reinforced memory ${mem_id}`);
     }
 };

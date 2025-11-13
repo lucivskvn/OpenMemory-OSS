@@ -1,6 +1,54 @@
+<!-- markdownlint-disable MD024 -->
 # Changelog
 
-## [1.3.0] - 2025-11-09
+## [Unreleased]
+
+### Added
+
+- Bun-native developer notes and CI guidance (`docs/deployment/bun-native.md`).
+- Documentation updates for Bun-first development: `CONTRIBUTING.md`, `AGENTS.md`, `README.md`, and supporting notes (`docs/notes/agents-bun-addendum.md`).
+
+### Changed
+
+- Recommend Bun v1.3.2+ for local development and CI; add `@types/bun` guidance for TypeScript editing environments and `tsconfig.json` recommendations.
+
+### Notes
+
+This section groups the recent documentation and developer-ergonomics changes and is intentionally left as "Unreleased" until a formal release is published.
+
+## [1.3.1] - 2025-11-12
+
+### Added
+
+- Bun.file() helpers and file-based extract/ingest wrappers in `backend/src/ops/extract.ts` and `backend/src/ops/ingest.ts` for faster document processing and simpler file I/O.
+- `backend/src/utils/crypto.ts` — centralized cryptographic helpers (password hashing, safe comparisons) used by `auth` middleware.
+- CI security improvements: Trivy scans (filesystem + image), SLSA provenance attestation for published images, and Dependabot coverage for npm/pip.
+- Documentation: `CONTRIBUTING.md` (Bun best-practices), `AGENTS.md` (agent schema and Bun tips), `docs/deployment/oidc-setup.md`, `docs/security/github-actions-hardening.md`.
+
+### Changed
+
+- Workflows: SHA-pinned GitHub Actions, reduced top-level permissions, and job-scoped elevations for publishing and SARIF uploads.
+- File I/O: normalize ArrayBuffer/TypedArray to Node `Buffer` for third-party libraries while using `Bun.file()` for efficient streaming.
+- Auth: refactored to use `backend/src/utils/crypto.ts` for hashing and verification.
+
+### Fixed
+
+- Pinned `@xenova/transformers` to `^2.17.2` for dependency stability. Upgrade via Dependabot PRs only.
+
+### Security
+
+- Enforced least-privilege in CI: `contents: read` globally, `packages: write`/`attestations: write`/`id-token: write` only on publish job, and `security-events: write` scoped to the security-scan job for SARIF uploads.
+- Added Trivy SARIF uploads to enable GitHub Security tab integration.
+
+### Performance
+
+- File I/O performance: 2–3x faster document processing for extract/ingest paths using `Bun.file()` (measured on Ubuntu 22.04, 4 vCPU).
+
+### Notes
+
+- Backward compatible; no breaking API changes. Recommend Bun v1.3.2+ for development and CI.
+
+## [1.3.0] - 2025-11-11
 
 ### Added
 
@@ -8,13 +56,27 @@
 - Podman Quadlet deployment files for rootless systemd
 - Optional hybrid embedding fusion (semantic + synthetic) for improved recall/perf
 
+- Enforce hashed API keys for `OM_API_KEY` at runtime. Plaintext keys are rejected; use the helper script at `backend/scripts/hash-api-key.ts` to generate argon2-compatible hashes suitable for repository secrets.
+- A GitHub Actions workflow `.github/workflows/validate-om-api-key.yml` was added to validate that the `OM_API_KEY` repository secret looks hashed on PRs (skips when secret is absent to avoid blocking forks).
+- Consolidated backend operational docs into `backend/README.md` (previously `backend/API_KEYS.md` was removed).
+- Minimal TypeScript declarations for Bun's sqlite module (`backend/src/types/bun-sqlite.d.ts`) were added to improve typing and remove ts-ignore usages.
+- Unit test covering legacy vs modern handler behavior added: `tests/backend/legacy-handler.test.ts`.
+
 ### Changed
 
 - Backend runtime: Node -> Bun (opt-in). See MIGRATION.md for steps.
 
+- Server invocation model now distinguishes legacy handlers (marked with `handler.__legacy = true`) from modern handlers which must return a `Response` or a serializable value; modern handlers that return `undefined` will result in a 500 with guidance to mark legacy handlers or return a proper response.
+- SQLite DB usage updated to prefer `db.run`/`db.prepare` over deprecated `db.exec` overloads; PRAGMA handling adjusted to avoid parameterized placeholders where unsupported.
+- Backend README now includes migration guidance for hashed API keys and operational tips; root README links to backend docs and the changelog for recent updates.
+
 ### Performance
 
 - Bun runtime brings improved startup times and query performance in many cases.
+
+### Fixed
+
+- Tests and typing updates: backend tests pass locally after changes (22 tests, 0 failures at time of update).
 
 ## 1.2
 
@@ -50,7 +112,7 @@
     - Automatic retry on rate limit (429) errors
   - Reads backend configuration from root `.env` file (`OM_PORT`, `OM_API_KEY`)
   - Environment variable fallback chain: CLI flags → `OPENMEMORY_*` → `OM_*` → defaults
-  - Example: `node migrate/index.js --from mem0 --api-key KEY --verify`
+  - Example: `bun migrate/index.js --from mem0 --api-key KEY --verify`
   - Full documentation in `migrate/README.md`
 
 - **HYBRID Tier Performance Mode**

@@ -5,7 +5,7 @@ import { extractURL } from "../../backend/src/ops/extract";
 const originalFetch = globalThis.fetch;
 
 beforeAll(() => {
-    globalThis.fetch = async (input: RequestInfo, init?: RequestInit) => {
+    (globalThis as any).fetch = async (input: RequestInfo, init?: RequestInit) => {
         const body = `<html><body><h1>Test Page</h1><p>Hello from example.com</p></body></html>`;
         return new Response(body, { status: 200, headers: { "content-type": "text/html", "content-length": String(body.length) } });
     };

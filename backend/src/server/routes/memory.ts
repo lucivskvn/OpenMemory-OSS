@@ -11,6 +11,7 @@ import { env } from "../../core/cfg";
 import { update_user_summary } from "../../memory/user_summary";
 import { z } from "zod";
 import { Context } from "../server";
+import logger from "../../core/logger";
 
 const querySchema = z.object({
     query: z.string().min(1),
@@ -54,7 +55,7 @@ export function mem(app: any) {
             );
             if (b.user_id) {
                 update_user_summary(b.user_id).catch((e) =>
-                    console.error("[mem] user summary update failed:", e),
+                    logger.error({ component: "MEM", err: e }, "[MEM] user summary update failed: %o", e),
                 );
             }
             return new Response(JSON.stringify(m));
@@ -80,6 +81,10 @@ export function mem(app: any) {
             );
             return new Response(JSON.stringify(r));
         } catch (e: any) {
+            // Map file-too-large errors to 413 so clients can react appropriately
+            if (e?.code === "ERR_FILE_TOO_LARGE" || e?.name === "FileTooLargeError") {
+                return new Response(JSON.stringify({ err: "file_too_large", msg: e.message }), { status: 413 });
+            }
             return new Response(JSON.stringify({ err: "ingest_fail", msg: e.message }), { status: 500 });
         }
     });
@@ -91,6 +96,9 @@ export function mem(app: any) {
             const r = await ingestURL(b.url, b.metadata, b.config, b.user_id);
             return new Response(JSON.stringify(r));
         } catch (e: any) {
+            if (e?.code === "ERR_FILE_TOO_LARGE" || e?.name === "FileTooLargeError") {
+                return new Response(JSON.stringify({ err: "file_too_large", msg: e.message }), { status: 413 });
+            }
             return new Response(JSON.stringify({ err: "url_fail", msg: e.message }), { status: 500 });
         }
     });
@@ -124,6 +132,11 @@ export function mem(app: any) {
                     last_seen_at: x.last_seen_at,
                 })),
             };
+            // Backwards compatibility: some clients expect `memories` instead of `matches`.
+            try {
+                (responseData as any).memories = (responseData as any).matches;
+                logger.warn({ component: "MEM" }, "[DEPRECATION] API: /memory/query includes 'matches' and 'memories' (memories is deprecated). Please migrate clients to use 'matches'.");
+            } catch (e) { }
             return new Response(JSON.stringify(responseData), { headers: { "Content-Type": "application/json" } });
         } catch (e: any) {
             return new Response(JSON.stringify({ query: b.query, matches: [] }), { headers: { "Content-Type": "application/json" } });
@@ -177,7 +190,9 @@ export function mem(app: any) {
             const user_id = ctx.query.get("user_id");
 
             let r;
-            if (user_id) {
+            if (user_id && s) {
+                r = await q.all_mem_by_user_and_sector.all(user_id, s, l, u);
+            } else if (user_id) {
                 r = await q.all_mem_by_user.all(user_id, l, u);
             } else if (s) {
                 r = await q.all_mem_by_sector.all(s, l, u);
@@ -199,7 +214,11 @@ export function mem(app: any) {
                 version: x.version,
                 user_id: x.user_id,
             }));
-            return new Response(JSON.stringify({ items: i }));
+            const out = { items: i } as any;
+            // Backwards compatibility: include `memories` alias
+            out.memories = i;
+            logger.warn({ component: "MEM" }, "[DEPRECATION] API: /memory/all includes 'items' and 'memories' (memories is deprecated). Please migrate clients to use 'items'.");
+            return new Response(JSON.stringify(out));
         } catch (e: any) {
             return new Response(JSON.stringify({ err: "internal" }), { status: 500 });
         }
@@ -216,7 +235,7 @@ export function mem(app: any) {
                 return new Response(JSON.stringify({ err: "forbidden" }), { status: 403 });
             }
 
-            const v = await q.get_vecs_by_id.all(id);
+            const v = await q.get_vecs_by_id.all(id, user_id ?? m.user_id ?? null);
             const sec = v.map((x: any) => x.sector);
             const data = {
                 id: m.id,
@@ -251,8 +270,9 @@ export function mem(app: any) {
             }
 
             await q.del_mem.run(id);
-            await q.del_vec.run(id);
-            await q.del_waypoints.run(id, id);
+            // Pass explicit user_id (prefer query/body user_id, else the memory's owner)
+            await q.del_vec.run(id, user_id ?? m.user_id ?? null);
+            await q.del_waypoints.run(id, id, user_id ?? m.user_id ?? null);
             return new Response(JSON.stringify({ ok: true }));
         } catch (e: any) {
             return new Response(JSON.stringify({ err: "internal" }), { status: 500 });

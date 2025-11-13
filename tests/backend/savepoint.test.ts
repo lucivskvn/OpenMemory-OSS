@@ -14,9 +14,9 @@ import { env } from "../../backend/src/core/cfg";
 const is_pg = env.metadata_backend === "postgres";
 
 describe(`Nested transaction / savepoint behavior (${is_pg ? 'Postgres' : 'SQLite'})`, () => {
-    beforeEach(() => {
+    beforeEach(async () => {
         // Re-init DB for isolation when using SQLite
-        if (!is_pg) initDb();
+        if (!is_pg) await initDb();
     });
 
     test("nested rollback should only rollback inner savepoint", async () => {

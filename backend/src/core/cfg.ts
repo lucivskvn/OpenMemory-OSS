@@ -57,6 +57,21 @@ const envSchema = z.object({
 
     // Memory decay process
     OM_DECAY_INTERVAL_MINUTES: z.coerce.number().int().positive().default(1440),
+    OM_DECAY_RATIO: z.coerce.number().nonnegative().default(0.5),
+    OM_DECAY_SLEEP_MS: z.coerce.number().int().nonnegative().default(1000),
+    OM_REFLECT_MIN: z.coerce.number().int().positive().default(20),
+    OM_AUTO_REFLECT: z.coerce.boolean().default(true),
+    OM_REFLECT_INTERVAL: z.coerce.number().int().positive().default(10),
+
+    OM_USER_SUMMARY_INTERVAL: z.coerce.number().int().positive().default(30),
+
+    // LangGraph optional settings
+    OM_LG_NAMESPACE: z.string().optional(),
+    OM_LG_REFLECTIVE: z.coerce.boolean().default(false),
+    OM_LG_MAX_CONTEXT: z.coerce.number().int().positive().default(64),
+
+    // Keyword extraction defaults
+    OM_KEYWORD_MIN_LENGTH: z.coerce.number().int().positive().default(3),
 
     // Other settings
     OM_MAX_PAYLOAD_SIZE: z.coerce.number().int().positive().default(1000000), // 1MB
@@ -94,11 +109,17 @@ export const env = {
     cache_segments: parsedEnv.OM_CACHE_SEGMENTS,
     max_active: parsedEnv.OM_MAX_ACTIVE,
 
-    openai_key: parsedEnv.OM_OPENAI_KEY,
+    // Backwards-compatible fallbacks: accept older env names used in some
+    // deployments. Prefer the canonical OM_OPENAI_KEY when present, then
+    // fall back to OM_OPENAI_API_KEY or OPENAI_API_KEY if set in the
+    // environment. This allows existing docker-compose files to continue
+    // working without requiring changes during a short migration window.
+    openai_key: parsedEnv.OM_OPENAI_KEY ?? process.env.OM_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY,
     openai_base_url: parsedEnv.OM_OPENAI_BASE_URL,
     openai_model: parsedEnv.OM_OPENAI_MODEL,
 
-    gemini_key: parsedEnv.OM_GEMINI_KEY,
+    // Gemini key fallback chain as well
+    gemini_key: parsedEnv.OM_GEMINI_KEY ?? process.env.OM_GEMINI_API_KEY ?? process.env.GEMINI_API_KEY,
 
     ollama_url: parsedEnv.OM_OLLAMA_URL,
     ollama_declarative_model: parsedEnv.OM_OLLAMA_DECLARATIVE_MODEL,
@@ -109,9 +130,23 @@ export const env = {
     rate_limit_max_requests: parsedEnv.OM_RATE_LIMIT_MAX_REQUESTS,
 
     decay_interval_minutes: parsedEnv.OM_DECAY_INTERVAL_MINUTES,
+    decay_ratio: parsedEnv.OM_DECAY_RATIO,
+    decay_sleep_ms: parsedEnv.OM_DECAY_SLEEP_MS,
 
     max_payload_size: parsedEnv.OM_MAX_PAYLOAD_SIZE,
     log_auth: parsedEnv.OM_LOG_AUTH,
+
+    // Reflection/langgraph and related tuning knobs
+    reflect_min: parsedEnv.OM_REFLECT_MIN,
+    auto_reflect: parsedEnv.OM_AUTO_REFLECT,
+    reflect_interval: parsedEnv.OM_REFLECT_INTERVAL,
+    user_summary_interval: parsedEnv.OM_USER_SUMMARY_INTERVAL,
+
+    lg_namespace: parsedEnv.OM_LG_NAMESPACE,
+    lg_reflective: parsedEnv.OM_LG_REFLECTIVE,
+    lg_max_context: parsedEnv.OM_LG_MAX_CONTEXT,
+
+    keyword_min_length: parsedEnv.OM_KEYWORD_MIN_LENGTH,
 
     // Deprecated or less-used vars kept for compatibility are now read from env schema
 };

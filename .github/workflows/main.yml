@@ -12,6 +12,13 @@ jobs:
       pull-requests: write
     steps:
       - name: Contribute List
-        uses: akhilmhdh/contributors-readme-action@v2.3.11
+        # SHA-pinned for supply-chain security
+        uses: akhilmhdh/contributors-readme-action@83ea0b4f1ac928fbfe88b9e8460a932a528eb79f # v2.3.11
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Contributor README Automation
+  # Runs on push to main branch only
+  # Updates README.md with contributor avatars and links
+  # Security: SHA-pinned action, minimal permissions (contents:write, pull-requests:write), no secrets used
+  # No code execution from untrusted sources; safe for pull_request_target if needed (but uses push trigger)

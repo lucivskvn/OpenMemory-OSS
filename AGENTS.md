@@ -109,4 +109,3 @@ Maintainers / contact: ping a human reviewer (e.g., `@maintainer-handle`) for bi
 
 - Goal: "Pin @xenova/transformers and update lockfile"
 - Description: Edit `backend/package.json` to pin `@xenova/transformers` to a stable semver (e.g., `^2.17.2`), run `bun install` to update `bun.lockb`, and verify tests pass locally. Add a CHANGELOG entry and update CI to use `--frozen-lockfile`.
-

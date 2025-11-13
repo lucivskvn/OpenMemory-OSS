@@ -5,7 +5,7 @@ Purpose
 - Help an AI agent become productive quickly: architecture overview, key workflows, conventions, and integration points.
 
 Quick architecture (big picture)
-- Backend: TypeScript Node service in `backend/` (entry: `backend/src/server/index.ts`). Handles HTTP API, WebSocket, decay/reflection background jobs and MCP integration.
+- Backend: TypeScript service (Bun runtime) in `backend/` (entry: `backend/src/server/index.ts`). Handles HTTP API, WebSocket, decay/reflection background jobs and MCP integration.
 - Dashboard: Next.js app in `dashboard/` serving the UI (`dashboard/app/` and `dashboard/page.tsx`).
 - Persistence: metadata and vectors live in SQLite by default (`data/openmemory.sqlite`) or Postgres (configured via env). Migrations live in `backend/src/migrate.ts`.
 - SDKs: `sdk-js/` and `sdk-py/` provide client libraries and examples in `examples/`.
@@ -17,12 +17,12 @@ Essential workflows & commands (run these exactly)
   - Build: `cd backend && bun run build`.
   - Start (production): `cd backend && bun run start` -> runs `bun dist/server/index.js`.
   - Run DB migrations: `cd backend && bun run migrate` (executes `backend/src/migrate.ts`).
-- Dashboard (frontend): `cd dashboard && npm install && npm run dev` / `npm run build` / `npm start`.
-- Repo-level shortcuts: root `package.json` forwards to the backend: `npm run build` and `npm start` from repo root run backend equivalents.
+ - Dashboard (frontend): `cd dashboard && bun install && bun run dev` / `bun run build` / `bun run start`.
+ - Repo-level shortcuts: root `package.json` forwards to the backend: `bun run build` and `bun run start` from repo root run backend equivalents.
 - Docker: `docker-compose up --build` (see `docker-compose.yml` for many env variables, e.g. `OM_DB_PATH`).
 
 Tests (exact commands)
-- Backend integration tests are run as plain Node scripts (they expect a running server):
+- Backend integration tests are run as plain Bun scripts (they expect a running server):
   1. Start the backend (dev or production build):
     ```bash
   cd backend
@@ -40,7 +40,7 @@ Tests (exact commands)
   bun test ../tests/backend/api.test.ts
   ```
 
-Note: `backend/package.json` currently does not define a `test` script. Agents should run test files directly (node ...) or add a `test` script if they introduce a test runner.
+Note: `backend/package.json` currently does not define a `test` script. Agents should run test files directly with Bun (e.g., `bun test <file>`) or add a `test` script if they introduce a test runner.
 
 Project-specific conventions & patterns
 - TypeScript-first: prefer TS in backend; dev server uses `tsx` and build uses `tsc`.

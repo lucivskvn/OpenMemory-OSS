@@ -98,33 +98,7 @@ jobs:
         working-directory: backend
         run: bun run build
 
-      - name: Optional: CPU profiling (backend)
-        if: env.ENABLE_PROFILING == 'true'
-        working-directory: backend
-        run: |
-          echo "Starting server briefly with CPU profiling"
-          mkdir -p profiling || true
-          bun --cpu-prof dist/server/index.js &
-          SERVER_PID=$!
-          for i in {1..40}; do
-            if curl -sSf "http://127.0.0.1:$OM_PORT/health" >/dev/null 2>&1; then
-              echo "Server responded"
-              break
-            fi
-            sleep 0.25
-          done
-          if ps -p $SERVER_PID >/dev/null 2>&1; then
-            kill $SERVER_PID || true
-          fi
-          mv cpu-* profiling/ 2>/dev/null || true
-
-      - name: Upload CPU profile (backend)
-        if: env.ENABLE_PROFILING == 'true'
-        uses: actions/upload-artifact@v3
-        with:
-          name: backend-cpu-profiles
-          path: backend/profiling/
-          retention-days: 7
+      # Optional CPU profiling steps removed per maintainer request (was causing IDE YAML/schema warnings)
 
       - name: Run backend tests (SQLite)
         working-directory: backend
@@ -233,36 +207,7 @@ jobs:
         working-directory: backend
         run: bun run build
 
-      - name: Optional: CPU profiling (backend)
-        if: env.ENABLE_PROFILING == 'true'
-        working-directory: backend
-        run: |
-          echo "Starting server briefly with CPU profiling"
-          mkdir -p profiling || true
-          # Start server with CPU profiler enabled; profile files will be emitted by Bun in working dir
-          bun --cpu-prof dist/server/index.js &
-          SERVER_PID=$!
-          for i in {1..40}; do
-            if curl -sSf "http://127.0.0.1:$OM_PORT/health" >/dev/null 2>&1; then
-              echo "Server responded"
-              break
-            fi
-            sleep 0.25
-          done
-          # Stop the server to flush the profile
-          if ps -p $SERVER_PID >/dev/null 2>&1; then
-            kill $SERVER_PID || true
-          fi
-          # Move cpu profile files (if any) into profiling/ directory
-          mv cpu-* profiling/ 2>/dev/null || true
-
-      - name: Upload CPU profile (backend)
-        if: env.ENABLE_PROFILING == 'true'
-        uses: actions/upload-artifact@v3
-        with:
-          name: backend-cpu-profiles
-          path: backend/profiling/
-          retention-days: 7
+      # Optional CPU profiling steps removed per maintainer request (was causing IDE YAML/schema warnings)
 
       - name: Run backend tests (Postgres)
         working-directory: backend

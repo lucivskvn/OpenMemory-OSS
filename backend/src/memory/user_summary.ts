@@ -1,5 +1,6 @@
 import { q } from "../core/db";
 import { env } from "../core/cfg";
+import logger from "../core/logger";
 
 const cos = (a: number[], b: number[]): number => {
     let d = 0,
@@ -110,7 +111,7 @@ export const auto_update_user_summaries = async (): Promise<{
             await update_user_summary(uid as string);
             updated++;
         } catch (e) {
-            console.error(`[USER_SUMMARY] Failed for ${uid}:`, e);
+            logger.error({ component: "USER_SUMMARY", uid, err: e }, `[USER_SUMMARY] Failed for ${uid}: %o`, e);
         }
     }
 
@@ -125,7 +126,7 @@ export const start_user_summary_reflection = () => {
     timer = setInterval(
         () =>
             auto_update_user_summaries().catch((e) =>
-                console.error("[USER_SUMMARY]", e),
+                logger.error({ component: "USER_SUMMARY", err: e }, "[USER_SUMMARY] %o", e),
             ),
         int,
     );
