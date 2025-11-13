@@ -69,56 +69,7 @@ export function sys(app: any) {
         }
     });
 
-    app.post("/agent", async (req: any, ctx: any) => {
-        try {
-            // Robust body parsing: prefer req.json(), but fall back to text+JSON.parse
-            let body: any = null;
-            try {
-                body = await req.json();
-            } catch (err) {
-                try {
-                    const txt = await req.text();
-                    body = txt ? JSON.parse(txt) : null;
-                } catch (err2) {
-                    body = null;
-                }
-            }
-
-            // Log what we received for debugging (helpful in tests)
-            logger.info({ component: "SERVER", body }, "[SERVER] /agent received payload");
-
-            // If body couldn't be parsed (for example in some test runtimes),
-            // accept the request for now but log a warning so callers can
-            // investigate. Prefer explicit id/goal when available.
-            if (!body) {
-                logger.warn({ component: "SERVER" }, "[SERVER] /agent invoked with empty body - accepting for compatibility");
-                const resp = {
-                    status: "accepted",
-                    patch: "",
-                    summary: "Agent endpoint accepted payload for processing",
-                    tests: {},
-                    artifacts: [],
-                } as any;
-                return new Response(JSON.stringify(resp), { status: 200, headers: { "Content-Type": "application/json" } });
-            }
-
-            if (!body.id || !body.goal) {
-                return new Response(JSON.stringify({ error: "invalid payload, requires id and goal" }), { status: 400, headers: { "Content-Type": "application/json" } });
-            }
-
-            // Minimal validation per AGENTS.md: require id and goal
-            logger.info({ component: "SERVER", agent: body.id }, "[SERVER] /agent invoked");
-            const resp = {
-                status: "accepted",
-                patch: "",
-                summary: "Agent endpoint accepted payload for processing",
-                tests: {},
-                artifacts: [],
-            } as any;
-            return new Response(JSON.stringify(resp), { status: 200, headers: { "Content-Type": "application/json" } });
-        } catch (e) {
-            logger.error({ component: "SERVER", err: e }, "[SERVER] /agent handler error");
-            return new Response(JSON.stringify({ error: "internal" }), { status: 500, headers: { "Content-Type": "application/json" } });
-        }
-    });
+    // Note: legacy /agent handler removed to allow dedicated agent route
+    // implemented in `backend/src/server/routes/agent.ts` to perform
+    // structured validation and agent orchestration per `AGENTS.md`.
 }

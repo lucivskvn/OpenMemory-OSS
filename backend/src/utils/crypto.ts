@@ -44,7 +44,8 @@ export function isHashedKey(key: string): boolean {
     if (!key || typeof key !== 'string') return false;
     // Match Argon2 variants explicitly: $argon2id$, $argon2i$, $argon2d$
     const argon2Re = /^\$argon2(?:id|i|d)\$/i;
-    if (argon2Re.test(key)) return true;
+    const bcryptRe = /^\$2(?:a|b|y)\$/i;
+    if (argon2Re.test(key) || bcryptRe.test(key)) return true;
     // Future-proof: if other well-known hash formats are needed, add them explicitly.
     return false;
 }

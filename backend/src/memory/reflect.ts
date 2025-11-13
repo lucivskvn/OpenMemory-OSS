@@ -80,7 +80,7 @@ const summ = (c: any): string => {
 
 const mark = async (ids: string[]) => {
     for (const id of ids) {
-        const m = await q.get_mem.get(id);
+        const m = await q.get_mem.get(id, null);
         if (m) {
             const meta = JSON.parse(m.meta || "{}");
             meta.consolidated = true;
@@ -97,7 +97,7 @@ const mark = async (ids: string[]) => {
 
 const boost = async (ids: string[]) => {
     for (const id of ids) {
-        const m = await q.get_mem.get(id);
+        const m = await q.get_mem.get(id, null);
         if (m) await q.upd_mem.run(m.content, m.tags, m.meta, Date.now(), id);
         await q.upd_seen.run(
             id,

@@ -649,8 +649,8 @@ setInterval(async () => {
     for (const [a, b] of pairs) {
         try {
             const [memA, memB] = await Promise.all([
-                q.get_mem.get(a),
-                q.get_mem.get(b),
+                q.get_mem.get(a, null),
+                q.get_mem.get(b, null),
             ]);
             if (!memA || !memB) continue;
             const time_diff = Math.abs(memA.last_seen_at - memB.last_seen_at);
@@ -670,7 +670,7 @@ setInterval(async () => {
 const get_sal = async (id: string, def_sal: number): Promise<number> => {
     const c = sal_cache.get(id);
     if (c && Date.now() - c.t < TTL) return c.s;
-    const m = await q.get_mem.get(id);
+    const m = await q.get_mem.get(id, null);
     const s = m?.salience ?? def_sal;
     sal_cache.set(id, { s, t: Date.now() });
     return s;
@@ -745,7 +745,7 @@ export async function hsg_query(
         if (tier === "hybrid") {
             const all_mems = await Promise.all(
                 Array.from(ids).map(async (id) => {
-                    const m = await q.get_mem.get(id);
+                    const m = await q.get_mem.get(id, null);
                     if (!m) return null;
                     // Respect an explicit user_id filter when collecting candidate memory texts
                     if (f?.user_id && m.user_id !== f.user_id) return null;
@@ -765,7 +765,7 @@ export async function hsg_query(
 
         const res: hsg_q_result[] = [];
         for (const mid of Array.from(ids)) {
-            const m = await q.get_mem.get(mid);
+            const m = await q.get_mem.get(mid, null);
             if (!m || (f?.minSalience && m.salience < f.minSalience)) continue;
             if (f?.user_id && m.user_id !== f.user_id) continue;
             const mvf = await calc_multi_vec_fusion_score(mid, qe, w, f?.user_id ?? null);
@@ -834,7 +834,7 @@ export async function hsg_query(
 
         // Update feedback scores for returned memories (simple learning)
         for (const r of top) {
-            const cur_fb = (await q.get_mem.get(r.id))?.feedback_score || 0;
+            const cur_fb = (await q.get_mem.get(r.id, null))?.feedback_score || 0;
             const new_fb = cur_fb * 0.9 + r.score * 0.1; // Exponential moving average
             await q.upd_feedback.run(r.id, new_fb);
         }
@@ -852,7 +852,7 @@ export async function hsg_query(
             );
             await q.upd_seen.run(r.id, Date.now(), rsal, Date.now());
             if (r.path.length > 1) {
-                const memR = await q.get_mem.get(r.id);
+                const memR = await q.get_mem.get(r.id, null);
                 const userForR = memR?.user_id ?? null;
                 await reinforce_waypoints(r.path, userForR);
                 const wps = await q.get_waypoints_by_src.all(r.id, userForR);
@@ -867,7 +867,7 @@ export async function hsg_query(
                         lns,
                     );
                 for (const u of pru) {
-                    const linked_mem = await q.get_mem.get(u.node_id);
+                    const linked_mem = await q.get_mem.get(u.node_id, null);
                     if (linked_mem) {
                         const time_diff =
                             (Date.now() - linked_mem.last_seen_at) / 86400000;
@@ -1039,7 +1039,7 @@ export async function reinforce_memory(
     id: string,
     boost: number = 0.1,
 ): Promise<void> {
-    const mem = await q.get_mem.get(id);
+    const mem = await q.get_mem.get(id, null);
     if (!mem) throw new Error(`Memory ${id} not found`);
     const new_sal = Math.min(reinforcement.max_salience, mem.salience + boost);
     await q.upd_seen.run(Date.now(), new_sal, Date.now(), id);
@@ -1051,7 +1051,7 @@ export async function update_memory(
     tags?: string[],
     metadata?: any,
 ): Promise<{ id: string; updated: boolean }> {
-    const mem = await q.get_mem.get(id);
+    const mem = await q.get_mem.get(id, null);
     if (!mem) throw new Error(`Memory ${id} not found`);
     const new_content = content !== undefined ? content : mem.content;
     const new_tags = tags !== undefined ? j(tags) : mem.tags || "[]";

@@ -35,7 +35,7 @@ jobs:
       - name: Install backend deps and run tests
         run: |
           cd backend
-          bun install
+          bun install --frozen-lockfile --no-save
           bun run build
           test -f dist/server/index.js || (echo "Build artifact missing: expected dist/server/index.js" && ls -la dist && exit 1)
           bun test

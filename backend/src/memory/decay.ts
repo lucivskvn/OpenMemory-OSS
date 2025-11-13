@@ -375,7 +375,7 @@ export const on_query_hit = async (
 ) => {
     if (!cfg.regeneration_enabled && !cfg.reinforce_on_query) return;
 
-    const m = await q.get_mem.get(mem_id);
+    const m = await q.get_mem.get(mem_id, null);
     if (!m) return;
 
     let updated = false;

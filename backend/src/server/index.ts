@@ -41,9 +41,12 @@ export function corsMiddleware() {
             process.env.OM_CORS_CREDENTIALS === "true" ? "true" : "false",
         );
 
-        try {
-            if (ctx && (ctx as any).skipCors) return await next();
-        } catch (e) { }
+        // Do not short-circuit here when ctx.skipCors is set: we need to
+        // await the handler so we can inspect the actual Response. Some
+        // handlers may set ctx.skipCors but still return a non-streaming
+        // response; in that case we should still merge CORS headers. We'll
+        // decide after the handler returns based on both ctx.skipCors and the
+        // response's content-type/body.
 
         if (req.method === "OPTIONS") {
             return new Response(null, { status: 200, headers: corsHeaders });
@@ -52,12 +55,25 @@ export function corsMiddleware() {
         const resp = await next();
 
         try {
-            if (ctx && (ctx as any).skipCors) return resp;
+            // Only skip merging when the handler explicitly opted out AND the
+            // response appears to be streaming. This avoids leaking the opt-out
+            // into subsequent non-streaming responses in case of accidental
+            // ctx mutation.
+            const respContentType = resp?.headers?.get?.('content-type') || '';
+            const respBody = (resp as any)?.body;
+            const respIsStream = respBody && typeof respBody.getReader === 'function';
+            if (ctx && (ctx as any).skipCors && (respIsStream || (typeof respContentType === 'string' && respContentType.includes('stream')))) {
+                logger.info({ component: "CORS", path: (req as any).url || req.url }, "Handler set ctx.skipCors; returning streaming response unmodified");
+                return resp;
+            }
         } catch (e) { }
 
-        try {
-            if (req.headers.get("accept")?.includes("stream")) return resp;
-        } catch (e) { }
+        // If the response itself indicates a streaming content-type, don't
+        // attempt to clone or rewrap it — return it unmodified. Avoid relying
+        // on the request's Accept header (which can be influenced by clients
+        // or reused connections) to detect streaming responses because that
+        // produced false positives when tests reused connections. Use the
+        // response's content-type and ctx.skipCors instead.
         try {
             if (resp && resp.headers && resp.headers.get("content-type")?.includes("stream")) return resp;
         } catch (e) { }

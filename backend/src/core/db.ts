@@ -13,11 +13,11 @@ type q_type = {
     upd_mem: { run: (...p: any[]) => Promise<void> };
     upd_mem_with_sector: { run: (...p: any[]) => Promise<void> };
     del_mem: { run: (...p: any[]) => Promise<void> };
-    get_mem: { get: (id: string) => Promise<any> };
-    get_mem_by_simhash: { get: (simhash: string) => Promise<any> };
-    all_mem: { all: (limit: number, offset: number) => Promise<any[]> };
+    get_mem: { get: (id: string, user_id?: string | null) => Promise<any> };
+    get_mem_by_simhash: { get: (simhash: string, user_id?: string | null) => Promise<any> };
+    all_mem: { all: (limit: number, offset: number, user_id?: string | null) => Promise<any[]> };
     all_mem_by_sector: {
-        all: (sector: string, limit: number, offset: number) => Promise<any[]>;
+        all: (sector: string, limit: number, offset: number, user_id?: string | null) => Promise<any[]>;
     };
     all_mem_by_user: {
         all: (user_id: string, limit: number, offset: number) => Promise<any[]>;
@@ -312,7 +312,7 @@ async function initDb() {
                 `create table if not exists ${m}(id uuid primary key,user_id text,segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,meta text,created_at bigint,updated_at bigint,last_seen_at bigint,salience double precision,decay_lambda double precision,version integer default 1,mean_dim integer,mean_vec bytea,compressed_vec bytea,feedback_score double precision default 0)`
             );
             await bunClient.query(
-                `create table if not exists ${v}(id uuid,sector text,user_id text,v bytea,dim integer not null,primary key(id,sector))`
+                `create table if not exists ${v}(id uuid,sector text,user_id text,v bytea,dim integer not null,primary key(id,sector,user_id))`
             );
             await bunClient.query(
                 `create table if not exists ${w}(src_id text,dst_id text not null,user_id text,weight double precision not null,created_at bigint,updated_at bigint,primary key(src_id,user_id))`
@@ -368,67 +368,197 @@ async function initDb() {
                 },
             },
             upd_mean_vec: {
-                run: (...p) =>
-                    run_async(
-                        `update ${m} set mean_dim=$2,mean_vec=$3 where id=$1`,
-                        p,
-                    ),
+                run: (...p) => {
+                    // Normalize parameters: (id, mean_dim, mean_vec [, user_id])
+                    let id: any, mean_dim: any, mean_vec: any, user_id: any;
+                    if (p.length === 4) [id, mean_dim, mean_vec, user_id] = p as any[];
+                    else[id, mean_dim, mean_vec] = p as any[];
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped write (upd_mean_vec) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: "DB", id }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
+                    return run_async(
+                        `update ${m} set mean_dim=$2,mean_vec=$3 where id=$1 and ($4 is null or user_id=$4)`,
+                        [id, mean_dim, mean_vec, user_id],
+                    );
+                },
             },
             upd_compressed_vec: {
-                run: (...p) =>
-                    run_async(`update ${m} set compressed_vec=$2 where id=$1`, p),
+                run: (...p) => {
+                    // Normalize parameters: (id, compressed_vec [, user_id])
+                    let id: any, compressed_vec: any, user_id: any;
+                    if (p.length === 3) [id, compressed_vec, user_id] = p as any[];
+                    else[id, compressed_vec] = p as any[];
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped write (upd_compressed_vec) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: "DB", id }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
+                    return run_async(
+                        `update ${m} set compressed_vec=$2 where id=$1 and ($3 is null or user_id=$3)`,
+                        [id, compressed_vec, user_id],
+                    );
+                },
             },
             upd_feedback: {
-                run: (...p) =>
-                    run_async(`update ${m} set feedback_score=$2 where id=$1`, p),
+                run: (...p) => {
+                    // Normalize parameters: (id, feedback_score [, user_id])
+                    let id: any, feedback_score: any, user_id: any;
+                    if (p.length === 3) [id, feedback_score, user_id] = p as any[];
+                    else[id, feedback_score] = p as any[];
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped write (upd_feedback) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: "DB", id }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
+                    return run_async(
+                        `update ${m} set feedback_score=$2 where id=$1 and ($3 is null or user_id=$3)`,
+                        [id, feedback_score, user_id],
+                    );
+                },
             },
             upd_seen: {
-                run: (...p) =>
-                    run_async(
-                        `update ${m} set last_seen_at=$2,salience=$3,updated_at=$4 where id=$1`,
-                        p,
-                    ),
+                run: (...p) => {
+                    // Normalize parameters: (id, last_seen_at, salience, updated_at [, user_id])
+                    let id: any, last_seen_at: any, salience: any, updated_at: any, user_id: any;
+                    if (p.length === 5) [id, last_seen_at, salience, updated_at, user_id] = p as any[];
+                    else[id, last_seen_at, salience, updated_at] = p as any[];
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped write (upd_seen) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: "DB", id }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
+                    return run_async(
+                        `update ${m} set last_seen_at=$2,salience=$3,updated_at=$4 where id=$1 and ($5 is null or user_id=$5)`,
+                        [id, last_seen_at, salience, updated_at, user_id],
+                    );
+                },
             },
             upd_mem: {
-                run: (...p) =>
-                    run_async(
-                        `update ${m} set content=$1,tags=$2,meta=$3,updated_at=$4,version=version+1 where id=$5`,
-                        p,
-                    ),
+                run: (...p) => {
+                    // Normalize parameters: (content, tags, meta, updated_at, id [, user_id])
+                    let content: any, tags: any, meta: any, updated_at: any, id: any, user_id: any;
+                    if (p.length === 6) [content, tags, meta, updated_at, id, user_id] = p as any[];
+                    else[content, tags, meta, updated_at, id] = p as any[];
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped write (upd_mem) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: "DB", id }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
+                    return run_async(
+                        `update ${m} set content=$1,tags=$2,meta=$3,updated_at=$4,version=version+1 where id=$5 and ($6 is null or user_id=$6)`,
+                        [content, tags, meta, updated_at, id, user_id],
+                    );
+                },
             },
             upd_mem_with_sector: {
-                run: (...p) =>
-                    run_async(
-                        `update ${m} set content=$1,primary_sector=$2,tags=$3,meta=$4,updated_at=$5,version=version+1 where id=$6`,
-                        p,
-                    ),
+                run: (...p) => {
+                    // Normalize parameters: (content, primary_sector, tags, meta, updated_at, id [, user_id])
+                    let content: any, primary_sector: any, tags: any, meta: any, updated_at: any, id: any, user_id: any;
+                    if (p.length === 7) [content, primary_sector, tags, meta, updated_at, id, user_id] = p as any[];
+                    else[content, primary_sector, tags, meta, updated_at, id] = p as any[];
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped write (upd_mem_with_sector) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: "DB", id }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
+                    return run_async(
+                        `update ${m} set content=$1,primary_sector=$2,tags=$3,meta=$4,updated_at=$5,version=version+1 where id=$6 and ($7 is null or user_id=$7)`,
+                        [content, primary_sector, tags, meta, updated_at, id, user_id],
+                    );
+                },
             },
             del_mem: {
-                run: (...p) => run_async(`delete from ${m} where id=$1`, p),
+                run: (...p) => {
+                    // Accept either (id) or (id, user_id)
+                    const id = p[0];
+                    const user_id = p.length > 1 ? p[1] : null;
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped write (del_mem) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: "DB", id }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
+                    return run_async(
+                        `delete from ${m} where id=$1 and ($2 is null or user_id=$2)`,
+                        [id, user_id],
+                    );
+                },
             },
             get_mem: {
-                get: (id) => get_async(`select * from ${m} where id=$1`, [id]),
+                get: (id, user_id = null) => {
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped read (get_mem) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: "DB", id }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
+                    return get_async(
+                        `select * from ${m} where id=$1 and ($2 is null or user_id=$2)`,
+                        [id, user_id],
+                    );
+                },
             },
             get_mem_by_simhash: {
-                get: (simhash) =>
-                    get_async(
-                        `select * from ${m} where simhash=$1 order by salience desc limit 1`,
-                        [simhash],
-                    ),
+                get: (simhash, user_id = null) => {
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped read (get_mem_by_simhash) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: "DB", simhash }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
+                    return get_async(
+                        `select * from ${m} where simhash=$1 and ($2 is null or user_id=$2) order by salience desc limit 1`,
+                        [simhash, user_id],
+                    );
+                },
             },
             all_mem: {
-                all: (limit, offset) =>
-                    all_async(
+                all: (limit, offset, user_id = null) => {
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped read (all_mem) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: "DB" }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
+                    if (user_id) {
+                        return all_async(
+                            `select * from ${m} where user_id=$3 order by created_at desc limit $1 offset $2`,
+                            [limit, offset, user_id],
+                        );
+                    }
+                    return all_async(
                         `select * from ${m} order by created_at desc limit $1 offset $2`,
                         [limit, offset],
-                    ),
+                    );
+                },
             },
             all_mem_by_sector: {
-                all: (sector, limit, offset) =>
-                    all_async(
+                all: (sector, limit, offset, user_id = null) => {
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped read (all_mem_by_sector) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: "DB", sector }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
+                    if (user_id) {
+                        return all_async(
+                            `select * from ${m} where primary_sector=$1 and user_id=$4 order by created_at desc limit $2 offset $3`,
+                            [sector, limit, offset, user_id],
+                        );
+                    }
+                    return all_async(
                         `select * from ${m} where primary_sector=$1 order by created_at desc limit $2 offset $3`,
                         [sector, limit, offset],
-                    ),
+                    );
+                },
             },
             all_mem_by_user_and_sector: {
                 all: (user_id, sector, limit, offset) =>
@@ -467,7 +597,7 @@ async function initDb() {
             ins_vec: {
                 run: (...p) =>
                     run_async(
-                        `insert into ${v}(id,sector,user_id,v,dim) values($1,$2,$3,$4,$5) on conflict(id,sector) do update set user_id=excluded.user_id,v=excluded.v,dim=excluded.dim`,
+                        `insert into ${v}(id,sector,user_id,v,dim) values($1,$2,$3,$4,$5) on conflict(id,sector,user_id) do update set user_id=excluded.user_id,v=excluded.v,dim=excluded.dim`,
                         p,
                     ),
             },
@@ -715,7 +845,7 @@ async function initDb() {
             `create table if not exists memories(id text primary key,user_id text,segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,meta text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0)`
         );
         db.run(
-            `create table if not exists vectors(id text not null,sector text not null,user_id text,v blob not null,dim integer not null,primary key(id,sector))`
+            `create table if not exists vectors(id text not null,sector text not null,user_id text,v blob not null,dim integer not null,primary key(id,sector,user_id))`
         );
         db.run(
             `create table if not exists waypoints(src_id text,dst_id text not null,user_id text,weight real not null,created_at integer,updated_at integer,primary key(src_id,user_id))`
@@ -1035,62 +1165,184 @@ async function initDb() {
                 },
             },
             upd_mean_vec: {
-                run: (...p) =>
-                    exec("update memories set mean_dim=?,mean_vec=? where id=?", p),
+                run: (...p) => {
+                    // Preserve backward-compatible ordering: (mean_dim, mean_vec, id [, user_id])
+                    let mean_dim: any, mean_vec: any, id: any, user_id: any;
+                    if (p.length === 4) [mean_dim, mean_vec, id, user_id] = p as any[];
+                    else[mean_dim, mean_vec, id] = p as any[];
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped write (upd_mean_vec) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: "DB", id }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
+                    return exec("update memories set mean_dim=?,mean_vec=? where id=? and (? is null or user_id=?)", [mean_dim, mean_vec, id, user_id, user_id]);
+                },
             },
             upd_compressed_vec: {
-                run: (...p) =>
-                    exec("update memories set compressed_vec=? where id=?", p),
+                run: (...p) => {
+                    // (compressed_vec, id [, user_id])
+                    let compressed_vec: any, id: any, user_id: any;
+                    if (p.length === 3) [compressed_vec, id, user_id] = p as any[];
+                    else[compressed_vec, id] = p as any[];
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped write (upd_compressed_vec) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: "DB", id }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
+                    return exec("update memories set compressed_vec=? where id=? and (? is null or user_id=?)", [compressed_vec, id, user_id, user_id]);
+                },
             },
             upd_feedback: {
-                run: (...p) =>
-                    exec("update memories set feedback_score=? where id=?", p),
+                run: (...p) => {
+                    // Preserve backward-compatible ordering: (feedback_score, id [, user_id])
+                    let feedback_score: any, id: any, user_id: any;
+                    if (p.length === 3) [feedback_score, id, user_id] = p as any[];
+                    else[feedback_score, id] = p as any[];
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped write (upd_feedback) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: "DB", id }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
+                    return exec("update memories set feedback_score=? where id=? and (? is null or user_id=?)", [feedback_score, id, user_id, user_id]);
+                },
             },
             upd_seen: {
-                run: (...p) =>
-                    exec(
-                        "update memories set last_seen_at=?,salience=?,updated_at=? where id=?",
-                        p,
-                    ),
+                run: (...p) => {
+                    // Preserve backward-compatible ordering:
+                    // (last_seen_at, salience, updated_at, id [, user_id])
+                    let last_seen_at: any, salience: any, updated_at: any, id: any, user_id: any;
+                    if (p.length === 5) [last_seen_at, salience, updated_at, id, user_id] = p as any[];
+                    else[last_seen_at, salience, updated_at, id] = p as any[];
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped write (upd_seen) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: "DB", id }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
+                    return exec(
+                        "update memories set last_seen_at=?,salience=?,updated_at=? where id=? and (? is null or user_id=?)",
+                        [last_seen_at, salience, updated_at, id, user_id, user_id],
+                    );
+                },
             },
             upd_mem: {
-                run: (...p) =>
-                    exec(
-                        "update memories set content=?,tags=?,meta=?,updated_at=?,version=version+1 where id=?",
-                        p,
-                    ),
+                run: (...p) => {
+                    // Preserve backward-compatible ordering: (content, tags, meta, updated_at, id [, user_id])
+                    let content: any, tags: any, meta: any, updated_at: any, id: any, user_id: any;
+                    if (p.length === 6) [content, tags, meta, updated_at, id, user_id] = p as any[];
+                    else[content, tags, meta, updated_at, id] = p as any[];
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped write (upd_mem) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: "DB", id }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
+                    return exec(
+                        "update memories set content=?,tags=?,meta=?,updated_at=?,version=version+1 where id=? and (? is null or user_id=?)",
+                        [content, tags, meta, updated_at, id, user_id, user_id],
+                    );
+                },
             },
             upd_mem_with_sector: {
-                run: (...p) =>
-                    exec(
-                        "update memories set content=?,primary_sector=?,tags=?,meta=?,updated_at=?,version=version+1 where id=?",
-                        p,
-                    ),
+                run: (...p) => {
+                    // Preserve backward-compatible ordering:
+                    // (content, primary_sector, tags, meta, updated_at, id [, user_id])
+                    let content: any, primary_sector: any, tags: any, meta: any, updated_at: any, id: any, user_id: any;
+                    if (p.length === 7) [content, primary_sector, tags, meta, updated_at, id, user_id] = p as any[];
+                    else[content, primary_sector, tags, meta, updated_at, id] = p as any[];
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped write (upd_mem_with_sector) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: "DB", id }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
+                    return exec(
+                        "update memories set content=?,primary_sector=?,tags=?,meta=?,updated_at=?,version=version+1 where id=? and (? is null or user_id=?)",
+                        [content, primary_sector, tags, meta, updated_at, id, user_id, user_id],
+                    );
+                },
             },
-            del_mem: { run: (...p) => exec("delete from memories where id=?", p) },
+            del_mem: {
+                run: (...p) => {
+                    // Accept either (id) or (id, user_id)
+                    const id = p[0];
+                    const user_id = p.length > 1 ? p[1] : null;
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped write (del_mem) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: "DB", id }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
+                    return exec("delete from memories where id=? and (? is null or user_id=?)", [id, user_id, user_id]);
+                },
+            },
             get_mem: {
-                get: (id) => one("select * from memories where id=?", [id]),
+                get: (id, user_id = null) => {
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped read (get_mem) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: "DB", id }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
+                    return one("select * from memories where id=? and (? is null or user_id=?)", [id, user_id, user_id]);
+                },
             },
             get_mem_by_simhash: {
-                get: (simhash) =>
-                    one(
-                        "select * from memories where simhash=? order by salience desc limit 1",
-                        [simhash],
-                    ),
+                get: (simhash, user_id = null) => {
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped read (get_mem_by_simhash) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: "DB", simhash }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
+                    return one(
+                        "select * from memories where simhash=? and (? is null or user_id=?) order by salience desc limit 1",
+                        [simhash, user_id, user_id],
+                    );
+                },
             },
             all_mem: {
-                all: (limit, offset) =>
-                    many(
+                all: (limit, offset, user_id = null) => {
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped read (all_mem) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: "DB" }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
+                    if (user_id) {
+                        return many(
+                            "select * from memories where user_id=? order by created_at desc limit ? offset ?",
+                            [user_id, limit, offset],
+                        );
+                    }
+                    return many(
                         "select * from memories order by created_at desc limit ? offset ?",
                         [limit, offset],
-                    ),
+                    );
+                },
             },
             all_mem_by_sector: {
-                all: (sector, limit, offset) =>
-                    many(
+                all: (sector, limit, offset, user_id = null) => {
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped read (all_mem_by_sector) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: "DB", sector }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
+                    if (user_id) {
+                        return many(
+                            "select * from memories where primary_sector=? and user_id=? order by created_at desc limit ? offset ?",
+                            [sector, user_id, limit, offset],
+                        );
+                    }
+                    return many(
                         "select * from memories where primary_sector=? order by created_at desc limit ? offset ?",
                         [sector, limit, offset],
-                    ),
+                    );
+                },
             },
             all_mem_by_user_and_sector: {
                 all: (user_id, sector, limit, offset) =>
@@ -1129,7 +1381,7 @@ async function initDb() {
             ins_vec: {
                 run: (...p) =>
                     exec(
-                        "insert into vectors(id,sector,user_id,v,dim) values(?,?,?,?,?) on conflict(id,sector) do update set user_id=excluded.user_id,v=excluded.v,dim=excluded.dim",
+                        "insert into vectors(id,sector,user_id,v,dim) values(?,?,?,?,?) on conflict(id,sector,user_id) do update set user_id=excluded.user_id,v=excluded.v,dim=excluded.dim",
                         p,
                     ),
             },

@@ -248,7 +248,7 @@ export async function retrieve_node_mems(p: lgm_retrieve_req) {
             user_id: user_for_query,
         });
         for (const match of matches) {
-            const row = (await q.get_mem.get(match.id)) as mem_row | undefined;
+            const row = (await q.get_mem.get(match.id, user_for_query ?? null)) as mem_row | undefined;
             if (!row) continue;
             // If query was tenant-scoped, enforce that the retrieved memory
             // also belongs to that tenant. This avoids returning rows from

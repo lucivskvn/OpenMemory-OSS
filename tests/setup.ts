@@ -33,6 +33,10 @@ beforeAll(async () => {
   const tmpDb = path.join(tmpDir, `openmemory-server-${process.pid}-${Date.now()}.sqlite`);
 
   // Start the server directly from source, passing OM_DB_PATH env so it uses the temp DB
+  // Disable noisy DB user-scope warnings by default for the test suite. Tests that
+  // specifically assert the presence of these warnings (e.g. db-console.test.ts)
+  // will enable OM_DB_USER_SCOPE_WARN explicitly in their own environment.
+  process.env.OM_DB_USER_SCOPE_WARN = process.env.OM_DB_USER_SCOPE_WARN || "false";
   // When running under Bun we can import the server module in-process which is
   // simpler and avoids child-process lifecycle issues. Otherwise fall back to spawn.
   if (typeof Bun !== "undefined") {

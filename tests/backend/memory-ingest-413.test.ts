@@ -8,7 +8,8 @@ test("POST /memory/ingest maps ERR_FILE_TOO_LARGE to 413", async () => {
     const dbPath = path.join(tmpDir, `openmemory-memory-ingest-413-${process.pid}-${Date.now()}.sqlite`);
 
     process.env.OM_NO_AUTO_START = "true";
-    const port = 18200 + (process.pid % 1000);
+    // Use an ephemeral port to avoid cross-test conflicts
+    const port = 0;
 
     // Use the test seam to override ingestDocument so we can simulate the file-too-large error
     const ingestMod = await import("../../backend/src/ops/ingest.ts");
@@ -25,14 +26,15 @@ test("POST /memory/ingest maps ERR_FILE_TOO_LARGE to 413", async () => {
 
     const mod = await import("../../backend/src/server/index.ts");
     const start = mod.startServer as (opts?: { port?: number; dbPath?: string }) => Promise<{ stop: () => Promise<void> }>;
-    const server = await start({ port, dbPath });
+    const serverInfo = await start({ port, dbPath });
+    const actualPort = (serverInfo as any).port || Number(process.env.OM_PORT) || port;
 
     const payload = {
         content_type: "text",
         data: Buffer.from("small").toString("base64"),
     };
 
-    const res = await fetch(`http://127.0.0.1:${port}/memory/ingest`, {
+    const res = await fetch(`http://127.0.0.1:${actualPort}/memory/ingest`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -43,5 +45,5 @@ test("POST /memory/ingest maps ERR_FILE_TOO_LARGE to 413", async () => {
     expect(j).toHaveProperty("err");
     expect(j.err).toBe("file_too_large");
 
-    await server.stop();
+    await serverInfo.stop();
 });

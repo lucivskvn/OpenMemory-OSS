@@ -193,7 +193,11 @@ export async function extractText(contentType: string, data: string | Buffer | A
         'text/markdown': 'markdown',
         'text/x-markdown': 'markdown',
         'application/rtf': 'text',
-        'application/octet-stream': 'pdf',
+        // Do NOT default generic octet-stream to PDF. We'll perform a
+        // lightweight magic-bytes check below: only treat octet-stream as
+        // PDF if the buffer begins with the PDF signature. Otherwise throw
+        // an unsupported content type error to avoid misclassifying unknown
+        // binaries.
     };
     if (mimeMap[ct]) ct = mimeMap[ct];
 
@@ -216,6 +220,56 @@ export async function extractText(contentType: string, data: string | Buffer | A
         buffer = Buffer.from(data as any);
     }
 
+    // Log a quick comparison between raw bytes and decoded characters to help
+    // surface discrepancies for multi-byte/Unicode text in production. We decode
+    // a small preview (full decode is cheap compared to parsing) to compute
+    // the character count used by downstream metadata.
+    try {
+        const preview = buffer.toString('utf8');
+        logger.debug({ component: 'EXTRACT', bytes: buffer.byteLength, chars: preview.length }, 'Buffer vs char count');
+    } catch (e) {
+        // Non-fatal: logging failure shouldn't block extraction
+        logger.debug({ component: 'EXTRACT', bytes: buffer.byteLength, err: String(e) }, 'Buffer decode failed for char count');
+    }
+
+    // If the caller provided a generic application/octet-stream, try a
+    // minimal magic-bytes check after we have a buffer to avoid guessing
+    // based only on content-type. This prevents accidentally treating
+    // arbitrary binaries as PDFs. We also allow an opt-in legacy fallback
+    // (`OM_ACCEPT_OCTET_LEGACY=true`) that will attempt to decode the
+    // octet-stream as UTF-8 text for backward compatibility with some
+    // clients — this is opt-in because it can misclassify binary files.
+    if (ct === 'application/octet-stream') {
+        // Check PDF signature: %PDF- at the start
+        const sig4 = buffer.slice(0, 4);
+        const isPdf = sig4.length >= 4 && sig4.toString('utf8', 0, 4) === '%PDF';
+        // Check ZIP-based DOCX signature: PK\x03\x04
+        const isZip = sig4.length >= 4 && sig4[0] === 0x50 && sig4[1] === 0x4b && sig4[2] === 0x03 && sig4[3] === 0x04;
+        if (isPdf) {
+            ct = 'pdf';
+        } else if (isZip) {
+            // ZIP container is commonly used for DOCX files; prefer docx
+            ct = 'docx';
+        } else if (process.env.OM_ACCEPT_OCTET_LEGACY === 'true') {
+            // Legacy permissive mode: attempt to treat octet-stream as UTF-8 text
+            try {
+                const maybe = buffer.toString('utf8');
+                // cheap sanity check: if the decoded string has reasonable printable content,
+                // treat it as text. This is intentionally permissive for backward compatibility.
+                const printableRatio = (maybe.replace(/\s/g, '').replace(/[^\x20-\x7E]/g, '').length) / Math.max(1, maybe.length);
+                if (printableRatio > 0.2) ct = 'text';
+                else throw new Error('Octet legacy decode produced non-text-like payload');
+            } catch (e) {
+                throw new Error(`Unsupported content type: ${contentType}`);
+            }
+        } else {
+            // Log guidance for operators: suggest opt-in legacy flag when clients send
+            // generic `application/octet-stream` without recognizable magic bytes.
+            logger.warn({ component: 'EXTRACT', content_type: contentType }, "Unsupported octet-stream detected; set OM_ACCEPT_OCTET_LEGACY=true to permissively accept octet-stream as text (opt-in, may misclassify binaries)");
+            throw new Error(`Unsupported content type: ${contentType}`);
+        }
+    }
+
     switch (ct) {
         case 'pdf':
             return extractPDF(buffer);
@@ -227,26 +281,32 @@ export async function extractText(contentType: string, data: string | Buffer | A
             return extractHTML(buffer.toString('utf8'));
         case 'md':
         case 'markdown':
-            return {
-                text: buffer.toString('utf8'),
-                metadata: {
-                    content_type: 'markdown',
-                    char_count: buffer.byteLength,
-                    estimated_tokens: estimateTokens(buffer.toString('utf8')),
-                    extraction_method: 'passthrough',
-                },
-            };
+            {
+                const str = buffer.toString('utf8');
+                return {
+                    text: str,
+                    metadata: {
+                        content_type: 'markdown',
+                        char_count: str.length,
+                        estimated_tokens: estimateTokens(str),
+                        extraction_method: 'passthrough',
+                    },
+                };
+            }
         case 'txt':
         case 'text':
-            return {
-                text: buffer.toString('utf8'),
-                metadata: {
-                    content_type: 'text',
-                    char_count: buffer.byteLength,
-                    estimated_tokens: estimateTokens(buffer.toString('utf8')),
-                    extraction_method: 'passthrough',
-                },
-            };
+            {
+                const str = buffer.toString('utf8');
+                return {
+                    text: str,
+                    metadata: {
+                        content_type: 'text',
+                        char_count: str.length,
+                        estimated_tokens: estimateTokens(str),
+                        extraction_method: 'passthrough',
+                    },
+                };
+            }
         default:
             throw new Error(`Unsupported content type: ${contentType}`);
     }
@@ -255,13 +315,21 @@ export async function extractText(contentType: string, data: string | Buffer | A
 // File helpers
 export async function extractPDFFromFile(filePath: string): Promise<ExtractionResult> {
     const start = Date.now();
-    let fileSize: number | null = null;
     try {
         const f = Bun.file(filePath);
         const exists = await f.exists();
         if (!exists) throw new Error('File not found');
-        // Bun.file.size may be undefined on some platforms; guard accordingly
-        fileSize = (f as any).size ?? null;
+        // Bun.file.size may be undefined or a promise on some platforms; normalize to a number or null
+        let fileSize: number | null = null;
+        try {
+            const maybeSize: any = (f as any).size;
+            if (typeof maybeSize === 'number') fileSize = maybeSize;
+            else if (maybeSize && typeof maybeSize.then === 'function') {
+                try { fileSize = await maybeSize; } catch { fileSize = null; }
+            } else fileSize = null;
+        } catch (_err) {
+            fileSize = null;
+        }
         logger.info('[EXTRACT] Processing file', { filePath, file_size_bytes: fileSize, method: 'bun-file' });
 
         const arr = await f.arrayBuffer();
@@ -287,12 +355,21 @@ export async function extractPDFFromFile(filePath: string): Promise<ExtractionRe
 
 export async function extractDOCXFromFile(filePath: string): Promise<ExtractionResult> {
     const start = Date.now();
-    let fileSize: number | null = null;
     try {
         const f = Bun.file(filePath);
         const exists = await f.exists();
         if (!exists) throw new Error('File not found');
-        fileSize = (f as any).size ?? null;
+        // Bun.file.size may be undefined or a promise on some platforms; normalize to a number or null
+        let fileSize: number | null = null;
+        try {
+            const maybeSize: any = (f as any).size;
+            if (typeof maybeSize === 'number') fileSize = maybeSize;
+            else if (maybeSize && typeof maybeSize.then === 'function') {
+                try { fileSize = await maybeSize; } catch { fileSize = null; }
+            } else fileSize = null;
+        } catch (_err) {
+            fileSize = null;
+        }
         logger.info('[EXTRACT] Processing file', { filePath, file_size_bytes: fileSize, method: 'bun-file' });
 
         const arr = await f.arrayBuffer();

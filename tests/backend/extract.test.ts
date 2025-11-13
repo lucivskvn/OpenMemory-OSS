@@ -27,3 +27,17 @@ describe("extractURL", () => {
         expect(res.metadata.estimated_tokens).toBeGreaterThan(0);
     });
 });
+
+describe('extractText multibyte handling', () => {
+    it('computes char_count based on characters not bytes for UTF-8', async () => {
+        const { extractText } = await import('../../backend/src/ops/extract');
+        const sample = 'Hello café 🚀';
+        // Sanity: JS string length should count surrogate pairs; expected length = 13
+        expect(sample.length).toBe(13);
+        const res = await extractText('text/plain', Buffer.from(sample, 'utf8'));
+        expect(res).toBeTruthy();
+        expect(res.metadata.char_count).toBe(sample.length);
+        // estimated tokens use char_count -> > 0
+        expect(res.metadata.estimated_tokens).toBeGreaterThan(0);
+    });
+});

@@ -63,7 +63,7 @@ export function ide(app: any) {
             if (session_id) {
                 filtered = [];
                 for (const r of results) {
-                    const mem = await q.get_mem.get(r.id);
+                    const mem = await q.get_mem.get(r.id, null);
                     if (mem) {
                         const meta = p(mem.meta);
                         if (meta && meta.ide_session_id === session_id) {

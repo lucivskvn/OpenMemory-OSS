@@ -107,7 +107,7 @@ export const create_mcp_srv = () => {
         user_id: z.string().trim().min(1).optional().describe('Validate ownership against a specific user identifier')
     }, async ({ id, include_vectors, user_id }) => {
         const u = uid(user_id)
-        const mem = await q.get_mem.get(id)
+        const mem = await q.get_mem.get(id, u ?? null)
         if (!mem) return { content: [{ type: 'text', text: `Memory ${id} not found.` }] }
         if (u && mem.user_id !== u) return { content: [{ type: 'text', text: `Memory ${id} not found for user ${u}.` }] }
         const vecs = include_vectors ? await q.get_vecs_by_id.all(id, mem.user_id ?? null) : []
