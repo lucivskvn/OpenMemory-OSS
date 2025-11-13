@@ -120,7 +120,7 @@ jobs:
           # Run the test suite (tests may also start programmatic servers on other ports)
           # Keep the background server running so tests that expect OM_PORT to be served work.
           # Use package.json test script for consistent invocation
-          bun run test
+          bun run test:ci
           # Ensure background server is stopped after tests finish
           if ps -p $SERVER_PID >/dev/null 2>&1; then
             echo "Stopping background server (pid=$SERVER_PID)"
@@ -223,7 +223,7 @@ jobs:
           ATTEMPT=1
           while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
             echo "Test attempt $ATTEMPT/$MAX_ATTEMPTS"
-            if bun run test; then
+            if bun run test:ci; then
               echo "Tests passed on attempt $ATTEMPT"
               break
             fi

@@ -106,6 +106,7 @@ export async function authenticate_api_request(req: Request, ctx: Context, next:
 
     const provided = extract_api_key(req);
     if (!provided) {
+        logger.warn({ component: "AUTH", event: "missing_key" });
         return new Response(JSON.stringify({ error: "authentication_required", message: "API key required" }),
             { status: 401, headers: { "Content-Type": "application/json" } });
     }
@@ -120,6 +121,7 @@ export async function authenticate_api_request(req: Request, ctx: Context, next:
 
     // If not allowed, immediately return 429 with rate-limit headers.
     if (!rl.allowed) {
+        logger.warn({ component: "AUTH", event: "rate_limit", client_id });
         const headers = new Headers({ "Content-Type": "application/json" });
         if (auth_config.rate_limit_enabled) {
             headers.set("X-RateLimit-Limit", auth_config.rate_limit_max_requests.toString());
