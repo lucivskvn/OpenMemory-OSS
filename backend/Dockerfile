@@ -25,6 +25,11 @@ RUN [ -f dist/server/index.js ] || (echo "Build artifact missing: expected dist/
 # ===== PRODUCTION STAGE =====
 FROM oven/bun:1.3.2-alpine AS production
 
+# Add OCI/Podman labels for autoupdate and metadata
+LABEL io.containers.autoupdate="registry"
+LABEL org.opencontainers.image.source="https://github.com/lucivskvn/OpenMemory-OSS"
+LABEL org.opencontainers.image.description="OpenMemory - Hierarchical Semantic Graph Memory System"
+
 WORKDIR /app
 
 # Create a dedicated non-root user for security

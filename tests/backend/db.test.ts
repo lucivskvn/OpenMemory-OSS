@@ -49,8 +49,48 @@ describe(`Database Layer (${is_pg ? 'PostgreSQL' : 'SQLite'})`, () => {
 
         await transaction.begin();
         // Insert memories for two different users
-        await q.ins_mem.run(`mem1-${now}`, userId1, 0, "content1", `sim1-${now}`, "episodic", null, null, now, now, now, 1, 0.99, 1, null, null, null, 0);
-        await q.ins_mem.run(`mem2-${now}`, userId2, 0, "content2", `sim2-${now}`, "episodic", null, null, now, now, now, 1, 0.99, 1, null, null, null, 0);
+        // Use legacy ins_mem parameter ordering (id, content, primary_sector, tags, meta, created_at, updated_at, last_seen_at, salience, decay_lambda, version, user_id, mean_dim, mean_vec, compressed_vec)
+        // Use canonical 18-arg ins_mem ordering (id, user_id, segment, content, simhash, primary_sector, tags, meta, created_at, updated_at, last_seen_at, salience, decay_lambda, version, mean_dim, mean_vec, compressed_vec, feedback_score)
+        await q.ins_mem.run(
+            `mem1-${now}`,
+            userId1,
+            0,
+            "content1",
+            "",
+            "episodic",
+            JSON.stringify([]),
+            JSON.stringify({}),
+            now,
+            now,
+            now,
+            1.0,
+            0.99,
+            1,
+            0,
+            Buffer.alloc(0),
+            Buffer.alloc(0),
+            0,
+        );
+        await q.ins_mem.run(
+            `mem2-${now}`,
+            userId2,
+            0,
+            "content2",
+            "",
+            "episodic",
+            JSON.stringify([]),
+            JSON.stringify({}),
+            now,
+            now,
+            now,
+            1.0,
+            0.99,
+            1,
+            0,
+            Buffer.alloc(0),
+            Buffer.alloc(0),
+            0,
+        );
         await transaction.commit();
 
         // Fetch memories for each user

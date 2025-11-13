@@ -65,6 +65,22 @@ export function mem(app: any) {
     });
 
     app.post("/memory/ingest", async (req: Request, ctx: Context) => {
+        // Some clients or request paths may not have been parsed by the
+        // global body parser (for example in edge cases with streaming
+        // transport). If ctx.body is undefined, try to parse the raw body
+        // as JSON as a fallback so routes remain resilient and tests that
+        // set seams can still exercise the ingest pipeline.
+        if (ctx.body === undefined) {
+            try {
+                const text = await req.text();
+                if (text && text.length) {
+                    try { ctx.body = JSON.parse(text); } catch (e) { /* leave as undefined; validation will catch */ }
+                }
+            } catch (e) {
+                // ignore and let validation report invalid_request below
+            }
+        }
+
         const validation = ingestSchema.safeParse(ctx.body);
         if (!validation.success) {
             return new Response(JSON.stringify({ error: "invalid_request", issues: validation.error.issues }),
@@ -164,7 +180,7 @@ export function mem(app: any) {
         };
         if (!id) return new Response(JSON.stringify({ err: "id" }), { status: 400 });
         try {
-            const m = await q.get_mem.get(id);
+            const m = await q.get_mem.get(id, b.user_id ?? null);
             if (!m) return new Response(JSON.stringify({ err: "nf" }), { status: 404 });
 
             if (b.user_id && m.user_id !== b.user_id) {
@@ -189,15 +205,31 @@ export function mem(app: any) {
             const s = ctx.query.get("sector");
             const user_id = ctx.query.get("user_id");
 
+            // Check if strict tenant mode is enabled
+            const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+
+            // If strict mode is enabled, require user_id
+            if (strict && (!user_id || user_id.trim() === "")) {
+                return new Response(
+                    JSON.stringify({
+                        error: "user_id_required",
+                        message: "user_id parameter is required when OM_STRICT_TENANT=true"
+                    }),
+                    { status: 400, headers: { "Content-Type": "application/json" } }
+                );
+            }
+
             let r;
             if (user_id && s) {
                 r = await q.all_mem_by_user_and_sector.all(user_id, s, l, u);
             } else if (user_id) {
                 r = await q.all_mem_by_user.all(user_id, l, u);
             } else if (s) {
-                r = await q.all_mem_by_sector.all(s, l, u);
+                // Pass user_id to enforce scoping in updated method
+                r = await q.all_mem_by_sector.all(s, l, u, user_id);
             } else {
-                r = await q.all_mem.all(l, u);
+                // Pass user_id to enforce scoping in updated method
+                r = await q.all_mem.all(l, u, user_id);
             }
 
             const i = r.map((x: any) => ({
@@ -220,6 +252,15 @@ export function mem(app: any) {
             logger.warn({ component: "MEM" }, "[DEPRECATION] API: /memory/all includes 'items' and 'memories' (memories is deprecated). Please migrate clients to use 'items'.");
             return new Response(JSON.stringify(out));
         } catch (e: any) {
+            if (e.message && e.message.includes("user_id when OM_STRICT_TENANT=true")) {
+                return new Response(
+                    JSON.stringify({
+                        error: "tenant_isolation_error",
+                        message: e.message
+                    }),
+                    { status: 400, headers: { "Content-Type": "application/json" } }
+                );
+            }
             return new Response(JSON.stringify({ err: "internal" }), { status: 500 });
         }
     });
@@ -228,7 +269,7 @@ export function mem(app: any) {
         try {
             const id = ctx.params.id;
             const user_id = ctx.query.get("user_id");
-            const m = await q.get_mem.get(id);
+            const m = await q.get_mem.get(id, user_id ?? null);
             if (!m) return new Response(JSON.stringify({ err: "nf" }), { status: 404 });
 
             if (user_id && m.user_id !== user_id) {
@@ -262,14 +303,14 @@ export function mem(app: any) {
         try {
             const id = ctx.params.id;
             const user_id = ctx.query.get("user_id") || (ctx.body as any)?.user_id;
-            const m = await q.get_mem.get(id);
+            const m = await q.get_mem.get(id, user_id ?? null);
             if (!m) return new Response(JSON.stringify({ err: "nf" }), { status: 404 });
 
             if (user_id && m.user_id !== user_id) {
                 return new Response(JSON.stringify({ err: "forbidden" }), { status: 403 });
             }
 
-            await q.del_mem.run(id);
+            await q.del_mem.run(id, user_id ?? m.user_id ?? null);
             // Pass explicit user_id (prefer query/body user_id, else the memory's owner)
             await q.del_vec.run(id, user_id ?? m.user_id ?? null);
             await q.del_waypoints.run(id, id, user_id ?? m.user_id ?? null);

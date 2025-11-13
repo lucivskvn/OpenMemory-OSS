@@ -91,7 +91,7 @@ export const usr = (app: any) => {
             let deleted = 0;
 
             for (const m of mems) {
-                await q.del_mem.run(m.id);
+                await q.del_mem.run(m.id, user_id);
                 // Pass explicit user_id to vector delete so DB helpers can scope the deletion
                 await q.del_vec.run(m.id, user_id);
                 await q.del_waypoints.run(m.id, m.id, user_id);

@@ -177,6 +177,39 @@ export function createServer(config: { max_payload_size?: number } = {}) {
                     }
                 }
 
+                // Robust fallback: some runtimes or edge cases may leave ctx.body
+                // undefined even when a JSON payload was provided. As a final
+                // attempt, try to read the raw request text and parse JSON. Do
+                // this only when we expect JSON to avoid interfering with other
+                // content types. Wrap in try/catch to avoid throwing during
+                // normal request handling.
+                try {
+                    if ((ctx as any).body === undefined && contentType.includes("application/json")) {
+                        let rawText: string | undefined = undefined;
+                        // Some runtimes place a cached raw body on the request
+                        if (typeof (req as any).rawBody === 'string') rawText = (req as any).rawBody;
+                        // Fall back to reading text() if available and not yet consumed
+                        if (!rawText && typeof (req as any).text === 'function') {
+                            try {
+                                rawText = await (req as any).text();
+                            } catch (e) {
+                                // Could be locked/consumed; ignore and proceed
+                                rawText = undefined;
+                            }
+                        }
+                        if (rawText) {
+                            try {
+                                (ctx as any).body = JSON.parse(rawText);
+                                try { (req as any).body = (ctx as any).body; } catch (_) { }
+                            } catch (_e) {
+                                // leave ctx.body undefined so validation reports invalid_json
+                            }
+                        }
+                    }
+                } catch (e) {
+                    // swallow any fallback errors — don't change main behavior
+                }
+
                 const runner = async (index: number): Promise<Response> => {
                     if (index < middlewares.length) {
                         return middlewares[index](req, ctx, () => runner(index + 1));
@@ -186,12 +219,11 @@ export function createServer(config: { max_payload_size?: number } = {}) {
                     // To avoid re-invoking route code, only call the handler in legacy
                     // mode if it's explicitly marked or the global migration flag is set.
                     const isExplicitLegacy = (handler as any).__legacy === true;
-                    // Default to legacy-compatible behavior during the migration window.
-                    // Operators can explicitly opt out of legacy compatibility by
-                    // setting OM_LEGACY_HANDLER_MODE=false. When unset or set to
-                    // any value other than 'false' the server will run in legacy
-                    // compatible mode to avoid 500s for handlers that return undefined.
-                    const globalLegacyMode = process.env.OM_LEGACY_HANDLER_MODE !== 'false';
+                    // Default to modern (req, ctx) invocation. Legacy mode is
+                    // opt-in to avoid surprising modern handlers being invoked
+                    // with a legacy-style response shim. To enable legacy mode
+                    // set OM_LEGACY_HANDLER_MODE=true in the environment.
+                    const globalLegacyMode = process.env.OM_LEGACY_HANDLER_MODE === 'true';
 
                     // Legacy res shim (used only when legacy mode is enabled)
                     const makeResShim = () => {
@@ -260,9 +292,10 @@ export function createServer(config: { max_payload_size?: number } = {}) {
                                 const body = (ret as any).body;
                                 const isStream = body && typeof body.getReader === 'function';
                                 const contentType = ret.headers?.get?.('content-type') || '';
-                                if (isStream || (typeof contentType === 'string' && contentType.includes('stream'))) {
-                                    try { (ctx as any).skipCors = true; } catch (e) { }
-                                }
+                                // Do not auto-set ctx.skipCors here. Handlers that need
+                                // to opt-out should set `ctx.skipCors = true` themselves.
+                                // Auto-setting caused the opt-out to leak into other
+                                // responses in some runtimes.
                             } catch (e) { }
                             return ret;
                         }

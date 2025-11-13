@@ -12,6 +12,8 @@ PublishPort=8080:8080
 Restart=on-failure
 # Use user namespace remapping for rootless compatibility
 UserNS=keep-id
+# Explicit user/group to match container file permissions
+User=1001:1001
 # Environment variables (one per line for quadlet compatibility)
 Environment=OM_PORT=8080
 Environment=OM_DB_PATH=/data/openmemory.sqlite

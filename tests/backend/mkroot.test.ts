@@ -9,6 +9,9 @@ process.env.OM_DB_PATH = path.join(tmpDir, `openmemory-mkroot-${process.pid}-${D
 import { test, expect, beforeAll } from "bun:test";
 import { initDb, q, transaction } from "../../backend/src/core/db";
 
+// Disable user-scope warn in most tests to keep logs focused; mkroot relies on explicit user_id in calls.
+process.env.OM_DB_USER_SCOPE_WARN = process.env.OM_DB_USER_SCOPE_WARN || "false";
+
 beforeAll(async () => {
     await initDb();
 });
@@ -40,7 +43,7 @@ test("legacy ins_mem parameter order creates a memory row", async () => {
     );
     await transaction.commit();
 
-    const row: any = await q.get_mem.get(id);
+    const row: any = await q.get_mem.get(id, null);
     expect(row).not.toBeNull();
     expect(row.id).toBe(id);
     expect(row.primary_sector).toBe(primary_sector);

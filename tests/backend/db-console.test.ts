@@ -17,7 +17,11 @@ test("DB console prefix appears when OM_DB_CONSOLE and user-scope warn enabled",
         logs.push(args.map(String).join(" "));
     };
 
-    // Enable console-prefixed DB messages and user-scope warnings
+    // Enable console-prefixed DB messages and user-scope warnings for this test only
+    const _prev_console = process.env.OM_DB_CONSOLE;
+    const _prev_warn = process.env.OM_DB_USER_SCOPE_WARN;
+    const _prev_db_path = process.env.OM_DB_PATH;
+    const _prev_meta = process.env.OM_METADATA_BACKEND;
     process.env.OM_DB_CONSOLE = "true";
     process.env.OM_DB_USER_SCOPE_WARN = "true";
     process.env.OM_DB_PATH = ":memory:";
@@ -42,5 +46,10 @@ test("DB console prefix appears when OM_DB_CONSOLE and user-scope warn enabled",
         console.log = origLog;
         console.warn = origWarn;
         console.error = origError;
+        // Restore previous env vars so this test does not leak observability flags to other tests
+        if (_prev_console === undefined) delete process.env.OM_DB_CONSOLE; else process.env.OM_DB_CONSOLE = _prev_console;
+        if (_prev_warn === undefined) delete process.env.OM_DB_USER_SCOPE_WARN; else process.env.OM_DB_USER_SCOPE_WARN = _prev_warn;
+        if (_prev_db_path === undefined) delete process.env.OM_DB_PATH; else process.env.OM_DB_PATH = _prev_db_path;
+        if (_prev_meta === undefined) delete process.env.OM_METADATA_BACKEND; else process.env.OM_METADATA_BACKEND = _prev_meta;
     }
 });

@@ -42,6 +42,10 @@ describe('file I/O helpers', () => {
         expect(resBufPdf).toBeDefined();
         expect(resFilePdf.metadata.content_type).toBe(resBufPdf.metadata.content_type);
         expect(typeof resFilePdf.text).toBe('string');
+        // metadata enrichment: duration and file size
+        expect(typeof resFilePdf.metadata.extraction_duration_ms).toBe('number');
+        expect(resFilePdf.metadata).toHaveProperty('file_size_bytes');
+        expect(typeof resFilePdf.metadata.file_size_bytes === 'number' || resFilePdf.metadata.file_size_bytes === null).toBe(true);
 
         // DOCX: file-based vs buffer-based
         const resFileDocx = await ExtractOps.extractDOCXFromFile(sampleDocx);
@@ -51,6 +55,35 @@ describe('file I/O helpers', () => {
         expect(resBufDocx).toBeDefined();
         expect(resFileDocx.metadata.content_type).toBe(resBufDocx.metadata.content_type);
         expect(typeof resFileDocx.text).toBe('string');
+        // metadata enrichment: duration and file size
+        expect(typeof resFileDocx.metadata.extraction_duration_ms).toBe('number');
+        expect(resFileDocx.metadata).toHaveProperty('file_size_bytes');
+        expect(typeof resFileDocx.metadata.file_size_bytes === 'number' || resFileDocx.metadata.file_size_bytes === null).toBe(true);
+    });
+
+    it('octet-stream strict mode rejects unknown binaries and legacy env accepts as text', async () => {
+        const payload = Buffer.from('this-is-not-pdf-or-zip');
+        // Default: strict mode should throw
+        let threw = false;
+        try {
+            await ExtractOps.extractText('application/octet-stream', payload);
+        } catch (e: any) {
+            threw = true;
+        }
+        expect(threw).toBe(true);
+
+        // With legacy opt-in, the same payload should be accepted as text
+        const prev = process.env.OM_ACCEPT_OCTET_LEGACY;
+        try {
+            process.env.OM_ACCEPT_OCTET_LEGACY = 'true';
+            const res = await ExtractOps.extractText('application/octet-stream', payload);
+            expect(res).toBeDefined();
+            expect(res.metadata.content_type).toBe('text');
+            expect(typeof res.text).toBe('string');
+        } finally {
+            if (prev === undefined) delete process.env.OM_ACCEPT_OCTET_LEGACY;
+            else process.env.OM_ACCEPT_OCTET_LEGACY = prev;
+        }
     });
 
     it('extractText accepts common MIME types', async () => {
@@ -97,5 +130,33 @@ describe('file I/O helpers', () => {
         expect(res.root_memory_id).toBe('mock-id');
         expect(res.child_count).toBe(0);
         try { await fs.promises.unlink(smallTxt); } catch (e) { }
+    });
+
+    it('ingestDocumentFromFile enforces max size and throws FileTooLargeError', async () => {
+        const fixturesDir = path.resolve('./tests/fixtures');
+        const bigTxt = path.join(fixturesDir, 'tmp-test-ingest-large.txt');
+        const content = 'A'.repeat(200);
+        await fs.promises.writeFile(bigTxt, content);
+        const Ingest = await import('../../backend/src/ops/ingest');
+        // reuse the same DB/transaction stubs as other test
+        const fakeQ = { ins_mem: { run: async (..._a: any[]) => ({}) }, ins_waypoint: { run: async (..._a: any[]) => ({}) } };
+        const fakeTxn = { begin: async () => { }, commit: async () => { }, rollback: async () => { } };
+        (Ingest.ingestDocument as any)._q = fakeQ;
+        (Ingest.ingestDocument as any)._transaction = fakeTxn;
+        if ((ExtractOps as any).setExtractTextForTests) {
+            (ExtractOps as any).setExtractTextForTests(async (_t: any, _data: any) => ({ text: 'big file', metadata: { content_type: 'text', estimated_tokens: 1 } }));
+        }
+        (Ingest.ingestDocument as any)._add_hsg_memory = async (_txt: any, _tags: any, _meta: any, _user?: any) => ({ id: 'mock-id' });
+
+        let threw = false;
+        try {
+            await Ingest.ingestDocumentFromFile(bigTxt, 'text', undefined, { max_size_mb: 0.0001 });
+        } catch (e: any) {
+            threw = true;
+            expect(e && e.name).toBe('FileTooLargeError');
+        } finally {
+            try { await fs.promises.unlink(bigTxt); } catch (e) { }
+        }
+        expect(threw).toBe(true);
     });
 });

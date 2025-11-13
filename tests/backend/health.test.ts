@@ -7,8 +7,20 @@ async function startServerForTest() {
     if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
     const tmpDb = path.join(tmpDir, `openmemory-health-${process.pid}-${Date.now()}.sqlite`);
     process.env.OM_DB_PATH = tmpDb;
-    // Importing the server module starts it (top-level code)
-    await import("../../backend/src/server/index.ts");
+    // Import the server module and explicitly start the server so tests
+    // wait for the server to be bound before attempting HTTP requests.
+    // Some test runners import modules without awaiting side-effects, which
+    // can cause a race when the module auto-starts the server. Calling the
+    // exported startServer() function directly avoids that race.
+    const mod = await import("../../backend/src/server/index.ts");
+    if (mod && typeof mod.startServer === "function") {
+        // Prefer to start on an ephemeral port in tests to avoid collisions.
+        await mod.startServer({ port: 0, dbPath: tmpDb });
+    } else {
+        // Fallback: if the module doesn't export startServer for some reason,
+        // rely on the module's auto-start side-effect.
+        await import("../../backend/src/server/index.ts");
+    }
 }
 
 test("/health endpoint responds OK", async () => {

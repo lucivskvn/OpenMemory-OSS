@@ -151,11 +151,15 @@ Requirements:
 
 - Recommended Bun version: v1.3.2 or newer for local development and CI.
 - Prefer `Bun.file()` for large file reads/writes (ingest/extract) for better performance.
+- Runtime: Bun v1.3.2 (recommended). The backend now uses Bun.file() for file I/O in ingestion/extraction paths to improve throughput and reduce blocking I/O.
+- OIDC / Deployment: See detailed deployment notes for OIDC-enabled deployments at `docs/deployment/oidc-setup.md`.
 - Use the centralized helper for API key hashing and verification at `backend/src/utils/crypto.ts`.
 - When editing backend TypeScript, add `@types/bun` to devDependencies and include Bun typings in `tsconfig.json` to avoid type errors in CI and editors.
 
 > [!NOTE]
 > **New in v1.3.1:** Bun.file() migration for extract/ingest yields ~2–3× faster document processing. CI has been hardened with SHA-pinned actions, Trivy scanning, and SLSA attestations. See [CHANGELOG.md](CHANGELOG.md) for details.
+
+For additional CI hardening and GitHub Actions best practices, see `docs/security/github-actions-hardening.md` which outlines SHA pins, provenance, and SLSA attestation recommendations.
 
 ```bash
 git clone https://github.com/caviraoss/openmemory.git
@@ -170,6 +174,8 @@ bun run hash-key "your-secret-api-key"
 bun install
 bun run dev
 ```
+
+> Note: For file-based ingestion/extraction, clients should send accurate MIME types (for example, `application/pdf` for PDFs and `application/vnd.openxmlformats-officedocument.wordprocessingml.document` for DOCX). The server performs lightweight magic-bytes detection for generic `application/octet-stream` inputs (PDF and ZIP/DOCX detection). If you need backward-compatible permissive behavior for octet-stream payloads, set `OM_ACCEPT_OCTET_LEGACY=true` in your environment (opt-in). Using accurate MIME types avoids misclassification and is the recommended practice.
 
 ## Security: Extract DNS checks (SSRF protection)
 
@@ -662,6 +668,8 @@ Tested with LongMemEval benchmark:
 ## 12. Contributing
 
 See `CONTRIBUTING.md`, `GOVERNANCE.md`, and `CODE_OF_CONDUCT.md` for guidelines.
+
+Also see `AGENTS.md` for guidance for automated agents and contributors using the repo-level agent tooling, and refer to `CONTRIBUTING.md` for contributor workflows and PR expectations.
 
 ```bash
 make build

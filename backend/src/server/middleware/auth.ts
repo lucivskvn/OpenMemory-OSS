@@ -186,6 +186,13 @@ export function log_authenticated_request(req: Request, ctx: Context, next: () =
     return next();
 }
 
+// Test seam: allow tests to override the configured API key at runtime.
+// This avoids forcing tests to re-import internal env parsers and keeps the
+// middleware behavior deterministic in unit tests.
+export function setAuthApiKeyForTests(val: string | undefined | null) {
+    (auth_config as any).api_key = val as any;
+}
+
 setInterval(
     () => {
         const now = Date.now();

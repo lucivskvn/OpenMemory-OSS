@@ -45,6 +45,23 @@ OM_EXTRACT_DNS_CHECK=true
 
 We recommend enabling `OM_EXTRACT_DNS_CHECK=true` in production deployments (and CI runs that exercise URL extraction) to reduce SSRF risk. If your runtime does not expose a DNS resolver, the code will fall back to literal host checks unless this feature is explicitly enabled — in that case DNS resolution failures are treated as blocked to preserve safety.
 
+### MIME types and octet-stream handling
+
+When contributing to ingestion or extraction code, prefer enforcing accurate MIME types from clients rather than relying on `application/octet-stream`. The backend performs lightweight magic-bytes detection for `application/octet-stream` (PDF and ZIP/DOCX) but this can misclassify unknown binaries. For backward-compatibility a runtime opt-in exists: set `OM_ACCEPT_OCTET_LEGACY=true` to allow permissive octet-stream decoding as UTF-8 text. Document any changes to this behavior in PR descriptions and tests.
+
+Example (opt-in legacy behavior):
+
+```bash
+# Permissive octet-stream acceptance (may misclassify binary files as text)
+export OM_ACCEPT_OCTET_LEGACY=true
+bun run dev
+```
+
+Trade-offs:
+
+- Pros: preserves compatibility with clients that send generic `application/octet-stream` without correct MIME types; avoids immediate rejections.
+- Cons: may incorrectly treat binary files as text (risk of data leakage or parser errors). Prefer fixing clients to send accurate MIME types when possible.
+
 ## Code style and commits
 
 - Use TypeScript for new backend code.

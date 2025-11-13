@@ -218,6 +218,7 @@ export function dynroutes(app: any) {
 
                 const memory_record_from_database = await q.get_mem.get(
                     target_memory_id_from_request,
+                    null,
                 );
                 if (!memory_record_from_database) {
                     return outgoing_http_response
@@ -432,9 +433,11 @@ export function dynroutes(app: any) {
 
                 const source_memory_record = await q.get_mem.get(
                     source_memory_id_from_request,
+                    null,
                 );
                 const target_memory_record = await q.get_mem.get(
                     target_memory_id_from_request,
+                    null,
                 );
 
                 if (!source_memory_record || !target_memory_record) {

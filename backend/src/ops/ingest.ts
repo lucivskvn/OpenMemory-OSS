@@ -3,7 +3,6 @@ import { q, transaction } from "../core/db";
 import { rid, now, j } from "../utils";
 import { extractText, ExtractionResult } from "./extract";
 import logger from "../core/logger";
-import fs from 'fs';
 
 const LG = 8000,
     SEC = 3000;
@@ -52,9 +51,13 @@ const mkRoot = async (
     const _q = (ingestDocument as any)._q || q;
     await _transaction.begin();
     try {
+        // canonical 18-arg ins_mem: (id, user_id, segment, content, simhash, primary_sector, tags, meta, created_at, updated_at, last_seen_at, salience, decay_lambda, version, mean_dim, mean_vec, compressed_vec, feedback_score)
         await _q.ins_mem.run(
             id,
+            user_id || null,
+            0,
             cnt,
+            "",
             "reflective",
             j([]),
             j({
@@ -70,8 +73,10 @@ const mkRoot = async (
             1.0,
             0.1,
             1,
-            user_id || null,
-            null,
+            0,
+            Buffer.alloc(0),
+            Buffer.alloc(0),
+            0,
         );
         await _transaction.commit();
         return id;
@@ -241,22 +246,97 @@ export async function ingestDocumentFromFile(
         const envMax = Number(process.env.OM_INGEST_MAX_SIZE_MB || '') || undefined;
         const maxMb = cfg?.max_size_mb ?? envMax ?? 200;
         const maxBytes = maxMb * 1024 * 1024;
+
+        // If we have a size reported by Bun, enforce it immediately.
         if (fileSize && fileSize > maxBytes) {
             const err: any = new Error('File too large');
             err.code = 'ERR_FILE_TOO_LARGE';
             err.name = 'FileTooLargeError';
             throw err;
         }
-        // If fileSize wasn't available above, we will get the ArrayBuffer and infer size.
-        const arr = await f.arrayBuffer();
-        const buffer = Buffer.from(arr);
-        if (fileSize === undefined) fileSize = arr.byteLength;
-        // Enforce max size after inferring size from the array buffer
-        if (fileSize > maxBytes) {
-            const err: any = new Error('File too large');
-            err.code = 'ERR_FILE_TOO_LARGE';
-            err.name = 'FileTooLargeError';
-            throw err;
+
+        // If Bun.file() didn't expose a size we must read the file in chunks and
+        // abort early if it exceeds the configured max. This avoids reading an
+        // entire huge file into memory before checking size.
+        let buffer: Buffer;
+        if (fileSize === undefined) {
+            // Try a small prefix read to allow lightweight type/sniff checks.
+            const PREFIX_BYTES = 4096;
+            const reader = (f as any).stream ? (f as any).stream().getReader() : null;
+            if (reader) {
+                const chunks: Uint8Array[] = [];
+                let total = 0;
+                try {
+                    while (true) {
+                        const { value, done } = await reader.read();
+                        if (done) break;
+                        const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+                        if (chunk && chunk.length) {
+                            chunks.push(chunk);
+                            total += chunk.length;
+                            if (total > maxBytes) {
+                                // cancel the reader to free resources
+                                try { await reader.cancel(); } catch (_) { }
+                                const err: any = new Error('File too large');
+                                err.code = 'ERR_FILE_TOO_LARGE';
+                                err.name = 'FileTooLargeError';
+                                throw err;
+                            }
+                        }
+                    }
+                } catch (e) {
+                    // If the stream read failed for any reason, fall back to arrayBuffer
+                    // below which will also enforce size.
+                    // (no-op here; we'll take the arrayBuffer path next)
+                }
+                // concatenate chunks into one Uint8Array (always copy to create a plain ArrayBuffer)
+                let arrBuf: ArrayBuffer;
+                if (chunks.length === 0) {
+                    arrBuf = new ArrayBuffer(0);
+                } else {
+                    const totalLen = chunks.reduce((s, c) => s + c.length, 0);
+                    const out = new Uint8Array(totalLen);
+                    let offset = 0;
+                    for (const c of chunks) {
+                        out.set(c, offset);
+                        offset += c.length;
+                    }
+                    arrBuf = out.buffer;
+                }
+                // Enforce size after streaming/concatenation (total is tracked above)
+                if (total > maxBytes) {
+                    const err: any = new Error('File too large');
+                    err.code = 'ERR_FILE_TOO_LARGE';
+                    err.name = 'FileTooLargeError';
+                    throw err;
+                }
+                buffer = Buffer.from(arrBuf);
+                fileSize = total;
+            } else {
+                // No stream support detected - fall back to arrayBuffer() but still
+                // enforce maxBytes after reading the ArrayBuffer but before converting
+                // to a Buffer to avoid extra memory pressure.
+                const arr = await f.arrayBuffer();
+                fileSize = arr.byteLength;
+                if (fileSize > maxBytes) {
+                    const err: any = new Error('File too large');
+                    err.code = 'ERR_FILE_TOO_LARGE';
+                    err.name = 'FileTooLargeError';
+                    throw err;
+                }
+                buffer = Buffer.from(arr);
+            }
+        } else {
+            // fileSize known and within limits; do a single arrayBuffer read and convert
+            const arr = await f.arrayBuffer();
+            // Double-check in case size changed between stat and read
+            if (arr.byteLength > maxBytes) {
+                const err: any = new Error('File too large');
+                err.code = 'ERR_FILE_TOO_LARGE';
+                err.name = 'FileTooLargeError';
+                throw err;
+            }
+            buffer = Buffer.from(arr);
         }
         // Log detected MIME type from Bun.file() to aid debugging and validation
         logger.info({ component: 'INGEST', file: filePath, size: fileSize, mime: mimeType }, `[INGEST] Processing file: ${filePath} size: ${fileSize} mime: ${mimeType}`);

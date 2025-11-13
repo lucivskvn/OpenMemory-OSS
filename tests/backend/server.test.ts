@@ -32,6 +32,10 @@ describe("CORS middleware and streaming opt-out", () => {
             expect(r1.headers.get("Access-Control-Allow-Origin")).toBeNull();
             expect(r1.headers.get("Access-Control-Allow-Credentials")).toBeNull();
 
+            // Drain the streaming body to ensure the server finishes request lifecycle
+            // and releases any per-request resources before issuing the next request.
+            try { await r1.text(); } catch (e) { /* ignore read errors */ }
+
             const r2 = await fetch(`http://localhost:${port}/json`);
             expect(r2.headers.get("Access-Control-Allow-Origin")).toBe("*");
             // Default OM_CORS_CREDENTIALS is false, so header should be 'false'
