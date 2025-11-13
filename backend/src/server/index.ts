@@ -218,6 +218,15 @@ export async function startServer(options?: { port?: number; dbPath?: string }) 
     // Determine the actual bound port when the caller requested port 0.
     const actualPort = (srv as any)?.port || listenPort;
 
+    // Expose the actual bound port via env so tests and external tools can
+    // reliably discover the server port after auto-start. Some tests import
+    // this module and expect `process.env.OM_PORT` to reflect the runtime
+    // port; set it here so callers that read it after importing will see the
+    // right value.
+    try {
+        process.env.OM_PORT = String(actualPort);
+    } catch (e) { }
+
     return {
         port: actualPort,
         stop: async () => {
