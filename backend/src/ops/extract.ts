@@ -274,8 +274,37 @@ export async function extractText(contentType: string, data: string | Buffer | A
         case 'pdf':
             return extractPDF(buffer);
         case 'docx':
-        case 'doc':
             return extractDOCX(buffer);
+        case 'doc':
+            // `application/msword` historically refers to legacy binary DOC files.
+            // Mammoth only supports DOCX (ZIP-based) files. To avoid attempting
+            // to parse legacy .doc with mammoth, check for the ZIP signature
+            // (PK\x03\x04) and treat only ZIP-backed payloads as DOCX.
+            try {
+                const sig4 = buffer.slice(0, 4);
+                const isZip = sig4.length >= 4 && sig4[0] === 0x50 && sig4[1] === 0x4b && sig4[2] === 0x03 && sig4[3] === 0x04;
+                if (isZip) {
+                    // Treat as DOCX container
+                    return extractDOCX(buffer);
+                }
+            } catch (e) {
+                // fallthrough to passthrough below
+            }
+            // Fallback: do a safe UTF-8 passthrough for legacy .doc to avoid
+            // mis-parsing or throwing during extraction. If callers prefer to
+            // reject legacy .doc explicitly, change this to throw.
+            {
+                const str = buffer.toString('utf8');
+                return {
+                    text: str,
+                    metadata: {
+                        content_type: 'doc',
+                        char_count: str.length,
+                        estimated_tokens: estimateTokens(str),
+                        extraction_method: 'passthrough',
+                    },
+                };
+            }
         case 'html':
         case 'htm':
             return extractHTML(buffer.toString('utf8'));

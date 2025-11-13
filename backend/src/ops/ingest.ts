@@ -262,9 +262,10 @@ export async function ingestDocumentFromFile(
         if (fileSize === undefined) {
                 // Try a small prefix read to allow lightweight type/sniff checks.
             const reader = (f as any).stream ? (f as any).stream().getReader() : null;
-            if (reader) {
+                if (reader) {
                 const chunks: Uint8Array[] = [];
-                    let total = 0;
+                let total = 0;
+                let streamTruncated = false;
                 try {
                     while (true) {
                         const { value, done } = await reader.read();
@@ -283,9 +284,8 @@ export async function ingestDocumentFromFile(
                             }
                             // If we've read a small prefix sufficient for MIME sniffing,
                             // break early to avoid reading the entire file into memory here.
-                            // We'll rely on `f.arrayBuffer()` below to obtain the full
-                            // contents when necessary (and it will re-check size limits).
                             if (total >= 4096) {
+                                streamTruncated = true;
                                 try { await reader.cancel(); } catch (_) { }
                                 break;
                             }
@@ -296,6 +296,20 @@ export async function ingestDocumentFromFile(
                     // below which will also enforce size.
                     // (no-op here; we'll take the arrayBuffer path next)
                 }
+                // If we only read a prefix for sniffing, perform a full read now to
+                // obtain the complete contents (and re-check size limits).
+                if (streamTruncated) {
+                    const arr = await f.arrayBuffer();
+                    const fullSize = arr.byteLength;
+                    if (fullSize > maxBytes) {
+                        const err: any = new Error('File too large');
+                        err.code = 'ERR_FILE_TOO_LARGE';
+                        err.name = 'FileTooLargeError';
+                        throw err;
+                    }
+                    buffer = Buffer.from(arr);
+                    fileSize = fullSize;
+                } else {
                 // concatenate chunks into one Uint8Array (always copy to create a plain ArrayBuffer)
                 let arrBuf: ArrayBuffer;
                 if (chunks.length === 0) {
@@ -319,6 +333,7 @@ export async function ingestDocumentFromFile(
                 }
                 buffer = Buffer.from(arrBuf);
                 fileSize = total;
+                }
             } else {
                 // No stream support detected - fall back to arrayBuffer() but still
                 // enforce maxBytes after reading the ArrayBuffer but before converting
