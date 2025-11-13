@@ -212,7 +212,7 @@ bun install
 bun run dev
 ```
 
-The dashboard runs on `http://localhost:3000`.
+The dashboard runs on `http://localhost:8080`.
 
 **Configuration (.env.local):**
 
@@ -522,10 +522,10 @@ Claude Code supports HTTP MCP servers natively. Since OpenMemory provides an HTT
 
 ```bash
 # Add globally (available in all projects)
-claude mcp add --transport http --scope user openmemory http://localhost:3000/mcp
+claude mcp add --transport http --scope user openmemory http://localhost:8080/mcp
 
 # Or add to current project only
-claude mcp add --transport http openmemory http://localhost:3000/mcp
+claude mcp add --transport http openmemory http://localhost:8080/mcp
 ```
 
 **Method 2: Manual Configuration**
@@ -537,10 +537,27 @@ Add to `~/.claude.json` (global) or `.mcp.json` (project-specific):
   "mcpServers": {
     "openmemory": {
       "type": "http",
-      "url": "http://localhost:3000/mcp"
+      "url": "http://localhost:8080/mcp"
     }
   }
 }
+
+or
+
+{
+  "mcpServers": {
+    "openmemory": {
+      "headers": {
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+        "x-api-key": "{OM_API_KEY}"
+      },
+      "type": "http",
+      "url": "http://120.0.0.1:8080/mcp"
+    }
+  }
+}
+
 ```
 
 Then restart Claude Code.
@@ -552,7 +569,7 @@ Then restart Claude Code.
 - `mcp__openmemory__get` - Retrieve specific memory by ID
 - `mcp__openmemory__reinforce` - Boost memory salience
 
-**Note**: Make sure your OpenMemory Docker container is running on `http://localhost:3000` before connecting.
+**Note**: Make sure your OpenMemory Docker container is running on `http://localhost:8080` before connecting.
 
 [![MseeP.ai Security Assessment Badge](https://mseep.net/pr/caviraoss-openmemory-badge.png)](https://mseep.ai/app/caviraoss-openmemory)
 
@@ -775,6 +792,13 @@ make test
                     <img src="https://avatars.githubusercontent.com/u/2829939?v=4" width="100;" alt="lwsinclair"/>
                     <br />
                     <sub><b>Lawrence Sinclair</b></sub>
+                </a>
+            </td>
+            <td align="center">
+                <a href="https://github.com/Hchunjun">
+                    <img src="https://avatars.githubusercontent.com/u/11238835?v=4" width="100;" alt="Hchunjun"/>
+                    <br />
+                    <sub><b>鱼</b></sub>
                 </a>
             </td>
 		</tr>
