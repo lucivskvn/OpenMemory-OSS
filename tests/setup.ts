@@ -37,6 +37,29 @@ beforeAll(async () => {
   // specifically assert the presence of these warnings (e.g. db-console.test.ts)
   // will enable OM_DB_USER_SCOPE_WARN explicitly in their own environment.
   process.env.OM_DB_USER_SCOPE_WARN = process.env.OM_DB_USER_SCOPE_WARN || "false";
+
+  // Ensure tests use a hashed OM_API_KEY to avoid plaintext API key warnings
+  // during the test run. When running under Bun we can compute an Argon2 hash
+  // at runtime; otherwise fall back to a bcrypt-like placeholder to satisfy
+  // `isHashedKey()` checks in tests.
+  if (!process.env.OM_API_KEY) {
+    try {
+      if (typeof Bun !== "undefined" && (Bun as any).password && Bun.password.hash) {
+        // Use a deterministic, test-only plaintext and hash it so tests can
+        // exercise hashed-key flows without leaking secrets.
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const hashed = await Bun.password.hash("test-integration-key");
+        process.env.OM_API_KEY = hashed;
+      } else {
+        // A bcrypt-style placeholder that satisfies `isHashedKey()` regex.
+        process.env.OM_API_KEY = "$2b$12$abcdefghijklmnopqrstuvABCDEFGHIJKLMNO";
+      }
+    } catch (e) {
+      // If hashing fails for any reason, set a bcrypt-like placeholder to avoid
+      // triggering plaintext-key warnings during tests.
+      process.env.OM_API_KEY = "$2b$12$abcdefghijklmnopqrstuvABCDEFGHIJKLMNO";
+    }
+  }
   // When running under Bun we can import the server module in-process which is
   // simpler and avoids child-process lifecycle issues. Otherwise fall back to spawn.
   if (typeof Bun !== "undefined") {
