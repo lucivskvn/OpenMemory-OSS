@@ -76,6 +76,9 @@ async function initDb() {
         : process.env.OM_DB_PATH || env.db_path || "./data/openmemory.sqlite");
     if (_initialized_db_path === desiredPath) return;
     const is_pg = (process.env.OM_METADATA_BACKEND || env.metadata_backend) === "postgres";
+    // Tenant enforcement is controlled by the environment variable
+    // `OM_STRICT_TENANT`. Do not set a default here so test harnesses and
+    // programmatic callers can control tenant mode explicitly.
     /*
      Postgres runtime behavior and fallback
      --------------------------------------
@@ -323,6 +326,26 @@ async function initDb() {
             await bunClient.query(
                 `create table if not exists "${sc}"."openmemory_users"(user_id text primary key,summary text,reflection_count integer default 0,created_at bigint,updated_at bigint)`
             );
+            // Ensure maintenance/statistics and temporal tables exist in Postgres
+            // to match the SQLite branch. These tables power maintenance logging
+            // (`log_maint_op`) and temporal facts/edges features used in tests
+            // and some domain workflows.
+            await bunClient.query(
+                `create table if not exists "${sc}"."openmemory_stats"(id bigserial primary key,type text not null,count integer default 1,ts bigint not null)`
+            );
+            await bunClient.query(
+                `create table if not exists "${sc}"."openmemory_temporal_facts"(id text primary key,subject text not null,predicate text not null,object text not null,valid_from bigint not null,valid_to bigint,confidence double precision not null check(confidence >= 0 and confidence <= 1),last_updated bigint not null,metadata text,unique(subject,predicate,object,valid_from))`
+            );
+            await bunClient.query(
+                `create table if not exists "${sc}"."openmemory_temporal_edges"(id text primary key,source_id text not null,target_id text not null,relation_type text not null,valid_from bigint not null,valid_to bigint,weight double precision not null,metadata text)`
+            );
+            // Create helpful indexes similar to the SQLite branch
+            await bunClient.query(`create index if not exists "idx_stats_ts" on "${sc}"."openmemory_stats"(ts)`);
+            await bunClient.query(`create index if not exists "idx_temporal_subject" on "${sc}"."openmemory_temporal_facts"(subject)`);
+            await bunClient.query(`create index if not exists "idx_temporal_predicate" on "${sc}"."openmemory_temporal_facts"(predicate)`);
+            await bunClient.query(`create index if not exists "idx_temporal_validity" on "${sc}"."openmemory_temporal_facts"(valid_from,valid_to)`);
+            await bunClient.query(`create index if not exists "idx_edges_source" on "${sc}"."openmemory_temporal_edges"(source_id)`);
+            await bunClient.query(`create index if not exists "idx_edges_target" on "${sc}"."openmemory_temporal_edges"(target_id)`);
         } catch (e) {
             logger.error({ component: "DB", err: e }, "[DB] Failed to create tables with Bun Postgres client");
             throw e;

@@ -68,11 +68,15 @@ jobs:
           sarif_file: trivy-results.sarif
 
       - name: Generate Build Attestation (Test)
+        # Only run attestation when the build action emitted a digest. This workflow is deprecated
+        # (it uses `load: true`) and may not reliably produce a digest. Guard the attestation
+        # to avoid failing the workflow when no digest is available. `ci.yml` remains the
+        # source-of-truth for attestations in main CI.
+        if: ${{ steps.build-backend.outputs.digest != '' }}
         uses: actions/attest-build-provenance@f8d5ea8082b0d9f5ab855907be308fbd7eefb155 # v1.1.0
         with:
           subject-name: openmemory-backend:test
-          # Use the digest emitted by the build step when available. The build step sets `id: build-backend` and `load: true`
-          # so CI can reference the resulting image digest if provided by the action outputs.
+          # Use the digest emitted by the build step when available.
           subject-digest: ${{ steps.build-backend.outputs.digest }}
 
       - name: Container smoke test (Docker)

@@ -101,6 +101,10 @@ export function mem(app: any) {
             if (e?.code === "ERR_FILE_TOO_LARGE" || e?.name === "FileTooLargeError") {
                 return new Response(JSON.stringify({ err: "file_too_large", msg: e.message }), { status: 413 });
             }
+            // Map unsupported content type to 415
+            if (e?.name === 'UnsupportedContentTypeError') {
+                return new Response(JSON.stringify({ err: 'unsupported_media_type', msg: e.message }), { status: 415 });
+            }
             return new Response(JSON.stringify({ err: "ingest_fail", msg: e.message }), { status: 500 });
         }
     });
@@ -114,6 +118,9 @@ export function mem(app: any) {
         } catch (e: any) {
             if (e?.code === "ERR_FILE_TOO_LARGE" || e?.name === "FileTooLargeError") {
                 return new Response(JSON.stringify({ err: "file_too_large", msg: e.message }), { status: 413 });
+            }
+            if (e?.name === 'UnsupportedContentTypeError') {
+                return new Response(JSON.stringify({ err: 'unsupported_media_type', msg: e.message }), { status: 415 });
             }
             return new Response(JSON.stringify({ err: "url_fail", msg: e.message }), { status: 500 });
         }

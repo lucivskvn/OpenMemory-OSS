@@ -3,6 +3,7 @@ import { q, transaction } from "../core/db";
 import { rid, now, j } from "../utils";
 import { extractText, ExtractionResult } from "./extract";
 import logger from "../core/logger";
+import { getNormalizedFileSize, logFileProcessing } from "../utils/file";
 
 const LG = 8000,
     SEC = 3000;
@@ -13,6 +14,8 @@ export interface ingestion_cfg {
     lg_thresh?: number;
     // Optional override for max ingest size in megabytes
     max_size_mb?: number;
+    // Optional: prefer Bun-detected MIME over provided contentType when provided type is likely wrong
+    prefer_detected_mime?: boolean;
 }
 export interface IngestionResult {
     root_memory_id: string;
@@ -81,7 +84,7 @@ const mkRoot = async (
         await _transaction.commit();
         return id;
     } catch (e) {
-        logger.error({ component: "INGEST", err: e }, "[INGEST] Root failed: %o", e);
+        logger.error({ component: "INGEST", err: e }, "Root failed");
         await _transaction.rollback();
         throw e;
     }
@@ -123,10 +126,10 @@ const link = async (
     try {
         await _q.ins_waypoint.run(rid, cid, user_id || null, 1.0, ts, ts);
         await _transaction.commit();
-        logger.info({ component: "INGEST" }, "[INGEST] Linked: %s -> %s (section %d)", rid.slice(0, 8), cid.slice(0, 8), idx);
+        logger.info({ component: "INGEST", root: rid.slice(0, 8), child: cid.slice(0, 8), section: idx }, "Linked");
     } catch (e) {
         await _transaction.rollback();
-        logger.error({ component: "INGEST", err: e }, "[INGEST] Link failed for section %d: %o", idx, e);
+        logger.error({ component: "INGEST", err: e, section: idx }, "Link failed");
         throw e;
     }
 };
@@ -170,15 +173,15 @@ export async function ingestDocument(
     }
 
     const secs = split(text, sz);
-    logger.info({ component: "INGEST", tokens: exMeta.estimated_tokens }, "[INGEST] Document: %d tokens", exMeta.estimated_tokens);
-    logger.info({ component: "INGEST", sections: secs.length }, "[INGEST] Splitting into %d sections", secs.length);
+    logger.info({ component: "INGEST", tokens: exMeta.estimated_tokens }, "Document token count");
+    logger.info({ component: "INGEST", sections: secs.length }, "Splitting into sections");
 
     let rid: string;
     const cids: string[] = [];
 
     try {
         rid = await mkRoot(text, ex, meta, user_id);
-        logger.info({ component: "INGEST", root: rid }, "[INGEST] Root memory created: %s", rid);
+        logger.info({ component: "INGEST", root: rid }, "Root memory created");
         for (let i = 0; i < secs.length; i++) {
             try {
                 const cid = await mkChild(
@@ -191,13 +194,13 @@ export async function ingestDocument(
                 );
                 cids.push(cid);
                 await link(rid, cid, i, user_id);
-                logger.info({ component: "INGEST", section: i + 1, total_sections: secs.length, id: cid }, "[INGEST] Section %d/%d processed: %s", i + 1, secs.length, cid);
+                logger.info({ component: "INGEST", section: i + 1, total_sections: secs.length, id: cid }, "Section processed");
             } catch (e) {
-                logger.error({ component: "INGEST", err: e }, "[INGEST] Section %d/%d failed: %o", i + 1, secs.length, e);
+                logger.error({ component: "INGEST", err: e, section: i + 1, total_sections: secs.length }, "Section failed");
                 throw e;
             }
         }
-        logger.info({ component: "INGEST", root: rid, linked: cids.length }, "[INGEST] Completed: %d sections linked to %s", cids.length, rid);
+        logger.info({ component: "INGEST", root: rid, linked: cids.length }, "Completed sections linked");
         return {
             root_memory_id: rid,
             child_count: secs.length,
@@ -206,7 +209,7 @@ export async function ingestDocument(
             extraction: exMeta,
         };
     } catch (e) {
-        logger.error({ component: "INGEST", err: e }, "[INGEST] Document ingestion failed: %o", e);
+        logger.error({ component: "INGEST", err: e }, "Document ingestion failed");
         throw e;
     }
 }
@@ -230,16 +233,8 @@ export async function ingestDocumentFromFile(
         const f = Bun.file(filePath);
         const exists = await f.exists();
         if (!exists) throw new Error('File not found');
-        // Try to obtain a size without reading the whole file when possible.
-        let fileSize: number | undefined = undefined;
-        try {
-            // Bun may expose a numeric `size` property; handle Promise or number.
-            const maybeSize: any = (f as any).size;
-            if (typeof maybeSize === 'number') fileSize = maybeSize;
-            else if (maybeSize && typeof maybeSize.then === 'function') fileSize = await maybeSize;
-        } catch (_) {
-            // ignore, we'll fallback to detecting size later
-        }
+        // Normalize file size (Bun may expose `size` as number or Promise)
+        let fileSize = await getNormalizedFileSize(f);
         // Bun.file().type is best-effort; call it now
         const mimeType = (f as any).type;
         // Determine max size: priority: cfg param -> env var -> default 200 MB
@@ -255,84 +250,80 @@ export async function ingestDocumentFromFile(
             throw err;
         }
 
-        // If Bun.file() didn't expose a size we must read the file in chunks and
-        // abort early if it exceeds the configured max. This avoids reading an
-        // entire huge file into memory before checking size.
+        // If Bun.file() didn't expose a size (null or undefined) we must read the
+        // file in chunks and abort early if it exceeds the configured max. This
+        // avoids reading an entire huge file into memory before checking size.
         let buffer: Buffer;
-        if (fileSize === undefined) {
-                // Try a small prefix read to allow lightweight type/sniff checks.
+        // treat both `null` and `undefined` as missing size
+        if (fileSize == null) {
+        // Try a small prefix read to allow lightweight type/sniff checks.
             const reader = (f as any).stream ? (f as any).stream().getReader() : null;
-                if (reader) {
+            if (reader) {
+                // Read the entire stream in a single pass (no double-read). Enforce
+                // maxBytes while streaming to avoid excessive memory use.
                 const chunks: Uint8Array[] = [];
                 let total = 0;
-                let streamTruncated = false;
+                let streamOk = false;
                 try {
                     while (true) {
                         const { value, done } = await reader.read();
-                        if (done) break;
+                        if (done) {
+                            streamOk = true;
+                            break;
+                        }
                         const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
                         if (chunk && chunk.length) {
                             chunks.push(chunk);
                             total += chunk.length;
                             if (total > maxBytes) {
-                                // cancel the reader to free resources
                                 try { await reader.cancel(); } catch (_) { }
                                 const err: any = new Error('File too large');
                                 err.code = 'ERR_FILE_TOO_LARGE';
                                 err.name = 'FileTooLargeError';
                                 throw err;
                             }
-                            // If we've read a small prefix sufficient for MIME sniffing,
-                            // break early to avoid reading the entire file into memory here.
-                            if (total >= 4096) {
-                                streamTruncated = true;
-                                try { await reader.cancel(); } catch (_) { }
-                                break;
-                            }
                         }
                     }
                 } catch (e) {
-                    // If the stream read failed for any reason, fall back to arrayBuffer
-                    // below which will also enforce size.
-                    // (no-op here; we'll take the arrayBuffer path next)
+                    // Streaming read failed; best-effort cancel and fall back to arrayBuffer
+                    try { await reader.cancel(); } catch (_) { }
                 }
-                // If we only read a prefix for sniffing, perform a full read now to
-                // obtain the complete contents (and re-check size limits).
-                if (streamTruncated) {
+
+                if (streamOk) {
+                    // concatenate chunks into one ArrayBuffer only when stream succeeded
+                    let arrBuf: ArrayBuffer;
+                    if (chunks.length === 0) {
+                        arrBuf = new ArrayBuffer(0);
+                    } else {
+                        const totalLen = chunks.reduce((s, c) => s + c.length, 0);
+                        const out = new Uint8Array(totalLen);
+                        let offset = 0;
+                        for (const c of chunks) {
+                            out.set(c, offset);
+                            offset += c.length;
+                        }
+                        arrBuf = out.buffer;
+                    }
+                    // total is tracked above
+                    if (total > maxBytes) {
+                        const err: any = new Error('File too large');
+                        err.code = 'ERR_FILE_TOO_LARGE';
+                        err.name = 'FileTooLargeError';
+                        throw err;
+                    }
+                    buffer = Buffer.from(arrBuf);
+                    fileSize = total;
+                } else {
+                    // Streaming failed; fallback to arrayBuffer and enforce limits there
                     const arr = await f.arrayBuffer();
-                    const fullSize = arr.byteLength;
-                    if (fullSize > maxBytes) {
+                    fileSize = arr.byteLength;
+                    if (fileSize > maxBytes) {
                         const err: any = new Error('File too large');
                         err.code = 'ERR_FILE_TOO_LARGE';
                         err.name = 'FileTooLargeError';
                         throw err;
                     }
                     buffer = Buffer.from(arr);
-                    fileSize = fullSize;
-                } else {
-                // concatenate chunks into one Uint8Array (always copy to create a plain ArrayBuffer)
-                let arrBuf: ArrayBuffer;
-                if (chunks.length === 0) {
-                    arrBuf = new ArrayBuffer(0);
-                } else {
-                    const totalLen = chunks.reduce((s, c) => s + c.length, 0);
-                    const out = new Uint8Array(totalLen);
-                    let offset = 0;
-                    for (const c of chunks) {
-                        out.set(c, offset);
-                        offset += c.length;
-                    }
-                    arrBuf = out.buffer;
-                }
-                // Enforce size after streaming/concatenation (total is tracked above)
-                if (total > maxBytes) {
-                    const err: any = new Error('File too large');
-                    err.code = 'ERR_FILE_TOO_LARGE';
-                    err.name = 'FileTooLargeError';
-                    throw err;
-                }
-                buffer = Buffer.from(arrBuf);
-                fileSize = total;
                 }
             } else {
                 // No stream support detected - fall back to arrayBuffer() but still
@@ -361,7 +352,7 @@ export async function ingestDocumentFromFile(
             buffer = Buffer.from(arr);
         }
         // Log detected MIME type from Bun.file() to aid debugging and validation
-        logger.info({ component: 'INGEST', file: filePath, size: fileSize, mime: mimeType }, `[INGEST] Processing file: ${filePath} size: ${fileSize} mime: ${mimeType}`);
+        logFileProcessing("INGEST", filePath, fileSize, mimeType, "bun-file");
         // Optional quick validation: if a contentType was provided and it disagrees with Bun's
         // detected type, log a warning so callers can see potential mismatches. Compare
         // normalized MIME types (split on ';') to avoid false positives when charsets are present.
@@ -369,12 +360,25 @@ export async function ingestDocumentFromFile(
         const normDetected = (mimeType || '').split(';')[0].trim().toLowerCase();
         if (normProvided && normDetected && normProvided !== normDetected) {
             // Surface potential user misconfigurations at WARN level so they are more visible
-            logger.warn({ component: 'INGEST', file: filePath, provided: contentType, detected: mimeType }, `[INGEST] Provided contentType '%s' differs from detected mime '%s'`, contentType, mimeType);
+            logger.warn({ component: 'INGEST', file: filePath, provided: contentType, detected: mimeType }, 'Provided contentType differs from detected mime');
         }
         // If contentType is missing or generic, prefer the detected mime type from Bun.file()
         let effectiveType = contentType;
         if (!effectiveType || effectiveType === 'application/octet-stream') {
             effectiveType = mimeType || effectiveType;
+        }
+        // Optional opt-in: prefer detected MIME when provided type is a generic text/* but detected is a stronger type
+        const preferDetected = cfg?.prefer_detected_mime || (process.env.OM_INGEST_PREFER_DETECTED || '').toLowerCase() === 'true';
+        if (preferDetected && normProvided.startsWith('text') && normDetected) {
+            const preferSet = new Set([
+                'application/pdf',
+                'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                'text/html',
+            ]);
+            if (preferSet.has(normDetected)) {
+                effectiveType = normDetected;
+                logger.info({ component: 'INGEST', file: filePath, provided: contentType, detected: mimeType }, 'Overriding provided contentType with detected MIME since prefer_detected_mime is enabled');
+            }
         }
         // If both provided contentType and Bun.file().type are absent, try to infer from extension
         if (!effectiveType) {
@@ -389,10 +393,10 @@ export async function ingestDocumentFromFile(
         }
         // Keep existing mismatch warning when both are present and differ
         const result = await ingestDocument(effectiveType, buffer, meta, cfg, user_id);
-        logger.info({ component: 'INGEST', file: filePath, duration: Date.now() - start }, `[INGEST] Completed ingestion for ${filePath} in ${Date.now() - start}ms`);
+        logger.info({ component: 'INGEST', file: filePath, duration: Date.now() - start }, 'Completed ingestion');
         return result;
     } catch (e) {
-        logger.error({ component: 'INGEST', file: filePath, err: e }, `[INGEST] File ingestion failed for ${filePath}: %o`, e);
+        logger.error({ component: 'INGEST', file: filePath, err: e }, 'File ingestion failed');
         throw e;
     }
 }
@@ -431,15 +435,15 @@ export async function ingestURL(
     }
 
     const secs = split(ex.text, sz);
-    logger.info({ component: "INGEST", tokens: ex.metadata.estimated_tokens }, "[INGEST] URL: %d tokens", ex.metadata.estimated_tokens);
-    logger.info({ component: "INGEST", sections: secs.length }, "[INGEST] Splitting into %d sections", secs.length);
+    logger.info({ component: "INGEST", tokens: ex.metadata.estimated_tokens }, "URL token count");
+    logger.info({ component: "INGEST", sections: secs.length }, "Splitting into sections");
 
     let rid: string;
     const cids: string[] = [];
 
     try {
         rid = await mkRoot(ex.text, ex, { ...meta, source_url: url }, user_id);
-        logger.info({ component: "INGEST", root: rid }, "[INGEST] Root memory for URL: %s", rid);
+        logger.info({ component: "INGEST", root: rid }, "Root memory for URL created");
         for (let i = 0; i < secs.length; i++) {
             try {
                 const cid = await mkChild(
@@ -452,13 +456,13 @@ export async function ingestURL(
                 );
                 cids.push(cid);
                 await link(rid, cid, i, user_id);
-                logger.info({ component: "INGEST", section: i + 1, total_sections: secs.length, id: cid }, "[INGEST] URL section %d/%d processed: %s", i + 1, secs.length, cid);
+                logger.info({ component: "INGEST", section: i + 1, total_sections: secs.length, id: cid }, "URL section processed");
             } catch (e) {
-                logger.error({ component: "INGEST", err: e }, "[INGEST] URL section %d/%d failed: %o", i + 1, secs.length, e);
+                logger.error({ component: "INGEST", err: e, section: i + 1, total_sections: secs.length }, "URL section failed");
                 throw e;
             }
         }
-        logger.info({ component: "INGEST", root: rid, linked: cids.length }, "[INGEST] URL completed: %d sections linked to %s", cids.length, rid);
+        logger.info({ component: "INGEST", root: rid, linked: cids.length }, "URL completed sections linked");
         return {
             root_memory_id: rid,
             child_count: secs.length,
@@ -467,7 +471,7 @@ export async function ingestURL(
             extraction: ex.metadata,
         };
     } catch (e) {
-        logger.error({ component: "INGEST", err: e }, "[INGEST] URL ingestion failed: %o", e);
+        logger.error({ component: "INGEST", err: e }, "URL ingestion failed");
         throw e;
     }
 }

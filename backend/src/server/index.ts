@@ -168,8 +168,8 @@ export async function startServer(options?: { port?: number; dbPath?: string }) 
 
     // Show the ASCII header: structured log (base64) + colored terminal banner when TTY
     showBanner(ASC);
-    logger.info({ component: "SERVER", runtime: `Bun v${Bun.version}` }, "Server starting...");
-    logger.info({ component: "CONFIG", tier: tier, vector_dim: env.vec_dim, cache_segments: env.cache_segments, max_active_queries: env.max_active }, "Configuration loaded");
+    logger.info({ component: "SERVER", runtime: `Bun v${Bun.version}` }, "[SERVER] Server starting...");
+    logger.info({ component: "CONFIG", tier: tier, vector_dim: env.vec_dim, cache_segments: env.cache_segments, max_active_queries: env.max_active }, "[CONFIG] Configuration loaded");
 
     app.use(request_logger_mw());
     app.use(req_tracker_mw());
@@ -187,30 +187,30 @@ export async function startServer(options?: { port?: number; dbPath?: string }) 
 
     mcp(app);
     if (env.mode === "langgraph") {
-        logger.info({ component: "MODE", mode: "langgraph" }, "LangGraph integration enabled");
+        logger.info({ component: "MODE", mode: "langgraph" }, "[MODE] LangGraph integration enabled");
     }
 
     const decayIntervalMs = env.decay_interval_minutes * 60 * 1000;
-    logger.info({ component: "DECAY", interval_minutes: env.decay_interval_minutes, interval_ms: decayIntervalMs }, "Decay process configured");
+    logger.info({ component: "DECAY", interval_minutes: env.decay_interval_minutes, interval_ms: decayIntervalMs }, "[DECAY] Decay process configured");
 
     decayIntervalId = setInterval(async () => {
-        logger.info({ component: "DECAY" }, "Running HSG decay process...");
+        logger.info({ component: "DECAY" }, "[DECAY] Running HSG decay process...");
         try {
             const result = await run_decay_process();
-            logger.info({ component: "DECAY", decayed: result.decayed, processed: result.processed }, "Decay process completed");
+            logger.info({ component: "DECAY", decayed: result.decayed, processed: result.processed }, "[DECAY] Decay process completed");
         } catch (error) {
-            logger.error({ component: "DECAY", err: error }, "Decay process failed");
+            logger.error({ component: "DECAY", err: error }, "[DECAY] Decay process failed");
         }
     }, decayIntervalMs);
 
     pruneIntervalId = setInterval(
         async () => {
-            logger.info({ component: "PRUNE" }, "Pruning weak waypoints...");
+            logger.info({ component: "PRUNE" }, "[PRUNE] Pruning weak waypoints...");
             try {
                 const pruned = await prune_weak_waypoints();
-                logger.info({ component: "PRUNE", pruned_count: pruned }, "Pruning completed");
+                logger.info({ component: "PRUNE", pruned_count: pruned }, "[PRUNE] Pruning completed");
             } catch (error) {
-                logger.error({ component: "PRUNE", err: error }, "Pruning failed");
+                logger.error({ component: "PRUNE", err: error }, "[PRUNE] Pruning failed");
             }
         },
         7 * 24 * 60 * 60 * 1000,
@@ -218,17 +218,17 @@ export async function startServer(options?: { port?: number; dbPath?: string }) 
 
     run_decay_process()
         .then((result: any) => {
-            logger.info({ component: "INIT", decayed: result.decayed, processed: result.processed }, "Initial decay process completed");
+            logger.info({ component: "INIT", decayed: result.decayed, processed: result.processed }, "[INIT] Initial decay process completed");
         })
-        .catch((err) => logger.error({ component: "INIT", err }, "Initial decay failed"));
+        .catch((err) => logger.error({ component: "INIT", err }, "[INIT] Initial decay failed"));
 
     start_reflection();
     start_user_summary_reflection();
 
     const listenPort = options?.port ?? env.port;
-    logger.info({ component: "SERVER", port: listenPort }, `Starting server...`);
+    logger.info({ component: "SERVER", port: listenPort }, `[SERVER] Starting server...`);
     const srv = app.listen(listenPort, () => {
-        logger.info({ component: "SERVER", url: `http://localhost:${listenPort}` }, "Server running");
+        logger.info({ component: "SERVER", url: `http://localhost:${listenPort}` }, `[SERVER] Server running`);
     });
 
     // Determine the actual bound port when the caller requested port 0.

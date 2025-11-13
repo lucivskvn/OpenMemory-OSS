@@ -1,6 +1,8 @@
-++ new file mode 100644
 import { describe, it, expect } from 'bun:test';
 import { extractText } from '../../backend/src/ops/extract';
+
+// Ensure no other tests left a mock on `extractText`.
+(extractText as any)._mock = undefined;
 
 describe('extract msword handling', () => {
     it('treats ZIP-backed application/msword as docx', async () => {

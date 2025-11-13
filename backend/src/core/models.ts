@@ -7,17 +7,22 @@ let cfg: model_cfg | null = null;
 
 export const load_models = (): model_cfg => {
     if (cfg) return cfg;
-    const p = join(__dirname, "../../../models.yml");
+    // Allow tests or deployments to override the models.yml path via env
+    const p = process.env.OM_MODELS_PATH || join(__dirname, "../../../models.yml");
     if (!existsSync(p)) {
         console.warn("[MODELS] models.yml not found, using defaults");
         return get_defaults();
     }
     try {
         const yml = readFileSync(p, "utf-8");
-        cfg = parse_yaml(yml);
-        console.log(
-            `[MODELS] Loaded models.yml (${Object.keys(cfg).length} sectors)`,
-        );
+        const parsed = parse_yaml(yml);
+        if (!parsed || Object.keys(parsed).length === 0) {
+            console.warn("[MODELS] Parsed models.yml is empty or invalid, using defaults");
+            cfg = get_defaults();
+            return cfg;
+        }
+        cfg = parsed;
+        console.log(`[MODELS] Loaded models.yml (${Object.keys(cfg).length} sectors)`);
         return cfg;
     } catch (e) {
         console.error("[MODELS] Failed to parse models.yml:", e);
@@ -29,19 +34,23 @@ const parse_yaml = (yml: string): model_cfg => {
     const lines = yml.split("\n");
     const obj: model_cfg = {};
     let cur_sec: string | null = null;
-    for (const line of lines) {
-        const trim = line.trim();
-        if (!trim || trim.startsWith("#")) continue;
+    for (let line of lines) {
+        // Remove inline comments
+        const withoutComment = line.replace(/#.*/, "");
+        const trim = withoutComment.trim();
+        if (!trim) continue;
         const indent = line.search(/\S/);
         const [key, ...val_parts] = trim.split(":");
-        const val = val_parts.join(":").trim();
-        if (indent === 0 && val) {
+        const rawVal = val_parts.join(":").trim();
+        // If value is empty, this is a section header
+        if (indent === 0 && rawVal) {
+        // This looks like a root-level key with a value; treat as malformed and skip
             continue;
         } else if (indent === 0) {
             cur_sec = key;
             obj[cur_sec] = {};
-        } else if (cur_sec && val) {
-            obj[cur_sec][key] = val;
+        } else if (cur_sec && rawVal) {
+            obj[cur_sec][key] = rawVal;
         }
     }
     return obj;

@@ -40,6 +40,23 @@ bun run dev
 bun run start
 ```
 
+## Tenant Isolation Default Change (v1.3)
+
+OpenMemory v1.3 hardens multi-tenant defaults to prevent accidental cross-tenant reads and writes.
+
+- Default behavior: `OM_STRICT_TENANT=true` by default. This requires that tenant-scoped read and write methods include a `user_id` argument. Omitting `user_id` for tenant-scoped methods will raise an error.
+- Rationale: safer default prevents accidental cross-tenant data access in multi-tenant deployments.
+
+Operators who intentionally require system-wide access can opt out by setting:
+
+```bash
+export OM_STRICT_TENANT=false
+```
+
+Warning: enabling `OM_STRICT_TENANT=true` may surface missing `user_id` arguments in application code that previously relied on the permissive `OR $N IS NULL` behavior. Before upgrading, run the test suite and address any call sites that need to pass a `user_id` explicitly.
+
+See `backend/src/core/db.ts` for the runtime check and guidance.
+
 **Canonical migration runner:** `backend/src/migrate.ts`
 
 Note: A legacy migration helper exists at `backend/src/core/migrate.ts` but it is not the canonical CLI runner. Use `bun run migrate` from the `backend` directory which executes `backend/src/migrate.ts`.
