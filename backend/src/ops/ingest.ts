@@ -260,12 +260,11 @@ export async function ingestDocumentFromFile(
         // entire huge file into memory before checking size.
         let buffer: Buffer;
         if (fileSize === undefined) {
-            // Try a small prefix read to allow lightweight type/sniff checks.
-            const PREFIX_BYTES = 4096;
+                // Try a small prefix read to allow lightweight type/sniff checks.
             const reader = (f as any).stream ? (f as any).stream().getReader() : null;
             if (reader) {
                 const chunks: Uint8Array[] = [];
-                let total = 0;
+                    let total = 0;
                 try {
                     while (true) {
                         const { value, done } = await reader.read();
@@ -281,6 +280,14 @@ export async function ingestDocumentFromFile(
                                 err.code = 'ERR_FILE_TOO_LARGE';
                                 err.name = 'FileTooLargeError';
                                 throw err;
+                            }
+                            // If we've read a small prefix sufficient for MIME sniffing,
+                            // break early to avoid reading the entire file into memory here.
+                            // We'll rely on `f.arrayBuffer()` below to obtain the full
+                            // contents when necessary (and it will re-check size limits).
+                            if (total >= 4096) {
+                                try { await reader.cancel(); } catch (_) { }
+                                break;
                             }
                         }
                     }

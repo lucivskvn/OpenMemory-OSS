@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { hashPassword, verifyPassword, hashString, generateId, generateToken } from '../../backend/src/utils/crypto';
+import { hashPassword, verifyPassword, hashString, generateId, generateToken, isHashedKey } from '../../backend/src/utils/crypto';
 
 describe('crypto utils basic', () => {
     it('hash and verify password', async () => {
@@ -29,7 +29,6 @@ describe('crypto utils basic', () => {
 
 describe('hashed key helpers and auth middleware', () => {
     it('isHashedKey recognizes argon2 and bcrypt hashes and rejects plaintext', () => {
-        const { isHashedKey } = require('../../backend/src/utils/crypto');
         expect(isHashedKey('$argon2id$v=19$m=65536,t=2,p=1$SOMEBASE64$SOMEHASH')).toBe(true);
         expect(isHashedKey('$2b$12$abcdefghijklmnopqrstuv')).toBe(true);
         expect(isHashedKey('plain-secret-api-key')).toBe(false);
@@ -45,7 +44,7 @@ describe('hashed key helpers and auth middleware', () => {
         const logger = await import('../../backend/src/core/logger');
         const originalError = logger.default.error;
         try {
-            logger.default.error = () => { /* noop during this test */ } as any;
+            logger.default.error = () => { /* noop during this test */ };
 
             // Inject a plaintext API key into the middleware seam
             authMod.setAuthApiKeyForTests('plain-secret-value');

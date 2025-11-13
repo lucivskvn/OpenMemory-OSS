@@ -226,10 +226,10 @@ export async function extractText(contentType: string, data: string | Buffer | A
     // the character count used by downstream metadata.
     try {
         const preview = buffer.toString('utf8');
-        logger.debug({ component: 'EXTRACT', bytes: buffer.byteLength, chars: preview.length }, 'Buffer vs char count');
+        logger.debug({ component: 'EXTRACT', bytes: buffer.length, chars: preview.length }, 'Buffer vs char count');
     } catch (e) {
         // Non-fatal: logging failure shouldn't block extraction
-        logger.debug({ component: 'EXTRACT', bytes: buffer.byteLength, err: String(e) }, 'Buffer decode failed for char count');
+        logger.debug({ component: 'EXTRACT', bytes: buffer.length, err: String(e) }, 'Buffer decode failed for char count');
     }
 
     // If the caller provided a generic application/octet-stream, try a
