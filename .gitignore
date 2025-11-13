@@ -16,6 +16,12 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Ignore npm lockfiles in favor of Bun lockfiles
+**/package-lock.json
+**/npm-shrinkwrap.json
+**/yarn.lock
+**/pnpm-lock.yaml
+
 # Bun lock files (local/backups)
 bun.lock
 *.lockb
