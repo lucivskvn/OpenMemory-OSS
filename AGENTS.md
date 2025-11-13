@@ -56,6 +56,14 @@ Optional fields:
 - `summary`: short human-readable summary
 - `tests`: map of test name -> {status, output}
 - `artifacts`: list of created files or PR URL
+- `security_scan`: object summarizing automated security findings. Example schema:
+  - `summary`: short string
+  - `findings`: array of { `id`: string, `description`: string, `severity`: "low|medium|high|critical", `file?`: string }
+  - `recommendations`: array of short remediation strings
+- `performance_impact`: object with estimated runtime and resource impact. Example schema:
+  - `cpu_ms?`: number  # estimated CPU time in milliseconds
+  - `mem_mb?`: number  # estimated memory impact in megabytes
+  - `notes?`: string   # human-readable notes about perf tradeoffs
 
 ## Agent action contract (concise)
 
@@ -109,3 +117,43 @@ Maintainers / contact: ping a human reviewer (e.g., `@maintainer-handle`) for bi
 
 - Goal: "Pin @xenova/transformers and update lockfile"
 - Description: Edit `backend/package.json` to pin `@xenova/transformers` to a stable semver (e.g., `^2.17.2`), run `bun install` to update `bun.lockb`, and verify tests pass locally. Add a CHANGELOG entry and update CI to use `--frozen-lockfile`.
+
+## Bun Native API Examples
+
+The repo uses Bun-native APIs in several backend hotspots. Below are quick examples and cross-references to code that uses these APIs.
+
+- **File I/O (large files)**: use `Bun.file()` for streaming and to access `.size` efficiently. See `backend/src/ops/extract.ts` for canonical usage and sanity checks when handling `application/octet-stream`.
+
+- **Password / hashing helpers**: prefer `Bun.password` helpers where available for deterministic test-friendly hashes; see `backend/src/core/db.ts` for integration points and `backend/src/server/middleware/auth.ts` for how hashed keys are validated.
+
+- **Server lifecycle**: Bun's fast runtime is used in `backend/src/server/server.ts` / `backend/src/server/index.ts`; agents should prefer the server's programmatic start/stop helpers when writing integration tests to avoid binding port conflicts.
+
+- **Example snippet (reading a file safely)**:
+
+```ts
+// stream a large file with Bun.file()
+const f = Bun.file('/path/to/large.bin');
+const size = typeof f.size === 'function' ? await f.size() : f.size;
+const buf = await f.arrayBuffer();
+// pass `buf` to existing extract helpers
+```
+
+## MCP Integration Patterns
+
+When integrating with the MCP (Model Context Protocol) transport, follow these patterns for reliability and testability:
+
+- **Transport lifecycle**: start the MCP transport in a controlled manner from `backend/src/server/server.ts` and expose programmatic start/stop helpers used by tests. Ensure transports reconnect with exponential backoff and emit clear logs for connection state changes.
+
+- **Idempotent handlers**: design handlers to be idempotent where possible (retries may occur). Persisting side-effects should use upserts or dedup keys; see `backend/src/core/db.ts` for examples of `insert or replace` patterns.
+
+- **Batching & backpressure**: batch outgoing embedding or reflection requests and respect provider rate limits. Use background workers that checkpoint progress so retries continue from the last checkpoint.
+
+- **Error handling & observability**: return structured error objects to the MCP transport and record metrics (counts, latency). Include a short `context` blob in failures so downstream agents can triage without full logs.
+
+- **Example pattern (request/response)**:
+
+1. Validate incoming MCP payload quickly and synchronously.
+2. Enqueue heavy work (embedding, file-extract) to a background worker and immediately ack if protocol allows.
+3. Persist task id and respond with a reference; provide a callback/webhook pattern for the agent to retrieve results.
+
+See `backend/src/ai/mcp.ts` (MCP helpers) and `backend/src/ops/extract.ts` (heavy work examples) for concrete patterns and helper utilities.
