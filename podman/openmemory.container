@@ -12,8 +12,9 @@ PublishPort=8080:8080
 Restart=on-failure
 # Use user namespace remapping for rootless compatibility
 UserNS=keep-id
-# Environment variables (comma-separated)
-Env=OM_PORT=8080,OM_DB_PATH=/data/openmemory.sqlite
+# Environment variables (one per line for quadlet compatibility)
+Environment=OM_PORT=8080
+Environment=OM_DB_PATH=/data/openmemory.sqlite
 # Exec command to start the Bun application from the built image
 Exec=bun run start
 
@@ -38,7 +39,7 @@ TimeoutStartSec=900
 # Use a named volume declared in openmemory-data.volume
 # Keep a single volume declaration to avoid conflicting host mount definitions.
 # Append :Z to ensure SELinux relabeling is applied for rootless/SELinux hosts
-Volume=openmemory-data.volume:/data:Z
+Volume=openmemory-data:/data:Z
 
 [Install]
 WantedBy=default.target

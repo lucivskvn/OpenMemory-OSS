@@ -12,6 +12,7 @@ import {
 import { start_reflection, stop_reflection } from "../memory/reflect";
 import { start_user_summary_reflection, stop_user_summary_reflection } from "../memory/user_summary";
 import { req_tracker_mw } from "./routes/dashboard";
+import { request_logger_mw } from "./middleware/request_logger";
 import { showBanner } from "./banner";
 
 const ASC_B64 = "ICAgX19fICAgICAgICAgICAgICAgICAgIF9fICBfXyAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAogIC8gXyBcIF8gX18gICBfX18gXyBfXyB8ICBcLyAgfCBfX18gXyBfXyBfX18gICBfX18gIF8gX18gXyAgIF8gCiB8IHwgfCB8ICdfIFwgLyBfIFwgJ18gXHwgfFwvfCB8LyBfIFwgJ18gYCBfIFwgLyBfIFx8ICdfX3wgfCB8IHwKIHwgfF98IHwgfF8pIHwgIF9fLyB8IHwgfCB8ICB8IHwgIF9fLyB8IHwgfCB8IHwgKF8pIHwgfCAgfCB8X3wgfAogIFxfX18vfCAuX18vIFxfX198X3wgfF98X3wgIHxffFxfX198X3wgfF98IHxffFxfX18vfF98ICAgXF9fLCB8CiAgICAgICB8X3wgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICB8X19fLyA=";
@@ -21,18 +22,108 @@ let serverApp: ReturnType<typeof createServer> | null = null;
 let decayIntervalId: any = null;
 let pruneIntervalId: any = null;
 
+// Exported CORS middleware factory so tests can import and exercise it.
+// See comments below for behavior and opt-out using `ctx.skipCors`.
+export function corsMiddleware() {
+    return async (req: Request, ctx: any, next: () => Promise<Response>) => {
+        const corsHeaders = new Headers();
+        corsHeaders.set("Access-Control-Allow-Origin", "*");
+        corsHeaders.set(
+            "Access-Control-Allow-Methods",
+            "GET,POST,PUT,DELETE,OPTIONS",
+        );
+        corsHeaders.set(
+            "Access-Control-Allow-Headers",
+            "Content-Type,Authorization,x-api-key",
+        );
+        corsHeaders.set(
+            "Access-Control-Allow-Credentials",
+            process.env.OM_CORS_CREDENTIALS === "true" ? "true" : "false",
+        );
+
+        try {
+            if (ctx && (ctx as any).skipCors) return await next();
+        } catch (e) { }
+
+        if (req.method === "OPTIONS") {
+            return new Response(null, { status: 200, headers: corsHeaders });
+        }
+
+        const resp = await next();
+
+        try {
+            if (ctx && (ctx as any).skipCors) return resp;
+        } catch (e) { }
+
+        try {
+            if (req.headers.get("accept")?.includes("stream")) return resp;
+        } catch (e) { }
+        try {
+            if (resp && resp.headers && resp.headers.get("content-type")?.includes("stream")) return resp;
+        } catch (e) { }
+
+        try {
+            let bodyToUse: any = null;
+            try {
+                if (resp && typeof (resp as any).clone === "function") {
+                    const cloned = (resp as any).clone();
+                    bodyToUse = cloned.body;
+                } else {
+                    bodyToUse = resp.body;
+                }
+            } catch (innerErr) {
+                try {
+                    const mergedFallback = new Headers(resp.headers);
+                    for (const [k, v] of (corsHeaders as any).entries()) mergedFallback.set(k, v as string);
+                    const prevVary = mergedFallback.get("Vary");
+                    if (!prevVary) {
+                        mergedFallback.set("Vary", "Origin");
+                    } else {
+                        const parts = prevVary.split(",").map((s) => s.trim());
+                        if (!parts.includes("Origin")) mergedFallback.set("Vary", `${prevVary}, Origin`);
+                    }
+                    return new Response(resp.body, {
+                        status: resp.status,
+                        statusText: (resp as any).statusText,
+                        headers: mergedFallback,
+                    });
+                } catch (fallbackErr) {
+                    return resp;
+                }
+            }
+
+            const merged = new Headers(resp.headers);
+            for (const [k, v] of (corsHeaders as any).entries()) merged.set(k, v as string);
+            const existingVary = merged.get("Vary");
+            if (!existingVary) {
+                merged.set("Vary", "Origin");
+            } else {
+                const parts = existingVary.split(",").map((s) => s.trim());
+                if (!parts.includes("Origin")) merged.set("Vary", `${existingVary}, Origin`);
+            }
+            return new Response(bodyToUse, {
+                status: resp.status,
+                statusText: (resp as any).statusText,
+                headers: merged,
+            });
+        } catch (e) {
+            return resp;
+        }
+    };
+}
+
 export async function startServer(options?: { port?: number; dbPath?: string }) {
     // Allow tests or callers to override DB path or port programmatically.
-    if (options?.dbPath) {
+    if (options?.dbPath !== undefined) {
         process.env.OM_DB_PATH = options.dbPath;
         // Update parsed env object so initDb picks up the override at runtime
         try {
             (env as any).db_path = options.dbPath;
         } catch (e) { }
     }
-    if (options?.port) process.env.OM_PORT = String(options.port);
+    if (options?.port !== undefined) process.env.OM_PORT = String(options.port);
 
-    initDb();
+    await initDb();
 
     // Ensure DB migrations are applied for the selected DB path by importing the
     // top-level migration runner which uses the DB helpers already initialized
@@ -64,46 +155,11 @@ export async function startServer(options?: { port?: number; dbPath?: string }) 
     logger.info({ component: "SERVER", runtime: `Bun v${Bun.version}` }, "Server starting...");
     logger.info({ component: "CONFIG", tier: tier, vector_dim: env.vec_dim, cache_segments: env.cache_segments, max_active_queries: env.max_active }, "Configuration loaded");
 
+    app.use(request_logger_mw());
     app.use(req_tracker_mw());
 
-    // Bun-compatible CORS middleware: uses (req, ctx, next) signature and augments responses.
-    app.use(async (req: Request, ctx: any, next: () => Promise<Response>) => {
-        const corsHeaders = new Headers();
-        corsHeaders.set("Access-Control-Allow-Origin", "*");
-        corsHeaders.set(
-            "Access-Control-Allow-Methods",
-            "GET,POST,PUT,DELETE,OPTIONS",
-        );
-        corsHeaders.set(
-            "Access-Control-Allow-Headers",
-            "Content-Type,Authorization,x-api-key",
-        );
-        corsHeaders.set("Access-Control-Allow-Credentials", "false");
-
-        // Preflight
-        if (req.method === "OPTIONS") {
-            return new Response(null, { status: 200, headers: corsHeaders });
-        }
-
-        const resp = await next();
-
-        // Responses returned by handlers or other middleware may be immutable
-        // (frozen) in Bun's runtime. To avoid TypeError on .headers.set(),
-        // create a fresh Headers object, copy existing headers, append CORS
-        // headers, and return a new Response preserving body/status.
-        try {
-            const merged = new Headers(resp.headers);
-            for (const [k, v] of corsHeaders.entries()) merged.set(k, v as string);
-            return new Response(resp.body, {
-                status: resp.status,
-                statusText: (resp as any).statusText,
-                headers: merged,
-            });
-        } catch (e) {
-            // If anything goes wrong, return the original response as a safe fallback
-            return resp;
-        }
-    });
+    // Register middleware instance (uses exported corsMiddleware above)
+    app.use(corsMiddleware());
 
     app.use(authenticate_api_request);
 
@@ -153,13 +209,17 @@ export async function startServer(options?: { port?: number; dbPath?: string }) 
     start_reflection();
     start_user_summary_reflection();
 
-    const listenPort = options?.port || env.port;
+    const listenPort = options?.port ?? env.port;
     logger.info({ component: "SERVER", port: listenPort }, `Starting server...`);
-    app.listen(listenPort, () => {
+    const srv = app.listen(listenPort, () => {
         logger.info({ component: "SERVER", url: `http://localhost:${listenPort}` }, "Server running");
     });
 
+    // Determine the actual bound port when the caller requested port 0.
+    const actualPort = (srv as any)?.port || listenPort;
+
     return {
+        port: actualPort,
         stop: async () => {
             if (decayIntervalId) clearInterval(decayIntervalId as any);
             if (pruneIntervalId) clearInterval(pruneIntervalId as any);
@@ -191,7 +251,7 @@ export async function stopServer() {
 // before importing this module.
 if (!process.env.OM_NO_AUTO_START) {
     startServer().catch((e) => {
-        console.error("Failed to start server:", e);
+        logger.error({ component: "SERVER", err: e }, "[SERVER] Failed to start server: %o", e);
         process.exit(1);
     });
 }

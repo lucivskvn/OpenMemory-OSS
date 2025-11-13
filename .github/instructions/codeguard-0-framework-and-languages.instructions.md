@@ -93,7 +93,7 @@ IO.write("| os command here", "foo")
 - Avoid `eval`, `child_process.exec` with user input; use `helmet` for headers; `hpp` for parameter pollution.
 - Rate limit auth endpoints; monitor event loop health; handle uncaught exceptions cleanly.
 - Cookies: set `secure`, `httpOnly`, `sameSite`; set `NODE_ENV=production`.
-- Keep packages updated; run `npm audit`; use security linters and ReDoS testing.
+- Keep packages updated; run `npm audit` (or an SCA scanner compatible with Bun tooling); use security linters and ReDoS testing.
 
 ### PHP Configuration
 - Production php.ini: `expose_php=Off`, log errors not display; restrict `allow_url_fopen/include`; set `open_basedir`.

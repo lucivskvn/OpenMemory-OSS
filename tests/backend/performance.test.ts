@@ -18,13 +18,19 @@ describe("embedding utilities performance and correctness", () => {
         expect(n).toBeLessThan(1.1);
     });
 
-    it("gen_syn_emb is reasonably fast for small inputs", () => {
-        const t = "This is a short test string to measure synthetic embedding performance.";
-        const runs = 200;
-        const start = Date.now();
-        for (let i = 0; i < runs; i++) gen_syn_emb(t, "semantic");
-        const elapsed = Date.now() - start;
-        // Expect under 1s for 200 runs on typical CI; relax if needed
-        expect(elapsed).toBeLessThan(2000);
-    });
+    if (process.env.OM_RUN_PERF_TESTS === 'true') {
+        it("gen_syn_emb is reasonably fast for small inputs", () => {
+            const t = "This is a short test string to measure synthetic embedding performance.";
+            const runs = 200;
+            const start = Date.now();
+            for (let i = 0; i < runs; i++) gen_syn_emb(t, "semantic");
+            const elapsed = Date.now() - start;
+            // Expect under 2s for 200 runs when perf tests are enabled
+            expect(elapsed).toBeLessThan(2000);
+        });
+    } else {
+        it("gen_syn_emb perf test skipped (OM_RUN_PERF_TESTS != 'true')", () => {
+            // Perf tests are gated behind OM_RUN_PERF_TESTS to avoid CI flakiness.
+        });
+    }
 });

@@ -24,7 +24,8 @@ if (!spawnFn) {
 let serverProcess: any;
 
 beforeAll(async () => {
-  console.log("[TEST SETUP] Starting backend server for integration tests...");
+  const DEBUG = process.env.TEST_DEBUG === '1';
+  if (DEBUG) console.log("[TEST SETUP] Starting backend server for integration tests...");
 
   // Create a temporary DB path for the server instance so tests run isolated
   const tmpDir = path.resolve(process.cwd(), "tmp");
@@ -48,8 +49,8 @@ beforeAll(async () => {
     });
   }
 
-  // Log server output for debugging (only for spawned child processes)
-  if (serverProcess) {
+  // Log server output for debugging (only when TEST_DEBUG=1)
+  if (serverProcess && process.env.TEST_DEBUG === '1') {
     serverProcess.stdout.on('data', (data: any) => console.log(`[SERVER]: ${data}`));
     serverProcess.stderr.on('data', (data: any) => console.error(`[SERVER ERROR]: ${data}`));
   }
@@ -59,7 +60,7 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
-  console.log("[TEST SETUP] Stopping backend server...");
+  if (process.env.TEST_DEBUG === '1') console.log("[TEST SETUP] Stopping backend server...");
   if (serverProcess && serverProcess.pid) {
     // Kill the entire process group to ensure the server and any children are terminated
     process.kill(-serverProcess.pid, 'SIGKILL');
@@ -71,10 +72,10 @@ async function waitForHealthCheck(retries = 30, interval = 1000) {
     for (let i = 0; i < retries; i++) {
         try {
             const response = await fetch('http://localhost:8080/health');
-            if (response.ok) {
-                console.log('[TEST SETUP] Server is healthy and ready!');
-                return;
-            }
+          if (response.ok) {
+        if (process.env.TEST_DEBUG === '1') console.log('[TEST SETUP] Server is healthy and ready!');
+        return;
+      }
         } catch (e) {
             // Ignore fetch errors while waiting for the server to start
         }

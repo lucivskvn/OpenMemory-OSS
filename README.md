@@ -1,8 +1,13 @@
+<!-- markdownlint-disable MD033 MD041 MD022 MD034 MD026 MD040 MD024 MD036 MD010 -->
 <img width="1577" height="781" alt="image" src="https://github.com/user-attachments/assets/3baada32-1111-4c2c-bf13-558f2034e511" />
 
 # OpenMemory
 
 Long-term memory for AI systems. Open source, self-hosted, and explainable.
+
+Note: Backend-specific operational and deployment guidance (including API key hashing and helper scripts) is consolidated in `backend/README.md`. If you manage or deploy the server, start there.
+
+Recent changes and release notes are maintained in `CHANGELOG.md` — see that file for a concise list of implemented features, fixes, and migration guidance.
 
 ⚠️ **Upgrading from v1.1?** Multi-user tenant support requires database migration. See [MIGRATION.md](./MIGRATION.md) for upgrade instructions.
 
@@ -114,7 +119,7 @@ Its **multi-sector cognitive model** allows explainable recall paths, hybrid emb
 Deploy OpenMemory to your favorite cloud platform:
 
 <p align="center">
-  <a href="https://vercel.com/new/clone?repository-url=https://github.com/CaviraOSS/OpenMemory&root-directory=backend&build-command=npm%20install%20&&%20npm%20run%20build">
+    <a href="https://vercel.com/new/clone?repository-url=https://github.com/CaviraOSS/OpenMemory&root-directory=backend&build-command=bun%20install%20%26%26%20bun%20run%20build">
     <img src="https://vercel.com/button" alt="Deploy with Vercel" height="32">
   </a>
   <a href="https://cloud.digitalocean.com/apps/new?repo=https://github.com/CaviraOSS/OpenMemory/tree/main">
@@ -142,6 +147,16 @@ Requirements:
 > [!NOTE]
 > This project now uses Bun as its runtime.
 
+#### Bun-native development notes
+
+- Recommended Bun version: v1.3.2 or newer for local development and CI.
+- Prefer `Bun.file()` for large file reads/writes (ingest/extract) for better performance.
+- Use the centralized helper for API key hashing and verification at `backend/src/utils/crypto.ts`.
+- When editing backend TypeScript, add `@types/bun` to devDependencies and include Bun typings in `tsconfig.json` to avoid type errors in CI and editors.
+
+> [!NOTE]
+> **New in v1.3.1:** Bun.file() migration for extract/ingest yields ~2–3× faster document processing. CI has been hardened with SHA-pinned actions, Trivy scanning, and SLSA attestations. See [CHANGELOG.md](CHANGELOG.md) for details.
+
 ```bash
 git clone https://github.com/caviraoss/openmemory.git
 cd openmemory/backend
@@ -155,6 +170,16 @@ bun run hash-key "your-secret-api-key"
 bun install
 bun run dev
 ```
+
+## Security: Extract DNS checks (SSRF protection)
+
+The backend supports an optional DNS-based safety check used by URL extraction and other networked extraction paths. To enable conservative DNS-based blocking of hosts that resolve to private or loopback ranges, set:
+
+```bash
+OM_EXTRACT_DNS_CHECK=true
+```
+
+We recommend enabling `OM_EXTRACT_DNS_CHECK=true` in production deployments to reduce SSRF risk. If the runtime does not provide a DNS resolver, the code will fall back to literal hostname/IP checks unless `OM_EXTRACT_DNS_CHECK` is explicitly enabled — in that case DNS resolution failures will be treated as blocked for safety.
 
 The server runs on `http://localhost:8080`.
 
@@ -172,13 +197,13 @@ The dashboard provides a web interface to visualize and manage your memories.
 
 Requirements:
 
-- Node.js 20 or higher
+- Bun v1.3.2 or higher
 - Running OpenMemory backend (on port 8080)
 
 ```bash
 cd dashboard
-npm install
-npm run dev
+bun install
+bun run dev
 ```
 
 The dashboard runs on `http://localhost:3000`.
@@ -205,8 +230,8 @@ NEXT_PUBLIC_API_KEY=your_api_key_here
 **Production Build:**
 
 ```bash
-npm run build
-npm start
+bun run build
+bun run start
 ```
 
 # 💖 Support the Project
@@ -233,9 +258,11 @@ OpenMemory uses Hierarchical Memory Decomposition (HMD):
 **Stack:**
 
 - Backend: TypeScript
+- Backend: TypeScript on Bun v1.3.2 (Bun.serve, Bun.file(), Bun.password)
 - Storage: SQLite or PostgreSQL
+- Security: GitHub Actions with SHA-pinned actions, OIDC-ready workflows, Trivy + SLSA attestations (see `docs/security/github-actions-hardening.md`)
+- Note: The backend supports PostgreSQL when requested. It prefers Bun's native Postgres client when available; if Bun Postgres isn't present in the runtime, the backend will fall back to the Node `pg` package at runtime (the repository already includes `pg` as a fallback dependency in `backend/package.json`). To enable Postgres-backed storage set `OM_METADATA_BACKEND=postgres` and consult `backend/README.md` for operational details and CI configuration.
 - Embeddings: E5/BGE/OpenAI/Gemini/Ollama
-- Scheduler: node-cron for decay and maintenance
 - Scheduler: Bun timers (setInterval) for decay and maintenance
 
 **Query flow:**
@@ -328,7 +355,8 @@ Migrate your existing memories from Zep, Mem0, or Supermemory to OpenMemory with
 
 ```bash
 cd migrate
-node index.js --from mem0 --api-key YOUR_KEY --verify
+# Run with Bun for a Bun-first runtime (or `node` if you prefer Node)
+bun index.js --from mem0 --api-key YOUR_KEY --verify
 ```
 
 ### Supported Providers
@@ -350,18 +378,18 @@ node index.js --from mem0 --api-key YOUR_KEY --verify
 
 ```bash
 # List of all args
-node index.js --help
+bun index.js --help
 
 # Basic migration with verification
-node index.js --from mem0 --api-key MEM0_KEY --verify
+bun index.js --from mem0 --api-key MEM0_KEY --verify
 
 # Target remote OpenMemory instance
-node index.js --from zep --api-key ZEP_KEY \
-  --openmemory-url https://my-instance.com \
-  --openmemory-key SECRET
+bun index.js --from zep --api-key ZEP_KEY \
+    --openmemory-url https://my-instance.com \
+    --openmemory-key SECRET
 
 # Custom rate limit for paid tier
-node index.js --from supermemory --api-key SM_KEY --rate-limit 25
+bun index.js --from supermemory --api-key SM_KEY --rate-limit 25
 ```
 
 ---
@@ -477,7 +505,7 @@ See [MCP_MIGRATION.md](./MCP_MIGRATION.md) for migration guide.
 For stdio mode (Claude Desktop):
 
 ```bash
-node backend/dist/ai/mcp.js
+bun backend/dist/ai/mcp.js
 ```
 
 [![MseeP.ai Security Assessment Badge](https://mseep.net/pr/caviraoss-openmemory-badge.png)](https://mseep.ai/app/caviraoss-openmemory)
@@ -585,7 +613,8 @@ Tested with LongMemEval benchmark:
 | v1.0    | Core memory backend       | ✅ Complete |
 | v1.1    | Pluggable vector backends | ✅ Complete |
 | v1.2    | Dashboard and metrics     | ✅ Complete |
-| v1.3    | Learned sector classifier | 🔜 Planned  |
+| v1.3    | Learned sector classifier | ✅ Complete |
+| v1.3.1  | Bun hardening & security  | ✅ Complete |
 | v1.4    | Federated multi-node      | 🔜 Planned  |
 
 ---

@@ -30,12 +30,12 @@ Secure the build, packaging, and deployment supply chain: protect pipelines and 
 - Secrets: Docker/Kubernetes secrets; never in layers/env; mount via runtime secrets.
 - Scanning: scan images on build and admission; block high‑severity vulns.
 
-### Node.js in Containers
-- Deterministic builds: `npm ci --omit=dev`; pin base image with digest.
-- Production env: `ENV NODE_ENV=production`.
-- Non‑root: copy with correct ownership and drop to `USER node`.
+### JavaScript runtimes in Containers (Bun / Node)
+- Deterministic builds: prefer Bun in CI and containers where possible — e.g. `bun install --frozen-lockfile` (reproducible lockfile install). If you must use Node in CI, use `npm ci --omit=dev` and pin the lockfile.
+- Production env: set runtime environment variables (for Node/Bun this commonly includes `NODE_ENV=production`).
+- Non‑root: copy with correct ownership and drop to a non‑root user.
 - Signals: use an init (e.g., `dumb-init`) and implement graceful shutdown handlers.
-- Multi‑stage builds: separate build and runtime; mount secrets via BuildKit; use `.dockerignore`.
+- Multi‑stage builds: separate build and runtime; mount secrets via BuildKit; use `.dockerignore` to avoid leaking source or credentials.
 
 ### Virtual Patching (Temporary Mitigation)
 - Use WAF/IPS/ModSecurity for immediate protection when code fixes are not yet possible.
@@ -48,10 +48,9 @@ Secure the build, packaging, and deployment supply chain: protect pipelines and 
 - Debug vs Release: enable sanitizers in debug; enable hardening flags in release; assert in debug only.
 - CI checks: verify flags (`checksec`) and fail builds if protections missing.
 
-### Implementation Checklist
 - Pipeline: secrets in vault; ephemeral runners; security scans; signed artifacts with provenance.
 - Containers: non‑root, least privilege, read‑only FS, resource limits; no daemon socket mounts.
 - Images: minimal, pinned, scanned; healthchecks; `.dockerignore` maintained.
-- Node images: `npm ci`, `NODE_ENV=production`, proper init and shutdown.
+- Node/Bun images: `bun install --frozen-lockfile` in Bun-first CI/images; if using Node, `npm ci --omit=dev`. Ensure `NODE_ENV=production` where applicable and a proper init for graceful shutdown.
 - Virtual patching: defined process; accurate rules; logs; retirement after fix.
 - Native builds: hardening flags enabled and verified in CI.

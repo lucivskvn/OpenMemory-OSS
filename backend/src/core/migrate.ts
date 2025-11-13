@@ -1,10 +1,15 @@
 import { env } from "./cfg";
-import sqlite3 from "sqlite3";
+// NOTE: This legacy helper historically imported `sqlite3` statically which
+// caused runtime errors for environments that don't have the native
+// `sqlite3` module installed. We now dynamically load `sqlite3` only when
+// needed and provide a clear error message if it's missing. The canonical
+// migration CLI runner is `backend/src/migrate.ts` (see repo root docs).
 import { initDb, run_async, all_async } from "./db";
+import logger from "./logger";
 
 const is_pg = env.metadata_backend === "postgres";
 
-const log = (msg: string) => console.log(`[MIGRATE] ${msg}`);
+const log = (msg: string) => logger.info({ component: "MIGRATE" }, "[MIGRATE] %s", msg);
 
 interface Migration {
     version: string;
@@ -63,18 +68,16 @@ const migrations: Migration[] = [
     },
 ];
 
-async function get_db_version_sqlite(
-    db: sqlite3.Database,
-): Promise<string | null> {
+async function get_db_version_sqlite(db: any): Promise<string | null> {
     return new Promise((ok, no) => {
         db.get(
             `SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'`,
-            (err, row: any) => {
+            (err: any, row: any) => {
                 if (err) return no(err);
                 if (!row) return ok(null);
                 db.get(
                     `SELECT version FROM schema_version ORDER BY applied_at DESC LIMIT 1`,
-                    (e, v: any) => {
+                    (e: any, v: any) => {
                         if (e) return no(e);
                         ok(v?.version || null);
                     },
@@ -84,21 +87,18 @@ async function get_db_version_sqlite(
     });
 }
 
-async function set_db_version_sqlite(
-    db: sqlite3.Database,
-    version: string,
-): Promise<void> {
+async function set_db_version_sqlite(db: any, version: string): Promise<void> {
     return new Promise((ok, no) => {
         db.run(
             `CREATE TABLE IF NOT EXISTS schema_version (
         version TEXT PRIMARY KEY, applied_at INTEGER
       )`,
-            (err) => {
+            (err: any) => {
                 if (err) return no(err);
                 db.run(
                     `INSERT OR REPLACE INTO schema_version VALUES (?, ?)`,
                     [version, Date.now()],
-                    (e) => {
+                    (e: any) => {
                         if (e) return no(e);
                         ok();
                     },
@@ -108,23 +108,16 @@ async function set_db_version_sqlite(
     });
 }
 
-async function check_column_exists_sqlite(
-    db: sqlite3.Database,
-    table: string,
-    column: string,
-): Promise<boolean> {
+async function check_column_exists_sqlite(db: any, table: string, column: string): Promise<boolean> {
     return new Promise((ok, no) => {
-        db.all(`PRAGMA table_info(${table})`, (err, rows: any[]) => {
+        db.all(`PRAGMA table_info(${table})`, (err: any, rows: any[]) => {
             if (err) return no(err);
-            ok(rows.some((r) => r.name === column));
+            ok(rows.some((r: any) => r.name === column));
         });
     });
 }
 
-async function run_sqlite_migration(
-    db: sqlite3.Database,
-    m: Migration,
-): Promise<void> {
+async function run_sqlite_migration(db: any, m: Migration): Promise<void> {
     log(`Running migration: ${m.version} - ${m.desc}`);
 
     const has_user_id = await check_column_exists_sqlite(
@@ -133,18 +126,16 @@ async function run_sqlite_migration(
         "user_id",
     );
     if (has_user_id) {
-        log(
-            `Migration ${m.version} already applied (user_id exists), skipping`,
-        );
+        log(`Migration ${m.version} already applied (user_id exists), skipping`);
         await set_db_version_sqlite(db, m.version);
         return;
     }
 
     for (const sql of m.sqlite) {
         await new Promise<void>((ok, no) => {
-            db.run(sql, (err) => {
+            db.run(sql, (err: any) => {
                 if (err && !err.message.includes("duplicate column")) {
-                    log(`ERROR: ${err.message}`);
+                    logger.error({ component: "MIGRATE", err }, "[MIGRATE] SQL error: %o", err);
                     return no(err);
                 }
                 ok();
@@ -215,9 +206,7 @@ async function run_pg_migration(m: Migration): Promise<void> {
     const has_user_id = await check_column_exists_pg(mt, "user_id");
 
     if (has_user_id) {
-        log(
-            `Migration ${m.version} already applied (user_id exists), skipping`,
-        );
+        log(`Migration ${m.version} already applied (user_id exists), skipping`);
         await set_db_version_pg(m.version);
         return;
     }
@@ -241,7 +230,7 @@ async function run_pg_migration(m: Migration): Promise<void> {
                 !e.message.includes("already exists") &&
                 !e.message.includes("duplicate")
             ) {
-                log(`ERROR: ${e.message}`);
+                logger.error({ component: "MIGRATE", err: e }, "[MIGRATE] PG error: %o", e);
                 throw e;
             }
         }
@@ -258,7 +247,7 @@ export async function run_migrations() {
         // Initialize DB helpers (this will use Bun Postgres client when
         // OM_METADATA_BACKEND=postgres). We rely on the exported async
         // helpers from ./db so migrations run under the same client.
-        initDb();
+        await initDb();
 
         const current = await get_db_version_pg();
         log(`Current database version: ${current || "none"}`);
@@ -270,6 +259,21 @@ export async function run_migrations() {
         }
     } else {
         const db_path = process.env.OM_DB_PATH || "./data/openmemory.sqlite";
+        // Dynamically load sqlite3 so the module import doesn't fail on runtimes
+        // that don't ship the node-sqlite3 C extension (CI, Bun-native,
+        // contributor machines without sqlite3). If sqlite3 is unavailable we
+        // surface a clear error and instruct the operator to use the canonical
+        // runner `backend/src/migrate.ts` instead or install sqlite3.
+        let sqlite3: any;
+        try {
+            // dynamic import to avoid hard dependency at module-load time
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            sqlite3 = await import("sqlite3");
+        } catch (e) {
+            logger.error({ component: "MIGRATE", err: e }, "[MIGRATE] sqlite3 module not available. This legacy migration helper requires the 'sqlite3' package. Prefer running `bun src/migrate.ts` from the backend directory which uses Bun-friendly migrations, or install sqlite3 in this environment.");
+            throw new Error("sqlite3 module not available. Use backend/src/migrate.ts or install sqlite3 to run this helper.");
+        }
+
         const db = new sqlite3.Database(db_path);
 
         const current = await get_db_version_sqlite(db);

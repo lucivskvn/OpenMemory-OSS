@@ -55,7 +55,24 @@ const safe_parse = <T>(val: string | null, fb: T): T => {
 const resolve_sector = (node: string): sector_type =>
     node_sector_map[node.toLowerCase()] ?? default_sector;
 
-const resolve_ns = (ns?: string) => ns || env.lg_namespace;
+const resolve_ns = (ns?: string): string => {
+    // Always return a string (may be empty) so downstream callers don't need
+    // to handle `undefined` namespaces.
+    return ns ?? (env.lg_namespace ?? "");
+};
+
+/**
+ * If namespace encodes a user id (convention: "user:<user_id>"), return the
+ * user_id string. Otherwise return undefined.
+ *
+ * Note: we keep this conservative and only recognise the explicit `user:`
+ * prefix to avoid accidental interpretations of arbitrary namespaces.
+ */
+const extract_user_from_ns = (ns: string): string | undefined => {
+    if (!ns) return undefined;
+    const m = ns.match(/^user:(.+)$/);
+    return m ? m[1] : undefined;
+};
 
 const build_tags = (
     tags: string[] | undefined,
@@ -114,7 +131,7 @@ const hydrate_mem_row = async (
     path?: string[],
 ): Promise<hydrated_mem> => {
     const tags = safe_parse<string[]>(row.tags, []);
-    const vecs = await q.get_vecs_by_id.all(row.id);
+    const vecs = await q.get_vecs_by_id.all(row.id, row.user_id ?? null);
     const secs = vecs.map((v) => v.sector);
     const mem: hydrated_mem = {
         id: row.id,
@@ -225,12 +242,18 @@ export async function retrieve_node_mems(p: lgm_retrieve_req) {
     const gid = p.graph_id;
     const items: hydrated_mem[] = [];
     if (p.query) {
+        const user_for_query = extract_user_from_ns(ns);
         const matches = await hsg_query(p.query, Math.max(lim * 2, lim), {
             sectors: [sec],
+            user_id: user_for_query,
         });
         for (const match of matches) {
             const row = (await q.get_mem.get(match.id)) as mem_row | undefined;
             if (!row) continue;
+            // If query was tenant-scoped, enforce that the retrieved memory
+            // also belongs to that tenant. This avoids returning rows from
+            // other users if DB helpers don't accept user_id for this call.
+            if (user_for_query && row.user_id && row.user_id !== user_for_query) continue;
             const meta = safe_parse<Record<string, unknown>>(row.meta, {});
             if (!matches_ns(meta, ns, gid)) continue;
             const hyd = await hydrate_mem_row(
@@ -244,11 +267,16 @@ export async function retrieve_node_mems(p: lgm_retrieve_req) {
             if (items.length >= lim) break;
         }
     } else {
-        const raw_rows = (await q.all_mem_by_sector.all(
-            sec,
-            lim * 4,
-            0,
-        )) as mem_row[];
+        // Prefer tenant-scoped listing when namespace includes a user filter in metadata
+        const user_for_list = extract_user_from_ns(ns);
+        const raw_rows = user_for_list
+            ? ((await q.all_mem_by_user_and_sector.all(
+                user_for_list,
+                sec,
+                lim * 4,
+                0,
+            )) as mem_row[])
+            : ((await q.all_mem_by_sector.all(sec, lim * 4, 0)) as mem_row[]);
         for (const row of raw_rows) {
             const meta = safe_parse<Record<string, unknown>>(row.meta, {});
             if (!matches_ns(meta, ns, gid)) continue;

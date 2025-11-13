@@ -32,6 +32,11 @@ export function setPdfParseForTests(mockImpl: any) {
     _pdfParseImpl = mockImpl;
 }
 
+// Testing seam for extractText
+export function setExtractTextForTests(mock: (ct: string, data: any, isBase64?: boolean) => Promise<ExtractionResult>) {
+    (extractText as any)._mock = mock;
+}
+
 async function loadPdfParseImpl(): Promise<any> {
     if (_pdfParseImpl) return _pdfParseImpl;
     try {
@@ -253,6 +258,8 @@ export async function extractPDFFromFile(filePath: string): Promise<ExtractionRe
     let fileSize: number | null = null;
     try {
         const f = Bun.file(filePath);
+        const exists = await f.exists();
+        if (!exists) throw new Error('File not found');
         // Bun.file.size may be undefined on some platforms; guard accordingly
         fileSize = (f as any).size ?? null;
         logger.info('[EXTRACT] Processing file', { filePath, file_size_bytes: fileSize, method: 'bun-file' });
@@ -283,6 +290,8 @@ export async function extractDOCXFromFile(filePath: string): Promise<ExtractionR
     let fileSize: number | null = null;
     try {
         const f = Bun.file(filePath);
+        const exists = await f.exists();
+        if (!exists) throw new Error('File not found');
         fileSize = (f as any).size ?? null;
         logger.info('[EXTRACT] Processing file', { filePath, file_size_bytes: fileSize, method: 'bun-file' });
 

@@ -1,3 +1,4 @@
+import logger from "../../core/logger";
 import {
     store_node_mem,
     retrieve_node_mems,
@@ -22,7 +23,7 @@ export function lg(app: any) {
             const r = await store_node_mem(req.body as lgm_store_req);
             return new Response(JSON.stringify(r), { status: 200, headers: { "Content-Type": "application/json" } });
         } catch (e) {
-            console.error("[LGM] store error:", e);
+            logger.error({ component: "LGM", err: e }, "[LGM] store error: %o", e);
             return new Response(JSON.stringify({
                 err: "lgm_store_failed",
                 message: (e as Error).message,
@@ -35,7 +36,7 @@ export function lg(app: any) {
             const r = await retrieve_node_mems(req.body as lgm_retrieve_req);
             return new Response(JSON.stringify(r), { status: 200, headers: { "Content-Type": "application/json" } });
         } catch (e) {
-            console.error("[LGM] retrieve error:", e);
+            logger.error({ component: "LGM", err: e }, "[LGM] retrieve error: %o", e);
             return new Response(JSON.stringify({
                 err: "lgm_retrieve_failed",
                 message: (e as Error).message,
@@ -48,7 +49,7 @@ export function lg(app: any) {
             const r = await get_graph_ctx(req.body as lgm_context_req);
             return new Response(JSON.stringify(r), { status: 200, headers: { "Content-Type": "application/json" } });
         } catch (e) {
-            console.error("[LGM] context error:", e);
+            logger.error({ component: "LGM", err: e }, "[LGM] context error: %o", e);
             return new Response(JSON.stringify({
                 err: "lgm_context_failed",
                 message: (e as Error).message,
@@ -61,7 +62,7 @@ export function lg(app: any) {
             const r = await create_refl(req.body as lgm_reflection_req);
             return new Response(JSON.stringify(r), { status: 200, headers: { "Content-Type": "application/json" } });
         } catch (e) {
-            console.error("[LGM] reflection error:", e);
+            logger.error({ component: "LGM", err: e }, "[LGM] reflection error: %o", e);
             return new Response(JSON.stringify({
                 err: "lgm_reflection_failed",
                 message: (e as Error).message,

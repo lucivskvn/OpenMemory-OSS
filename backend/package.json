@@ -39,7 +39,7 @@
         "typescript": "^5.6.3"
     },
     "x-pinned-dependencies": {
-        "@xenova/transformers": "Pinned for stability at ^2.17.2; attempted upgrade to ^3.0.0 failed to resolve (not published). Will upgrade when a stable 3.x release is published."
+        "@xenova/transformers": "Pinned for stability at ^2.17.2; upgrade to 3.x will be performed once a stable 3.0.0 is published in the registry."
     },
     "engines": {
         "bun": ">=1.3.2"

@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 import { initDb, run_async, all_async } from "./core/db";
-
-// Ensure DB helpers are initialized before running migrations (sets up SQLite or PG helpers)
-initDb();
+import { env } from "./core/cfg";
+import logger from "./core/logger";
 
 const SCHEMA_DEFINITIONS = {
     memories: `create table if not exists memories(id text primary key,user_id text,segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,meta text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0)`,
@@ -51,7 +50,30 @@ async function get_existing_indexes(): Promise<Set<string>> {
 }
 
 export async function run_migrations() {
-    console.log("[MIGRATE] Starting automatic migration...");
+    logger.info({ component: "MIGRATE" }, "[MIGRATE] Starting automatic migration...");
+
+    // If the metadata backend is Postgres, avoid running SQLite-specific
+    // migrations here. Postgres DDL differs from the SQLite schema above
+    // (types, serial/autoincrement, bytea, etc.). Operators using Postgres
+    // should run Postgres-compatible migrations outside this script or
+    // provide a Postgres migration implementation. Skipping avoids
+    // accidental attempts to query sqlite_master on Postgres.
+    if (env.metadata_backend === "postgres") {
+        logger.info({ component: "MIGRATE" }, "[MIGRATE] OM_METADATA_BACKEND=postgres detected, skipping SQLite-style migrations. Ensure Postgres migrations are applied separately.");
+        return;
+    }
+
+    // Ensure DB helpers are initialized. `initDb()` sets up run_async/all_async
+    // when invoked; callers may import this module before DB init, so guard
+    // and initialize here if necessary.
+    try {
+        if (typeof run_async !== "function" || typeof all_async !== "function") {
+            await initDb();
+        }
+    } catch (e) {
+        logger.error({ component: "MIGRATE", err: e }, "[MIGRATE] Failed to initialize DB helpers: %o", e);
+        throw e;
+    }
 
     const existing_tables = await get_existing_tables();
     const existing_indexes = await get_existing_indexes();
@@ -61,7 +83,7 @@ export async function run_migrations() {
 
     for (const [table_name, schema] of Object.entries(SCHEMA_DEFINITIONS)) {
         if (!existing_tables.has(table_name)) {
-            console.log(`[MIGRATE] Creating table: ${table_name}`);
+            logger.info({ component: "MIGRATE", table: table_name }, `[MIGRATE] Creating table: ${table_name}`);
             const statements = schema.split(";").filter((s) => s.trim());
             for (const stmt of statements) {
                 if (stmt.trim()) {
@@ -76,19 +98,42 @@ export async function run_migrations() {
         const match = index_sql.match(/create index if not exists (\w+)/);
         const index_name = match ? match[1] : null;
         if (index_name && !existing_indexes.has(index_name)) {
-            console.log(`[MIGRATE] Creating index: ${index_name}`);
+            logger.info({ component: "MIGRATE", index: index_name }, `[MIGRATE] Creating index: ${index_name}`);
             await run_async(index_sql);
             created_indexes++;
         }
     }
 
-    console.log(
-        `[MIGRATE] Migration complete: ${created_tables} tables, ${created_indexes} indexes created`,
-    );
+    logger.info({ component: "MIGRATE", created_tables, created_indexes }, `[MIGRATE] Migration complete: ${created_tables} tables, ${created_indexes} indexes created`);
 
     const final_tables = await get_existing_tables();
-    console.log(`[MIGRATE] Total tables: ${final_tables.size}`);
-    console.log(`[MIGRATE] Tables: ${Array.from(final_tables).join(", ")}`);
+    logger.info({ component: "MIGRATE", total_tables: final_tables.size }, `[MIGRATE] Total tables: ${final_tables.size}`);
+    logger.info({ component: "MIGRATE", tables: Array.from(final_tables) }, `[MIGRATE] Tables: ${Array.from(final_tables).join(", ")}`);
+
+    // Post-migration verification: ensure multi-tenant columns and indexes exist
+    try {
+        const requiredTablesWithUserCol = ["memories", "vectors", "waypoints"];
+        for (const t of requiredTablesWithUserCol) {
+            const cols = await all_async(`PRAGMA table_info(${t})`);
+            const hasUser = Array.isArray(cols) && cols.some((c: any) => c && (c.name === "user_id"));
+            if (!hasUser) {
+                throw new Error(`[MIGRATE] verification failed: table ${t} missing user_id column`);
+            }
+        }
+
+        const existingIndexes = await get_existing_indexes();
+        const requiredIndexes = ["idx_memories_user", "idx_vectors_user", "idx_waypoints_user"];
+        for (const idx of requiredIndexes) {
+            if (!existingIndexes.has(idx)) {
+                throw new Error(`[MIGRATE] verification failed: missing index ${idx}`);
+            }
+        }
+
+        logger.info({ component: "MIGRATE" }, "[MIGRATE] verification ok");
+    } catch (e) {
+        logger.error({ component: "MIGRATE", err: e }, "[MIGRATE] verification failed: %o", e);
+        throw e;
+    }
 }
 
 // If this module is executed directly (CLI), run migrations and exit with
@@ -104,7 +149,7 @@ try {
         run_migrations()
             .then(() => process.exit(0))
             .catch((err) => {
-                console.error("[MIGRATE] Error:", err);
+                logger.error({ component: "MIGRATE", err }, "[MIGRATE] Error: %o", err);
                 process.exit(1);
             });
     }

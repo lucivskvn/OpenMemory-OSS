@@ -11,14 +11,10 @@ Official JavaScript/TypeScript client for OpenMemory — an open-source, self-ho
 - ESM and CommonJS builds
 - Node.js and edge/runtime friendly (native `fetch`)
 
-## Installation
+Installation
 
 ```bash
-npm install openmemory-js
-# or
-yarn add openmemory-js
-# or
-pnpm add openmemory-js
+bun add openmemory-js
 ```
 
 ## Quick Start
@@ -209,10 +205,12 @@ All methods are typed. You can import the public types:
 import type { AddMemoryInput, QueryMemoryInput } from 'openmemory-js';
 ```
 
-## Node.js Compatibility
+## Runtime Compatibility
 
-- Node 18+ (native `fetch`)
-- ESM by default; CJS build available
+- Bun v1.3+ (recommended)
+- Node 18+ (native `fetch`) supported
+
+EMSR/CJS: ESM by default; CJS build available
 
 CJS usage:
 

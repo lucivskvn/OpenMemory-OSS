@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD040 MD003 -->
 # Multi-User Tenant Migration (v1.2)
 
 ⚠️ **Required for users upgrading from v1.1 or earlier**
@@ -31,13 +32,6 @@ OpenMemory Database Migration Tool
 
 **Features:**
 
-- ✅ Auto-detects applied migrations (won't re-run)
-- ✅ Safe execution (checks for existing columns before altering)
-- ✅ Version tracking (stores applied versions in `schema_version` table)
-- ✅ Works with both SQLite and PostgreSQL
-- ✅ Gracefully handles errors (skips duplicates)
-- ✅ Runs before database is initialized
-
 **After migration, start your server normally:**
 
 ```bash
@@ -46,9 +40,9 @@ bun run dev
 bun run start
 ```
 
-**Location:** `backend/src/core/migrate.ts`
+**Canonical migration runner:** `backend/src/migrate.ts`
 
----
+Note: A legacy migration helper exists at `backend/src/core/migrate.ts` but it is not the canonical CLI runner. Use `bun run migrate` from the `backend` directory which executes `backend/src/migrate.ts`.
 
 ## Manual Migration (Advanced)
 
@@ -59,16 +53,12 @@ If you prefer manual control or need to run migrations separately, use the SQL s
 Run these commands in your SQLite database (`data/openmemory.sqlite`):
 
 ```sql
--- Add user_id to memories table
 ALTER TABLE memories ADD COLUMN user_id TEXT;
 CREATE INDEX idx_memories_user ON memories(user_id);
 
--- Add user_id to vectors table
 ALTER TABLE vectors ADD COLUMN user_id TEXT;
 CREATE INDEX idx_vectors_user ON vectors(user_id);
 
--- Recreate waypoints table with composite primary key (src_id, user_id)
--- SQLite requires table recreation to change primary key
 CREATE TABLE waypoints_new (
   src_id TEXT,
   dst_id TEXT NOT NULL,
@@ -90,7 +80,6 @@ CREATE INDEX idx_waypoints_src ON waypoints(src_id);
 CREATE INDEX idx_waypoints_dst ON waypoints(dst_id);
 CREATE INDEX idx_waypoints_user ON waypoints(user_id);
 
--- Create users table
 CREATE TABLE users (
   user_id TEXT PRIMARY KEY,
   summary TEXT,
@@ -99,7 +88,6 @@ CREATE TABLE users (
   updated_at INTEGER
 );
 
--- Create stats table (added in v1.2 for maintenance tracking)
 CREATE TABLE stats (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   type TEXT NOT NULL,
@@ -111,28 +99,22 @@ CREATE INDEX idx_stats_ts ON stats(ts);
 CREATE INDEX idx_stats_type ON stats(type);
 ```
 
----
-
 ## PostgreSQL Migration
 
 Replace `schema` with `OM_PG_SCHEMA` and `table_name` with `OM_PG_TABLE` from your config:
 
 ```sql
--- Add user_id to memories table
 ALTER TABLE schema.table_name ADD COLUMN user_id TEXT;
 CREATE INDEX openmemory_memories_user_idx ON schema.table_name(user_id);
 
--- Add user_id to vectors table
 ALTER TABLE schema.openmemory_vectors ADD COLUMN user_id TEXT;
 CREATE INDEX openmemory_vectors_user_idx ON schema.openmemory_vectors(user_id);
 
--- Add user_id to waypoints and update primary key
 ALTER TABLE schema.openmemory_waypoints ADD COLUMN user_id TEXT;
 ALTER TABLE schema.openmemory_waypoints DROP CONSTRAINT openmemory_waypoints_pkey;
 ALTER TABLE schema.openmemory_waypoints ADD PRIMARY KEY (src_id, user_id);
 CREATE INDEX openmemory_waypoints_user_idx ON schema.openmemory_waypoints(user_id);
 
--- Create users table
 CREATE TABLE schema.openmemory_users (
   user_id TEXT PRIMARY KEY,
   summary TEXT,
@@ -141,6 +123,8 @@ CREATE TABLE schema.openmemory_users (
   updated_at BIGINT
 );
 ```
+
+Note: the repository's in-process migration runner (`bun run migrate`) will skip the SQLite-style automatic migrations when `OM_METADATA_BACKEND=postgres` is set. Postgres DDL differs from the SQLite schema, so operators should run the Postgres-specific migration commands shown above (or a suitable SQL migration tool) when using a Postgres metadata backend.
 
 ## Bun Runtime Migration (v1.2 → v1.3)
 
@@ -159,7 +143,7 @@ curl -fsSL https://bun.sh/install | bash
 export PATH="$HOME/.bun/bin:$PATH"
 ```
 
-1. From the backend directory, refresh dependencies and run migrations:
+1. From the backend directory, refresh dependencies and run migrations using Bun:
 
 ```bash
 cd backend
@@ -177,7 +161,7 @@ curl http://localhost:8080/health
 
 Rollback:
 
-  use your previous release tag, then `npm install` and run the old server.
+  use your previous release tag, then `bun install` and run the old server.
 
 Testing:
 
@@ -199,21 +183,14 @@ Note about WebSocket dependency:
   `next` branch. If your deployment still expects a Node `ws` server, update
   your runtime to Bun or pin an earlier branch that retained Node artifacts.
 
-Postgres / legacy Node support
-------------------------------
+Postgres / runtime compatibility
 
-As of the `next` branch changes on 2025-11-11, the backend now requires Bun's native Postgres client when `OM_METADATA_BACKEND=postgres`.
-
-- The legacy Node `pg` client fallback and the previous `ws`/Node server compatibility path were removed to simplify the runtime and reduce maintenance burden.
-- If you need to run the code with the legacy `pg` client (Node), set up a pinned branch before this change or revert the commit — this repository no longer ships `pg` in `backend/package.json` on the `next` branch.
-- To run Postgres-backed tests and services, ensure your CI or local environment provides a Bun runtime with Postgres support (e.g., Bun >=1.3.x with Postgres bindings) and the env vars: `OM_PG_HOST`, `OM_PG_PORT`, `OM_PG_USER`, `OM_PG_PASSWORD`, `OM_PG_DB`.
+The backend prefers Bun's native Postgres client when `OM_METADATA_BACKEND=postgres` is selected. However, to improve compatibility across CI runners and contributor machines, the codebase supports a dynamic runtime fallback to the Node `pg` driver when a Bun Postgres client is not available. The fallback is loaded dynamically at startup and preserves the same query and transaction semantics used by the Bun path.
 
 Recommended migration steps
 
-1. Add a CI job that starts Postgres and runs `bun test` against the `backend` package. Validate migrations and table creation under Bun's Postgres client.
-2. Remove any lingering Node-only server artifacts if you no longer need them (search for `server.js` or `ws`-based code paths) and update docs accordingly.
-
-C
+1. Add a CI job that starts Postgres and runs `bun test` against the `backend` package. Validate migrations and table creation under the runtime you plan to use (Bun with Postgres support or Node `pg` fallback).
+2. If you want to require Bun's native Postgres client in CI, ensure the runner includes a Bun build with Postgres enabled or remove the dynamic fallback and update deployment docs accordingly.
 
 ## CI validation (added)
 
@@ -221,45 +198,16 @@ A GitHub Actions job named `test-backend-postgres` has been added to the consoli
 
 Additionally, the consolidated CI pipeline builds and publishes a multi-platform Docker image to GitHub Container Registry (GHCR) after tests pass. The published image tags are:
 
-- `ghcr.io/<owner>/<repo>:latest`
-- `ghcr.io/<owner>/<repo>:<commit-sha>`
-
 Replace `<owner>/<repo>` with your repository owner/name when pulling the image. If you prefer Docker Hub or another registry, update the workflow and provide credentials via repository secrets.
 
 ## Configuration additions
-
-- `OM_HYBRID_FUSION` (boolean, default: true): Toggle hybrid fusion behavior when the backend runs in hybrid tier. This variable is available in `docker-compose.yml` and is mapped to `env.hybrid_fusion` in `backend/src/core/cfg.ts`.
-
-- `OM_EMBEDDINGS` (legacy alias): Some deploys historically used `OM_EMBEDDINGS`. The backend now prefers `OM_EMBEDDINGS` when present for backwards compatibility, but `OM_EMBED_KIND` is the canonical variable. To avoid ambiguity, set `OM_EMBED_KIND` in new deployments.
-
----
 
 ## Schema Changes Summary
 
 ### Modified Tables
 
-- **memories**: Added `user_id TEXT` column + index
-- **vectors**: Added `user_id TEXT` column + index
-- **waypoints**: Added `user_id TEXT` column, changed primary key from `(src_id)` to `(src_id, user_id)`
-
 ### New Tables
-
-- **users**: User summaries and reflection tracking
-- **stats**: Maintenance operation logging (decay, reflect, consolidate)
 
 ### New Query Methods
 
-- `all_mem_by_user(user_id, limit, offset)` - Get memories for specific user
-- `ins_user(user_id, summary, reflection_count, created_at, updated_at)` - Insert/update user
-- `get_user(user_id)` - Get user record
-- `upd_user_summary(user_id, summary, updated_at)` - Update user summary
-
----
-
 ## Post-Migration Notes
-
-- **Existing records**: Will have `user_id = NULL` (treated as system/default user)
-- **API usage**: Include `user_id` in `POST /memory/add` requests
-- **Querying**: Filter by user with `filters: { user_id: "user123" }`
-- **User summaries**: Auto-generated when memories are added per user
-- **Migration tool**: Preserves user_id when importing from Zep/Mem0/Supermemory

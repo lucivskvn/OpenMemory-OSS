@@ -101,8 +101,9 @@ const querymem = async (txt, opts) => {
     method: 'POST',
     body: JSON.stringify(body),
   });
-  console.log(`[results] ${r.memories.length} found\n`);
-  r.memories.forEach((m, i) => {
+  const matches = r.matches || r.memories || [];
+  console.log(`[results] ${matches.length} found\n`);
+  matches.forEach((m, i) => {
     console.log(`${i + 1}. [${m.primary_sector}] ${m.content}`);
     console.log(`   id: ${m.id}`);
     console.log(
@@ -124,8 +125,9 @@ const listmem = async (opts) => {
   } else {
     r = await req(`/memory/all?limit=${lim}&offset=${off}`);
   }
-  console.log(`[memories] showing ${r.memories.length}\n`);
-  r.memories.forEach((m, i) => {
+  const items = r.items || r.memories || [];
+  console.log(`[memories] showing ${items.length}\n`);
+  items.forEach((m, i) => {
     console.log(`${i + 1}. [${m.primary_sector}] ${m.content}`);
     console.log(`   id: ${m.id} | user: ${m.user_id || 'system'}`);
     console.log(`   sal: ${m.salience.toFixed(3)}`);

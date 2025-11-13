@@ -6,7 +6,7 @@ import { test, expect } from "bun:test";
 
 test("postgres integration: start server and crud memory", async () => {
     if (process.env.OM_METADATA_BACKEND !== "postgres") {
-        console.log("Skipping Postgres integration test (OM_METADATA_BACKEND != postgres)");
+        if (process.env.TEST_DEBUG === '1') console.log("Skipping Postgres integration test (OM_METADATA_BACKEND != postgres)");
         return;
     }
 
@@ -16,7 +16,7 @@ test("postgres integration: start server and crud memory", async () => {
     const db = process.env.OM_PG_DB || "openmemory";
     const user = process.env.OM_PG_USER || "om";
 
-    console.log(`Running Postgres integration test against ${user}@${host}:${port}/${db}`);
+    if (process.env.TEST_DEBUG === '1') console.log(`Running Postgres integration test against ${user}@${host}:${port}/${db}`);
 
     // Prevent auto-start so we can control lifecycle
     process.env.OM_NO_AUTO_START = "true";

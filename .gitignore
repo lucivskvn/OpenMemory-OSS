@@ -1,24 +1,12 @@
+## OpenMemory - repository ignore rules
+
+### OS / Editor
 .DS_Store
-*.bak
-*~
-*.orig
-*.backup
-*.tmp
-*.swp
-/.env
-/.env.local
-/.vscode/
-/.idea/
-backend/dist/
-node_modules/
-tmp/
-tmp_restore/
-data/*.sqlite-shm
-data/*.sqlite-wal
-backend/data/*.sqlite-shm
-backend/data/*.sqlite-wal# -------------------------
-# Node / JavaScript
-# -------------------------
+Thumbs.db
+.idea/
+.vscode/
+
+### Node / Bun / JavaScript
 node_modules/
 dist/
 build/
@@ -28,9 +16,15 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# -------------------------
-# Python
-# -------------------------
+# Bun lock files (local/backups)
+bun.lock
+*.lockb
+**/*.lockb
+dashboard/bun.lock
+backend/bun.lock
+IDE/bun.lock
+
+### Python
 __pycache__/
 *.py[cod]
 *.pyo
@@ -41,19 +35,17 @@ env/
 ENV/
 pip-wheel-metadata/
 
-# Packaging / build artifacts
+### Packaging / build artifacts
 *.egg-info/
 pip-wheel-metadata/
 
-# Coverage
+### Coverage
 .coverage
 .coverage.*
 coverage/
 htmlcov/
 
-# -------------------------
-# Databases / test artifacts
-# -------------------------
+### Databases / test artifacts
 # SQLite runtime artifacts (WAL/SHM)
 *.sqlite-wal
 *.sqlite-shm
@@ -62,27 +54,16 @@ htmlcov/
 tests/**/verify_tenant_*.sqlite
 tests/**/verify_tenant_*.sqlite*
 
-# Persistent data directories (if you keep an on-disk DB in repo during development)
+# Persistent data directories (local DB during development)
 data/
 
-# -------------------------
-# Environment & secrets
-# -------------------------
-.env
-.env.local
-.env.*
+### Environment & secrets
+/.env
+/.env.local
+.env*
 !.env.example
 
-# -------------------------
-# Editor / OS
-# -------------------------
-.DS_Store
-.idea/
-.vscode/
-
-# -------------------------
-# Caches, logs, misc
-# -------------------------
+### Caches, logs, misc
 .cache/
 tmp/
 tmp_restore/
@@ -93,21 +74,9 @@ benchmark/
 exports/
 *.vsix
 
-# Misc
+### Misc
 .pypirc
 target/
 
-# Ignore editor/backup files
-*.bak
-# Ignore npm lockfiles now that Bun is canonical
-package-lock.json
-
-# Local IDE / environment artifacts
+### Local IDE / environment artifacts
 IDE/.openmemory/
-IDE/bun.lock
-
-# Bun lock backup files sometimes present from local runs
-**/*.lockb
-# Dashboard / backend bun locks (local)
-dashboard/bun.lock
-backend/*.lockb

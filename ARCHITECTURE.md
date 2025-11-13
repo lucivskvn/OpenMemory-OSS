@@ -8,7 +8,7 @@ OpenMemory is a self-hosted AI memory engine implementing **Hierarchical Memory 
 
 ## High-Level Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         CLIENT LAYER                                 │
 ├─────────────────────────────────────────────────────────────────────┤
@@ -19,7 +19,7 @@ OpenMemory is a self-hosted AI memory engine implementing **Hierarchical Memory 
                                      │
                          ┌───────────▼───────────┐
                          │   REST API SERVER     │
-                         │   (TypeScript/Node)   │
+                         │   (TypeScript — Bun runtime)   │
                          │   Port: 8080          │
                          └───────────┬───────────┘
                                      │
@@ -50,7 +50,7 @@ OpenMemory is a self-hosted AI memory engine implementing **Hierarchical Memory 
 │ • waypoints   │  │ • Pruning        │
 │ • embed_logs  │  │                  │
 └───────────────┘  └──────────────────┘
-```
+```text
 
 ---
 
@@ -132,11 +132,11 @@ SECTORS = {
 }
 ```
 
-#### 2.2 Memory Operations
+### 2.2 Memory Operations
 
 **Add Memory Flow:**
 
-```
+```text
 1. Content → classifyContent() → {primary, additional}
 2. For each sector → embedMultiSector() → vectors[]
 3. Calculate mean vector from all sector vectors
@@ -147,19 +147,19 @@ SECTORS = {
 
 **Query Memory Flow:**
 
-```
+```text
 1. Query text → classifyContent() → candidate sectors
 2. For each sector → embedForSector() → query vector
 3. Search vectors by sector → cosine similarity
 4. Get top-K per sector → merge results
 5. expandViaWaypoints() → 1-hop graph traversal
 6. Score each memory: composite score
-   = 0.6×similarity + 0.2×salience + 0.1×recency + 0.1×waypoint
+  = 0.6×similarity + 0.2×salience + 0.1×recency + 0.1×waypoint
 7. Sort and return top-K
 8. Reinforce: boost salience + strengthen waypoints
 ```
 
-#### 2.3 Decay System
+### 2.3 Decay System
 
 **Purpose:** Simulate memory fading over time
 
@@ -174,7 +174,7 @@ calculateDecay(sector, initialSalience, daysSinceLastSeen) {
 - Episodic memories decay fastest (0.020)
 - Reflective memories decay slowest (0.001)
 
-#### 2.4 Waypoint Graph
+### 2.4 Waypoint Graph
 
 **Purpose:** Single-waypoint associative linking
 
@@ -674,15 +674,17 @@ Ports:
 
 ```bash
 cd backend
-npm install
-npm run dev
+
+bun install
+bun run dev
 ```
 
 ### Production
 
 ```bash
-npm run build
-npm start
+
+bun run build
+bun run start
 ```
 
 **Systemd service:**
@@ -696,7 +698,7 @@ After=network.target
 Type=simple
 User=openmemory
 WorkingDirectory=/opt/openmemory/backend
-ExecStart=/usr/bin/node dist/server/index.js
+ExecStart=/usr/bin/bun run start
 Restart=always
 
 [Install]

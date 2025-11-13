@@ -18,8 +18,8 @@ First, make sure the OpenMemory backend is running:
 
 ```bash
 cd backend
-npm install
-npm run dev
+bun install
+bun run dev
 ```
 
 The backend will start on `http://localhost:8080`
@@ -37,8 +37,8 @@ NEXT_PUBLIC_API_URL=http://localhost:8080
 
 ```bash
 cd dashboard
-npm install
-npm run dev
+bun install
+bun run dev
 ```
 
 The dashboard will start on `http://localhost:3000`
@@ -47,7 +47,7 @@ The dashboard will start on `http://localhost:3000`
 
 Before chatting, you need to add some memories to your database. You can do this via:
 
-**Option A: API (Recommended for Testing)**
+### Option A: API (Recommended for Testing)
 
 ```bash
 curl -X POST http://localhost:8080/memory/add \
@@ -59,7 +59,7 @@ curl -X POST http://localhost:8080/memory/add \
   }'
 ```
 
-**Option B: Use the SDK**
+### Option B: Use the SDK
 
 ```javascript
 // examples/js-sdk/basic-usage.js
@@ -73,7 +73,7 @@ await om.addMemory({
 });
 ```
 
-**Option C: Ingest a Document**
+### Option C: Ingest a Document
 
 ```bash
 curl -X POST http://localhost:8080/memory/ingest \
@@ -124,7 +124,7 @@ Clicking the **+** button on a memory card:
 
 ### "Failed to query memories"
 
-- Ensure backend is running: `npm run dev` in `backend/`
+- Ensure backend is running: `bun run dev` in `backend/`
 - Check backend is on port 8080: `curl http://localhost:8080/health`
 - Verify CORS is enabled (already configured)
 

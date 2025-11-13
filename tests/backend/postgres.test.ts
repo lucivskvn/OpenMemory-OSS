@@ -18,7 +18,7 @@ async function waitFor(predicate: () => Promise<boolean>, attempts = 40, delayMs
 
 test("postgres: connection, schema, CRUD, transactions, multi-tenant isolation", async () => {
     if (process.env.OM_METADATA_BACKEND !== "postgres") {
-        console.log("Skipping Postgres tests (OM_METADATA_BACKEND != postgres)");
+        if (process.env.TEST_DEBUG === '1') console.log("Skipping Postgres tests (OM_METADATA_BACKEND != postgres)");
         return;
     }
 
@@ -29,7 +29,7 @@ test("postgres: connection, schema, CRUD, transactions, multi-tenant isolation",
     const { initDb } = mod as any;
 
     // Initialize DB layer (Postgres branch will run)
-    initDb();
+    await initDb();
 
     // Wait for run_async/get_async to become usable and for tables to exist
     const ready = await waitFor(async () => {

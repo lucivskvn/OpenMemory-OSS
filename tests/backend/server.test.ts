@@ -1,22 +1,44 @@
 import { describe, it, expect } from "bun:test";
-import path from "path";
-import fs from "fs";
+import { createServer } from "../../backend/src/server/server";
+import { corsMiddleware } from "../../backend/src/server/index";
 
-async function startServerForTest() {
-    const tmpDir = path.resolve(process.cwd(), "tmp");
-    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
-    const tmpDb = path.join(tmpDir, `openmemory-server-${process.pid}-${Date.now()}.sqlite`);
-    process.env.OM_DB_PATH = tmpDb;
-    await import("../../backend/src/server/index.ts");
-}
+describe("CORS middleware and streaming opt-out", () => {
+    it("does not merge CORS headers for handlers that set ctx.skipCors and stream", async () => {
+        const app = createServer();
+        app.use(corsMiddleware());
 
-describe("server health", () => {
-    it("/health returns 200", async () => {
-        await startServerForTest();
-        const resp = await fetch("http://localhost:8080/health");
-        expect(resp.ok).toBe(true);
-        const json = await resp.json();
-        // Health payload may vary; at minimum expect an OK flag or version
-        expect(json.ok || json.version).toBeDefined();
+        app.get("/stream", async (_req, ctx) => {
+            // Mark this handler as streaming so the CORS middleware skips merging
+            ctx.skipCors = true;
+            const rs = new ReadableStream({
+                start(ctrl) {
+                    ctrl.enqueue(new TextEncoder().encode("data: hello\n\n"));
+                    ctrl.close();
+                },
+            });
+            return new Response(rs, { status: 200, headers: { "Content-Type": "text/event-stream" } });
+        });
+
+        app.get("/json", async () => {
+            return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+        });
+
+        const server = app.listen(0);
+        const port = (server as any).port;
+
+        try {
+            const r1 = await fetch(`http://localhost:${port}/stream`);
+            // Streaming response should not include Access-Control-Allow-Origin/Credentials
+            expect(r1.headers.get("Access-Control-Allow-Origin")).toBeNull();
+            expect(r1.headers.get("Access-Control-Allow-Credentials")).toBeNull();
+
+            const r2 = await fetch(`http://localhost:${port}/json`);
+            expect(r2.headers.get("Access-Control-Allow-Origin")).toBe("*");
+            // Default OM_CORS_CREDENTIALS is false, so header should be 'false'
+            expect(r2.headers.get("Access-Control-Allow-Credentials")).toBe("false");
+        } finally {
+            server.stop(true);
+        }
     });
 });
+

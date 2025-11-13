@@ -133,6 +133,8 @@ export async function ingestDocument(
     cfg?: ingestion_cfg,
     user_id?: string | null,
 ): Promise<IngestionResult> {
+    // Testing seam: allow tests to override the ingest pipeline.
+    if ((ingestDocument as any)._mock) return await (ingestDocument as any)._mock(t, data, meta, cfg, user_id);
     const th = cfg?.lg_thresh || LG,
         sz = cfg?.sec_sz || SEC;
     const ex = await extractText(t, data);
@@ -204,6 +206,11 @@ export async function ingestDocument(
     }
 }
 
+// Test seam to set a mock implementation for ingestDocument.
+export function setIngestDocumentForTests(mock: (t: string, data: string | Buffer, meta?: Record<string, unknown>, cfg?: ingestion_cfg, user_id?: string | null) => Promise<IngestionResult>) {
+    (ingestDocument as any)._mock = mock;
+}
+
 // File-based ingestion helper that uses Bun.file() for faster I/O
 export async function ingestDocumentFromFile(
     filePath: string,
@@ -259,7 +266,8 @@ export async function ingestDocumentFromFile(
         const normProvided = (contentType || '').split(';')[0].trim().toLowerCase();
         const normDetected = (mimeType || '').split(';')[0].trim().toLowerCase();
         if (normProvided && normDetected && normProvided !== normDetected) {
-            logger.info({ component: 'INGEST', file: filePath, provided: contentType, detected: mimeType }, `[INGEST] Provided contentType '%s' differs from detected mime '%s'`, contentType, mimeType);
+            // Surface potential user misconfigurations at WARN level so they are more visible
+            logger.warn({ component: 'INGEST', file: filePath, provided: contentType, detected: mimeType }, `[INGEST] Provided contentType '%s' differs from detected mime '%s'`, contentType, mimeType);
         }
         // If contentType is missing or generic, prefer the detected mime type from Bun.file()
         let effectiveType = contentType;

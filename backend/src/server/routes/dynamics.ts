@@ -1,4 +1,5 @@
 import { q } from "../../core/db";
+import logger from "../../core/logger";
 import {
     calculateDynamicSalienceWithTimeDecay,
     calculateCrossSectorResonanceScore,
@@ -50,10 +51,7 @@ export function dynroutes(app: any) {
                         advanced_memory_dynamics_configuration_constants,
                 });
             } catch (unexpected_error_during_constants_retrieval) {
-                console.error(
-                    "[DYNAMICS] Error retrieving dynamics constants:",
-                    unexpected_error_during_constants_retrieval,
-                );
+                logger.error({ component: "DYNAMICS", err: unexpected_error_during_constants_retrieval }, "[DYNAMICS] Error retrieving dynamics constants: %o", unexpected_error_during_constants_retrieval);
                 outgoing_http_response.status(500).json({ err: "internal" });
             }
         },
@@ -99,10 +97,7 @@ export function dynroutes(app: any) {
                     },
                 });
             } catch (unexpected_error_during_salience_calculation) {
-                console.error(
-                    "[DYNAMICS] Error calculating dynamic salience:",
-                    unexpected_error_during_salience_calculation,
-                );
+                logger.error({ component: "DYNAMICS", err: unexpected_error_during_salience_calculation }, "[DYNAMICS] Error calculating dynamic salience: %o", unexpected_error_during_salience_calculation);
                 outgoing_http_response.status(500).json({ err: "internal" });
             }
         },
@@ -139,10 +134,7 @@ export function dynroutes(app: any) {
                     },
                 });
             } catch (unexpected_error_during_resonance_calculation) {
-                console.error(
-                    "[DYNAMICS] Error calculating cross-sector resonance:",
-                    unexpected_error_during_resonance_calculation,
-                );
+                logger.error({ component: "DYNAMICS", err: unexpected_error_during_resonance_calculation }, "[DYNAMICS] Error calculating cross-sector resonance: %o", unexpected_error_during_resonance_calculation);
                 outgoing_http_response.status(500).json({ err: "internal" });
             }
         },
@@ -203,10 +195,7 @@ export function dynroutes(app: any) {
                         ),
                 });
             } catch (unexpected_error_during_energy_retrieval) {
-                console.error(
-                    "[DYNAMICS] Error performing energy-based retrieval:",
-                    unexpected_error_during_energy_retrieval,
-                );
+                logger.error({ component: "DYNAMICS", err: unexpected_error_during_energy_retrieval }, "[DYNAMICS] Error performing energy-based retrieval: %o", unexpected_error_during_energy_retrieval);
                 outgoing_http_response.status(500).json({ err: "internal" });
             }
         },
@@ -254,6 +243,7 @@ export function dynroutes(app: any) {
                 const connected_waypoints_from_database =
                     await q.get_waypoints_by_src.all(
                         target_memory_id_from_request,
+                        memory_record_from_database.user_id ?? null,
                     );
                 const linked_nodes_with_weights_array =
                     connected_waypoints_from_database.map(
@@ -294,10 +284,7 @@ export function dynroutes(app: any) {
                     linked_nodes_updates: propagated_reinforcement_updates_list,
                 });
             } catch (unexpected_error_during_trace_reinforcement) {
-                console.error(
-                    "[DYNAMICS] Error applying trace reinforcement:",
-                    unexpected_error_during_trace_reinforcement,
-                );
+                logger.error({ component: "DYNAMICS", err: unexpected_error_during_trace_reinforcement }, "[DYNAMICS] Error applying trace reinforcement: %o", unexpected_error_during_trace_reinforcement);
                 outgoing_http_response.status(500).json({ err: "internal" });
             }
         },
@@ -353,10 +340,7 @@ export function dynroutes(app: any) {
                     spreading_activation_results: activation_results_as_array,
                 });
             } catch (unexpected_error_during_spreading_activation) {
-                console.error(
-                    "[DYNAMICS] Error performing spreading activation:",
-                    unexpected_error_during_spreading_activation,
-                );
+                logger.error({ component: "DYNAMICS", err: unexpected_error_during_spreading_activation }, "[DYNAMICS] Error performing spreading activation: %o", unexpected_error_during_spreading_activation);
                 outgoing_http_response.status(500).json({ err: "internal" });
             }
         },
@@ -420,10 +404,7 @@ export function dynroutes(app: any) {
                     detailed_node_information: detailed_graph_nodes_array,
                 });
             } catch (unexpected_error_building_waypoint_graph) {
-                console.error(
-                    "[DYNAMICS] Error building waypoint graph:",
-                    unexpected_error_building_waypoint_graph,
-                );
+                logger.error({ component: "DYNAMICS", err: unexpected_error_building_waypoint_graph }, "[DYNAMICS] Error building waypoint graph: %o", unexpected_error_building_waypoint_graph);
                 outgoing_http_response.status(500).json({ err: "internal" });
             }
         },
@@ -481,7 +462,7 @@ export function dynroutes(app: any) {
 
                 const time_gap_between_memories_milliseconds = Math.abs(
                     source_memory_record.created_at -
-                        target_memory_record.created_at,
+                    target_memory_record.created_at,
                 );
 
                 const calculated_waypoint_link_weight =
@@ -505,10 +486,7 @@ export function dynroutes(app: any) {
                     },
                 });
             } catch (unexpected_error_calculating_waypoint_weight) {
-                console.error(
-                    "[DYNAMICS] Error calculating waypoint weight:",
-                    unexpected_error_calculating_waypoint_weight,
-                );
+                logger.error({ component: "DYNAMICS", err: unexpected_error_calculating_waypoint_weight }, "[DYNAMICS] Error calculating waypoint weight: %o", unexpected_error_calculating_waypoint_weight);
                 outgoing_http_response.status(500).json({ err: "internal" });
             }
         },

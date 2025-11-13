@@ -2,6 +2,7 @@ import { q, log_maint_op } from "../core/db";
 import { add_hsg_memory } from "./hsg";
 import { env } from "../core/cfg";
 import { j } from "../utils";
+import logger from "../core/logger";
 
 const cos = (a: number[], b: number[]): number => {
     let d = 0,
@@ -108,18 +109,16 @@ const boost = async (ids: string[]) => {
 };
 
 export const run_reflection = async () => {
-    console.log("[REFLECT] Starting reflection job...");
+    logger.info({ component: "REFLECT" }, "[REFLECT] Starting reflection job...");
     const min = env.reflect_min || 20;
     const mems = await q.all_mem.all(100, 0);
-    console.log(
-        `[REFLECT] Fetched ${mems.length} memories (min required: ${min})`,
-    );
+    logger.info({ component: "REFLECT", fetched: mems.length, min_required: min }, "[REFLECT] Fetched %d memories (min required: %d)", mems.length, min);
     if (mems.length < min) {
-        console.log("[REFLECT] Not enough memories, skipping");
+        logger.info({ component: "REFLECT" }, "[REFLECT] Not enough memories, skipping");
         return { created: 0, reason: "low" };
     }
     const cls = cluster(mems);
-    console.log(`[REFLECT] Clustered into ${cls.length} groups`);
+    logger.info({ component: "REFLECT", clusters: cls.length }, "[REFLECT] Clustered into %d groups", cls.length);
     let n = 0;
     for (const c of cls) {
         const txt = summ(c);
@@ -131,16 +130,21 @@ export const run_reflection = async () => {
             freq: c.n,
             at: new Date().toISOString(),
         };
-        console.log(
-            `[REFLECT] Creating reflection: ${c.n} memories, salience=${s.toFixed(3)}, sector=${c.mem[0].primary_sector}`,
+        logger.info({ component: "REFLECT", freq: c.n, salience: s, sector: c.mem[0].primary_sector }, "[REFLECT] Creating reflection: %d memories, salience=%s, sector=%s", c.n, s.toFixed(3), c.mem[0].primary_sector);
+        // If all source memories belong to the same user, attach the reflection to that user.
+        const userIds = new Set<string>(
+            c.mem
+                .map((m: any) => m.user_id)
+                .filter((u: any): u is string => !!u && typeof u === "string"),
         );
-        await add_hsg_memory(txt, j(["reflect:auto"]), meta);
+        const reflectionUser: string | undefined = userIds.size === 1 ? Array.from(userIds)[0] : undefined;
+        await add_hsg_memory(txt, j(["reflect:auto"]), meta, reflectionUser);
         await mark(src);
         await boost(src);
         n++;
     }
     if (n > 0) await log_maint_op("reflect", n);
-    console.log(`[REFLECT] Job complete: created ${n} reflections`);
+    logger.info({ component: "REFLECT", created: n }, "[REFLECT] Job complete: created %d reflections", n);
     return { created: n, clusters: cls.length };
 };
 
@@ -150,10 +154,10 @@ export const start_reflection = () => {
     if (!env.auto_reflect || timer) return;
     const int = (env.reflect_interval || 10) * 60000;
     timer = setInterval(
-        () => run_reflection().catch((e) => console.error("[REFLECT]", e)),
+        () => run_reflection().catch((e) => logger.error({ component: "REFLECT", err: e }, "[REFLECT] %o", e)),
         int,
     );
-    console.log(`[REFLECT] Started: every ${env.reflect_interval || 10}m`);
+    logger.info({ component: "REFLECT", interval_minutes: env.reflect_interval || 10 }, "[REFLECT] Started: every %d m", env.reflect_interval || 10);
 };
 
 export const stop_reflection = () => {

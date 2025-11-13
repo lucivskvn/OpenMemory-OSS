@@ -1,0 +1,31 @@
+name: Validate OM_API_KEY secret
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  validate-om-api-key:
+    runs-on: ubuntu-latest
+    name: Ensure OM_API_KEY is hashed
+    steps:
+      - name: Check OM_API_KEY secret exists
+        env:
+          OM_API_KEY: ${{ secrets.OM_API_KEY }}
+        run: |
+          # If no secret is configured, don't fail CI here - some forks and PRs
+          # from contributors won't have repository secrets. Only validate when set.
+          if [ -z "$OM_API_KEY" ]; then
+            echo "OM_API_KEY secret not set in this repo - skipping validation.";
+            exit 0;
+          fi
+          # Validate hashed format: look for common hash indicators ($ or argon2)
+          # Do not echo the secret value to logs.
+          echo "Validating OM_API_KEY format..."
+          if echo "$OM_API_KEY" | grep -Eqi "(^\$argon2|argon2|\$)"; then
+            echo "OM_API_KEY looks hashed.";
+            exit 0;
+          else
+            echo "ERROR: OM_API_KEY appears to be plaintext. Please set OM_API_KEY to a hashed value (argon2).";
+            exit 1;
+          fi
