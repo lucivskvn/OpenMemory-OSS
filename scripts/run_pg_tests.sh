@@ -7,12 +7,14 @@ PORT="${PORT:-5432}"
 TEARDOWN=false
 SKIP_UP=false
 TEARDOWN_AFTER_FAILURE=false
+DOWN_ONLY=false
 
 usage(){
   echo "Usage: $0 [--teardown|-t]" >&2
   echo "  --teardown, -t    Tear down the Postgres containers and remove volumes after tests" >&2
   echo "  --skip-up, -s     Skip 'docker compose up' (assume containers already running)" >&2
   echo "  --teardown-after-failure, -f  Tear down containers and volumes if tests fail" >&2
+  echo "  --down-only, -d   Skip tests and just run 'docker compose --profile pg down --volumes'" >&2
   echo "  --help            Show this help" >&2
   exit 1
 }
@@ -32,6 +34,10 @@ while [[ ${#} -gt 0 ]]; do
       TEARDOWN_AFTER_FAILURE=true
       shift
       ;;
+    -d|--down-only)
+      DOWN_ONLY=true
+      shift
+      ;;
     -h|--help)
       usage
       ;;
@@ -49,6 +55,13 @@ while [[ ${#} -gt 0 ]]; do
       ;;
   esac
 done
+
+# If down-only mode was requested, skip everything and just tear down
+if [ "${DOWN_ONLY}" = "true" ]; then
+  echo "Down-only mode: tearing down Postgres containers and volumes"
+  docker compose --profile pg down --volumes || true
+  exit 0
+fi
 
 echo "Starting Postgres via docker compose (profile: pg)"
 if [ "${SKIP_UP}" = "true" ]; then
