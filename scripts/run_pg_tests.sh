@@ -6,11 +6,13 @@ HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-5432}"
 TEARDOWN=false
 SKIP_UP=false
+TEARDOWN_AFTER_FAILURE=false
 
 usage(){
   echo "Usage: $0 [--teardown|-t]" >&2
   echo "  --teardown, -t    Tear down the Postgres containers and remove volumes after tests" >&2
   echo "  --skip-up, -s     Skip 'docker compose up' (assume containers already running)" >&2
+  echo "  --teardown-after-failure, -f  Tear down containers and volumes if tests fail" >&2
   echo "  --help            Show this help" >&2
   exit 1
 }
@@ -24,6 +26,10 @@ while [[ ${#} -gt 0 ]]; do
       ;;
     -s|--skip-up|--no-build)
       SKIP_UP=true
+      shift
+      ;;
+    -f|--teardown-after-failure)
+      TEARDOWN_AFTER_FAILURE=true
       shift
       ;;
     -h|--help)
@@ -45,7 +51,11 @@ while [[ ${#} -gt 0 ]]; do
 done
 
 echo "Starting Postgres via docker compose (profile: pg)"
-docker compose --profile pg up -d postgres
+if [ "${SKIP_UP}" = "true" ]; then
+  echo "Skipping 'docker compose up' (assuming containers already running)"
+else
+  docker compose --profile pg up -d postgres
+fi
 
 
 echo "Waiting for Postgres to accept connections on ${HOST}:${PORT}..."
@@ -118,14 +128,23 @@ NODE
 wait_for_port "${HOST}" ${PORT}
 
 echo "Running Postgres integration tests"
+# Run tests but capture exit code so we can teardown on failure if requested
+set +e
 OM_METADATA_BACKEND=postgres OM_ENABLE_PG=true OM_PG_HOST=${HOST} OM_PG_PORT=${PORT} OM_PG_DB=openmemory OM_PG_USER=openmemory OM_PG_PASSWORD=openmemory bun test tests/backend/db-migration.pg.test.js --verbose
+TEST_EXIT=$?
+set -e
 
-echo "Postgres tests finished"
+echo "Postgres tests finished (exit code: ${TEST_EXIT})"
 
-if [ "${TEARDOWN}" = "true" ]; then
-  echo "Tearing down Postgres container and removing volumes (requested via --teardown)"
+# Decide whether to teardown:
+# - If --teardown was passed, always teardown
+# - If --teardown-after-failure was passed and tests failed, teardown
+if [ "${TEARDOWN}" = "true" ] || { [ "${TEARDOWN_AFTER_FAILURE}" = "true" ] && [ ${TEST_EXIT} -ne 0 ]; }; then
+  echo "Tearing down Postgres container and removing volumes"
   docker compose --profile pg down --volumes
 else
   echo "Leaving Postgres container running (keep data by default)."
   echo "To remove containers and data now, run: docker compose --profile pg down --volumes"
 fi
+
+exit ${TEST_EXIT}
