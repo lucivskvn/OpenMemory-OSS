@@ -57,6 +57,15 @@ Warning: enabling `OM_STRICT_TENANT=true` may surface missing `user_id` argument
 
 See `backend/src/core/db.ts` for the runtime check and guidance.
 
+### Optional user-scope diagnostics
+
+The DB layer includes a developer-facing warning that attempts to detect queries referencing `user_id` but invoked without a `user_id` parameter. This is best-effort and may be noisy; to control it:
+
+- `OM_DB_USER_SCOPE_WARN=true` enables the warning checks (tests run with this disabled by default).
+- `OM_DB_DEBUG_USER_SCOPE=true` enables a noisier fallback heuristic when the SQL parser cannot precisely determine parameter positions. Only enable this when actively debugging user-scope issues.
+
+Recommendation: run tests and CI with `OM_DB_USER_SCOPE_WARN=false` (the `backend/package.json` test script already sets this), and enable the warnings locally only when diagnosing migration or tenant-scoping problems.
+
 **Canonical migration runner:** `backend/src/migrate.ts`
 
 Note: A legacy migration helper exists at `backend/src/core/migrate.ts` but it is not the canonical CLI runner. Use `bun run migrate` from the `backend` directory which executes `backend/src/migrate.ts`.

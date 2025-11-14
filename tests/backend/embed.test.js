@@ -78,4 +78,31 @@ describe('Embedding layer integration tests', () => {
       expect(info.provider).toBeTruthy();
       expect(info.dimensions).toBeTruthy();
   });
+
+    it('embedMultiSector marks logs failed after retries when provider consistently fails', async () => {
+        const id = 'embed-fail-test';
+        const mod = await import('../../backend/src/memory/embed.js');
+        const orig_emb_local = mod.emb_local;
+        // Monkey-patch the provider to always throw
+        mod.emb_local = async () => {
+            throw new Error('forced failure for test');
+        };
+        let threw = false;
+        try {
+            await mod.embedMultiSector(id, 'this will fail', ['semantic'], undefined, 'test-user');
+        } catch (e) {
+            threw = true;
+        }
+        try {
+            const row = await get_async('select status,err from embed_logs where id=?', [id]);
+            expect(threw).toBe(true);
+            expect(row).toBeTruthy();
+            expect(String(row.status).toLowerCase()).toBe('failed');
+            expect(row.err).toBeTruthy();
+            expect(String(row.err).length).toBeGreaterThan(0);
+        } finally {
+            // restore provider to avoid side-effects
+            mod.emb_local = orig_emb_local;
+        }
+    });
 });

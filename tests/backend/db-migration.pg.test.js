@@ -58,4 +58,42 @@ describe('Postgres metadata backend integration', () => {
     const got = await q.get_mem.get(id, 'pg_user_tx');
     expect(got === undefined || got === null).toBe(true);
   });
+
+    it('vectors and waypoints enforce per-user isolation (Postgres)', async () => {
+        if (skip) return;
+        const { q } = dbExports;
+        const now = Date.now();
+        const dim = 8;
+        const a = new Float32Array(dim).fill(0).map((v, i) => i / dim);
+        const b = new Float32Array(dim).fill(0).map((v, i) => (i + 1) / dim);
+        const bufA = Buffer.from(a.buffer);
+        const bufB = Buffer.from(b.buffer);
+
+        await q.ins_vec.run('pg-vec-1', 'semantic', 'pg_user1', bufA, dim);
+        await q.ins_vec.run('pg-vec-2', 'semantic', 'pg_user2', bufB, dim);
+
+        const got1 = await q.get_vec.get('pg-vec-1', 'semantic', 'pg_user1');
+        expect(got1).toBeTruthy();
+        const got2_for_user1 = await q.get_vec.get('pg-vec-2', 'semantic', 'pg_user1');
+        expect(got2_for_user1 === undefined || got2_for_user1 === null).toBe(true);
+
+        await q.ins_waypoint.run('pg-src-1', 'pg-dst-a', 'pg_user1', 1.0, now, now);
+        await q.ins_waypoint.run('pg-src-1', 'pg-dst-b', 'pg_user2', 0.5, now, now);
+        const neighs_user1 = await q.get_neighbors.all('pg-src-1', 'pg_user1');
+        expect(neighs_user1.length).toBe(1);
+        expect(neighs_user1[0].dst_id).toBe('pg-dst-a');
+
+        // strict mode should reject deletions without user_id
+        process.env.OM_STRICT_TENANT = 'true';
+        await dbExports.initDb();
+        let threw = false;
+        try {
+            await q.del_vec.run('pg-vec-1');
+        } catch (e) {
+            threw = true;
+        }
+        expect(threw).toBe(true);
+        delete process.env.OM_STRICT_TENANT;
+        await dbExports.initDb();
+    });
 });
