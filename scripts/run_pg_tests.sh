@@ -8,6 +8,7 @@ TEARDOWN=false
 SKIP_UP=false
 TEARDOWN_AFTER_FAILURE=false
 DOWN_ONLY=false
+FORCE=false
 
 usage(){
   echo "Usage: $0 [--teardown|-t]" >&2
@@ -15,6 +16,7 @@ usage(){
   echo "  --skip-up, -s     Skip 'docker compose up' (assume containers already running)" >&2
   echo "  --teardown-after-failure, -f  Tear down containers and volumes if tests fail" >&2
   echo "  --down-only, -d   Skip tests and just run 'docker compose --profile pg down --volumes'" >&2
+  echo "  --force, -F       Skip interactive confirmations and force removal of volumes" >&2
   echo "  --help            Show this help" >&2
   exit 1
 }
@@ -36,6 +38,10 @@ while [[ ${#} -gt 0 ]]; do
       ;;
     -d|--down-only)
       DOWN_ONLY=true
+      shift
+      ;;
+    -F|--force)
+      FORCE=true
       shift
       ;;
     -h|--help)
@@ -152,9 +158,31 @@ echo "Postgres tests finished (exit code: ${TEST_EXIT})"
 # Decide whether to teardown:
 # - If --teardown was passed, always teardown
 # - If --teardown-after-failure was passed and tests failed, teardown
+confirm_or_abort() {
+  # If FORCE=true or not interactive, skip prompt
+  if [ "${FORCE}" = "true" ] || [ ! -t 0 ]; then
+    return 0
+  fi
+  echo "About to remove Postgres containers AND volumes. This will delete data. Continue? [y/N]"
+  read -r ans
+  case "${ans}" in
+    [yY]|[yY][eE][sS])
+      return 0
+      ;;
+    *)
+      echo "Aborting teardown." >&2
+      return 1
+      ;;
+  esac
+}
+
 if [ "${TEARDOWN}" = "true" ] || { [ "${TEARDOWN_AFTER_FAILURE}" = "true" ] && [ ${TEST_EXIT} -ne 0 ]; }; then
   echo "Tearing down Postgres container and removing volumes"
-  docker compose --profile pg down --volumes
+  if confirm_or_abort; then
+    docker compose --profile pg down --volumes
+  else
+    echo "Teardown skipped by user choice." >&2
+  fi
 else
   echo "Leaving Postgres container running (keep data by default)."
   echo "To remove containers and data now, run: docker compose --profile pg down --volumes"
