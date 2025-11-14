@@ -1,6 +1,49 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Defaults (can be overridden by environment)
+HOST="${HOST:-127.0.0.1}"
+PORT="${PORT:-5432}"
+TEARDOWN=false
+SKIP_UP=false
+
+usage(){
+  echo "Usage: $0 [--teardown|-t]" >&2
+  echo "  --teardown, -t    Tear down the Postgres containers and remove volumes after tests" >&2
+  echo "  --skip-up, -s     Skip 'docker compose up' (assume containers already running)" >&2
+  echo "  --help            Show this help" >&2
+  exit 1
+}
+
+# Simple arg parsing
+while [[ ${#} -gt 0 ]]; do
+  case "$1" in
+    -t|--teardown)
+      TEARDOWN=true
+      shift
+      ;;
+    -s|--skip-up|--no-build)
+      SKIP_UP=true
+      shift
+      ;;
+    -h|--help)
+      usage
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*|--*)
+      echo "Unknown option: $1" >&2
+      usage
+      ;;
+    *)
+      # positional (none expected)
+      shift
+      ;;
+  esac
+done
+
 echo "Starting Postgres via docker compose (profile: pg)"
 docker compose --profile pg up -d postgres
 
@@ -79,4 +122,10 @@ OM_METADATA_BACKEND=postgres OM_ENABLE_PG=true OM_PG_HOST=${HOST} OM_PG_PORT=${P
 
 echo "Postgres tests finished"
 
-echo "Tearing down Postgres container (keep data by default). To remove data, run: docker compose --profile pg down -v" 
+if [ "${TEARDOWN}" = "true" ]; then
+  echo "Tearing down Postgres container and removing volumes (requested via --teardown)"
+  docker compose --profile pg down --volumes
+else
+  echo "Leaving Postgres container running (keep data by default)."
+  echo "To remove containers and data now, run: docker compose --profile pg down --volumes"
+fi
