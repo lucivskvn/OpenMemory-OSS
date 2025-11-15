@@ -76,6 +76,9 @@ async function initDb() {
         : process.env.OM_DB_PATH || env.db_path || "./data/openmemory.sqlite");
     if (_initialized_db_path === desiredPath) return;
     const is_pg = (process.env.OM_METADATA_BACKEND || env.metadata_backend) === "postgres";
+    // Tenant enforcement is controlled by the environment variable
+    // `OM_STRICT_TENANT`. Do not set a default here so test harnesses and
+    // programmatic callers can control tenant mode explicitly.
     /*
      Postgres runtime behavior and fallback
      --------------------------------------
@@ -204,6 +207,14 @@ async function initDb() {
                     if ((process.env.OM_DB_CONSOLE || "").toLowerCase() === "true") console.log(msg);
                 }
                 // Warn if queries referencing user_id are called without a user_id when guard enabled
+                // NOTE: this heuristic is intentionally conservative and best-effort. It attempts to
+                // parse parameter placeholders to detect which positional parameter(s) are meant
+                // for `user_id`. If parsing succeeds we inspect the exact slots and warn when those
+                // slots are null/empty. If parsing fails we do NOT fall back to a noisy heuristic
+                // by default — that produced many false positives in developer environments. To opt
+                // into the noisier fallback behavior set `OM_DB_DEBUG_USER_SCOPE=true` *in addition*
+                // to `OM_DB_USER_SCOPE_WARN=true` (i.e. both must be true). Tests should run with
+                // `OM_DB_USER_SCOPE_WARN=false` (see `backend/package.json` test script).
                 if (process.env.OM_DB_USER_SCOPE_WARN === "true" && /user_id/.test(sql)) {
                     // Determine which parameter indexes correspond to user_id in the SQL.
                     // For Postgres ($1-style) we extract the numeric placeholder. For SQLite (?) we
@@ -230,15 +241,16 @@ async function initDb() {
                             userIdIndexes.push(idx);
                         }
                     } catch (e) {
-                        // If any unexpected parsing error occurs, fall back to a conservative
-                        // heuristic: warn when any parameter is null/empty. This is less precise
-                        // but safe for flagging potential user-scope omissions.
-                        logger.warn({ component: "DB", err: e }, "[DB] Failed to parse SQL for user_id parameter positions; falling back to heuristic");
+                        // If parsing fails we only warn if the developer explicitly opted into
+                        // the noisier fallback via OM_DB_DEBUG_USER_SCOPE=true. Otherwise silently
+                        // skip the warning to avoid false positives.
+                        logger.warn({ component: "DB", err: e }, "[DB] Failed to parse SQL for user_id parameter positions; skipping noisy fallback. Set OM_DB_DEBUG_USER_SCOPE=true to enable verbose heuristics.");
                     }
 
                     // Inspect the parameter values at the detected indexes. If any user_id slot
-                    // exists and is null/empty, warn. If we failed to detect indexes, fall back
-                    // to a conservative check: warn if any parameter is explicitly null/empty.
+                    // exists and is null/empty, warn. Only when indexes were detected do we
+                    // perform this precise check. If indexes were not detected, consult
+                    // OM_DB_DEBUG_USER_SCOPE to decide whether to run the noisier heuristic.
                     let shouldWarn = false;
                     if (userIdIndexes.length > 0 && Array.isArray(p)) {
                         for (const i of userIdIndexes) {
@@ -248,14 +260,14 @@ async function initDb() {
                                 break;
                             }
                         }
-                    } else if (Array.isArray(p)) {
-                        // fallback: if any parameter is null-ish, assume a missing user_id slot
+                    } else if (Array.isArray(p) && (process.env.OM_DB_DEBUG_USER_SCOPE || "false") === "true") {
+                        // Developer explicitly opted into noisy fallback heuristics.
                         shouldWarn = p.some((x) => x === null || x === undefined || x === "");
                     }
 
                     if (shouldWarn) {
-                        const msg = `[DB] DB query referencing user_id invoked without user_id parameter: ${sql}`;
-                        logger.warn({ component: "DB", sql }, msg);
+                        const msg = `[DB] DB query referencing user_id invoked without user_id parameter: ${sql.length > 200 ? sql.slice(0, 200) + '...' : sql}`;
+                        logger.warn({ component: "DB", sql: sql.length > 200 ? sql.slice(0, 200) + '...' : sql }, msg);
                         if ((process.env.OM_DB_CONSOLE || "").toLowerCase() === "true") console.warn(msg);
                     }
                 }
@@ -323,6 +335,26 @@ async function initDb() {
             await bunClient.query(
                 `create table if not exists "${sc}"."openmemory_users"(user_id text primary key,summary text,reflection_count integer default 0,created_at bigint,updated_at bigint)`
             );
+            // Ensure maintenance/statistics and temporal tables exist in Postgres
+            // to match the SQLite branch. These tables power maintenance logging
+            // (`log_maint_op`) and temporal facts/edges features used in tests
+            // and some domain workflows.
+            await bunClient.query(
+                `create table if not exists "${sc}"."openmemory_stats"(id bigserial primary key,type text not null,count integer default 1,ts bigint not null)`
+            );
+            await bunClient.query(
+                `create table if not exists "${sc}"."openmemory_temporal_facts"(id text primary key,subject text not null,predicate text not null,object text not null,valid_from bigint not null,valid_to bigint,confidence double precision not null check(confidence >= 0 and confidence <= 1),last_updated bigint not null,metadata text,unique(subject,predicate,object,valid_from))`
+            );
+            await bunClient.query(
+                `create table if not exists "${sc}"."openmemory_temporal_edges"(id text primary key,source_id text not null,target_id text not null,relation_type text not null,valid_from bigint not null,valid_to bigint,weight double precision not null,metadata text)`
+            );
+            // Create helpful indexes similar to the SQLite branch
+            await bunClient.query(`create index if not exists "idx_stats_ts" on "${sc}"."openmemory_stats"(ts)`);
+            await bunClient.query(`create index if not exists "idx_temporal_subject" on "${sc}"."openmemory_temporal_facts"(subject)`);
+            await bunClient.query(`create index if not exists "idx_temporal_predicate" on "${sc}"."openmemory_temporal_facts"(predicate)`);
+            await bunClient.query(`create index if not exists "idx_temporal_validity" on "${sc}"."openmemory_temporal_facts"(valid_from,valid_to)`);
+            await bunClient.query(`create index if not exists "idx_edges_source" on "${sc}"."openmemory_temporal_edges"(source_id)`);
+            await bunClient.query(`create index if not exists "idx_edges_target" on "${sc}"."openmemory_temporal_edges"(target_id)`);
         } catch (e) {
             logger.error({ component: "DB", err: e }, "[DB] Failed to create tables with Bun Postgres client");
             throw e;
@@ -361,6 +393,14 @@ async function initDb() {
                         ];
                     };
                     const params = mapParams(p);
+                    // Enforce tenant scoping for inserts when OM_STRICT_TENANT is enabled
+                    const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
+                    const user_id = Array.isArray(params) && params.length > 1 ? params[1] : null;
+                    if (strict && (user_id === null || user_id === undefined || user_id === '')) {
+                        const msg = `Tenant-scoped write (ins_mem) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: 'DB' }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
                     return run_async(
                         `insert into ${m}(id,user_id,segment,content,simhash,primary_sector,tags,meta,created_at,updated_at,last_seen_at,salience,decay_lambda,version,mean_dim,mean_vec,compressed_vec,feedback_score) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) on conflict(id) do update set user_id=excluded.user_id,segment=excluded.segment,content=excluded.content,simhash=excluded.simhash,primary_sector=excluded.primary_sector,tags=excluded.tags,meta=excluded.meta,created_at=excluded.created_at,updated_at=excluded.updated_at,last_seen_at=excluded.last_seen_at,salience=excluded.salience,decay_lambda=excluded.decay_lambda,version=excluded.version,mean_dim=excluded.mean_dim,mean_vec=excluded.mean_vec,compressed_vec=excluded.compressed_vec,feedback_score=excluded.feedback_score`,
                         params,
@@ -1158,6 +1198,14 @@ async function initDb() {
                         ];
                     };
                     const params = mapParams(p);
+                    // Enforce tenant scoping for inserts when OM_STRICT_TENANT is enabled
+                    const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
+                    const user_id = Array.isArray(params) && params.length > 1 ? params[1] : null;
+                    if (strict && (user_id === null || user_id === undefined || user_id === '')) {
+                        const msg = `Tenant-scoped write (ins_mem) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: 'DB', id: params && params[0] }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
                     return exec(
                         "insert into memories(id,user_id,segment,content,simhash,primary_sector,tags,meta,created_at,updated_at,last_seen_at,salience,decay_lambda,version,mean_dim,mean_vec,compressed_vec,feedback_score) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         params,
@@ -1439,21 +1487,42 @@ async function initDb() {
             del_vec: {
                 run: (...p) => {
                     const [id, user_id = null] = p as any[];
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped write (del_vec) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: 'DB', id }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
                     return exec("delete from vectors where id=? and (? is null or user_id=?)", [id, user_id, user_id]);
                 },
             },
             del_vec_sector: {
                 run: (...p) => {
                     const [id, sector, user_id = null] = p as any[];
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped write (del_vec_sector) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: 'DB', id, sector }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
                     return exec("delete from vectors where id=? and sector=? and (? is null or user_id=?)", [id, sector, user_id, user_id]);
                 },
             },
             ins_waypoint: {
                 run: (...p) =>
-                    exec(
-                        "insert or replace into waypoints(src_id,dst_id,user_id,weight,created_at,updated_at) values(?,?,?,?,?,?)",
-                        p,
-                    ),
+                    ((): Promise<void> => {
+                        const [src, dst, user_id] = p as any[];
+                        const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                        if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                            const msg = `Tenant-scoped write (ins_waypoint) requires user_id when OM_STRICT_TENANT=true`;
+                            logger.error({ component: 'DB', src, dst }, `[DB] ${msg}`);
+                            throw new Error(msg);
+                        }
+                        return exec(
+                            "insert or replace into waypoints(src_id,dst_id,user_id,weight,created_at,updated_at) values(?,?,?,?,?,?)",
+                            p,
+                        );
+                    })(),
             },
             get_neighbors: {
                 all: (src, user_id = null) => {
@@ -1512,6 +1581,12 @@ async function initDb() {
                         src = p[2];
                         dst = p[3];
                     }
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped write (upd_waypoint) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: 'DB', src, dst }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
                     return exec(
                         "update waypoints set weight=?,updated_at=? where src_id=? and dst_id=? and (? is null or user_id=?)",
                         [weight, updated_at, src, dst, user_id, user_id],
@@ -1521,6 +1596,12 @@ async function initDb() {
             del_waypoints: {
                 run: (...p) => {
                     const [src, dst, user_id = null] = p as any[];
+                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const msg = `Tenant-scoped write (del_waypoints) requires user_id when OM_STRICT_TENANT=true`;
+                        logger.error({ component: 'DB', src, dst }, `[DB] ${msg}`);
+                        throw new Error(msg);
+                    }
                     return exec("delete from waypoints where (src_id=? or dst_id=?) and (? is null or user_id=?)", [src, dst, user_id, user_id]);
                 },
             },

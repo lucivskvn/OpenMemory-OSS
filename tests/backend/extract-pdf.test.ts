@@ -82,3 +82,41 @@ describe("extractText pdf pathway (mock + integration)", () => {
         }
     });
 });
+
+// Merged tests from `tests/backend/extract-pdf-mock.test.ts` (consolidation)
+// Appended the mock-only test-block to preserve coverage from the duplicate file.
+describe("extractText pdf pathway with mocked pdf-parse (merged)", () => {
+    beforeEach(() => {
+        // Inject the mock implementation so extractPDF uses it instead of the real parser
+        setPdfParseForTests(mockPdfParse);
+    });
+
+    it("returns the mocked text and metadata", async () => {
+        // Allow tests to be skipped locally when RUN_PDF_FIXTURES!=1. In CI we
+        // export RUN_PDF_FIXTURES=1 so the fixture check runs. Also try several
+        // candidate paths so running tests from `backend/` or repo root both work.
+        const runPdfFixtures = process.env.RUN_PDF_FIXTURES === '1';
+        if (!runPdfFixtures) {
+            // No-op test variant when fixtures are not requested.
+            return;
+        }
+
+        const candidates = [
+            path.resolve(process.cwd(), "tests", "fixtures", "sample.pdf"),
+            path.resolve(__dirname, "..", "fixtures", "sample.pdf"),
+            path.resolve(__dirname, "..", "..", "tests", "fixtures", "sample.pdf"),
+        ];
+        let fixturePath: string | null = null;
+        for (const c of candidates) if (fs.existsSync(c)) { fixturePath = c; break; }
+        if (!fixturePath) {
+            throw new Error(`Required fixture not found in candidates: ${candidates.join(', ')}`);
+        }
+        const fixture = fs.readFileSync(fixturePath);
+        const res = await extractText("pdf", fixture);
+        expect(res).toBeTruthy();
+        expect(res.text).toBe("Mocked PDF text content");
+        expect(res.metadata.content_type).toBe("pdf");
+        expect(res.metadata.pages).toBe(1);
+        expect(res.metadata.info).toEqual({ mocked: true });
+    });
+});

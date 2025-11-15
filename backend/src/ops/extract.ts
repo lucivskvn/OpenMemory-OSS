@@ -1,6 +1,7 @@
 import mammoth from "mammoth";
 import TurndownService from "turndown";
 import logger from "../core/logger";
+import { getNormalizedFileSize, logFileProcessing } from "../utils/file";
 
 // Minimal, robust extraction helpers used by tests. This file intentionally
 // keeps implementations small and adds test seams so unit tests can inject
@@ -80,15 +81,26 @@ export async function extractPDF(buffer: Buffer): Promise<ExtractionResult> {
     }
 
     // Unknown shape: fallback
+    // Decode once and derive both char_count and estimated_tokens from the
+    // decoded UTF-8 string to avoid mixing byte length with character count.
+    const text = buffer.toString('utf8');
     return {
-        text: buffer.toString('utf8'),
+        text,
         metadata: {
             content_type: 'pdf',
-            char_count: buffer.length,
-            estimated_tokens: estimateTokens(buffer.toString('utf8')),
+            char_count: text.length,
+            estimated_tokens: estimateTokens(text),
             extraction_method: 'unknown',
         },
     };
+}
+
+// Typed error exported so callers (HTTP layer) can map it to 415 responses.
+export class UnsupportedContentTypeError extends Error {
+    constructor(message?: string) {
+        super(message);
+        this.name = 'UnsupportedContentTypeError';
+    }
 }
 
 export async function extractDOCX(buffer: Buffer): Promise<ExtractionResult> {
@@ -139,21 +151,18 @@ export async function extractHTML(html: string): Promise<ExtractionResult> {
 export async function extractURL(url: string, userId?: string): Promise<ExtractionResult> {
     // Minimal fetch+turndown implementation with basic SSRF checks already handled elsewhere.
     const start = Date.now();
-    // Enforce a bounded fetch to avoid hanging requests. Use AbortController with 30s timeout.
-    const controller = new AbortController();
+    // Enforce a bounded fetch to avoid hanging requests. Use AbortSignal.timeout
+    // (available in Bun/modern runtimes) to simplify timeout handling.
     const timeout = 30000; // 30 seconds
-    const timer = setTimeout(() => controller.abort(), timeout);
     let response: Response;
     try {
-        response = await fetch(url, { signal: controller.signal } as any);
+        response = await fetch(url, { signal: (AbortSignal as any).timeout ? (AbortSignal as any).timeout(timeout) : undefined } as any);
     } catch (e: any) {
         // Distinguish aborts so callers can log/handle timeouts distinctly
         if (e && e.name === 'AbortError') {
             throw new Error('Fetch aborted: timeout');
         }
         throw e;
-    } finally {
-        clearTimeout(timer);
     }
     if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     const html = await response.text();
@@ -260,13 +269,13 @@ export async function extractText(contentType: string, data: string | Buffer | A
                 if (printableRatio > 0.2) ct = 'text';
                 else throw new Error('Octet legacy decode produced non-text-like payload');
             } catch (e) {
-                throw new Error(`Unsupported content type: ${contentType}`);
+                throw new UnsupportedContentTypeError(`Unsupported content type: ${contentType}`);
             }
         } else {
             // Log guidance for operators: suggest opt-in legacy flag when clients send
             // generic `application/octet-stream` without recognizable magic bytes.
             logger.warn({ component: 'EXTRACT', content_type: contentType }, "Unsupported octet-stream detected; set OM_ACCEPT_OCTET_LEGACY=true to permissively accept octet-stream as text (opt-in, may misclassify binaries)");
-            throw new Error(`Unsupported content type: ${contentType}`);
+            throw new UnsupportedContentTypeError(`Unsupported content type: ${contentType}`);
         }
     }
 
@@ -337,7 +346,7 @@ export async function extractText(contentType: string, data: string | Buffer | A
                 };
             }
         default:
-            throw new Error(`Unsupported content type: ${contentType}`);
+            throw new UnsupportedContentTypeError(`Unsupported content type: ${contentType}`);
     }
 }
 
@@ -348,18 +357,10 @@ export async function extractPDFFromFile(filePath: string): Promise<ExtractionRe
         const f = Bun.file(filePath);
         const exists = await f.exists();
         if (!exists) throw new Error('File not found');
-        // Bun.file.size may be undefined or a promise on some platforms; normalize to a number or null
-        let fileSize: number | null = null;
-        try {
-            const maybeSize: any = (f as any).size;
-            if (typeof maybeSize === 'number') fileSize = maybeSize;
-            else if (maybeSize && typeof maybeSize.then === 'function') {
-                try { fileSize = await maybeSize; } catch { fileSize = null; }
-            } else fileSize = null;
-        } catch (_err) {
-            fileSize = null;
-        }
-        logger.info('[EXTRACT] Processing file', { filePath, file_size_bytes: fileSize, method: 'bun-file' });
+        // Normalize Bun.file size and log common file metadata
+        const fileSize = await getNormalizedFileSize(f);
+        const mimeType = (f as any).type;
+        logFileProcessing('EXTRACT', filePath, fileSize, mimeType, 'bun-file');
 
         const arr = await f.arrayBuffer();
         const buffer = Buffer.from(arr);
@@ -373,7 +374,7 @@ export async function extractPDFFromFile(filePath: string): Promise<ExtractionRe
             file_size_bytes: fileSize,
             extraction_method: result.metadata.extraction_method || 'pdf-parse',
         };
-        logger.info('[EXTRACT] Completed', { filePath, duration_ms: duration, file_size_bytes: fileSize, method: 'bun-file' });
+        logger.info({ component: 'EXTRACT', file: filePath, duration_ms: duration, file_size_bytes: fileSize, method: 'bun-file' }, 'Completed');
         return result;
     } catch (e: any) {
         const duration = Date.now() - start;
@@ -388,18 +389,10 @@ export async function extractDOCXFromFile(filePath: string): Promise<ExtractionR
         const f = Bun.file(filePath);
         const exists = await f.exists();
         if (!exists) throw new Error('File not found');
-        // Bun.file.size may be undefined or a promise on some platforms; normalize to a number or null
-        let fileSize: number | null = null;
-        try {
-            const maybeSize: any = (f as any).size;
-            if (typeof maybeSize === 'number') fileSize = maybeSize;
-            else if (maybeSize && typeof maybeSize.then === 'function') {
-                try { fileSize = await maybeSize; } catch { fileSize = null; }
-            } else fileSize = null;
-        } catch (_err) {
-            fileSize = null;
-        }
-        logger.info('[EXTRACT] Processing file', { filePath, file_size_bytes: fileSize, method: 'bun-file' });
+        // Normalize Bun.file size and log common file metadata
+        const fileSize = await getNormalizedFileSize(f);
+        const mimeType = (f as any).type;
+        logFileProcessing('EXTRACT', filePath, fileSize, mimeType, 'bun-file');
 
         const arr = await f.arrayBuffer();
         const buffer = Buffer.from(arr);
@@ -412,7 +405,7 @@ export async function extractDOCXFromFile(filePath: string): Promise<ExtractionR
             file_size_bytes: fileSize,
             extraction_method: result.metadata.extraction_method || 'mammoth',
         };
-        logger.info('[EXTRACT] Completed', { filePath, duration_ms: duration, file_size_bytes: fileSize, method: 'bun-file' });
+        logger.info({ component: 'EXTRACT', file: filePath, duration_ms: duration, file_size_bytes: fileSize, method: 'bun-file' }, 'Completed');
         return result;
     } catch (e: any) {
         const duration = Date.now() - start;

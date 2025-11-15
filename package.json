@@ -9,5 +9,6 @@
         "start": "cd backend && bun run start",
         "dev": "cd backend && bun run dev",
         "test": "cd backend && bun run test"
+        ,"test:pg":"./scripts/run_pg_tests.sh"
     }
 }

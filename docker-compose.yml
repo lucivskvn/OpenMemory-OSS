@@ -69,6 +69,7 @@ services:
 
       # Metadata Backend (SQLite/PostgreSQL)
       - OM_METADATA_BACKEND=${OM_METADATA_BACKEND:-sqlite}
+      - OM_STRICT_TENANT=${OM_STRICT_TENANT:-true}
       - OM_PG_HOST=${OM_PG_HOST:-}
       - OM_PG_PORT=${OM_PG_PORT:-5432}
       - OM_PG_DB=${OM_PG_DB:-}
@@ -149,8 +150,24 @@ services:
     command: ["bun", "test", "../tests/backend/"]
     environment:
       - OM_METADATA_BACKEND=${OM_METADATA_BACKEND:-sqlite}
+      - OM_STRICT_TENANT=${OM_STRICT_TENANT:-true}
     depends_on:
       - openmemory
+
+  # Optional Postgres service for integration testing and local development.
+  # Enable with: `docker compose --profile pg up postgres`
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${OM_PG_DB:-openmemory}
+      - POSTGRES_USER=${OM_PG_USER:-openmemory}
+      - POSTGRES_PASSWORD=${OM_PG_PASSWORD:-openmemory}
+    volumes:
+      - openmemory_pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    profiles: ["pg"]
 
 volumes:
   openmemory_data:
