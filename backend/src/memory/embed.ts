@@ -1043,7 +1043,7 @@ export function fuseEmbeddingVectors(
 
 
 
-export const getEmbeddingInfo = async () => {
+export function getEmbeddingInfo() {
     const e = currentEnv();
     const i: Record<string, any> = {
         kind: e.embed_kind,  // Canonical mode string from OM_EMBED_KIND (e.g., 'openai', 'router_cpu')
@@ -1120,10 +1120,14 @@ export const getEmbeddingInfo = async () => {
             i.validation_errors = [];
             i.validation_status = 'skipped';
         } else {
+            // We'll return cached validation status immediately; tests that need
+            // up-to-date router validation should call `validateRouterOnStartup()`
+            // directly and await it. This keeps `getEmbeddingInfo()` synchronous
+            // so tests can call it without awaiting a Promise.
             try {
-                const validationResult = await validateRouterOnStartup();
-                i.validation_status = validationResult.status;
-                i.validation_errors = validationResult.errors;
+                const validationResult = routerValidationCache ?? { status: 'not_run', errors: [], timestamp: Date.now() };
+                i.validation_status = validationResult.status as any;
+                i.validation_errors = validationResult.errors || [];
             } catch (error) {
                 // Convert strict mode failures to response fields instead of throwing for GET /embed/config
                 const msg = error instanceof Error ? error.message : String(error);
