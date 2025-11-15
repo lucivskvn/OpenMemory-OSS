@@ -8,22 +8,6 @@
 - Bun-native developer notes and CI guidance (`docs/deployment/bun-native.md`).
 - Documentation updates for Bun-first development: `CONTRIBUTING.md`, `AGENTS.md`, `README.md`, and supporting notes (`docs/notes/agents-bun-addendum.md`).
 
-- **router_cpu embedding mode**: CPU-only single-expert-per-sector router over Ollama models (not an SB-MoE implementation). Selects optimal models per brain sector (e.g., procedural → bge-small-en-v1.5) with SIMD vector fusion and synthetic fallback. Set `OM_EMBED_KIND=router_cpu` for CPU deployments. Note: transformers.js 3.x and IBM/Liquid MoE integration are deferred; current CPU optimization is via router_cpu plus SIMD fusion.
-
-- **SIMD-accelerated vector operations** (`backend/src/utils/simd.ts`): 20-30% faster fusion/similarity on supported CPUs using Float32Array unrolling and loop optimization. Automatic fallback to JavaScript implementations when SIMD unavailable.
-
-- **`/embed/config` endpoint**: GET runtime config (mode, SIMD status); POST mode switching (requires restart).
-
-- **dashboard embedding mode selector**: UI for switching providers/modes with performance metrics.
-
-- **chat page embedding awareness**: Sidebar badge showing mode ('Router CPU', etc.). Graceful fallback to 'synthetic' on config fetch errors.
-
-- Ollama sidecar support and management endpoints:
-  - `POST /embed/ollama/pull` — pull models into the local Ollama sidecar
-  - `GET /embed/ollama/list` — list installed Ollama models (30s cache)
-  - `POST /embed/ollama/delete` — remove Ollama models (idempotent)
-  - `GET /embed/ollama/status` — check Ollama health & version (10s cache)
-
 ### Changed
 
 - Recommend Bun v1.3.2+ for local development and CI; add `@types/bun` guidance for TypeScript editing environments and `tsconfig.json` recommendations.

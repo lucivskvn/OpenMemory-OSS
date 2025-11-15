@@ -34,56 +34,11 @@ reflective:
   openai: text-embedding-3-large
   gemini: models/embedding-001
   local: all-mpnet-base-v2
-
-# Router CPU Mode
-# CPU-only router that selects different Ollama models per sector.
-# This is PHASE 2.5 implementation: single-expert-per-sector routing
-# without SB-MoE tail or MUVERA approximations. Models can be overridden
-# via OM_ROUTER_SECTOR_MODELS environment variable.
-#
-# Dimension validation: Router requires consistent dimensions across sector models.
-# Startup validation checks for dimension mismatches with OM_VEC_DIM (default 256).
-# Use OM_ROUTER_DIM_TOLERANCE (default 0.1) for acceptable variance.
-# Mixed dimensions trigger warnings or failures based on OM_ROUTER_VALIDATE_STRICT.
-router_cpu:
-  episodic: nomic-embed-text      # For temporal event sequences (768d)
-  semantic: nomic-embed-text      # For meaning-based similarity (768d)
-  procedural: bge-small-en-v1.5   # For action patterns and instructions (384d, use OM_VEC_DIM=384 or expect 10% tolerance)
-  emotional: nomic-embed-text     # For affective content (768d)
-  reflective: nomic-embed-text    # For introspective analysis (768d)
-
-# SideCar Setup (Ollama)
-# The docker-compose.yml includes an Ollama service configured as a sidecar.
-# This enables local model management and multimodal capabilities without external dependencies.
-#
-# Default models:
-# - nomic-embed-text (embedding, 768d) - pulled automatically
-# - llava:13b (vision+text, optional) - pull via /embed/ollama/pull
-# - whisper:tiny (speech-to-text, optional) - pull via /embed/ollama/pull
-#
-# To enable SideCar:
-# 1. Set OM_OLLAMA_URL=http://ollama:11434 (default in docker-compose.yml)
-# 2. Start services: docker-compose up -d
-# 3. Pull additional models: curl -X POST http://localhost:8080/embed/ollama/pull -d '{"model":"llava:13b"}'
-#
-# Management endpoints:
-# - POST /embed/ollama/pull - Pull a model
-# - GET /embed/ollama/list - List installed models
-# - POST /embed/ollama/delete - Remove a model
-# - GET /embed/ollama/status - Check Ollama health
-
-# Available Ollama models (pull with: ollama pull <model> or via API)
-# Embedding models:
-# - nomic-embed-text (768d, recommended, default)
+# Available Ollama models (pull with: ollama pull <model>)
+# - nomic-embed-text (768d, recommended)
 # - mxbai-embed-large (1024d)
 # - snowflake-arctic-embed (1024d)
 # - all-minilm (384d, fast)
-#
-# Multimodal models:
-# - llava:13b (vision+text, 13B params, good balance)
-# - llava:7b (vision+text, 7B params, faster)
-# - whisper:tiny (speech-to-text, 39M params)
-# - whisper:base (speech-to-text, 74M params, more accurate)
 
 # OpenAI models:
 # - text-embedding-3-small (1536d)
@@ -91,3 +46,4 @@ router_cpu:
 
 # Gemini models:
 # - models/embedding-001 (768d)
+

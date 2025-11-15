@@ -1,12 +1,12 @@
 # OpenMemory Governance Model
 
-Last updated: 2025-10-18
+_Last updated: 2025-10-18_
 
 ---
 
 ## 1. Overview
 
-**OpenMemory** is an open-source, community-driven project under the umbrella of **lucivskvn**.  
+**OpenMemory** is an open-source, community-driven project under the umbrella of **CaviraOSS**.  
 This document defines how decisions are made, who has authority within the project, and how contributors can grow into maintainers.
 
 Our goal is to ensure transparency, trust, and long-term sustainability for all contributors and users.
@@ -108,10 +108,10 @@ This governance document may be amended through a pull request approved by **two
 | Name          | Role              | Area                        |
 | ------------- | ----------------- | --------------------------- |
 | **nullure**   | Lead Maintainer   | Architecture & Vision       |
-| **lucivskvn** | Organization      | Infrastructure & Governance |
+| **CaviraOss** | Organization      | Infrastructure & Governance |
 | _(vacant)_    | Python Maintainer | SDK & API Sync              |
 | _(vacant)_    | JS Maintainer     | JS SDK, npm releases        |
 
 ---
 
-This document ensures OpenMemory remains a transparent, open, and long-lived project — open to contributors worldwide. Document cannot be edited without nullure's approval and nullure owns all rights to the project OpenMemory
+_This document ensures OpenMemory remains a transparent, open, and long-lived project — open to contributors worldwide. Document cannot be edited without nullure's approval and nullure owns all rights to the project OpenMemory_

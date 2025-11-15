@@ -27,8 +27,7 @@ FROM oven/bun:1.3.2-alpine AS production
 
 # Add OCI/Podman labels for autoupdate and metadata
 LABEL io.containers.autoupdate="registry"
-LABEL org.opencontainers.image.source="https://github.com/lucivskvn/openmemory-OSS"
-LABEL org.opencontainers.image.revision="${GITHUB_SHA}"
+LABEL org.opencontainers.image.source="https://github.com/lucivskvn/OpenMemory-OSS"
 LABEL org.opencontainers.image.description="OpenMemory - Hierarchical Semantic Graph Memory System"
 
 WORKDIR /app

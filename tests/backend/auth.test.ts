@@ -10,7 +10,15 @@ describe('Auth middleware (auth.ts)', () => {
         const logger = (await import('../../backend/src/core/logger')).default;
         let handle: any = null;
         try {
-            handle = spyLoggerMethod(logger, 'error', () => { /* noop */ });
+            try {
+                handle = spyLoggerMethod(logger, 'error', () => { /* noop */ });
+            } catch (e) {
+        // If spy couldn't be installed (unusual runtime shape), fall back
+        // to the previous behavior of temporarily replacing the method.
+                const originalError = logger.error;
+                logger.error = () => { /* noop during test */ };
+                handle = { restore: () => { logger.error = originalError; } };
+            }
 
             // Inject a plaintext API key into the middleware seam
             authMod.setAuthApiKeyForTests('plain-secret-value');

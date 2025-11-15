@@ -45,12 +45,12 @@ All data stores locally. No telemetry. Open source code available for audit.
 
 Check backend running: `curl http://localhost:8080/health`
 
-For issues, see [GitHub](https://github.com/lucivskvn/openmemory-OSS/issues)
+For issues, see [GitHub](https://github.com/CaviraOSS/OpenMemory/issues)
 
 ## Links
 
-- [GitHub](https://github.com/lucivskvn/openmemory-OSS)
-- [Documentation](https://github.com/lucivskvn/openmemory-OSS/blob/main/README.md)
-- [Changelog](https://github.com/lucivskvn/openmemory-OSS/blob/main/CHANGELOG.md)
+- [GitHub](https://github.com/CaviraOSS/OpenMemory)
+- [Documentation](https://github.com/CaviraOSS/OpenMemory/blob/main/README.md)
+- [Changelog](https://github.com/CaviraOSS/OpenMemory/blob/main/CHANGELOG.md)
 
-Made by the lucivskvn project
+Made by the Cavira team

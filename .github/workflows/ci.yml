@@ -119,9 +119,6 @@ jobs:
           # Keep the background server running so tests that expect OM_PORT to be served work.
           # Use package.json test script for consistent invocation
           bun run test:ci
-          # Focused verification tests for tenant-scoping and embed logging
-          OM_DB_USER_SCOPE_WARN=false bun test ../tests/backend/db-migration.test.js || (echo "db-migration tests failed" && exit 1)
-          OM_DB_USER_SCOPE_WARN=false bun test ../tests/backend/embed.test.js || (echo "embed tests failed" && exit 1)
           # Ensure background server is stopped after tests finish
           if ps -p $SERVER_PID >/dev/null 2>&1; then
             echo "Stopping background server (pid=$SERVER_PID)"
@@ -268,8 +265,8 @@ jobs:
           file: ./backend/Dockerfile
           push: true
           tags: |
-            ghcr.io/lucivskvn/openmemory-OSS:latest
-            ghcr.io/lucivskvn/openmemory-OSS:${{ github.sha }}
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
           platforms: linux/amd64,linux/arm64
 
       # SLSA provenance enables supply-chain verification; use

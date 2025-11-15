@@ -33,9 +33,4 @@ test("initDb() is idempotent across DB paths", async () => {
 
     await initDb();
     expect(fs.existsSync(dbPath2)).toBe(true);
-    // Close DB handles used during this test
-    try {
-        const mod = await import("../../backend/src/core/db.ts");
-        if (mod && typeof (mod as any).closeDb === 'function') await (mod as any).closeDb();
-    } catch (e) { }
 });

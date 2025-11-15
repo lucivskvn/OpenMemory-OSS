@@ -17,7 +17,7 @@ test("db helpers: ins_mem/ins_vec/get_vec/get_user and transactions", async () =
 
     process.env.OM_DB_PATH = dbPath;
     const dbMod: any = await import("../../backend/src/core/db.ts");
-    const { initDb, q, transaction, closeDb } = dbMod;
+    const { initDb, q, transaction } = dbMod;
 
     await initDb();
     expect(fs.existsSync(dbPath)).toBe(true);
@@ -120,8 +120,4 @@ test("db helpers: ins_mem/ins_vec/get_vec/get_user and transactions", async () =
     const got = await q.get_mem.get(txId, null);
     expect(got).toBeDefined();
     expect(got.id || got["id"]).toBe(txId);
-    // Ensure DB handle closed for this dynamic import-based test
-    try {
-        await closeDb();
-    } catch (e) { }
 });

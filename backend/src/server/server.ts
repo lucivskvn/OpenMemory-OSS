@@ -188,18 +188,7 @@ export function createServer(config: { max_payload_size?: number } = {}) {
                         let rawText: string | undefined = undefined;
                         // Some runtimes place a cached raw body on the request
                         if (typeof (req as any).rawBody === 'string') rawText = (req as any).rawBody;
-
-                        // Prefer using a cloned request to avoid "Body already used"
-                        if (!rawText && typeof (req as any).clone === 'function') {
-                            try {
-                                rawText = await (req as any).clone().text();
-                            } catch (e) {
-                                // clone may fail if runtime doesn't support it or body already locked
-                                rawText = undefined;
-                            }
-                        }
-
-                        // Fall back to reading text() only if clone didn't work
+                        // Fall back to reading text() if available and not yet consumed
                         if (!rawText && typeof (req as any).text === 'function') {
                             try {
                                 rawText = await (req as any).text();
@@ -208,7 +197,6 @@ export function createServer(config: { max_payload_size?: number } = {}) {
                                 rawText = undefined;
                             }
                         }
-
                         if (rawText) {
                             try {
                                 (ctx as any).body = JSON.parse(rawText);

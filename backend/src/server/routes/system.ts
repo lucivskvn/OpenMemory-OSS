@@ -1,6 +1,6 @@
 import { all_async } from "../../core/db";
 import { sector_configs } from "../../memory/hsg";
-import { getEmbeddingInfo, getOllamaHealth } from "../../memory/embed";
+import { getEmbeddingInfo } from "../../memory/embed";
 import { tier, env } from "../../core/cfg";
 import logger from "../../core/logger";
 
@@ -33,30 +33,14 @@ const TIER_BENEFITS = {
 
 export function sys(app: any) {
     app.get("/health", async (req: any, ctx: any) => {
-        // Avoid network calls when Ollama isn't the active provider
-        const embeddingInfo = await getEmbeddingInfo();
-        let ollamaHealth;
-        if (embeddingInfo.kind !== 'ollama') {
-            ollamaHealth = null;
-        } else {
-            ollamaHealth = await getOllamaHealth();
-        }
-
-        let ollama;
-        if (ollamaHealth === null) {
-            ollama = { configured: false, available: false };
-        } else {
-            ollama = { configured: true, available: ollamaHealth.available, version: ollamaHealth.version, models_loaded: ollamaHealth.models_loaded, error: ollamaHealth.error ?? undefined };
-        }
         const payload = {
             ok: true,
             version: "2.0-hsg-tiered",
-            embedding: await getEmbeddingInfo(),
+            embedding: getEmbeddingInfo(),
             tier,
             dim: env.vec_dim,
             cache: env.cache_segments,
             expected: (TIER_BENEFITS as any)[tier],
-            ollama,
         };
         return new Response(JSON.stringify(payload), {
             status: 200,

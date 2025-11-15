@@ -19,8 +19,7 @@ test("postgres migration: stats and temporal tables exist", async () => {
 
     await initDb();
 
-    try {
-        const ready = await waitFor(async () => {
+    const ready = await waitFor(async () => {
         try {
             // Try selecting counts from key tables that should be created by initDb
             await (mod.get_async)(`select count(*) as c from stats`);
@@ -36,11 +35,6 @@ test("postgres migration: stats and temporal tables exist", async () => {
 
     // Additional sanity: ensure memories table exists and is queryable
     const memTable = mod.memories_table;
-        const memOk = await (mod.get_async)(`select count(*) as c from ${memTable}`);
-        expect(memOk).toBeDefined();
-    } finally {
-        if (mod && typeof (mod as any).closeDb === 'function') {
-            try { await (mod as any).closeDb(); } catch (e) { /* best-effort */ }
-        }
-    }
+    const memOk = await (mod.get_async)(`select count(*) as c from ${memTable}`);
+    expect(memOk).toBeDefined();
 }, { timeout: 120_000 });

@@ -4,29 +4,15 @@ import fs from "node:fs";
 import path from "node:path";
 import logger from "./logger";
 
-/**
- * Typed q helper signatures
- *
- * We prefer explicit parameter lists for the common call-shapes used by
- * application code. Legacy, backward-compatible call shapes (omitting a
- * trailing `user_id`) are supported at runtime but are considered
- * deprecated for application code when `OM_STRICT_TENANT=true` is used.
- */
-type RunIdUserOptional = { run: (id: string, user_id?: string | null) => Promise<void> };
-type RunIdSectorUserOptional = { run: (id: string, sector: string, user_id?: string | null) => Promise<void> };
-type RunIdUserOptionalGeneric = { run: (id: string, ...rest: any[]) => Promise<void> };
-
 type q_type = {
-    // Complex/variable signature: keep flexible for existing callers
     ins_mem: { run: (...p: any[]) => Promise<void> };
-    // Prefer normalized signatures for vector/mean updates used by apps
-    upd_mean_vec: { run: (id: string, mean_dim: number, mean_vec: Buffer | Uint8Array | any, user_id?: string | null) => Promise<void> };
-    upd_compressed_vec: { run: (id: string, compressed_vec: Buffer | Uint8Array | any, user_id?: string | null) => Promise<void> };
-    upd_feedback: { run: (id: string, feedback_score: number, user_id?: string | null) => Promise<void> };
-    upd_seen: { run: (id: string, last_seen_at: number, salience: number, updated_at: number, user_id?: string | null) => Promise<void> };
-    upd_mem: { run: (content: string, tags: string, meta: string, updated_at: number, id: string, user_id?: string | null) => Promise<void> };
-    upd_mem_with_sector: { run: (content: string, primary_sector: string, tags: string, meta: string, updated_at: number, id: string, user_id?: string | null) => Promise<void> };
-    del_mem: { run: (id: string, user_id?: string | null) => Promise<void> };
+    upd_mean_vec: { run: (...p: any[]) => Promise<void> };
+    upd_compressed_vec: { run: (...p: any[]) => Promise<void> };
+    upd_feedback: { run: (...p: any[]) => Promise<void> };
+    upd_seen: { run: (...p: any[]) => Promise<void> };
+    upd_mem: { run: (...p: any[]) => Promise<void> };
+    upd_mem_with_sector: { run: (...p: any[]) => Promise<void> };
+    del_mem: { run: (...p: any[]) => Promise<void> };
     get_mem: { get: (id: string, user_id?: string | null) => Promise<any> };
     get_mem_by_simhash: { get: (simhash: string, user_id?: string | null) => Promise<any> };
     all_mem: { all: (limit: number, offset: number, user_id?: string | null) => Promise<any[]> };
@@ -61,11 +47,9 @@ type q_type = {
     upd_log: { run: (...p: any[]) => Promise<void> };
     get_pending_logs: { all: () => Promise<any[]> };
     get_failed_logs: { all: () => Promise<any[]> };
-    get_stream_telemetry: { all: (limit?: number, offset?: number) => Promise<any[]> };
     ins_user: { run: (...p: any[]) => Promise<void> };
     get_user: { get: (user_id: string) => Promise<any> };
     upd_user_summary: { run: (...p: any[]) => Promise<void> };
-    ins_stream_telemetry: { run: (id: string, user_id: string | null, embedding_mode: string | null, duration_ms: number, memory_ids: string, query: string, ts: number) => Promise<void> };
 };
 
 let run_async: (sql: string, p?: any[]) => Promise<void>;
@@ -80,69 +64,6 @@ let q: q_type;
 let memories_table: string;
 // Guard to ensure initDb() is idempotent across imports/calls
 let _initialized_db_path: string | null = null;
-// Track underlying DB clients so tests and callers can cleanly close them.
-let _pgClient: any = null;
-let _pgPool: any = null;
-let _sqliteDb: Database | null = null;
-
-/**
- * Helper: warnIfMissingUserId
- * Centralize the user-scope warning heuristic used by both Postgres and SQLite
- * query wrappers. When `OM_DB_USER_SCOPE_WARN=true` and the SQL contains
- * `user_id` references, attempt to parse parameter positions and warn if the
- * detected parameter slots are null/empty. Respects `OM_DB_DEBUG_USER_SCOPE`
- * to enable noisier fallback heuristics.
- */
-function warnIfMissingUserId(sql: string, p: any[] = []) {
-    try {
-        if (process.env.OM_DB_USER_SCOPE_WARN !== "true") return;
-        if (!/user_id/.test(sql)) return;
-
-        const userIdIndexes: number[] = [];
-        const debugFallback = (process.env.OM_DB_DEBUG_USER_SCOPE || "false") === "true";
-
-        // Postgres-style placeholders: user_id=$N
-        const pgRe = /user_id\s*=\s*\$(\d+)/gi;
-        let m: RegExpExecArray | null;
-        while ((m = pgRe.exec(sql))) {
-            const idx = parseInt(m[1], 10) - 1;
-            if (!Number.isNaN(idx)) userIdIndexes.push(idx);
-        }
-
-        // SQLite-style placeholders: user_id=? ; count question marks before occurrence
-        const sqliteRe = /user_id\s*=\s*\?/gi;
-        while ((m = sqliteRe.exec(sql))) {
-            const pos = m.index;
-            const snippet = sql.slice(0, pos + 1);
-            const qCount = (snippet.match(/\?/g) || []).length;
-            const idx = Math.max(0, qCount - 1);
-            userIdIndexes.push(idx);
-        }
-
-        let shouldWarn = false;
-        if (userIdIndexes.length > 0 && Array.isArray(p)) {
-            for (const i of userIdIndexes) {
-                const val = p[i];
-                if (val === null || val === undefined || val === "") {
-                    shouldWarn = true;
-                    break;
-                }
-            }
-        } else if (Array.isArray(p) && debugFallback) {
-            shouldWarn = p.some((x) => x === null || x === undefined || x === "");
-        }
-
-        if (shouldWarn) {
-            const short = sql.length > 200 ? sql.slice(0, 200) + '...' : sql;
-            const msg = `[DB] DB query referencing user_id invoked without user_id parameter: ${short}`;
-            logger.warn({ component: 'DB', sql: short }, msg);
-            if ((process.env.OM_DB_CONSOLE || '').toLowerCase() === 'true') console.warn(msg);
-        }
-    } catch (e) {
-        // Non-fatal: log parsing failures at warn level to avoid noisy errors
-        logger.warn({ component: 'DB', err: e }, '[DB] Failed to parse SQL for user_id parameter positions; skipping noisy heuristic. Set OM_DB_DEBUG_USER_SCOPE=true to enable verbose heuristics.');
-    }
-}
 
 async function initDb() {
     // Idempotent guard per-db: if we've already initialized the helpers for
@@ -249,9 +170,6 @@ async function initDb() {
                     ssl: opts.ssl,
                 });
                 const client = await pool.connect();
-                // store pool + client for later cleanup
-                _pgPool = pool;
-                _pgClient = client;
                 bunClient = client;
                 logger.info({ component: "DB" }, "[DB] Using node 'pg' client as Postgres backend fallback");
             }
@@ -261,8 +179,7 @@ async function initDb() {
             throw new Error("Postgres client unavailable: install 'pg' or run Bun with Postgres support.");
         }
 
-        // Record Bun client (if present) for cleanup, and verify connection
-        _pgClient = _pgClient || bunClient;
+        // Verify connection (awaited to avoid starting server with a broken client)
         try {
             await bunClient.query("SELECT 1");
         } catch (e) {
@@ -289,8 +206,71 @@ async function initDb() {
                     logger.info({ component: "DB", sql: sql.length > 200 ? sql.slice(0, 200) + '...' : sql, duration_ms: dur }, msg);
                     if ((process.env.OM_DB_CONSOLE || "").toLowerCase() === "true") console.log(msg);
                 }
-                // Centralized user-scope warning helper (keeps behavior identical)
-                warnIfMissingUserId(sql, p);
+                // Warn if queries referencing user_id are called without a user_id when guard enabled
+                // NOTE: this heuristic is intentionally conservative and best-effort. It attempts to
+                // parse parameter placeholders to detect which positional parameter(s) are meant
+                // for `user_id`. If parsing succeeds we inspect the exact slots and warn when those
+                // slots are null/empty. If parsing fails we do NOT fall back to a noisy heuristic
+                // by default — that produced many false positives in developer environments. To opt
+                // into the noisier fallback behavior set `OM_DB_DEBUG_USER_SCOPE=true` *in addition*
+                // to `OM_DB_USER_SCOPE_WARN=true` (i.e. both must be true). Tests should run with
+                // `OM_DB_USER_SCOPE_WARN=false` (see `backend/package.json` test script).
+                if (process.env.OM_DB_USER_SCOPE_WARN === "true" && /user_id/.test(sql)) {
+                    // Determine which parameter indexes correspond to user_id in the SQL.
+                    // For Postgres ($1-style) we extract the numeric placeholder. For SQLite (?) we
+                    // count the question-mark placeholders up to the occurrence of 'user_id=?'.
+                    const userIdIndexes: number[] = [];
+                    try {
+                        // Postgres-style: look for 'user_id=$N' and record N-1
+                        const pgRe = /user_id\s*=\s*\$(\d+)/gi;
+                        let m: RegExpExecArray | null;
+                        while ((m = pgRe.exec(sql))) {
+                            const idx = parseInt(m[1], 10) - 1;
+                            if (!Number.isNaN(idx)) userIdIndexes.push(idx);
+                        }
+
+                        // SQLite-style: find occurrences of 'user_id=?' and count preceding '?' to get index
+                        const sqliteRe = /user_id\s*=\s*\?/gi;
+                        while ((m = sqliteRe.exec(sql))) {
+                            const pos = m.index;
+                            // count '?' before this position
+                            const snippet = sql.slice(0, pos + 1);
+                            const qCount = (snippet.match(/\?/g) || []).length;
+                            // parameters are zero-based in our `p` array
+                            const idx = Math.max(0, qCount - 1);
+                            userIdIndexes.push(idx);
+                        }
+                    } catch (e) {
+                        // If parsing fails we only warn if the developer explicitly opted into
+                        // the noisier fallback via OM_DB_DEBUG_USER_SCOPE=true. Otherwise silently
+                        // skip the warning to avoid false positives.
+                        logger.warn({ component: "DB", err: e }, "[DB] Failed to parse SQL for user_id parameter positions; skipping noisy fallback. Set OM_DB_DEBUG_USER_SCOPE=true to enable verbose heuristics.");
+                    }
+
+                    // Inspect the parameter values at the detected indexes. If any user_id slot
+                    // exists and is null/empty, warn. Only when indexes were detected do we
+                    // perform this precise check. If indexes were not detected, consult
+                    // OM_DB_DEBUG_USER_SCOPE to decide whether to run the noisier heuristic.
+                    let shouldWarn = false;
+                    if (userIdIndexes.length > 0 && Array.isArray(p)) {
+                        for (const i of userIdIndexes) {
+                            const val = p[i];
+                            if (val === null || val === undefined || val === "") {
+                                shouldWarn = true;
+                                break;
+                            }
+                        }
+                    } else if (Array.isArray(p) && (process.env.OM_DB_DEBUG_USER_SCOPE || "false") === "true") {
+                        // Developer explicitly opted into noisy fallback heuristics.
+                        shouldWarn = p.some((x) => x === null || x === undefined || x === "");
+                    }
+
+                    if (shouldWarn) {
+                        const msg = `[DB] DB query referencing user_id invoked without user_id parameter: ${sql.length > 200 ? sql.slice(0, 200) + '...' : sql}`;
+                        logger.warn({ component: "DB", sql: sql.length > 200 ? sql.slice(0, 200) + '...' : sql }, msg);
+                        if ((process.env.OM_DB_CONSOLE || "").toLowerCase() === "true") console.warn(msg);
+                    }
+                }
                 return res && (res as any).rows ? (res as any).rows : res;
             } catch (e) {
                 const msg = `[DB] DB query error: ${String(e)} SQL: ${sql}`;
@@ -353,9 +333,6 @@ async function initDb() {
                 `create table if not exists ${l}(id text primary key,model text,status text,ts bigint,err text)`
             );
             await bunClient.query(
-                `create table if not exists "${sc}"."openmemory_stream_telemetry"(id text primary key,user_id text,embedding_mode text,duration_ms bigint,memory_ids jsonb,query text,ts bigint)`
-            );
-            await bunClient.query(
                 `create table if not exists "${sc}"."openmemory_users"(user_id text primary key,summary text,reflection_count integer default 0,created_at bigint,updated_at bigint)`
             );
             // Ensure maintenance/statistics and temporal tables exist in Postgres
@@ -373,7 +350,6 @@ async function initDb() {
             );
             // Create helpful indexes similar to the SQLite branch
             await bunClient.query(`create index if not exists "idx_stats_ts" on "${sc}"."openmemory_stats"(ts)`);
-            await bunClient.query(`create index if not exists "idx_stream_telemetry_ts" on "${sc}"."openmemory_stream_telemetry"(ts)`);
             await bunClient.query(`create index if not exists "idx_temporal_subject" on "${sc}"."openmemory_temporal_facts"(subject)`);
             await bunClient.query(`create index if not exists "idx_temporal_predicate" on "${sc}"."openmemory_temporal_facts"(predicate)`);
             await bunClient.query(`create index if not exists "idx_temporal_validity" on "${sc}"."openmemory_temporal_facts"(valid_from,valid_to)`);
@@ -385,13 +361,6 @@ async function initDb() {
         }
 
         // Postgres query helper object (uses $1 placeholders)
-        // NOTE: The SQLite `q` helpers below intentionally support legacy and
-        // newer call shapes. Historically some callers omitted a trailing
-        // `user_id` parameter and the SQL used `(? is null or user_id=?)` to
-        // allow global access. When `OM_STRICT_TENANT=true`, these helpers
-        // will throw if an explicit `user_id` is not supplied. Operators
-        // should update callers to pass a `user_id` explicitly to opt into
-        // strict tenant enforcement.
         q = {
             ins_mem: {
                 run: (...p) => {
@@ -632,18 +601,11 @@ async function initDb() {
                 },
             },
             all_mem_by_user_and_sector: {
-                all: (user_id, sector, limit, offset) => {
-                    const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
-                    if (strict && (user_id === null || user_id === undefined || user_id === '')) {
-                        const msg = `Tenant-scoped read (all_mem_by_user_and_sector) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: 'DB' }, `[DB] ${msg}`);
-                        throw new Error(msg);
-                    }
-                    return all_async(
+                all: (user_id, sector, limit, offset) =>
+                    all_async(
                         `select * from ${m} where user_id=$1 and primary_sector=$2 order by created_at desc limit $3 offset $4`,
                         [user_id, sector, limit, offset],
-                    );
-                },
+                    ),
             },
             get_segment_count: {
                 get: (segment) =>
@@ -738,12 +700,6 @@ async function initDb() {
                     // params: id, user_id?
                     const id = p[0];
                     const user_id = p.length > 1 ? p[1] : null;
-                    const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
-                    if (strict && (user_id === null || user_id === undefined || user_id === '')) {
-                        const msg = `Tenant-scoped write (del_vec) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: 'DB', id }, `[DB] ${msg}`);
-                        throw new Error(msg);
-                    }
                     return run_async(`delete from ${v} where id=$1 and ($2 is null or user_id=$2)`, [id, user_id]);
                 },
             },
@@ -752,12 +708,6 @@ async function initDb() {
                     const id = p[0];
                     const sector = p[1];
                     const user_id = p.length > 2 ? p[2] : null;
-                    const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
-                    if (strict && (user_id === null || user_id === undefined || user_id === '')) {
-                        const msg = `Tenant-scoped write (del_vec_sector) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: 'DB', id, sector }, `[DB] ${msg}`);
-                        throw new Error(msg);
-                    }
                     return run_async(`delete from ${v} where id=$1 and sector=$2 and ($3 is null or user_id=$3)`, [id, sector, user_id]);
                 },
             },
@@ -828,12 +778,6 @@ async function initDb() {
                         src = p[2];
                         dst = p[3];
                     }
-                    const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
-                    if (strict && (user_id === null || user_id === undefined || user_id === '')) {
-                        const msg = `Tenant-scoped write (upd_waypoint) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: 'DB', src, dst }, `[DB] ${msg}`);
-                        throw new Error(msg);
-                    }
                     return run_async(
                         `update ${w} set weight=$3,updated_at=$4 where src_id=$1 and dst_id=$2 and ($5 is null or user_id=$5)`,
                         [src, dst, weight, updated_at, user_id],
@@ -845,12 +789,6 @@ async function initDb() {
                     // keep a user_id optional guard; callers can pass (src, dst, user_id) or (src, dst)
                     ((): Promise<void> => {
                         const [src, dst, user_id = null] = p as any[];
-                        const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
-                        if (strict && (user_id === null || user_id === undefined || user_id === '')) {
-                            const msg = `Tenant-scoped write (del_waypoints) requires user_id when OM_STRICT_TENANT=true`;
-                            logger.error({ component: 'DB', src, dst }, `[DB] ${msg}`);
-                            throw new Error(msg);
-                        }
                         return run_async(`delete from ${w} where (src_id=$1 or dst_id=$2) and ($3 is null or user_id=$3)`, [src, dst, user_id]);
                     })(),
             },
@@ -862,13 +800,6 @@ async function initDb() {
                     run_async(
                         `insert into ${l}(id,model,status,ts,err) values($1,$2,$3,$4,$5) on conflict(id) do update set model=excluded.model,status=excluded.status,ts=excluded.ts,err=excluded.err`,
                         p,
-                    ),
-            },
-            ins_stream_telemetry: {
-                run: (id: string, user_id: string | null, embedding_mode: string | null, duration_ms: number, memory_ids: string, query: string, ts: number) =>
-                    run_async(
-                        `insert into "${sc}"."openmemory_stream_telemetry"(id,user_id,embedding_mode,duration_ms,memory_ids,query,ts) values($1,$2,$3,$4,$5,$6,$7) on conflict(id) do update set user_id=excluded.user_id,embedding_mode=excluded.embedding_mode,duration_ms=excluded.duration_ms,memory_ids=excluded.memory_ids,query=excluded.query,ts=excluded.ts`,
-                        [id, user_id, embedding_mode, duration_ms, memory_ids, query, ts],
                     ),
             },
             upd_log: {
@@ -887,26 +818,12 @@ async function initDb() {
                         ["failed"],
                     ),
             },
-            get_stream_telemetry: {
-                all: (limit = 50, offset = 0) =>
-                    all_async(
-                        `select id,user_id,embedding_mode,duration_ms,memory_ids,query,ts from "${sc}"."openmemory_stream_telemetry" order by ts desc limit $1 offset $2`,
-                        [limit, offset],
-                    ),
-            },
             all_mem_by_user: {
-                all: (user_id, limit, offset) => {
-                    const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
-                    if (strict && (user_id === null || user_id === undefined || user_id === '')) {
-                        const msg = `Tenant-scoped read (all_mem_by_user) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: 'DB' }, `[DB] ${msg}`);
-                        throw new Error(msg);
-                    }
-                    return all_async(
+                all: (user_id, limit, offset) =>
+                    all_async(
                         `select * from ${m} where user_id=$1 order by created_at desc limit $2 offset $3`,
                         [user_id, limit, offset],
-                    );
-                },
+                    ),
             },
             ins_user: {
                 run: (...p) =>
@@ -940,8 +857,6 @@ async function initDb() {
         // The `strict` option causes Bun's sqlite to throw for mistakes that
         // would otherwise be ignored, which aids debugging and CI validation.
         const db = new Database(db_path, { strict: true });
-        // retain reference for cleanup
-        _sqliteDb = db;
 
         // Tune pragmas for reliability in multi-process test environments.
         // Set a generous busy timeout early so transient locks are retried.
@@ -983,12 +898,6 @@ async function initDb() {
         );
         db.run(
             `create table if not exists stats(id integer primary key autoincrement,type text not null,count integer default 1,ts integer not null)`
-        );
-        db.run(
-            `create table if not exists stream_telemetry(id text primary key,user_id text,embedding_mode text,duration_ms integer,memory_ids text,query text,ts integer)`
-        );
-        db.run(
-            `create index if not exists idx_stream_telemetry_ts on stream_telemetry(ts)`
         );
         db.run(
             `create table if not exists temporal_facts(id text primary key,subject text not null,predicate text not null,object text not null,valid_from integer not null,valid_to integer,confidence real not null check(confidence >= 0 and confidence <= 1),last_updated integer not null,metadata text,unique(subject,predicate,object,valid_from))`
@@ -1050,10 +959,10 @@ async function initDb() {
         memories_table = "memories";
         const SLOW_MS = process.env.OM_DB_SLOW_MS ? +process.env.OM_DB_SLOW_MS : 50;
 
-        // NOTE: Removed unused `_hasUserIdParam` helper. The user-scope
-        // warning logic below performs SQL parsing to determine parameter
-        // positions for `user_id` and inspects the `p` array directly. This
-        // avoids a separate heuristic helper that produced false positives.
+        const _hasUserIdParam = (p: any[]) => {
+            if (!Array.isArray(p)) return false;
+            return p.some((x) => typeof x === "string" && x.length > 0);
+        };
 
         const exec = (sql: string, p: any[] = []) => {
             const start = (globalThis as any).performance?.now ? (globalThis as any).performance.now() : Date.now();
@@ -1065,7 +974,44 @@ async function initDb() {
                     logger.info({ component: "DB", sql: sql.length > 200 ? sql.slice(0, 200) + "..." : sql, duration_ms: Math.round(dur) }, msg);
                     if ((process.env.OM_DB_CONSOLE || "").toLowerCase() === "true") console.log(msg);
                 }
-                warnIfMissingUserId(sql, p);
+                if (process.env.OM_DB_USER_SCOPE_WARN === "true" && /user_id/.test(sql)) {
+                    const userIdIndexes: number[] = [];
+                    try {
+                        const pgRe = /user_id\s*=\s*\$(\d+)/gi;
+                        let m: RegExpExecArray | null;
+                        while ((m = pgRe.exec(sql))) {
+                            const idx = parseInt(m[1], 10) - 1;
+                            if (!Number.isNaN(idx)) userIdIndexes.push(idx);
+                        }
+                        const sqliteRe = /user_id\s*=\s*\?/gi;
+                        while ((m = sqliteRe.exec(sql))) {
+                            const pos = m.index;
+                            const snippet = sql.slice(0, pos + 1);
+                            const qCount = (snippet.match(/\?/g) || []).length;
+                            const idx = Math.max(0, qCount - 1);
+                            userIdIndexes.push(idx);
+                        }
+                    } catch (e) {
+                        logger.warn({ component: "DB", err: e }, "[DB] Failed to parse SQL for user_id parameter positions; falling back to heuristic");
+                    }
+                    let shouldWarn = false;
+                    if (userIdIndexes.length > 0 && Array.isArray(p)) {
+                        for (const i of userIdIndexes) {
+                            const val = p[i];
+                            if (val === null || val === undefined || val === "") {
+                                shouldWarn = true;
+                                break;
+                            }
+                        }
+                    } else if (Array.isArray(p)) {
+                        shouldWarn = p.some((x) => x === null || x === undefined || x === "");
+                    }
+                    if (shouldWarn) {
+                        const msg = `[DB] DB query referencing user_id invoked without user_id parameter: ${sql.length > 200 ? sql.slice(0, 200) + "..." : sql}`;
+                        logger.warn({ component: "DB", sql: sql.length > 200 ? sql.slice(0, 200) + "..." : sql }, msg);
+                        if ((process.env.OM_DB_CONSOLE || "").toLowerCase() === "true") console.warn(msg);
+                    }
+                }
                 return Promise.resolve();
             } catch (e) {
                 logger.error({ component: "DB", sql, err: e }, "DB exec error");
@@ -1083,7 +1029,44 @@ async function initDb() {
                     logger.info({ component: "DB", sql: sql.length > 200 ? sql.slice(0, 200) + "..." : sql, duration_ms: Math.round(dur) }, msg);
                     if ((process.env.OM_DB_CONSOLE || "").toLowerCase() === "true") console.log(msg);
                 }
-                warnIfMissingUserId(sql, p);
+                if (process.env.OM_DB_USER_SCOPE_WARN === "true" && /user_id/.test(sql)) {
+                    const userIdIndexes: number[] = [];
+                    try {
+                        const pgRe = /user_id\s*=\s*\$(\d+)/gi;
+                        let m: RegExpExecArray | null;
+                        while ((m = pgRe.exec(sql))) {
+                            const idx = parseInt(m[1], 10) - 1;
+                            if (!Number.isNaN(idx)) userIdIndexes.push(idx);
+                        }
+                        const sqliteRe = /user_id\s*=\s*\?/gi;
+                        while ((m = sqliteRe.exec(sql))) {
+                            const pos = m.index;
+                            const snippet = sql.slice(0, pos + 1);
+                            const qCount = (snippet.match(/\?/g) || []).length;
+                            const idx = Math.max(0, qCount - 1);
+                            userIdIndexes.push(idx);
+                        }
+                    } catch (e) {
+                        logger.warn({ component: "DB", err: e }, "[DB] Failed to parse SQL for user_id parameter positions; falling back to heuristic");
+                    }
+                    let shouldWarn = false;
+                    if (userIdIndexes.length > 0 && Array.isArray(p)) {
+                        for (const i of userIdIndexes) {
+                            const val = p[i];
+                            if (val === null || val === undefined || val === "") {
+                                shouldWarn = true;
+                                break;
+                            }
+                        }
+                    } else if (Array.isArray(p)) {
+                        shouldWarn = p.some((x) => x === null || x === undefined || x === "");
+                    }
+                    if (shouldWarn) {
+                        const msg = `[DB] DB query referencing user_id invoked without user_id parameter: ${sql.length > 200 ? sql.slice(0, 200) + "..." : sql}`;
+                        logger.warn({ component: "DB", sql: sql.length > 200 ? sql.slice(0, 200) + "..." : sql }, msg);
+                        if ((process.env.OM_DB_CONSOLE || "").toLowerCase() === "true") console.warn(msg);
+                    }
+                }
                 return Promise.resolve(row);
             } catch (e) {
                 logger.error({ component: "DB", sql, err: e }, "[DB] DB query error");
@@ -1101,7 +1084,44 @@ async function initDb() {
                     logger.info({ component: "DB", sql: sql.length > 200 ? sql.slice(0, 200) + "..." : sql, duration_ms: Math.round(dur) }, msg);
                     if ((process.env.OM_DB_CONSOLE || "").toLowerCase() === "true") console.log(msg);
                 }
-                warnIfMissingUserId(sql, p);
+                if (process.env.OM_DB_USER_SCOPE_WARN === "true" && /user_id/.test(sql)) {
+                    const userIdIndexes: number[] = [];
+                    try {
+                        const pgRe = /user_id\s*=\s*\$(\d+)/gi;
+                        let m: RegExpExecArray | null;
+                        while ((m = pgRe.exec(sql))) {
+                            const idx = parseInt(m[1], 10) - 1;
+                            if (!Number.isNaN(idx)) userIdIndexes.push(idx);
+                        }
+                        const sqliteRe = /user_id\s*=\s*\?/gi;
+                        while ((m = sqliteRe.exec(sql))) {
+                            const pos = m.index;
+                            const snippet = sql.slice(0, pos + 1);
+                            const qCount = (snippet.match(/\?/g) || []).length;
+                            const idx = Math.max(0, qCount - 1);
+                            userIdIndexes.push(idx);
+                        }
+                    } catch (e) {
+                        logger.warn({ component: "DB", err: e }, "[DB] Failed to parse SQL for user_id parameter positions; falling back to heuristic");
+                    }
+                    let shouldWarn = false;
+                    if (userIdIndexes.length > 0 && Array.isArray(p)) {
+                        for (const i of userIdIndexes) {
+                            const val = p[i];
+                            if (val === null || val === undefined || val === "") {
+                                shouldWarn = true;
+                                break;
+                            }
+                        }
+                    } else if (Array.isArray(p)) {
+                        shouldWarn = p.some((x) => x === null || x === undefined || x === "");
+                    }
+                    if (shouldWarn) {
+                        const msg = `[DB] DB query referencing user_id invoked without user_id parameter: ${sql.length > 200 ? sql.slice(0, 200) + "..." : sql}`;
+                        logger.warn({ component: "DB", sql: sql.length > 200 ? sql.slice(0, 200) + "..." : sql }, msg);
+                        if ((process.env.OM_DB_CONSOLE || "").toLowerCase() === "true") console.warn(msg);
+                    }
+                }
                 return Promise.resolve(rows as any[]);
             } catch (e) {
                 logger.error({ component: "DB", sql, err: e }, "DB query error");
@@ -1610,30 +1630,12 @@ async function initDb() {
                         ["failed"],
                     ),
             },
-            get_stream_telemetry: {
-                all: (limit = 50, offset = 0) =>
-                    many(
-                        "select id,user_id,embedding_mode,duration_ms,memory_ids,query,ts from stream_telemetry order by ts desc limit ? offset ?",
-                        [limit, offset],
-                    ),
-            },
             all_mem_by_user: {
-                all: (user_id, limit, offset) => {
-                    const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
-                    if (strict && (user_id === null || user_id === undefined || user_id === '')) {
-                        const msg = `Tenant-scoped read (all_mem_by_user) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: 'DB' }, `[DB] ${msg}`);
-                        throw new Error(msg);
-                    }
-                    return many(
+                all: (user_id, limit, offset) =>
+                    many(
                         "select * from memories where user_id=? order by created_at desc limit ? offset ?",
                         [user_id, limit, offset],
-                    );
-                },
-            },
-            ins_stream_telemetry: {
-                run: (id: string, user_id: string | null, embedding_mode: string | null, duration_ms: number, memory_ids: string, query: string, ts: number) =>
-                    exec("insert or replace into stream_telemetry(id,user_id,embedding_mode,duration_ms,memory_ids,query,ts) values(?,?,?,?,?,?,?)", [id, user_id, embedding_mode, duration_ms, memory_ids, query, ts]),
+                    ),
             },
             ins_user: {
                 run: (...p) =>
@@ -1658,65 +1660,6 @@ async function initDb() {
 
     // Mark initialized for the backend/path so subsequent calls are no-ops
     _initialized_db_path = desiredPath;
-}
-
-/**
- * Close any active DB clients and reset initialization state.
- * Tests should call this to ensure Postgres clients and SQLite handles are
- * cleanly released between cases. This function is best-effort and will
- * swallow errors while logging warnings.
- */
-export async function closeDb(): Promise<void> {
-    // Close Postgres client/pool if present
-    try {
-        if (_pgClient) {
-            try {
-                // If this is a node `pg` client from pool.connect(), release it
-                if (typeof _pgClient.release === 'function') {
-                    try { _pgClient.release(); } catch (e) { /* ignore */ }
-                }
-                // If client exposes end/close, await it
-                if (typeof _pgClient.end === 'function') {
-                    await _pgClient.end();
-                } else if (typeof _pgClient.close === 'function') {
-                    await _pgClient.close();
-                }
-            } catch (e) {
-                logger.warn({ component: 'DB', err: e }, '[DB] Error while closing Postgres client');
-            }
-            _pgClient = null;
-        }
-        if (_pgPool) {
-            try {
-                if (typeof _pgPool.end === 'function') await _pgPool.end();
-            } catch (e) {
-                logger.warn({ component: 'DB', err: e }, '[DB] Error while closing Postgres pool');
-            }
-            _pgPool = null;
-        }
-    } catch (e) {
-        logger.warn({ component: 'DB', err: e }, '[DB] Unexpected error during Postgres shutdown');
-    }
-
-    // Close SQLite DB handle if present
-    try {
-        if (_sqliteDb) {
-            try {
-                if (typeof (_sqliteDb as any).close === 'function') {
-                    // Bun sqlite `Database.close()` is synchronous; wrap in Promise.resolve
-                    await Promise.resolve((_sqliteDb as any).close());
-                }
-            } catch (e) {
-                logger.warn({ component: 'DB', err: e }, '[DB] Error while closing SQLite handle');
-            }
-            _sqliteDb = null;
-        }
-    } catch (e) {
-        logger.warn({ component: 'DB', err: e }, '[DB] Unexpected error during SQLite shutdown');
-    }
-
-    // Reset initialized path so subsequent initDb() re-initializes
-    _initialized_db_path = null;
 }
 
 

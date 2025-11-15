@@ -34,7 +34,7 @@ export function corsMiddleware() {
         );
         corsHeaders.set(
             "Access-Control-Allow-Headers",
-            "Content-Type,Authorization,x-api-key,x-admin-key",
+            "Content-Type,Authorization,x-api-key",
         );
         corsHeaders.set(
             "Access-Control-Allow-Credentials",

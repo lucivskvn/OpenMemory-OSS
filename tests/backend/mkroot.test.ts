@@ -6,20 +6,14 @@ const tmpDir = path.resolve(process.cwd(), "tmp");
 if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
 process.env.OM_DB_PATH = path.join(tmpDir, `openmemory-mkroot-${process.pid}-${Date.now()}.sqlite`);
 
-import { test, expect, beforeAll, afterAll } from "bun:test";
-import { initDb, q, transaction, closeDb } from "../../backend/src/core/db.test-entry";
+import { test, expect, beforeAll } from "bun:test";
+import { initDb, q, transaction } from "../../backend/src/core/db";
 
 // Disable user-scope warn in most tests to keep logs focused; mkroot relies on explicit user_id in calls.
 process.env.OM_DB_USER_SCOPE_WARN = process.env.OM_DB_USER_SCOPE_WARN || "false";
 
 beforeAll(async () => {
     await initDb();
-});
-
-afterAll(async () => {
-    try {
-        await closeDb();
-    } catch (e) { }
 });
 
 test("legacy ins_mem parameter order creates a memory row", async () => {

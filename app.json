@@ -1,7 +1,7 @@
 {
     "name": "OpenMemory",
     "description": "Self-hosted long-term AI memory engine (TypeScript)",
-    "repository": "https://github.com/lucivskvn/openmemory-OSS",
+    "repository": "https://github.com/CaviraOSS/OpenMemory",
     "buildpacks": [
         {
             "url": "heroku/nodejs"

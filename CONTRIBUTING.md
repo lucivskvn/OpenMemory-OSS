@@ -89,16 +89,6 @@ The project follows a Bun-first development model. Please follow these patterns 
 - Tests: use `bun:test` and prefer in-memory or temp-file based tests. Tests that require Bun-only APIs should be gated or run under Bun CI.
 - Build: use `bun run build` and ensure any generated artifacts are listed in `.gitignore`.
 
-### Router and SIMD Testing
-
-When working with embedding providers and vector operations, run these specialized test suites for CPU deployment validation:
-
-- **Router tests**: `bun test:router` - tests sector-based routing, fallback handling, Ollama integration, and cache TTL behavior. Verifies router_cpu mode with `OM_EMBED_KIND=router_cpu OM_ROUTER_SIMD_ENABLED=true`.
-- **SIMD tests**: `bun test:simd` - benchmarks vector operations (dot product, normalization, fusion) comparing SIMD vs JavaScript implementations. Expects 20-30% performance improvement with SIMD enabled.
-- **Config endpoint tests**: `bun test:config` - validates `/embed/config` shape and mode switching with proper fallback handling.
-
-For CPU deployments, test with `OM_EMBED_KIND=router_cpu OM_SIMD_ENABLED=true` and mock Ollama at `http://localhost:11434`. Use fake timers (`vi.useFakeTimers()`) for reliable cache and performance testing. Example benchmark command: `bun run benchmark:embed` to validate P95 latency <150ms.
-
 ### Security Guidelines for GitHub Workflows
 
 - SHA pin all `uses:` entries to a specific commit SHA and add a human-readable comment with the tag version (e.g., `actions/checkout@<sha> # v4.1.1`).

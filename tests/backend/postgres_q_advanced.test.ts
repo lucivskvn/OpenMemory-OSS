@@ -20,8 +20,7 @@ test("postgres q advanced: json/array params, prepared reuse, error paths", asyn
 
     await initDb();
 
-    try {
-        const ready = await waitFor(async () => {
+    const ready = await waitFor(async () => {
         try {
             if (!mod.memories_table) return false;
             await (mod.get_async)(`select 1 as v`);
@@ -82,12 +81,7 @@ test("postgres q advanced: json/array params, prepared reuse, error paths", asyn
     }
     expect(sawError).toBe(true);
 
-        // Cleanup
-        await run(`delete from ${memTable} where primary_sector = $1`, ["pg-q-adv"]);
-        await run(`delete from ${memTable} where id in ($1,$2,$3,$4)`, [idJson, idArr1, ...reuseIds]);
-    } finally {
-        if (mod && typeof (mod as any).closeDb === 'function') {
-            try { await (mod as any).closeDb(); } catch (e) { /* best-effort */ }
-        }
-    }
+    // Cleanup
+    await run(`delete from ${memTable} where primary_sector = $1`, ["pg-q-adv"]);
+    await run(`delete from ${memTable} where id in ($1,$2,$3,$4)`, [idJson, idArr1, ...reuseIds]);
 }, { timeout: 120_000 });

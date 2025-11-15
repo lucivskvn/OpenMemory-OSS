@@ -11,142 +11,32 @@ Notes:
 
 - These quadlets are examples only. Validate and adapt to your environment before use.
 
-## Additional guidance
+Additional guidance
+-------------------
 
 Quickstart (systemd + Podman quadlets):
 
 1. Ensure Podman and podman-quadlets are installed on your host.
 
-2. Create the data directory and set proper permissions.
-
-For rootless Podman (recommended):
-
-```bash
-mkdir -p ~/.local/share/openmemory
-chown $USER:$USER ~/.local/share/openmemory
-```
-
-For rootful (system) deployments only:
+2. Create the data directory and set proper permissions:
 
 ```bash
 sudo mkdir -p /var/lib/openmemory
 sudo chown $USER:$USER /var/lib/openmemory
 ```
 
-## Ollama Sidecar (Podman)
-
-If you plan to run Ollama as a sidecar with Podman, create a dedicated volume for Ollama models and ensure it is owned by your user (rootless):
-
-```bash
-podman volume create ollama_models --driver local --opt o=uid=$(id -u),gid=$(id -g)
-podman volume create openmemory_data --driver local --opt o=uid=$(id -u),gid=$(id -g)
-```
-
-For convenience there is a script `scripts/podman-up-ollama.sh` that will create the required volumes
-and bring up Ollama using `podman compose` (or the `podman-compose` fallback). It also performs
-a minimal health check and prints the container logs on failure. The script's `--skip-pull` option
-now applies to both the `podman compose` and `podman-compose` flows (it sets `OM_OLLAMA_MODELS` to
-the empty value for the duration of the compose command), or when falling back to `podman run` it
-explicitly unsets the variable inside the container. This keeps development runs lightweight and
-prevents automatic large model downloads while iterating.
-
-If you have limited memory or are seeing Podman hangs, use the safe stub mode:
-
-```bash
-# Start lightweight Ollama stub (safe mode) to avoid crashes
-OM_OLLAMA_SAFE=1 ./scripts/podman-up-ollama.sh
-```
-
-The `OM_OLLAMA_SAFE` mode builds a tiny `ollama-stub` image and runs it with strict
-resource limits (512MB, 0.5 CPU). This provides a minimal REST surface that responds to
-the same health and model-list endpoints used by the backend tests and avoids heavy memory
-consumption from the full Ollama image.
-
-### Memory notes & external compose provider
-
-- If you're seeing excessive memory usage while creating the Ollama volume or starting
-  the Ollama service, it is likely due to the full Ollama image pulling and loading
-  models (these can be large). Be cautious with the environment variable
-  `OM_OLLAMA_MODELS` — it is commonly set to `nomic-embed-text` and will cause the sidecar
-  to auto-download large models when it starts. To prevent automatic model download
-  in development, run the sidecar with an empty `OM_OLLAMA_MODELS` value or use
-  `OM_OLLAMA_SAFE=1` to run the lightweight stub instead.
-
-- `podman compose` can be configured to run an *external* compose provider (e.g.,
-  the Docker Compose shim). The CLI prints a message like:
-
-  "Executing external compose provider '/home/user/.local/bin/docker-compose'"
-
-  This is informational but may cause repeated logs if `podman compose` invokes a
-  wrapper; the script `scripts/podman-up-ollama.sh` now detects that situation and
-  falls back to a controlled `podman run` with resource caps to avoid thrashing.
-
-  If you want to use the native podman compose implementation instead, remove the
-  `docker-compose` shim from PATH or install the `podman` compose plugin from your
-  distribution packages.
-
-If you need to wait for Ollama to be fully ready before running tests, use:
-
-```bash
-./scripts/wait-for-ollama.sh 60  # wait up to 60 seconds
-```
-
-Start OpenMemory and the Ollama sidecar together using `podman-compose` or `podman play kube` after converting the `docker-compose.yml`. The `ollama_models` volume will persist downloaded model files.
-
-Pull models into the sidecar via the backend management endpoint after services are running:
-
-```bash
-curl -X POST http://localhost:8080/embed/ollama/pull -H "Content-Type: application/json" -d '{"model":"nomic-embed-text"}'
-```
-
-### Using OLM and --skip-pull together
-
-Use the `--olm` flag to reduce the resource limits on the Ollama container and
-`--skip-pull` to prevent automatic model downloads when starting locally:
-
-```bash
-./scripts/podman-up-ollama.sh --olm --skip-pull
-```
-
-This helps keep the sidecar light for low-capacity development machines and avoids
-the heavy model downloads that can consume memory and disk.
-
-### Options for safer dev runs
-
-- Start the sidecar without automatically pulling models:
-
-  ```bash
-  ./scripts/podman-up-ollama.sh --skip-pull
-  ```
-
-  This unsets `OM_OLLAMA_MODELS` inside the container for the duration of the run, preventing the sidecar from immediately downloading large models.
-
-- Opt-in low-memory mode (OLM) for local development on low-RAM systems:
-
-  ```bash
-  ./scripts/podman-up-ollama.sh --olm
-  ```
-
-  This runs the Ollama container with smaller limits: 512MB memory and 0.5 CPUs. Use together with `--skip-pull` when testing on small machines.
-
-### Additional logs and visibility
-
-- The script now reports the compose method being used: `podman compose` (native), `podman-compose` (shim), or a fallback `podman run`. If an external provider is detected, the script prints a warning and falls back to `podman run` so resource caps can be applied deterministically.
-
-1. Build the image locally or pull from registry:
+3. Build the image locally or pull from registry:
 
 ```bash
 cd backend
-podman build -t ghcr.io/lucivskvn/openmemory-OSS:latest .
-# or pull the published image
-podman pull ghcr.io/lucivskvn/openmemory-OSS:latest
+podman build -t openmemory:latest .
+# or: podman pull quay.io/yourorg/openmemory:latest
 ```
 
-1. Use the example quadlets or `podman run` for an ephemeral test (rootless example shown):
+4. Use the example quadlets or `podman run` for an ephemeral test:
 
 ```bash
-# rootless quick test (binds a user-owned host path into /data)
-podman run --userns=keep-id -p 8080:8080 -v $HOME/.local/share/openmemory:/data:Z ghcr.io/lucivskvn/openmemory-OSS:latest
+podman run -p 8080:8080 -v /var/lib/openmemory:/data openmemory:latest
 ```
 
 Notes:
@@ -157,8 +47,6 @@ Notes:
 Additional rootless/systemd tips:
 
 - For rootless Podman + systemd setups, enable user namespace remapping by adding `UserNS=keep-id` to the quadlet/unit. This keeps file ownership sensible for the running user.
-- For rootless Podman + systemd setups, enable user namespace remapping by adding `UserNS=keep-id` to the quadlet/unit. This keeps file ownership sensible for the running user.
-- Note: the container image runs its process as a non-root user with UID/GID `1001` inside the container. That internal UID is independent from your host user; `UserNS=keep-id` ensures host UID/GID map correctly into the container so mounted volumes retain expected ownership.
 - Prefer a per-user environment file instead of a system-wide file to avoid leaking secrets between accounts. The recommended path is `%h/.config/openmemory/openmemory.env` (systemd expands `%h` to the user's home).
 
 Step-by-step (user-level systemd + podman quadlets)
@@ -176,7 +64,7 @@ mkdir -p ~/.local/share/containers/storage
 loginctl enable-linger $USER
 ```
 
-1. Populate a user-scoped env file from the example and secure it:
+3. Populate a user-scoped env file from the example and secure it:
 
 ```bash
 cp .env.example ~/.config/openmemory/openmemory.env
@@ -185,24 +73,20 @@ chmod 600 ~/.config/openmemory/openmemory.env
 ${EDITOR:-nano} ~/.config/openmemory/openmemory.env
 ```
 
-1. Install the quadlets (copy the `.container` and `.volume` files into `~/.config/containers/` or use `podman generate systemd` as a template):
+4. Install the quadlets (copy the `.container` and `.volume` files into `~/.config/containers/` or use `podman generate systemd` as a template):
 
 ```bash
-# Podman 5.x+: preferred user location for quadlets
-mkdir -p ~/.config/containers/systemd/
-cp podman/openmemory.container ~/.config/containers/systemd/
-cp podman/openmemory-data.volume ~/.config/containers/systemd/
-
-# Legacy distros may still use ~/.config/systemd/user/containers/ — create a
-# symlink if needed per Podman docs:
-# ln -s ~/.config/containers/systemd ~/.config/systemd/user/containers
+# example: copy to system location for systemd user units (adjust paths per distro)
+mkdir -p ~/.config/systemd/user/containers
+cp podman/openmemory.container ~/.config/systemd/user/containers/
+cp podman/openmemory-data.volume ~/.config/systemd/user/containers/
 
 # reload user units and start
 systemctl --user daemon-reload
 systemctl --user start openmemory
 ```
 
-1. Verify service health and logs:
+5. Verify service health and logs:
 
 ```bash
 systemctl --user status openmemory

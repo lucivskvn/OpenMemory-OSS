@@ -6,8 +6,8 @@ const tmpDir = path.resolve(process.cwd(), "tmp");
 if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
 process.env.OM_DB_PATH = path.join(tmpDir, `openmemory-observe-${process.pid}-${Date.now()}.sqlite`);
 
-import { describe, beforeEach, afterEach, test, expect, afterAll } from "bun:test";
-import { initDb, q, transaction, closeDb } from "../../backend/src/core/db.test-entry";
+import { describe, beforeEach, afterEach, test, expect } from "bun:test";
+import { initDb, q, transaction } from "../../backend/src/core/db";
 
 describe("DB Observability Wrappers", () => {
     let _prev_warn: string | undefined;
@@ -71,12 +71,4 @@ describe("DB Observability Wrappers", () => {
         const rows = await q.all_mem.all(10, 0);
         expect(Array.isArray(rows)).toBe(true);
     });
-});
-
-afterAll(async () => {
-    try {
-        await closeDb();
-    } catch (e) {
-        // best-effort cleanup
-    }
 });

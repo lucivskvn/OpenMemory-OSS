@@ -28,7 +28,7 @@ test("DB console prefix appears when OM_DB_CONSOLE and user-scope warn enabled",
     process.env.OM_METADATA_BACKEND = "sqlite";
 
     try {
-        const mod: any = await import("../../backend/src/core/db.test-entry");
+        const mod: any = await import("../../backend/src/core/db");
         // Call initDb before reading live bindings from the module namespace.
         await mod.initDb();
         const q = mod.q;
@@ -42,9 +42,6 @@ test("DB console prefix appears when OM_DB_CONSOLE and user-scope warn enabled",
         const found = logs.some((l) => l.includes("[DB]") || l.includes("DB query referencing user_id"));
         expect(found).toBe(true);
     } finally {
-        try {
-            if (mod && typeof mod.closeDb === 'function') await mod.closeDb();
-        } catch (e) { /* best-effort */ }
         // Restore console
         console.log = origLog;
         console.warn = origWarn;

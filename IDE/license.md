@@ -210,4 +210,4 @@ OpenMemory: Long-Term Memory Engine for AI Systems
  Copyright 2025 nullure
 
 This product includes software developed by nullure and contributors.
-For more information, visit: <https://github.com/lucivskvn/openmemory-OSS>
+For more information, visit: https://github.com/caviraoss/OpenMemory

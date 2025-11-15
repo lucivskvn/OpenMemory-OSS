@@ -108,7 +108,7 @@ async function postInstall() {
     );
   }
 
-  console.log('\n📖 For more info: https://github.com/lucivskvn/openmemory-OSS');
+  console.log('\n📖 For more info: https://github.com/CaviraOSS/OpenMemory');
 }
 
 postInstall().catch(console.error);

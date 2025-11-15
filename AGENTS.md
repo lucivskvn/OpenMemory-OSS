@@ -157,5 +157,3 @@ When integrating with the MCP (Model Context Protocol) transport, follow these p
 3. Persist task id and respond with a reference; provide a callback/webhook pattern for the agent to retrieve results.
 
 See `backend/src/ai/mcp.ts` (MCP helpers) and `backend/src/ops/extract.ts` (heavy work examples) for concrete patterns and helper utilities.
-
-- **Ollama management endpoints for agents**: Use `/embed/ollama/pull`, `/embed/ollama/list`, `/embed/ollama/delete`, and `/embed/ollama/status` as MCP-friendly orchestration surfaces. These endpoints support `mcp_task_id` for task correlation and include a `context` object in responses containing `task_id`, `model`, `requested_at`, and error details for reliable agent workflows in Linear/GitHub integrations.

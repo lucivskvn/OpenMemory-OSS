@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
+import { describe, it, expect, beforeAll } from 'bun:test';
 
 // This test file exercises the Postgres metadata backend.
 // It expects a Postgres instance reachable at localhost:5432 matching
@@ -18,7 +18,7 @@ let dbExports;
 
 beforeAll(async () => {
   try {
-      dbExports = await import('../../backend/src/core/db.test-entry');
+    dbExports = await import('../../backend/src/core/db.js');
     // Attempt to initialize; if Postgres isn't up this may throw.
     await dbExports.initDb();
   } catch (e) {
@@ -27,16 +27,6 @@ beforeAll(async () => {
     console.warn('[tests] Postgres not available; skipping Postgres integration tests:', String(e));
     skip = true;
   }
-});
-
-afterAll(async () => {
-    if (!skip && dbExports && typeof dbExports.closeDb === 'function') {
-        try {
-            await dbExports.closeDb();
-        } catch (e) {
-            console.warn('[tests] Warning while closing DB after Postgres tests:', String(e));
-        }
-    }
 });
 
 describe('Postgres metadata backend integration', () => {

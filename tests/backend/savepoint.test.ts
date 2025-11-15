@@ -7,8 +7,8 @@ const tmpDir = path.resolve(process.cwd(), "tmp");
 if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
 process.env.OM_DB_PATH = path.join(tmpDir, `openmemory-savepoint-${process.pid}-${Date.now()}.sqlite`);
 
-import { describe, test, expect, beforeEach, afterAll } from "bun:test";
-import { initDb, q, transaction, closeDb } from "../../backend/src/core/db.test-entry";
+import { describe, test, expect, beforeEach } from "bun:test";
+import { initDb, q, transaction } from "../../backend/src/core/db";
 import { env } from "../../backend/src/core/cfg";
 
 const is_pg = env.metadata_backend === "postgres";
@@ -68,10 +68,4 @@ describe(`Nested transaction / savepoint behavior (${is_pg ? 'Postgres' : 'SQLit
         expect(b).not.toBeNull();
         expect(b.user_id).toBe(uidB);
     });
-});
-
-afterAll(async () => {
-    try {
-        await closeDb();
-    } catch (e) { /* best-effort cleanup */ }
 });

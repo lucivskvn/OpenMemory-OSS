@@ -32,15 +32,13 @@ jobs:
         with:
           bun-version: "1.3.2"
 
-      - name: Install backend deps and run focused verification tests
+      - name: Install backend deps and run tests
         run: |
           cd backend
           bun install --frozen-lockfile --no-save
           bun run build
           test -f dist/server/index.js || (echo "Build artifact missing: expected dist/server/index.js" && ls -la dist && exit 1)
-          # Run only the migration & embed verification tests to keep this job fast
-          OM_DB_USER_SCOPE_WARN=false bun test ../tests/backend/db-migration.test.js
-          OM_DB_USER_SCOPE_WARN=false bun test ../tests/backend/embed.test.js
+          bun test
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@988b5a0280414f521da01fcc63a27aeeb4b104db # v3.6.1
