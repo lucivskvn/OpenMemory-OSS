@@ -739,14 +739,21 @@ make test
                 </a>
             </td>
             <td align="center">
+                <a href="https://github.com/lucivskvn">
+                    <img src="https://avatars.githubusercontent.com/u/7908015?v=4" width="100;" alt="lucivskvn"/>
+                    <br />
+                    <sub><b>Elang Swa Buana Putra</b></sub>
+                </a>
+            </td>
+		</tr>
+		<tr>
+            <td align="center">
                 <a href="https://github.com/josephgoksu">
                     <img src="https://avatars.githubusercontent.com/u/6523823?v=4" width="100;" alt="josephgoksu"/>
                     <br />
                     <sub><b>Joseph Goksu</b></sub>
                 </a>
             </td>
-		</tr>
-		<tr>
             <td align="center">
                 <a href="https://github.com/lwsinclair">
                     <img src="https://avatars.githubusercontent.com/u/2829939?v=4" width="100;" alt="lwsinclair"/>
