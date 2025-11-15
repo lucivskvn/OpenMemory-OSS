@@ -50,9 +50,13 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - OM_GEMINI_API_KEY=${OM_GEMINI_API_KEY:-}
 
-      # Ollama Provider
-      - OLLAMA_URL=${OLLAMA_URL:-http://localhost:11434}
-      - OM_OLLAMA_URL=${OM_OLLAMA_URL:-http://localhost:11434}
+      # Ollama Provider (SideCar deployment)
+      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      - OM_OLLAMA_URL=${OM_OLLAMA_URL:-http://ollama:11434}
+      - OM_OLLAMA_MODELS=${OM_OLLAMA_MODELS:-nomic-embed-text}
+      - OM_OLLAMA_KEEP_ALIVE=${OM_OLLAMA_KEEP_ALIVE:-5m}
+      - OM_OLLAMA_NUM_PARALLEL=${OM_OLLAMA_NUM_PARALLEL:-1}
+      - OM_OLLAMA_NUM_GPU=${OM_OLLAMA_NUM_GPU:-0}
 
       # Local Model
       - LOCAL_MODEL_PATH=${LOCAL_MODEL_PATH:-}
@@ -120,7 +124,9 @@ services:
       - OM_KEYWORD_BOOST=${OM_KEYWORD_BOOST:-2.5}
       - OM_KEYWORD_MIN_LENGTH=${OM_KEYWORD_MIN_LENGTH:-3}
     volumes:
-      - openmemory_data:/data:Z
+      - openmemory_data:/data:Z # Rootless: create with `podman volume create openmemory_data --driver local --opt o=uid=$(id -u),gid=$(id -g)`
+    # Note: depends_on removed to make Ollama sidecar optional
+    # Use `docker compose --profile ollama up` to include Ollama service
     userns_mode: keep-id
     init: true
     stop_grace_period: 30s
@@ -137,6 +143,42 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+    networks:
+      - openmemory_net
+
+  # Ollama - embedding and multimodal inference sidecar
+  ollama:
+    profiles: ["ollama"]
+    image: ollama/ollama:0.3.0
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama:Z
+    userns_mode: keep-id
+    init: true
+    stop_grace_period: 10s
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    # Resource constraints (helps when using Podman or when running locally in tests)
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+    # Older `mem_limit`/`cpus` fields are accepted by various compose implementations
+    mem_limit: 1G
+    cpus: 1
+    networks:
+      - openmemory_net
+    environment:
+      - OLLAMA_KEEP_ALIVE=${OM_OLLAMA_KEEP_ALIVE:-5m}
+      - OLLAMA_NUM_PARALLEL=${OM_OLLAMA_NUM_PARALLEL:-1}
+      - OLLAMA_NUM_GPU=${OM_OLLAMA_NUM_GPU:-0}
 
   # Optional test runner service (profiles: ["test"]) - use the named profile to enable
   # Use: `docker-compose --profile test up tests` to run the test harness against
@@ -153,6 +195,8 @@ services:
       - OM_STRICT_TENANT=${OM_STRICT_TENANT:-true}
     depends_on:
       - openmemory
+    networks:
+      - openmemory_net
 
   # Optional Postgres service for integration testing and local development.
   # Enable with: `docker compose --profile pg up postgres`
@@ -168,7 +212,21 @@ services:
     ports:
       - "5432:5432"
     profiles: ["pg"]
+    networks:
+      - openmemory_net
 
 volumes:
   openmemory_data:
     driver: local
+    # For rootless Podman, consider creating the volume with user-owned uid/gid
+    # podman volume create openmemory_data --driver local --opt o=uid=$(id -u),gid=$(id -g)
+  ollama_models:
+    driver: local
+    # For rootless Podman: podman volume create ollama_models --driver local --opt o=uid=$(id -u),gid=$(id -g)
+  # Ephemeral volume for test runs (use profile 'test' to enable services that mount this)
+  test_data:
+    driver: local
+
+networks:
+  openmemory_net:
+    driver: bridge

@@ -20,7 +20,8 @@ test("postgres q blob/array/concurrency: binary bindings, array+scalar mix, high
 
     await initDb();
 
-    const ready = await waitFor(async () => {
+    try {
+        const ready = await waitFor(async () => {
         try {
             if (!mod.memories_table) return false;
             await (mod.get_async)(`select 1 as v`);
@@ -88,7 +89,12 @@ test("postgres q blob/array/concurrency: binary bindings, array+scalar mix, high
     // Expect at least `concurrency` rows present (allow for small timing variance)
     expect(found.length).toBeGreaterThanOrEqual(concurrency);
 
-    // Cleanup inserted rows
-    await run(`delete from ${memTable} where primary_sector in ($1,$2,$3)`, ["pg-blob-parity", "pg-adv", "pg-conc"]);
-    await run(`delete from ${memTable} where id in ($1,$2,$3)`, [idBlob, idArray, ids[0]]);
+        // Cleanup inserted rows
+        await run(`delete from ${memTable} where primary_sector in ($1,$2,$3)`, ["pg-blob-parity", "pg-adv", "pg-conc"]);
+        await run(`delete from ${memTable} where id in ($1,$2,$3)`, [idBlob, idArray, ids[0]]);
+    } finally {
+        if (mod && typeof (mod as any).closeDb === 'function') {
+            try { await (mod as any).closeDb(); } catch (e) { /* best-effort */ }
+        }
+    }
 }, { timeout: 240_000 });

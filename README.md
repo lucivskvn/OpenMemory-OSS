@@ -11,7 +11,7 @@ Recent changes and release notes are maintained in `CHANGELOG.md` — see that f
 
 ⚠️ **Upgrading from v1.1?** Multi-user tenant support requires database migration. See [MIGRATION.md](./MIGRATION.md) for upgrade instructions.
 
-[VS Code Extension](https://marketplace.visualstudio.com/items?itemName=Nullure.openmemory-vscode) • [Report Bug](https://github.com/caviraOSS/openmemory/issues) • [Request Feature](https://github.com/caviraOSS/openmemor/issues) • [Discord server](https://discord.gg/P7HaRayqTh)
+[VS Code Extension](https://marketplace.visualstudio.com/items?itemName=Nullure.openmemory-vscode) • [Report Bug](https://github.com/lucivskvn/openmemory-OSS/issues) • [Request Feature](https://github.com/lucivskvn/openmemory-OSS/issues) • [Discord server](https://discord.gg/P7HaRayqTh)
 
 ---
 
@@ -119,19 +119,19 @@ Its **multi-sector cognitive model** allows explainable recall paths, hybrid emb
 Deploy OpenMemory to your favorite cloud platform:
 
 <p align="center">
-    <a href="https://vercel.com/new/clone?repository-url=https://github.com/CaviraOSS/OpenMemory&root-directory=backend&build-command=bun%20install%20%26%26%20bun%20run%20build">
+    <a href="https://vercel.com/new/clone?repository-url=https://github.com/lucivskvn/openmemory-OSS&root-directory=backend&build-command=bun%20install%20%26%26%20bun%20run%20build">
     <img src="https://vercel.com/button" alt="Deploy with Vercel" height="32">
   </a>
-  <a href="https://cloud.digitalocean.com/apps/new?repo=https://github.com/CaviraOSS/OpenMemory/tree/main">
+  <a href="https://cloud.digitalocean.com/apps/new?repo=https://github.com/lucivskvn/openmemory-OSS/tree/main">
     <img src="https://www.deploytodo.com/do-btn-blue.svg" alt="Deploy to DigitalOcean" height="32">
   </a>
-  <a href="https://railway.app/new/template?template=https://github.com/CaviraOSS/OpenMemory&rootDir=backend">
+  <a href="https://railway.app/new/template?template=https://github.com/lucivskvn/openmemory-OSS&rootDir=backend">
     <img src="https://railway.app/button.svg" alt="Deploy on Railway" height="32">
   </a>
   <a href="https://render.com/deploy">
     <img src="https://render.com/images/deploy-to-render-button.svg" alt="Deploy to Render" height="32">
   </a>
-  <a href="https://heroku.com/deploy?template=https://github.com/CaviraOSS/OpenMemory">
+  <a href="https://heroku.com/deploy?template=https://github.com/lucivskvn/openmemory-OSS">
     <img src="https://www.herokucdn.com/deploy/button.svg" alt="Deploy to Heroku" height="32">
   </a>
 </p>
@@ -162,7 +162,7 @@ Requirements:
 For additional CI hardening and GitHub Actions best practices, see `docs/security/github-actions-hardening.md` which outlines SHA pins, provenance, and SLSA attestation recommendations.
 
 ```bash
-git clone https://github.com/caviraoss/openmemory.git
+git clone https://github.com/lucivskvn/openmemory-OSS.git
 cd openmemory/backend
 cp .env.example .env
 
@@ -196,6 +196,25 @@ docker compose up --build -d
 ```
 
 This starts OpenMemory on port 8080. Data persists in `/data/openmemory.sqlite`.
+
+### Ollama Sidecar (Local Models)
+
+OpenMemory can run an Ollama sidecar for local embeddings and multimodal models. The repository's `docker-compose.yml` includes an `ollama` service you can enable by default.
+
+Management endpoints:
+
+- `POST /embed/ollama/pull` - Pull a model into the sidecar (body: `{ "model": "nomic-embed-text" }`).
+- `GET /embed/ollama/list` - List models installed in the sidecar.
+- `POST /embed/ollama/delete` - Remove a model from the sidecar (idempotent).
+- `GET /embed/ollama/status` - Health & version information for Ollama.
+  - Response fields: `ollama_available` (boolean), `ollama_version` (string),
+    and `models_loaded` (number). The endpoint guarantees a stable JSON shape
+    even when Ollama is unreachable (tests expect this behavior — see
+    `tests/backend/ollama-status.unit.test.ts`).
+
+Router CPU requires consistent dimensions across sector models; startup validation detects mismatches before production traffic.
+
+When deploying with Docker/Podman, model files are stored in a named volume `ollama_models`. For rootless Podman, create the volume with `podman volume create ollama_models --driver local --opt o=uid=$(id -u),gid=$(id -g)`.
 
 ### Dashboard Setup
 
@@ -268,7 +287,7 @@ OpenMemory uses Hierarchical Memory Decomposition (HMD):
 - Storage: SQLite or PostgreSQL
 - Security: GitHub Actions with SHA-pinned actions, OIDC-ready workflows, Trivy + SLSA attestations (see `docs/security/github-actions-hardening.md`)
 - Note: The backend supports PostgreSQL when requested. It prefers Bun's native Postgres client when available; if Bun Postgres isn't present in the runtime, the backend will fall back to the Node `pg` package at runtime (the repository already includes `pg` as a fallback dependency in `backend/package.json`). To enable Postgres-backed storage set `OM_METADATA_BACKEND=postgres` and consult `backend/README.md` for operational details and CI configuration.
-- Embeddings: E5/BGE/OpenAI/Gemini/Ollama
+- Embeddings: E5/BGE/OpenAI/Gemini/Ollama/router_cpu (single-expert-per-sector router over Ollama, not SB-MoE)
 - Scheduler: Bun timers (setInterval) for decay and maintenance
 
 **Query flow:**
@@ -563,6 +582,7 @@ or
 Then restart Claude Code.
 
 **Available Tools:**
+
 - `mcp__openmemory__query` - Semantic search across memories
 - `mcp__openmemory__store` - Store new memories
 - `mcp__openmemory__list` - List recent memories
@@ -571,7 +591,7 @@ Then restart Claude Code.
 
 **Note**: Make sure your OpenMemory Docker container is running on `http://localhost:8080` before connecting.
 
-[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/caviraoss-openmemory-badge.png)](https://mseep.ai/app/caviraoss-openmemory)
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/lucivskvn-openmemory-OSS-badge.png)](https://mseep.ai/app/lucivskvn-openmemory-OSS)
 
 ---
 
@@ -601,6 +621,14 @@ Queries per second with concurrent users:
 | 10    | 180 | 55 ms           | 120 ms          |
 | 50    | 650 | 75 ms           | 180 ms          |
 | 100   | 900 | 110 ms          | 280 ms          |
+
+**Router CPU Mode (CPU-Only)**:
+
+- QPS: 50-100 with 2-3 models loaded
+- Latency: 150-300ms (Ollama inference + routing)
+- Memory: 2-4GB RAM base usage
+- Benefits: 10-15% overhead vs single model, 20-30% SIMD gains when enabled
+- Note: transformers.js 3.x and IBM/Liquid MoE integration are deferred to a later phase, and that current CPU optimization is via `router_cpu` plus SIMD fusion.
 
 ### 9.3 Self-Hosted Cost
 
@@ -823,6 +851,6 @@ Join our [Discord](https://discord.gg/P7HaRayqTh) to connect with other develope
 ## 15. Other Projects
 
 **PageLM** - Transform study materials into quizzes, flashcards, notes, and podcasts.  
-https://github.com/CaviraOSS/PageLM
+https://github.com/lucivskvn/PageLM
 
 ---

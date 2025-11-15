@@ -12,8 +12,12 @@
     "build:binary": "bun build src/server/index.ts --compile --minify --sourcemap --target=bun --outfile=./dist/openmemory",
         "start": "bun dist/server/index.js",
         "migrate": "bun src/migrate.ts",
-    "test": "OM_DB_USER_SCOPE_WARN=false bun test ../tests/backend/",
-    "test:ci": "bun test --coverage --reporter=json",
+        "test": "OM_DB_USER_SCOPE_WARN=false bun test ../tests/backend/",
+        "test:ci": "OM_DB_USER_SCOPE_WARN=false bun test --coverage --reporter=json",
+        "test:simd": "OM_DB_USER_SCOPE_WARN=false bun test ../tests/backend/simd.test.ts",
+        "test:router": "OM_DB_USER_SCOPE_WARN=false bun test ../tests/backend/embed-router.test.ts",
+        "test:config": "OM_DB_USER_SCOPE_WARN=false bun test ../tests/backend/embed-config-endpoint.test.ts",
+        "benchmark:embed": "OM_DB_USER_SCOPE_WARN=false bun test ../tests/backend/simd.test.ts --grep 'benchmark'",
         "hash-key": "bun run scripts/hash-api-key.ts",
         "security:scan": "bun pm ls --all | grep -i 'deprecated\\|vulnerability' || echo 'No issues found'",
         "deps:outdated": "bun pm outdated",
@@ -45,10 +49,10 @@
     },
     "repository": {
         "type": "git",
-        "url": "https://github.com/caviraoss/openmemory.git"
+        "url": "https://github.com/lucivskvn/openmemory-OSS.git"
     },
     "bugs": {
-        "url": "https://github.com/caviraoss/openmemory/issues"
+        "url": "https://github.com/lucivskvn/openmemory-OSS/issues"
     },
-    "homepage": "https://github.com/caviraoss/openmemory#readme"
+    "homepage": "https://github.com/lucivskvn/openmemory-OSS#readme"
 }

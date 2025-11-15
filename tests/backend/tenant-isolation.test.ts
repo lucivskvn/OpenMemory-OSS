@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { test, expect } from "bun:test";
+import { test, expect, afterAll } from "bun:test";
 
 // Use isolated temp DB per-run
 const tmpDir = path.resolve(process.cwd(), "tmp");
@@ -8,7 +8,7 @@ if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
 process.env.OM_DB_PATH = path.join(tmpDir, `openmemory-tenant-${process.pid}-${Date.now()}.sqlite`);
 process.env.OM_METADATA_BACKEND = "sqlite";
 
-import { initDb, q, run_async } from "../../backend/src/core/db";
+import { initDb, q, run_async, closeDb } from "../../backend/src/core/db.test-entry";
 import { env } from "../../backend/src/core/cfg";
 
 test("tenant isolation: vectors and waypoints are scoped by user_id", async () => {
@@ -101,6 +101,14 @@ test("tenant isolation: vectors and waypoints are scoped by user_id", async () =
     await q.del_waypoints.run(memA, memA, userA);
     const wA_after2 = await q.get_waypoints_by_src.all(memA, userA);
     expect(wA_after2.length).toBe(0);
+});
+
+afterAll(async () => {
+    try {
+        await closeDb();
+    } catch (e) {
+        // best-effort cleanup
+    }
 });
 
 test("tenant isolation: get_mem_by_simhash is scoped by user_id", async () => {

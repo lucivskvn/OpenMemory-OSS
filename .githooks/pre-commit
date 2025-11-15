@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Pre-commit hook: run repo-wide logger-spy checker and prevent commit on failure
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
+
+# Run the checker; if it fails, abort the commit
+bash "$REPO_ROOT/scripts/check-logger-spy-repo.sh" || {
+  echo "Pre-commit hook: logger-spy check failed. Please fix direct logger monkey-patches or use tests/utils/spyLoggerSafely.ts"
+  exit 1
+}
+
+exit 0
