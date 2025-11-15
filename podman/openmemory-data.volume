@@ -1,16 +1,25 @@
+
 [Unit]
 Description=OpenMemory data volume (quadlet)
 
 [Volume]
-# Path on host
-Path=/var/lib/openmemory
+# Defines persistent data volume for SQLite DB and app data, mounted as /data in container.
+# Use a per-user path for rootless Podman services. Systemd user units will expand `%h` to
+# the user's home directory. This keeps the volume owned by the user and avoids requiring
+# sudo/chown during setup.
+Path=%h/.local/share/openmemory
 # Create the directory if it doesn't exist
 Create=yes
 # Use local driver and set ownership to the non-root container user (matches Dockerfile UID/GID)
 Driver=local
 # Recommended owner (container non-root user)
-User=1001
-Group=1001
+# Note: for rootful/system deployments override `Path` to `/var/lib/openmemory` and run
+# `sudo mkdir -p /var/lib/openmemory && sudo chown $USER:$USER /var/lib/openmemory` before use.
+# By default we do not hardcode User/Group so the host user (rootless podman) owns
+# the created path. If you need to pin to a specific UID/GID, set `User=` and
+# `Group=` to match your host mapping. The container image itself runs a non-root
+# user (UID 1001) internally; when using rootless Podman prefer `UserNS=keep-id`
+# in the unit so host UID/GID are mapped into the container.
 # Optional explicit volume name for clarity with quadlets
 VolumeName=openmemory-data
 # SELinux labeling; when mounting use :Z on the bind mount to relabel on SELinux hosts.

@@ -8,6 +8,7 @@ import { usr } from "./users";
 import { temporal } from "./temporal";
 import { dash } from "./dashboard";
 import { agent } from "./agent";
+import { embed } from "./embed";
 
 export function routes(app: any) {
     sys(app);
@@ -20,5 +21,6 @@ export function routes(app: any) {
     temporal(app);
     dash(app);
     agent(app);
+    embed(app);
 }
 

@@ -8,7 +8,10 @@
         "build": "cd backend && bun run build",
         "start": "cd backend && bun run start",
         "dev": "cd backend && bun run dev",
-        "test": "cd backend && bun run test"
+        "test": "cd backend && bun run test",
+        "check:logger-spy": "bash ./scripts/check-logger-spy.sh",
+        "check:logger-spy-repo": "bash ./scripts/check-logger-spy-repo.sh",
+        "install-hooks": "git config core.hooksPath .githooks && chmod +x .githooks/pre-commit"
         ,"test:pg":"./scripts/run_pg_tests.sh"
     }
 }

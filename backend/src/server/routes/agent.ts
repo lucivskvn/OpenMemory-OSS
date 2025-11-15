@@ -29,10 +29,18 @@ export function agent(app: any) {
         // Some callers or test harnesses may not have the global body parser
         // applied. As with other routes, attempt to recover by parsing the
         // raw request body when `ctx.body` is undefined or null so tests and
-        // clients that send JSON still work.
+        // clients that send JSON still work. Use a cloned request first to
+        // avoid "Body already used" errors when the stream has already
+        // been consumed by earlier middleware.
         if (ctx.body === undefined || ctx.body === null) {
             try {
-                const text = await req.text();
+                let text: string | undefined = undefined;
+                if (typeof (req as any).clone === 'function') {
+                    try { text = await (req as any).clone().text(); } catch (e) { text = undefined; }
+                }
+                if (!text && typeof (req as any).text === 'function') {
+                    try { text = await req.text(); } catch (e) { text = undefined; }
+                }
                 if (text && text.length) {
                     try { ctx.body = JSON.parse(text); } catch (e) { /* leave as null; validation will catch */ }
                 }

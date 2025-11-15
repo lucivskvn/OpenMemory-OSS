@@ -275,7 +275,7 @@ async function show_quick_setup() {
                 if (connected) await start_session();
             }
             break;
-        case 'docs': vscode.env.openExternal(vscode.Uri.parse('https://github.com/CaviraOSS/OpenMemory')); break;
+        case 'docs': vscode.env.openExternal(vscode.Uri.parse('https://github.com/lucivskvn/openmemory-OSS')); break;
         case 'test':
             update_status_bar('connecting');
             const connected = await check_connection();

@@ -1,0 +1,24 @@
+[Unit]
+Description=Ollama container (quadlet)
+After=network.target
+
+[Container]
+Image=ollama/ollama:0.3.0
+PublishPort=11434:11434
+Restart=on-failure
+UserNS=keep-id
+User=1001:1001
+Environment=OLLAMA_KEEP_ALIVE=5m
+Environment=OLLAMA_NUM_PARALLEL=1
+Environment=OLLAMA_NUM_GPU=0
+# Store models in a named volume (create with podman volume create ollama_models --opt o=uid=$(id -u),gid=$(id -g))
+Volume=ollama_models:/root/.ollama:Z
+HealthCmd=ollama list
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=3
+HealthStartPeriod=60s
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target
