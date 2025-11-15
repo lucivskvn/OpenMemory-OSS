@@ -66,7 +66,7 @@ OpenMemory(
 
 ### Environment Variables
 
-```
+```env
 OM_BASE_URL=http://localhost:8080
 OM_API_KEY=your_key
 ```
@@ -84,7 +84,7 @@ OpenMemory supports two backend embedding configurations:
 
 Set this in the backend `.env`:
 
-```
+```env
 OM_EMBED_MODE=simple    # or "advanced"
 ```
 
@@ -208,6 +208,6 @@ Apache 2.0
 
 ## 🌍 Links
 
-- **Docs:** https://openmemory.cavira.app
-- **GitHub:** https://github.com/caviraoss/openmemory
-- **SDK (JS):** https://github.com/caviraoss/openmemory-sdk-js
+- **Docs:** [https://openmemory.cavira.app](https://openmemory.cavira.app)
+- **GitHub:** <https://github.com/lucivskvn/openmemory-OSS>
+- **SDK (JS):** <https://github.com/lucivskvn/openmemory-OSS>

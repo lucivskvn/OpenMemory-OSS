@@ -19,6 +19,15 @@ OM_PLAIN_API_KEY="my-very-secret-key" bun run scripts/hash-api-key.ts
 
 The script prints a hashed string suitable for storing as the `OM_API_KEY` repository secret or environment variable.
 
+### Admin API key support
+
+A separate admin key may be used to secure privileged endpoints such as telemetry and audit APIs. The admin key should be stored hashed in the backend using the `OM_ADMIN_API_KEY` environment variable (Argon2 hash). To allow dashboard or other server-side components to call these admin-only endpoints, set `OM_ADMIN_API_KEY_PLAIN` in the dashboard/runtime environment with the plain-text admin key. The backend will verify the provided plain key against the hashed `OM_ADMIN_API_KEY` using Argon2. This allows server-to-server calls without exposing admin secrets to the browser.
+
+Example:
+
+1. Create a hash with the helper: `bun run scripts/hash-api-key.ts 'my-admin-secret'`
+2. Set `OM_ADMIN_API_KEY` (backend) to the returned hash, and `OM_ADMIN_API_KEY_PLAIN` (dashboard server) to `'my-admin-secret'`.
+
 ### CORS credentials
 
 If your consumers require cookies or credentialed CORS requests, you can enable the server to return Access-Control-Allow-Credentials: true by setting the environment variable:

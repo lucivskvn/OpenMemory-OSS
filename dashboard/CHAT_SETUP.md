@@ -63,7 +63,7 @@ curl -X POST http://localhost:8080/memory/add \
 
 ```javascript
 // examples/js-sdk/basic-usage.js
-import OpenMemory from '../../sdk-js/src/index.js';
+import OpenMemory from '../../sdk-js/src/index';
 
 const om = new OpenMemory('http://localhost:8080');
 
@@ -117,6 +117,8 @@ Clicking the **+** button on a memory card:
 - 🚧 Conversation memory persistence
 - 🚧 Export chat to memories
 - 🚧 WebSocket streaming responses
+- ✅ SSE streaming responses (incremental tokens) via AI SDK (`useChat`) and `/api/chat`
+- ✅ Embedding mode is attached to chat (adds `embedding_mode` to backend requests for router-aware CPU embeddings)
 - 🚧 Quiz generation from memories
 - 🚧 Podcast script generation
 

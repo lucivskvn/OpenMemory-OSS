@@ -7,8 +7,8 @@ const tmpDir = path.resolve(process.cwd(), "tmp");
 if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
 process.env.OM_DB_PATH = path.join(tmpDir, `openmemory-test-${process.pid}-${Date.now()}.sqlite`);
 
-import { describe, test, expect, beforeEach } from "bun:test";
-import { initDb, q, transaction } from "../../backend/src/core/db";
+import { describe, test, expect, beforeEach, afterAll } from "bun:test";
+import { initDb, q, transaction, closeDb } from "../../backend/src/core/db.test-entry";
 import { env } from "../../backend/src/core/cfg";
 
 // This test suite validates the database layer, running tests for both
@@ -125,4 +125,12 @@ describe(`Database Layer (${is_pg ? 'PostgreSQL' : 'SQLite'})`, () => {
         // Depending on the driver/library this may be `null` or `undefined` when not found.
         expect(user == null).toBe(true);
     });
+});
+
+afterAll(async () => {
+    try {
+        await closeDb();
+    } catch (e) {
+        // best-effort cleanup
+    }
 });

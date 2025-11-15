@@ -1,7 +1,11 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react"
-import { API_BASE_URL, getHeaders } from "@/lib/api"
+import { API_BASE_URL, getHeaders, getEmbeddingConfig, EmbeddingConfig } from "@/lib/api"
+// import { useChat } from "ai/react" // TODO: Enable when Vercel AI SDK v5 installed
+import { toast } from 'sonner'
+import { Badge } from "@/components/ui/badge"
+// import { useChat } from "ai/react" // TODO: Enable when Vercel AI SDK v5 installed
 
 interface ChatMessage {
     role: "user" | "assistant"
@@ -18,17 +22,64 @@ interface MemoryReference {
 }
 
 export default function ChatPage() {
+    // Note: useChat is commented out - streaming is not fully implemented yet
+    // const { messages: chatMessages, input: chatInput, setInput: setChatInput, handleInputChange, handleSubmit, isLoading } = useChat({ api: '/api/chat' })
+
     const [messages, setMessages] = useState<ChatMessage[]>([])
     const [input, setInput] = useState("")
     const [busy, setBusy] = useState(false)
     const [connecting, setConnecting] = useState(false)
     const [awaitingAnswer, setAwaitingAnswer] = useState(false)
     const [memories, setMemories] = useState<MemoryReference[]>([])
+    const [embeddingConfig, setEmbeddingConfig] = useState<EmbeddingConfig | null>(null)
+    const [streamTelemetry, setStreamTelemetry] = useState<{ stream_duration_ms?: number; memory_ids?: string[] } | null>(null)
     const scrollRef = useRef<HTMLDivElement>(null)
 
     useEffect(() => {
         setTimeout(() => scrollRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }), 0)
     }, [messages.length])
+    
+    // Note: useChat streaming is not currently implemented
+    // TODO: Implement streaming chat with AI SDK v5 when available
+    // This useEffect would sync with useChat messages
+    /*
+    useEffect(() => {
+        if (!chatMessages) return
+        // Map ai messages to ChatMessage format
+        const mapped = chatMessages.map((m: any) => ({ role: m.role, content: m.content, timestamp: m.createdAt || Date.now() }))
+        // Parse telemetry sentinel in assistant content
+        let telemetry: any = null
+        mapped.forEach((m:any) => {
+            if (m.role === 'assistant' && typeof m.content === 'string') {
+                const start = m.content.indexOf('[[OM_TELEMETRY]]')
+                const end = m.content.indexOf('[[/OM_TELEMETRY]]')
+                if (start !== -1 && end !== -1) {
+                    const json = m.content.slice(start + '[[OM_TELEMETRY]]'.length, end)
+                    try { telemetry = JSON.parse(json) } catch (err) { telemetry = null }
+                    // Strip telemetry from rendered content
+                    m.content = m.content.slice(0, start) + m.content.slice(end + '[[/OM_TELEMETRY]]'.length)
+                }
+            }
+        })
+        setMessages(mapped as ChatMessage[])
+        if (telemetry) setStreamTelemetry(telemetry)
+    }, [chatMessages])
+    */
+
+    useEffect(() => {
+        const fetchConfig = async () => {
+            try {
+                const config = await getEmbeddingConfig();
+                setEmbeddingConfig(config);
+            } catch (e) {
+                console.warn('Embedding config fetch failed, falling back to synthetic mode:', e);
+                setEmbeddingConfig({ kind: 'synthetic', dimensions: 256, mode: 'simple' } as EmbeddingConfig)
+            }
+        };
+        fetchConfig();
+        const interval = setInterval(fetchConfig, 60000);
+        return () => clearInterval(interval);
+    }, [])
 
     const queryMemories = async (query: string): Promise<MemoryReference[]> => {
         try {
@@ -38,7 +89,8 @@ export default function ChatPage() {
                 body: JSON.stringify({
                     query,
                     k: 10,
-                    filters: {}
+                    filters: {},
+                    metadata: { embedding_mode: embeddingConfig?.kind || 'synthetic' }
                 })
             })
 
@@ -190,26 +242,75 @@ export default function ChatPage() {
         setBusy(true)
 
         try {
-            // Query memories from backend
-            const relevantMemories = await queryMemories(currentInput)
-            setMemories(relevantMemories)
+            // Query memories from backend (first partial chunk) via streaming mem endpoint
+            // TODO: Enable SSE when /api/chat/mem route is fully implemented
+            const memStreamUrl = `/api/chat/mem?q=${encodeURIComponent(currentInput)}&embedding_mode=${encodeURIComponent(embeddingConfig?.kind || 'synthetic')}`
 
-            // Generate response based on memories
-            const responseContent = await generateResponse(currentInput, relevantMemories)
-
-            const assistantMessage: ChatMessage = {
-                role: "assistant",
-                content: responseContent,
-                timestamp: Date.now()
+            let eventSourceSupported = false
+            try {
+                // Pre-flight check: attempt to fetch the URL with HEAD to verify the route exists
+                const checkResponse = await fetch(memStreamUrl, { method: 'HEAD' })
+                eventSourceSupported = checkResponse.ok
+            } catch (e) {
+                // Route not available
             }
-            setMessages(prev => [...prev, assistantMessage])
+
+            if (eventSourceSupported) {
+                try {
+                    const evtSource = new EventSource(memStreamUrl)
+                    evtSource.addEventListener('memories', (ev:any) => {
+                        try {
+                            const parsed = JSON.parse(ev.data)
+                            setMemories(parsed.data || [])
+                            if (parsed.memory_ids) {
+                                setStreamTelemetry(prev => ({ ...(prev || {}), memory_ids: parsed.memory_ids }))
+                            }
+                        } catch (err) { console.error('mem event parse failed', err) }
+                    })
+                    evtSource.addEventListener('done', () => { evtSource.close() })
+                } catch (e) {
+                    // fallback to synchronous query if EventSource fails
+                    const relevantMemories = await queryMemories(currentInput)
+                    setMemories(relevantMemories)
+                }
+            } else {
+                // EventSource route not available, fallback to synchronous query
+                const relevantMemories = await queryMemories(currentInput)
+                setMemories(relevantMemories)
+            }
+
+            // For now, implement a simple non-streaming response using the chat API
+            // TODO: Implement streaming when AI SDK v5 support is added
+            const response = await fetch('/api/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    messages: [
+                        { role: 'user', content: currentInput }
+                    ],
+                    embedding_mode: embeddingConfig?.kind || 'synthetic'
+                })
+            })
+
+            if (response.ok) {
+                const data = await response.text()
+                const assistantMessage: ChatMessage = {
+                    role: 'assistant',
+                    content: data,
+                    timestamp: Date.now()
+                }
+                setMessages(prev => [...prev, assistantMessage])
+            } else {
+                const errorMessage: ChatMessage = {
+                    role: 'assistant',
+                    content: 'Sorry, I was unable to generate a response. Please try again.',
+                    timestamp: Date.now()
+                }
+                setMessages(prev => [...prev, errorMessage])
+            }
         } catch (error) {
             console.error("Error processing message:", error)
-            const errorMessage: ChatMessage = {
-                role: "assistant",
-                content: "I encountered an error while processing your message. Please make sure the OpenMemory backend is running on port 8080.",
-                timestamp: Date.now()
-            }
+            const errorMessage: ChatMessage = { role: 'assistant', content: 'I encountered an error while processing your message. Please make sure the OpenMemory backend is running on port 8080.', timestamp: Date.now() }
             setMessages(prev => [...prev, errorMessage])
         } finally {
             setAwaitingAnswer(false)
@@ -315,9 +416,35 @@ export default function ChatPage() {
                 <div className="hidden lg:block">
                     <div className="sticky top-6 h-[calc(100vh-8rem)] flex flex-col">
                         <div className="mb-5">
-                            <div className="rounded-2xl bg-stone-950/80 border border-zinc-900 px-4 py-3 flex items-center justify-between">
-                                <h3 className="text-stone-100 font-semibold tracking-wide">Memories Used</h3>
-                                <span className="text-xs text-stone-400">{memories.length}</span>
+                            <div className="rounded-2xl bg-stone-950/80 border border-zinc-900 px-4 py-3">
+                                <div className="flex items-center justify-between mb-2">
+                                    <h3 className="text-stone-100 font-semibold tracking-wide">Memories Used</h3>
+                                    <span className="text-xs text-stone-400">{memories.length}</span>
+                                </div>
+                                {embeddingConfig && (
+                                    <>
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center gap-2">
+                                                <Badge variant={embeddingConfig.kind === 'router_cpu' ? 'default' : 'secondary'} className="text-xs ml-2">
+                                                    {embeddingConfig.kind === 'router_cpu' ? 'Router CPU' : embeddingConfig.kind || 'Unknown'}
+                                                </Badge>
+                                                <span className="text-xs text-stone-500" title="Current embedding mode for memory retrieval">
+                                                    Embedding Mode
+                                                </span>
+                                            </div>
+                                        </div>
+                                        {embeddingConfig.kind === 'router_cpu' && (
+                                            <div className="text-xs text-muted-foreground mt-1">
+                                                Latency: {embeddingConfig.performance?.expected_p95_ms || 'N/A'}ms | SIMD: {embeddingConfig.simd_enabled ? 'Enabled' : 'Disabled'}
+                                            </div>
+                                        )}
+                                        {streamTelemetry && (
+                                            <div className="text-xs text-muted-foreground mt-1">
+                                                Stream: {streamTelemetry.stream_duration_ms}ms | Memory IDs: {streamTelemetry.memory_ids?.slice(0,3).join(', ')}
+                                            </div>
+                                        )}
+                                    </>
+                                )}
                             </div>
                         </div>
 

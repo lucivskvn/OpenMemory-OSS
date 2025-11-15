@@ -9,7 +9,8 @@ import pino from "pino";
 // Notes: timestamps are emitted in the server's local timezone (human-friendly) and
 // are included under the `time` field. Logs are JSON by default for easy parsing in CI/containers.
 
-const DEFAULT_LEVEL = process.env.LOG_LEVEL || "info";
+// Prefer OM_LOG_LEVEL for repo-specific log tuning, fall back to LOG_LEVEL
+const DEFAULT_LEVEL = process.env.OM_LOG_LEVEL || process.env.LOG_LEVEL || "info";
 const VERBOSE = (process.env.LOG_VERBOSE || "").toLowerCase() === "1" || (process.env.LOG_VERBOSE || "").toLowerCase() === "true";
 
 import os from "os";
@@ -92,3 +93,14 @@ if (PRETTY) {
 }
 
 export default logger;
+
+// Helper for other modules to resolve configured log levels. A module may
+// prefer to read `OM_LOG_<COMPONENT>_LEVEL` or fall back to the global
+// `OM_LOG_LEVEL`/`LOG_LEVEL` defaults. This function returns the resolved
+// string level (e.g., 'debug'|'info'|'warn'|'error').
+export function getEnvLogLevel(componentEnvVar?: string): string {
+  if (componentEnvVar && process.env[componentEnvVar]) return process.env[componentEnvVar] as string;
+  if (process.env.OM_LOG_LEVEL) return process.env.OM_LOG_LEVEL;
+  if (process.env.LOG_LEVEL) return process.env.LOG_LEVEL;
+  return VERBOSE ? 'debug' : DEFAULT_LEVEL;
+}

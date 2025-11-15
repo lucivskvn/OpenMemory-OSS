@@ -11,9 +11,10 @@ import {
     Legend,
 } from "chart.js"
 import Sidebar from "@/components/sidebar"
-import { API_BASE_URL, getHeaders } from "@/lib/api"
+import { API_BASE_URL, getHeaders, getEmbeddingConfig } from "@/lib/api"
 import { StatCard } from "@/components/dashboard/StatCard"
 import { HealthMetric } from "@/components/dashboard/HealthMetric"
+import { EmbeddingModeSelector } from "@/components/embedding/EmbeddingModeSelector"
 import { getStatusColor, sectorColors } from "@/lib/colors"
 
 // Register Chart.js components
@@ -31,6 +32,8 @@ export default function Dashboard() {
     const [maintenanceStats, setMaintenanceStats] = useState<any>({})
     const [systemHealth, setSystemHealth] = useState<any>({})
     const [backendHealth, setBackendHealth] = useState<any>({})
+    const [telemetry, setTelemetry] = useState<any[]>([])
+    const [embeddingHealth, setEmbeddingHealth] = useState<any | null>(null)
 
     useEffect(() => {
         fetchDashboardData()
@@ -77,6 +80,28 @@ export default function Dashboard() {
                     activeSegments: stats.config?.cacheSegments || 0,
                     maxActive: stats.config?.maxActive || 0,
                 }))
+            }
+
+            // Fetch embedding configuration
+            const embedRes = await getEmbeddingConfig();
+            if (embedRes) {
+                setEmbeddingHealth(embedRes);
+
+                // Update system health with embedding data
+                setSystemHealth((prev: any) => ({
+                    ...prev,
+                    embeddingProvider: embedRes.kind || 'Unknown',
+                    embeddingMode: embedRes.mode || 'N/A',
+                    simdEnabled: embedRes.simd_enabled || false,
+                }));
+            }
+
+            // Fetch stream telemetry entries
+            // Use a server-side proxy so we don't need to expose admin key to the browser
+            const telRes = await fetch(`/api/dashboard/telemetry?limit=20`);
+            if (telRes.ok) {
+                const tel = await telRes.json();
+                setTelemetry(tel.telemetry || []);
             }
 
             // Fetch activity logs
@@ -220,7 +245,7 @@ export default function Dashboard() {
                 </div>
 
                 { }
-                <div className="grid grid-cols-4 gap-4 mb-6 md:grid-cols-7">
+                <div className="grid grid-cols-4 gap-4 mb-6 xl:grid-cols-8">
                     <StatCard
                         label="Total Memories"
                         value={healthMetrics.totalMemories?.toLocaleString() || "0"}
@@ -263,6 +288,18 @@ export default function Dashboard() {
                         status="Stable"
                         statusColor={getStatusColor("Stable")}
                     />
+                    <StatCard
+                        label="Embedding Provider"
+                        value={systemHealth.embeddingProvider || "Unknown"}
+                        status={systemHealth.embeddingProvider === 'router_cpu' ? 'Optimized' : 'Standard'}
+                        statusColor={getStatusColor(systemHealth.embeddingProvider === 'router_cpu' ? 'Optimized' : 'Standard')}
+                    />
+                    <StatCard
+                        label="SIMD Status"
+                        value={systemHealth.simdEnabled ? 'Enabled' : 'Disabled'}
+                        status={systemHealth.simdEnabled ? 'Active' : 'Inactive'}
+                        statusColor={getStatusColor(systemHealth.simdEnabled ? 'Active' : 'Inactive')}
+                    />
                 </div>
 
                 { }
@@ -277,6 +314,37 @@ export default function Dashboard() {
                                     <option className="bg-stone-950">7 days</option>
                                     <option className="bg-stone-950">30 days</option>
                                 </select>
+                            </div>
+
+                            <div className="bg-transparent rounded-xl p-6 border border-[#27272a] hover:border-zinc-600 transition-colors duration-200 mt-6">
+                                <div className="flex items-center justify-between mb-4">
+                                    <h2 className="text-xl font-semibold text-[#f4f4f5]">Stream Telemetry</h2>
+                                    <div className="text-xs text-[#8a8a8a]">Recent stream operations</div>
+                                </div>
+
+                                <div className="bg-transparent rounded-lg p-2 mb-2 grid grid-cols-6 gap-2 text-xs font-semibold text-[#8a8a8a] border border-[#27272a] hover:border-zinc-600 transition-colors duration-200">
+                                    <span>Time</span>
+                                    <span>User</span>
+                                    <span>Embedding Mode</span>
+                                    <span>Duration (ms)</span>
+                                    <span>Memory Count</span>
+                                    <span>Query</span>
+                                </div>
+
+                                <div className="space-y-1 max-h-64 overflow-y-auto">
+                                    {telemetry.length > 0 ? telemetry.map((t, idx) => (
+                                        <div key={idx} className="bg-transparent rounded px-2 py-2 grid grid-cols-6 gap-2 text-xs text-[#9ca3af] hover:bg-transparent border border-transparent transition-colors">
+                                            <span className="text-[#6b7280]">{new Date(t.ts || Date.now()).toLocaleTimeString()}</span>
+                                            <span className="col-span-1">{t.user_id || 'anonymous'}</span>
+                                            <span className="text-[#9ca3af]">{t.embedding_mode || 'n/a'}</span>
+                                            <span>{t.duration_ms}</span>
+                                            <span>{Array.isArray(t.memory_ids) ? t.memory_ids.length : (t.memory_ids ? t.memory_ids.length : 0)}</span>
+                                            <span className="truncate">{(t.query || '').slice(0, 80)}</span>
+                                        </div>
+                                    )) : (
+                                        <div className="text-center text-stone-500 py-8">No telemetry yet. Start streaming answers to generate telemetry.</div>
+                                    )}
+                                </div>
                             </div>
                         </div>
                         <div style={{ height: "280px" }}>
@@ -540,6 +608,13 @@ export default function Dashboard() {
                 </div>
 
                 { }
+                <div className="mb-6">
+                    <EmbeddingModeSelector
+                        config={embeddingHealth}
+                        onConfigChange={(config) => setEmbeddingHealth(config)}
+                    />
+                </div>
+
                 <div className="mb-6 bg-transparent rounded-xl p-6 border border-[#27272a] hover:border-zinc-600 transition-colors duration-200  transition-all duration-300">
                     <h2 className="text-lg font-semibold text-[#f4f4f5] mb-4">System Health</h2>
                     <div className="grid grid-cols-3 gap-6">
@@ -588,6 +663,16 @@ export default function Dashboard() {
                             <div className="flex justify-between border-b border-[#27272a] pb-2">
                                 <span>Process ID</span>
                                 <span className="text-[#e6e6e6]">{backendHealth.process?.pid || 'N/A'}</span>
+                            </div>
+                            <div className="flex justify-between border-b border-[#27272a] pb-2">
+                                <span>Embedding Mode</span>
+                                <span className="text-[#e6e6e6]">{embeddingHealth?.mode || 'N/A'}</span>
+                            </div>
+                            <div className="flex justify-between border-b border-[#27272a] pb-2">
+                                <span>SIMD Enabled</span>
+                                <span className={`${embeddingHealth?.simd_enabled ? 'text-[#22c55e]' : 'text-[#f87171]'}`}>
+                                    {embeddingHealth?.simd_enabled ? 'Yes' : 'No'}
+                                </span>
                             </div>
                         </div>
                     </div>
@@ -676,4 +761,3 @@ export default function Dashboard() {
         </div>
     )
 }
-
