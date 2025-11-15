@@ -38,6 +38,37 @@ beforeAll(async () => {
   // will enable OM_DB_USER_SCOPE_WARN explicitly in their own environment.
   process.env.OM_DB_USER_SCOPE_WARN = process.env.OM_DB_USER_SCOPE_WARN || "false";
 
+  // Default test harness settings: enable test-mode hooks and prefer synthetic
+  // embeddings unless a developer explicitly overrides them. This ensures the
+  // test suite is deterministic and doesn't attempt external provider calls.
+  process.env.OM_TEST_MODE = process.env.OM_TEST_MODE ?? '1';
+  process.env.OM_EMBED_KIND = process.env.OM_EMBED_KIND ?? 'synthetic';
+
+  // Back up and temporarily unset provider credentials/URLs so accidental
+  // environment leakage doesn't cause external network calls during tests.
+  // We'll restore them in `afterAll` when the test process finishes.
+  const _providerBackups: Record<string, string | undefined> = {};
+  const _providerVars = [
+    'OPENAI_API_KEY',
+    'OM_OPENAI_KEY',
+    'OM_OPENAI_API_KEY',
+    'OM_GEMINI_KEY',
+    'GEMINI_API_KEY',
+    'OM_OLLAMA_URL',
+    'OM_API_KEY',
+  ];
+  for (const v of _providerVars) {
+    _providerBackups[v] = process.env[v];
+    try {
+      delete process.env[v];
+    } catch (e) {
+      // ignore if deletion not supported in runtime
+    }
+  }
+  // Expose backups to the global scope so afterAll can restore them.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (globalThis as any).__TEST_PROVIDER_BACKUPS = _providerBackups;
+
   // Ensure tests use a hashed OM_API_KEY to avoid plaintext API key warnings
   // during the test run. When running under Bun we can compute an Argon2 hash
   // at runtime; otherwise fall back to a bcrypt-like placeholder to satisfy
@@ -84,6 +115,19 @@ beforeAll(async () => {
 
   // Wait for the server to be healthy before running tests
   await waitForHealthCheck();
+  // Prevent accidental external network calls during tests by default.
+  // Tests that need to simulate provider APIs should explicitly override
+  // `globalThis.fetch` in their own scope; we back up the original here.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const anyG: any = globalThis as any;
+    anyG.__ORIG_FETCH = anyG.fetch;
+    anyG.fetch = async function () {
+      throw new Error('Network access disabled by test harness');
+    };
+  } catch (e) {
+    // ignore if runtime doesn't allow modifying fetch
+  }
 });
 
 afterAll(() => {
@@ -91,6 +135,27 @@ afterAll(() => {
   if (serverProcess && serverProcess.pid) {
     // Kill the entire process group to ensure the server and any children are terminated
     process.kill(-serverProcess.pid, 'SIGKILL');
+  }
+  // Restore provider envs backed up earlier (if any). We stored backups in a
+  // closure in beforeAll; expose them on globalThis so afterAll can access them.
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const anyGlobal: any = globalThis as any;
+    if (anyGlobal.__TEST_PROVIDER_BACKUPS) {
+      for (const [k, v] of Object.entries(anyGlobal.__TEST_PROVIDER_BACKUPS)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v as string;
+      }
+    }
+    // Restore any mocked global fetch
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const anyG: any = globalThis as any;
+      if (anyG.__ORIG_FETCH) anyG.fetch = anyG.__ORIG_FETCH;
+      delete anyG.__ORIG_FETCH;
+    } catch (e) { }
+  } catch (e) {
+    // ignore
   }
 });
 

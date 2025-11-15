@@ -28,8 +28,9 @@ test("postgres: connection, schema, CRUD, transactions, multi-tenant isolation",
     const mod = await import("../../backend/src/core/db.ts");
     const { initDb } = mod as any;
 
-    // Initialize DB layer (Postgres branch will run)
-    await initDb();
+    try {
+        // Initialize DB layer (Postgres branch will run)
+        await initDb();
 
     // Wait for run_async/get_async to become usable and for tables to exist
     const ready = await waitFor(async () => {
@@ -124,7 +125,11 @@ test("postgres: connection, schema, CRUD, transactions, multi-tenant isolation",
     // The helper all() above expects $1,$2,$3 style placeholders — ensure we got rows
     expect(concRows.length).toBeGreaterThanOrEqual(3);
 
-    // Cleanup test rows we created
-    await run(`delete from ${memTable} where primary_sector = $1`, ["pg-test"]);
-
+        // Cleanup test rows we created
+        await run(`delete from ${memTable} where primary_sector = $1`, ["pg-test"]);
+    } finally {
+        if (mod && typeof (mod as any).closeDb === 'function') {
+            try { await (mod as any).closeDb(); } catch (e) { /* best-effort */ }
+        }
+    }
 }, { timeout: 180_000 });

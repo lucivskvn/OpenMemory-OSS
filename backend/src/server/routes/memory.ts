@@ -69,10 +69,21 @@ export function mem(app: any) {
         // global body parser (for example in edge cases with streaming
         // transport). If ctx.body is undefined, try to parse the raw body
         // as JSON as a fallback so routes remain resilient and tests that
-        // set seams can still exercise the ingest pipeline.
+        // set seams can still exercise the ingest pipeline. Use a cloned
+        // request first to avoid "Body already used" errors.
         if (ctx.body === undefined) {
             try {
-                const text = await req.text();
+                let text: string | undefined = undefined;
+                if (typeof (req as any).clone === 'function') {
+                    try {
+                        text = await (req as any).clone().text();
+                    } catch (e) {
+                        text = undefined;
+                    }
+                }
+                if (!text && typeof (req as any).text === 'function') {
+                    try { text = await req.text(); } catch (e) { text = undefined; }
+                }
                 if (text && text.length) {
                     try { ctx.body = JSON.parse(text); } catch (e) { /* leave as undefined; validation will catch */ }
                 }
@@ -160,6 +171,24 @@ export function mem(app: any) {
                 (responseData as any).memories = (responseData as any).matches;
                 logger.warn({ component: "MEM" }, "[DEPRECATION] API: /memory/query includes 'matches' and 'memories' (memories is deprecated). Please migrate clients to use 'matches'.");
             } catch (e) { }
+            // If client requested SSE streaming, return a small streaming response with
+            // the memory matches first. This enables clients to quickly render which
+            // memories were used while they synthesize or stream an answer separately.
+            const accept = (req.headers.get ? req.headers.get('accept') : '') || '';
+            if (accept && accept.includes('text/event-stream')) {
+                const encoder = new TextEncoder();
+                const stream = new ReadableStream({
+                    start(controller) {
+                        controller.enqueue(encoder.encode('event: memories\n'))
+                        controller.enqueue(encoder.encode('data: ' + JSON.stringify({ type: 'memories', data: responseData.matches }) + '\n\n'))
+                        controller.enqueue(encoder.encode('event: done\n'))
+                        controller.enqueue(encoder.encode('data: {}\n\n'))
+                        controller.close()
+                    }
+                })
+                return new Response(stream, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });
+            }
+
             return new Response(JSON.stringify(responseData), { headers: { "Content-Type": "application/json" } });
         } catch (e: any) {
             return new Response(JSON.stringify({ query: b.query, matches: [] }), { headers: { "Content-Type": "application/json" } });

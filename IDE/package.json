@@ -17,7 +17,7 @@
     ],
     "repository": {
         "type": "git",
-        "url": "https://github.com/caviraoss/openmemory"
+        "url": "https://github.com/lucivskvn/openmemory-OSS"
     },
     "main": "./out/extension.js",
     "contributes": {

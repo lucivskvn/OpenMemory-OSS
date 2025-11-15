@@ -42,9 +42,11 @@ describe('hashed key helpers and auth middleware', () => {
         // deliberate plaintext-key detection exercised by this test. We still
         // assert the middleware behavior (403) below.
         const logger = await import('../../backend/src/core/logger');
-        const originalError = logger.default.error;
+        let handle: any = null;
+        const originalError = logger.default && logger.default.error;
         try {
-            logger.default.error = () => { /* noop during this test */ };
+            const { spyLoggerMethod } = await import('../utils/spyLoggerSafely');
+            handle = spyLoggerMethod(logger, 'error', () => { /* noop */ });
 
             // Inject a plaintext API key into the middleware seam
             authMod.setAuthApiKeyForTests('plain-secret-value');
@@ -62,7 +64,43 @@ describe('hashed key helpers and auth middleware', () => {
         } finally {
             // Reset seam and restore logger
             authMod.setAuthApiKeyForTests(undefined);
-            logger.default.error = originalError;
+            try { if (handle && typeof handle.restore === 'function') handle.restore(); } catch (e) { }
+            try { if (originalError && logger.default) logger.default.error = originalError; } catch (_) { }
         }
+    });
+});
+
+// Coarse performance/regression checks.
+// These are NOT precise benchmarks — they verify there are no large regressions
+// in CI. If you need precise benchmarking run a dedicated harness locally.
+describe('Performance', () => {
+    it('hashString() and hashPassword() complete under generous thresholds', async () => {
+        const iterations = 6; // keep CI time reasonable
+        const input = 'The quick brown fox jumps over the lazy dog '.repeat(10);
+        const pwd = 'S3cureP@ssw0rd!'.repeat(6);
+
+        let totalHashString = 0;
+        let totalHashPassword = 0;
+
+        for (let i = 0; i < iterations; i++) {
+            const t0 = Date.now();
+            // synchronous fast hash
+            hashString(input);
+            totalHashString += Date.now() - t0;
+
+            const t1 = Date.now();
+            // hashPassword is async and may be slower; await it.
+            // eslint-disable-next-line no-await-in-loop
+            await hashPassword(pwd);
+            totalHashPassword += Date.now() - t1;
+        }
+
+        const avgHashString = totalHashString / iterations;
+        const avgHashPassword = totalHashPassword / iterations;
+
+        // Conservative thresholds for CI machines. These are intentionally large
+        // to avoid flaky failures on slower CI runners but still catch huge regressions.
+        expect(avgHashString).toBeLessThan(150); // ms
+        expect(avgHashPassword).toBeLessThan(1500); // ms
     });
 });
