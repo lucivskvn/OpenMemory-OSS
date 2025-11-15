@@ -1,15 +1,16 @@
 import { describe, test, expect } from 'bun:test';
 
 import loggerModule from '../../backend/src/core/logger';
+import { spyLoggerMethod } from '../utils/spyLoggerSafely';
 
 describe('Auth middleware (auth.ts)', () => {
     test('auth middleware rejects plaintext API key (returns 403 invalid_api_key)', async () => {
         const authMod = await import('../../backend/src/server/middleware/auth');
-        // Temporarily silence logger.error to avoid noisy stderr output
+        // Temporarily spy/silence logger.error to avoid noisy stderr output
         const logger = (await import('../../backend/src/core/logger')).default;
-        const originalError = logger.error;
+        let handle: any = null;
         try {
-            logger.error = () => { /* noop during test */ };
+            handle = spyLoggerMethod(logger, 'error', () => { /* noop */ });
 
             // Inject a plaintext API key into the middleware seam
             authMod.setAuthApiKeyForTests('plain-secret-value');
@@ -27,7 +28,7 @@ describe('Auth middleware (auth.ts)', () => {
         } finally {
             // Reset seam and restore logger
             authMod.setAuthApiKeyForTests(undefined);
-            logger.error = originalError;
+            try { if (handle && typeof handle.restore === 'function') handle.restore(); } catch (e) { }
         }
     });
 });

@@ -47,6 +47,29 @@ OpenMemory v1.3 hardens multi-tenant defaults to prevent accidental cross-tenant
 - Default behavior: `OM_STRICT_TENANT=true` by default. This requires that tenant-scoped read and write methods include a `user_id` argument. Omitting `user_id` for tenant-scoped methods will raise an error.
 - Rationale: safer default prevents accidental cross-tenant data access in multi-tenant deployments.
 
+### Tenant-scoped methods and legacy call-shapes
+
+The DB helper set includes a number of tenant-scoped read and write methods. When
+`OM_STRICT_TENANT=true` these methods will throw if a `user_id` argument is not
+explicitly provided. This enforces per-user isolation and prevents accidental
+global reads/writes. The most commonly used tenant-scoped helpers include:
+
+- `q.ins_mem`, `q.upd_mem`, `q.upd_mem_with_sector`, `q.upd_mean_vec`, `q.upd_compressed_vec`, `q.upd_feedback`, `q.upd_seen`
+- `q.del_mem`, `q.del_vec`, `q.del_vec_sector`, `q.del_waypoints`
+- `q.get_mem`, `q.get_mem_by_simhash`, `q.all_mem`, `q.all_mem_by_user`, `q.all_mem_by_sector`, `q.all_mem_by_user_and_sector`
+- `q.ins_vec`, `q.get_vec`, `q.get_vecs_by_id`, `q.get_vecs_by_sector`, `q.get_vecs_batch`
+- `q.ins_waypoint`, `q.get_neighbors`, `q.get_waypoints_by_src`, `q.get_waypoint`, `q.upd_waypoint`
+
+Legacy call shapes sometimes omitted trailing `user_id` parameters and relied on
+SQL expressions like `(? is null or user_id=?)` to allow global access. Under the
+new strict mode these legacy omissions will cause the helper to throw an error.
+Before enabling `OM_STRICT_TENANT=true` in production, run the test suite and
+update any call sites to pass an explicit `user_id`. A short migration strategy:
+
+- Run tests with `OM_STRICT_TENANT=true` in a staging or CI environment and fix failing call sites.
+- Audit application code for DB helper calls (search for `q.` usages) and add explicit `user_id` parameters where missing.
+- If you temporarily need global access during migration, set `OM_STRICT_TENANT=false`, but prefer code updates as a long-term fix.
+
 Operators who intentionally require system-wide access can opt out by setting:
 
 ```bash
@@ -56,6 +79,37 @@ export OM_STRICT_TENANT=false
 Warning: enabling `OM_STRICT_TENANT=true` may surface missing `user_id` arguments in application code that previously relied on the permissive `OR $N IS NULL` behavior. Before upgrading, run the test suite and address any call sites that need to pass a `user_id` explicitly.
 
 See `backend/src/core/db.ts` for the runtime check and guidance.
+
+### Verification
+
+To verify tenant-scoping behavior and the Phase 1 migration changes, run the focused migration verification test from the `backend/` directory. This test is the canonical automated check for strict-tenant enforcement across both SQLite and Postgres backends.
+
+Run the canonical verification command from the repository root:
+
+```bash
+cd backend && OM_DB_USER_SCOPE_WARN=false bun test ../tests/backend/db-migration.test.js
+```
+
+Notes:
+
+- These tests exercise core tenant-scoping behaviors (insertion isolation, strict-mode read/write enforcement, transaction rollback, vector and waypoint scoping, and PRAGMA settings) and are the primary automated check for multi-tenant preservation after migration.
+- The test file `tests/backend/db-migration.test.js` uses an in-memory SQLite database by default and will run Postgres-specific verify blocks if `TEST_POSTGRES_URL` is set. To validate Postgres parity locally or in CI, provide a Postgres URL, for example:
+
+```bash
+export TEST_POSTGRES_URL="postgres://user:pass@localhost/testdb"
+cd backend && OM_DB_USER_SCOPE_WARN=false bun test ../tests/backend/db-migration.test.js
+```
+
+- CI integration: the consolidated CI workflow runs these verification tests explicitly so migration regressions are surfaced in CI logs. See `.github/workflows/ci.yml` and the Docker-build workflow for the explicit invocations.
+- Tests are Bun-compatible, use temporary/in-memory databases to avoid side effects, and follow the AGENTS.md testing expectations (isolated fixtures and structured assertions).
+
+Run the embed-layer verification after the migration test to validate embed logging and retry behavior:
+
+```bash
+cd backend && OM_DB_USER_SCOPE_WARN=false bun test ../tests/backend/embed.test.js
+```
+
+These focused verification commands are intended to be fast and deterministic; the `OM_DB_USER_SCOPE_WARN=false` prefix reduces noisy developer-only SQL heuristics during automated runs. Enable the warnings (`OM_DB_USER_SCOPE_WARN=true`) locally only when debugging specific call-site issues.
 
 ### Optional user-scope diagnostics
 
@@ -224,9 +278,30 @@ A GitHub Actions job named `test-backend-postgres` has been added to the consoli
 
 Additionally, the consolidated CI pipeline builds and publishes a multi-platform Docker image to GitHub Container Registry (GHCR) after tests pass. The published image tags are:
 
-Replace `<owner>/<repo>` with your repository owner/name when pulling the image. If you prefer Docker Hub or another registry, update the workflow and provide credentials via repository secrets.
+- `ghcr.io/lucivskvn/openmemory-OSS:latest`
+- `ghcr.io/lucivskvn/openmemory-OSS:<commit-sha>` (image tagged with the build commit)
+
+Use `podman pull ghcr.io/lucivskvn/openmemory-OSS:latest` to fetch the published image. If you prefer Docker Hub or another registry, update the workflow and provide credentials via repository secrets.
 
 ## Configuration additions
+
+### Logging tuning
+
+To reduce noisy embed-related logs in high-throughput deployments, OpenMemory supports an embed-specific log level environment variable:
+
+- `OM_LOG_EMBED_LEVEL`: controls the verbosity of embed-layer logs. Valid values: `debug`, `info`, `warn`, `error`. If unset, embed logs inherit from `OM_LOG_LEVEL` or `LOG_LEVEL` and default to `info`.
+
+Examples:
+
+```bash
+# quieter embed logs (only warnings/errors)
+export OM_LOG_EMBED_LEVEL=warn
+
+# enable debug-level embed logs for troubleshooting
+export OM_LOG_EMBED_LEVEL=debug
+```
+
+This variable only affects logs produced by the embedding layer (`backend/src/memory/embed.ts`) and is safe to tune independently of the global server log level.
 
 ## Schema Changes Summary
 

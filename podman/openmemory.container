@@ -4,8 +4,9 @@ After=network.target
 
 [Container]
 # Image to use (replace with your registry/image tag). Use the Bun runtime base or your built image.
-# For local builds the recommended base image is oven/bun:1.3.2-alpine or docker.io/yourrepo/openmemory:latest
-Image=ghcr.io/caviraoss/openmemory-backend:latest
+# For local builds the recommended base image is oven/bun:1.3.2-alpine or ghcr.io/lucivskvn/openmemory-OSS:latest
+# Use the unified published image (GHCR) so examples and CI align.
+Image=ghcr.io/lucivskvn/openmemory-OSS:latest
 # Expose port and map to host (use PublishPort for quadlet compatibility)
 PublishPort=8080:8080
 # Restart policy

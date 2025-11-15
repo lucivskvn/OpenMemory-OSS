@@ -20,7 +20,8 @@ test("postgres q parity: placeholders, ordering, null handling", async () => {
 
     await initDb();
 
-    const ready = await waitFor(async () => {
+    try {
+        const ready = await waitFor(async () => {
         try {
             if (!mod.memories_table) return false;
             await (mod.get_async)(`select 1 as v`);
@@ -79,7 +80,12 @@ test("postgres q parity: placeholders, ordering, null handling", async () => {
     // Should return at least one row (we inserted above)
     expect(nullRows.length).toBeGreaterThanOrEqual(1);
 
-    // Cleanup
-    await run(`delete from ${memTable} where primary_sector = $1`, ["pg-q-parity"]);
-    await run(`delete from ${memTable} where id in ($1,$2,$3)`, [testId, idA, idB]);
+        // Cleanup
+        await run(`delete from ${memTable} where primary_sector = $1`, ["pg-q-parity"]);
+        await run(`delete from ${memTable} where id in ($1,$2,$3)`, [testId, idA, idB]);
+    } finally {
+        if (mod && typeof (mod as any).closeDb === 'function') {
+            try { await (mod as any).closeDb(); } catch (e) { /* best-effort */ }
+        }
+    }
 }, { timeout: 120_000 });
