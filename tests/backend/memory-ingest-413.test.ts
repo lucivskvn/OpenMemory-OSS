@@ -46,6 +46,8 @@ test("POST /memory/ingest maps ERR_FILE_TOO_LARGE to 413", async () => {
     expect(j.err).toBe("file_too_large");
 
     await serverInfo.stop();
+    // Restore ingestion seam so other tests are not affected
+    try { (ingestMod as any).setIngestDocumentForTests(null); } catch (e) { }
 });
 
 // Merged from memory-ingest-415.test.ts: test that UnsupportedContentTypeError maps to 415

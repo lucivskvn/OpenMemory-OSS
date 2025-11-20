@@ -83,6 +83,9 @@ services:
       - OM_PG_TABLE=${OM_PG_TABLE:-openmemory_memories}
       - OM_PG_SSL=${OM_PG_SSL:-disable}
 
+      # Universal Postgres connection string (takes precedence over individual OM_PG_* vars)
+      - OM_PG_CONNECTION_STRING=${OM_PG_CONNECTION_STRING:-}
+
       # Vector Backend (SQLite/Weaviate)
       - OM_VECTOR_BACKEND=${OM_VECTOR_BACKEND:-sqlite}
       - OM_VECTOR_TABLE=${OM_VECTOR_TABLE:-openmemory_vectors}
@@ -170,6 +173,23 @@ services:
         limits:
           cpus: "1.0"
           memory: 1G
+    # GPU passthrough examples (uncomment if you run with GPUs)
+    # NVIDIA (requires NVIDIA Container Toolkit / CDI)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: "nvidia"
+    #           device_ids: ["all"]
+    #           capabilities: ["gpu"]
+    # Podman (rootless) example to allow the container to access NVIDIA GPUs:
+    #   --device nvidia.com/gpu=all --security-opt label=disable
+    # AMD (Vulkan) example (node host must have mesa and Vulkan ICDs):
+    #   devices:
+    #     - "/dev/dri:/dev/dri"
+    #     - "/dev/kfd:/dev/kfd"
+    #   volumes:
+    #     - /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro
     # Older `mem_limit`/`cpus` fields are accepted by various compose implementations
     mem_limit: 1G
     cpus: 1
@@ -179,6 +199,10 @@ services:
       - OLLAMA_KEEP_ALIVE=${OM_OLLAMA_KEEP_ALIVE:-5m}
       - OLLAMA_NUM_PARALLEL=${OM_OLLAMA_NUM_PARALLEL:-1}
       - OLLAMA_NUM_GPU=${OM_OLLAMA_NUM_GPU:-0}
+      # GPU Tuning (optional): flash attention & kv cache tuning
+      - OLLAMA_FLASH_ATTENTION=${OLLAMA_FLASH_ATTENTION:-0}
+      - OLLAMA_KV_CACHE_TYPE=${OLLAMA_KV_CACHE_TYPE:-q8_0}
+      # - OLLAMA_VULKAN=1  # Enable Vulkan backend for AMD GPUs
 
   # Optional test runner service (profiles: ["test"]) - use the named profile to enable
   # Use: `docker-compose --profile test up tests` to run the test harness against

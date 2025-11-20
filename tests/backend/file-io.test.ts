@@ -112,6 +112,9 @@ describe('file I/O helpers', () => {
         // Mock DB interactions so this test only validates file I/O and ingestion wiring
         // stub q and transaction to avoid real DB calls by injecting into ingest seam
         const Ingest = await import('../../backend/src/ops/ingest');
+        // Ensure any test seam previously left by other tests is cleared so
+        // this test executes the real ingestion logic.
+        try { (Ingest as any).setIngestDocumentForTests(null); } catch (_) { }
         const fakeQ = { ins_mem: { run: async (..._a: any[]) => ({}) }, ins_waypoint: { run: async (..._a: any[]) => ({}) } };
         const fakeTxn = { begin: async () => { }, commit: async () => { }, rollback: async () => { } };
         (Ingest.ingestDocument as any)._q = fakeQ;

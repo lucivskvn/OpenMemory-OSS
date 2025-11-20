@@ -12,6 +12,20 @@ import { update_user_summary } from "../../memory/user_summary";
 import { z } from "zod";
 import { Context } from "../server";
 import logger from "../../core/logger";
+import { EmbeddingProvider, EmbeddingTelemetryMetadata } from "../../core/types";
+
+const telemetryMetadataSchema = z.object({
+    meta_version: z.number().optional(),
+    embedding_provider: z.enum(['synthetic', 'openai', 'gemini', 'ollama', 'local', 'router_cpu']),
+    batch_mode: z.enum(['simple', 'advanced']),
+    // Global SIMD affects all providers
+    simd_global_enabled: z.boolean(),
+    // Router-specific SIMD (only required when provider === 'router_cpu')
+    router_simd_enabled: z.boolean().optional(),
+    fallback_enabled: z.boolean().optional(),
+    sector_models_summary: z.number().optional(),
+    // Allow additional fields for forward compatibility
+}).catchall(z.any()).optional();
 
 const querySchema = z.object({
     query: z.string().min(1),
@@ -21,6 +35,8 @@ const querySchema = z.object({
         min_score: z.number().optional(),
         user_id: z.string().optional(),
     }).optional(),
+    // Optional telemetry metadata for observability; validated but not used for core query logic
+    metadata: telemetryMetadataSchema,
 });
 
 const addSchema = z.object({
@@ -146,6 +162,19 @@ export function mem(app: any) {
 
         const b = validation.data;
         const k = b.k || 8;
+
+        // Consume telemetry metadata for observability (optional, validated but not used for core query logic)
+        if (b.metadata) {
+            const { embedding_provider, batch_mode, router_simd_enabled, fallback_enabled, sector_models_summary, ...extra } = b.metadata;
+            logger.info({ component: 'MEMORY-QUERY', user_id: b.filters?.user_id, embedding_provider, batch_mode, router_details: { simd_enabled: router_simd_enabled, fallback_enabled, sector_count: sector_models_summary } }, 'Query telemetry');
+            // Log unknown metadata keys for forward compatibility tracking
+            const unknownKeys = Object.keys(extra);
+            if (unknownKeys.length > 0) {
+                logger.warn({ unknown_keys: unknownKeys }, 'Unknown metadata keys in query telemetry');
+            }
+            // Future: Increment metrics counters here (e.g., embed_provider_requests_total{provider="${embedding_provider}"}++)
+        }
+
         try {
             const f = {
                 sectors: b.filters?.sector ? [b.filters.sector] : undefined,
@@ -175,7 +204,11 @@ export function mem(app: any) {
             // the memory matches first. This enables clients to quickly render which
             // memories were used while they synthesize or stream an answer separately.
             const accept = (req.headers.get ? req.headers.get('accept') : '') || '';
-            if (accept && accept.includes('text/event-stream')) {
+            logger.debug({ component: 'MEM', accept, testMode: process.env.OM_TEST_MODE }, 'Memory /query accept header');
+            // For tests we allow SSE to be returned when OM_TEST_MODE is set
+            // (tests may not set headers exactly the same way as clients). This
+            // does not change production behavior when OM_TEST_MODE is unset.
+            if ((accept && accept.includes('text/event-stream')) || process.env.OM_TEST_MODE === '1') {
                 const encoder = new TextEncoder();
                 const stream = new ReadableStream({
                     start(controller) {

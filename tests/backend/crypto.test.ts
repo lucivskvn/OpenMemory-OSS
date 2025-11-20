@@ -51,7 +51,11 @@ describe('hashed key helpers and auth middleware', () => {
             // Inject a plaintext API key into the middleware seam
             authMod.setAuthApiKeyForTests('plain-secret-value');
 
-            const req = new Request('http://localhost/test', { headers: { 'x-api-key': 'plain-secret-value' } });
+            // Use POST method to ensure auth is checked (GET requests bypass auth)
+            const req = new Request('http://localhost/test', {
+                method: 'POST',
+                headers: { 'x-api-key': 'plain-secret-value' }
+            });
 
             const res = await authMod.authenticate_api_request(req as any, {} as any, async () => {
                 return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });

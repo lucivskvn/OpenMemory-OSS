@@ -1,8 +1,8 @@
-import { Database } from "bun:sqlite";
 import { env } from "./cfg";
 import fs from "node:fs";
 import path from "node:path";
 import logger from "./logger";
+import { createSQLiteDatabase, detectSQLiteCapabilities } from "./sqlite-runtime";
 
 /**
  * Typed q helper signatures
@@ -83,7 +83,83 @@ let _initialized_db_path: string | null = null;
 // Track underlying DB clients so tests and callers can cleanly close them.
 let _pgClient: any = null;
 let _pgPool: any = null;
-let _sqliteDb: Database | null = null;
+let _sqliteDb: any = null; // Cross-runtime SQLite instance
+
+/**
+ * Sanitize connection string for logging by masking password without revealing raw credentials.
+ */
+function sanitizeConnectionString(connStr: string): string {
+    try {
+        const url = new URL(connStr);
+        url.password = '***';
+        return url.toString();
+    } catch {
+        // If URL parsing fails, mark as invalid without logging raw string
+        return '(invalid connection string - not parseable as URL)';
+    }
+}
+
+/**
+ * parsePgConnectionString: Parses a libpq-style PostgreSQL connection string (OM_PG_CONNECTION_STRING).
+ * Returns an options object with host, port, database, user, password, ssl, and logger warning if invalid.
+ * Note: malformed URIs (including empty hostnames or unsupported socket-style `host=/path/to/socket` patterns)
+ * cause the function to return an empty options object, and initDb() then falls back to discrete OM_PG_*
+ * environment variables.
+ */
+export function parsePgConnectionString(connStr: string | undefined, logger: any): any {
+    let opts: any = {};
+    if (connStr) {
+        try {
+            // Subset implementation: supports only simple host:port/database URIs; does not support libpq socket or multi-host forms
+            const u = new URL(connStr);
+            // Check for multi-host libpq URIs (unsupported)
+            if (u.hostname.includes(',')) {
+                logger.warn({ component: 'DB', connection_string: sanitizeConnectionString(connStr) }, '[DB] Multi-host libpq URIs are unsupported; comma-separated hostnames are not supported. The connection string is being ignored and discrete OM_PG_* variables will be used instead. Falling back to OM_PG_HOST, OM_PG_PORT, OM_PG_DB, OM_PG_USER, and OM_PG_PASSWORD');
+                return {};
+            }
+            // Check for unexpected query parameters (only sslmode and host are honored)
+            const params = Array.from(u.searchParams.keys());
+            if (params.some(p => p !== 'sslmode' && p !== 'host')) {
+                logger.warn({ component: 'DB', connection_string: sanitizeConnectionString(connStr) }, '[DB] Additional query string parameters are ignored; only sslmode and host are honored, others are not supported');
+            }
+            // Optionally detect socket-style URIs (host=/path/to/socket)
+            const hostParam = u.searchParams.get('host');
+            if (hostParam && hostParam.startsWith('/')) {
+                logger.warn({ component: 'DB', connection_string: sanitizeConnectionString(connStr) }, '[DB] Socket-style URIs are unsupported; host=/path/to/socket patterns are not supported. The connection string is being ignored and discrete OM_PG_* variables will be used instead. Falling back to OM_PG_HOST, OM_PG_PORT, OM_PG_DB, OM_PG_USER, and OM_PG_PASSWORD');
+                return {};
+            }
+            opts.host = u.hostname;
+            opts.port = u.port ? +u.port : undefined;
+            // URL pathname: split on '/', filter empty parts, take last segment for database name
+            opts.database = u.pathname ? u.pathname.split('/').filter(part => part.length > 0).pop() : undefined;
+            if (u.username) opts.user = decodeURIComponent(u.username);
+            if (u.password) opts.password = decodeURIComponent(u.password);
+            // libpq-style sslmode in query string (disable | require | verify-full)
+            const sslmode = u.searchParams.get('sslmode');
+            if (sslmode === 'require') opts.ssl = { rejectUnauthorized: false };
+            else if (sslmode === 'disable') opts.ssl = false;
+            else if (sslmode === 'verify-full') opts.ssl = { rejectUnauthorized: true };
+
+            // Validate URL scheme
+            if (u.protocol !== "postgres:" && u.protocol !== "postgresql:") {
+                logger.warn({ component: 'DB', connection_string: sanitizeConnectionString(connStr) }, '[DB] Invalid protocol in OM_PG_CONNECTION_STRING; only postgres:// or postgresql:// are supported, falling back to individual OM_PG_* env vars');
+                return {};
+            }
+
+            // Sanity check for required fields
+            if (!opts.database) {
+                logger.warn({ component: 'DB', connection_string: sanitizeConnectionString(connStr) }, '[DB] Incomplete connection string in OM_PG_CONNECTION_STRING; missing database, falling back to individual OM_PG_* env vars');
+                return {};
+            }
+        } catch (e) {
+            // If the connection string is malformed, fail silently and fall back
+            // to discrete env vars. Avoid noisy logs in test environments to
+            // keep behavior deterministic for unit tests that validate fallbacks.
+            return {};
+        }
+    }
+    return opts;
+}
 
 /**
  * Helper: warnIfMissingUserId
@@ -198,21 +274,39 @@ async function initDb() {
 
         // (fallback logic moved to use the already-declared opts below)
 
-        const ssl =
-            process.env.OM_PG_SSL === "require"
-                ? { rejectUnauthorized: false }
-                : process.env.OM_PG_SSL === "disable"
-                    ? false
-                    : undefined;
-        const db_name = process.env.OM_PG_DB || "openmemory";
-        const opts: any = {
-            host: process.env.OM_PG_HOST,
-            port: process.env.OM_PG_PORT ? +process.env.OM_PG_PORT : undefined,
-            database: db_name,
-            user: process.env.OM_PG_USER,
-            password: process.env.OM_PG_PASSWORD,
-            ssl,
-        };
+        // Note: Schema and table names are still controlled exclusively via
+        // OM_PG_SCHEMA, OM_PG_TABLE, and OM_VECTOR_TABLE env vars. They are not
+        // inferred from the search_path or any other connection string parameters
+        // to avoid operator confusion. Operators must set these env vars explicitly
+        // for non-default schemas.
+
+        // Support an explicit Postgres connection string in libpq URI format
+        // via OM_PG_CONNECTION_STRING for operator convenience. When set and valid,
+        // it takes precedence over individual OM_PG_* env vars and controls SSL/TLS
+        // behavior via its sslmode parameter. OM_PG_SSL is only consulted when
+        // the connection string is absent or invalid.
+        // The connection string is read dynamically via getConfig() to support
+        // hot-reload semantics in tests that modify process.env after module import.
+        let opts: any = parsePgConnectionString((await import("./cfg")).getConfig().pg_connection_string, logger);
+
+        // If no connection string parts were parsed, fall back to discrete env vars
+        if (!opts.host) {
+            const ssl =
+                process.env.OM_PG_SSL === "require"
+                    ? { rejectUnauthorized: false }
+                    : process.env.OM_PG_SSL === "disable"
+                        ? false
+                        : undefined;
+            const db_name = process.env.OM_PG_DB || "openmemory";
+            opts = {
+                host: process.env.OM_PG_HOST,
+                port: process.env.OM_PG_PORT ? +process.env.OM_PG_PORT : undefined,
+                database: db_name,
+                user: process.env.OM_PG_USER,
+                password: process.env.OM_PG_PASSWORD,
+                ssl,
+            };
+        }
 
         // Construct a Postgres client. Prefer Bun's Postgres client when
         // available; otherwise fall back to the Node 'pg' driver. The
@@ -866,10 +960,20 @@ async function initDb() {
             },
             ins_stream_telemetry: {
                 run: (id: string, user_id: string | null, embedding_mode: string | null, duration_ms: number, memory_ids: string, query: string, ts: number) =>
-                    run_async(
-                        `insert into "${sc}"."openmemory_stream_telemetry"(id,user_id,embedding_mode,duration_ms,memory_ids,query,ts) values($1,$2,$3,$4,$5,$6,$7) on conflict(id) do update set user_id=excluded.user_id,embedding_mode=excluded.embedding_mode,duration_ms=excluded.duration_ms,memory_ids=excluded.memory_ids,query=excluded.query,ts=excluded.ts`,
-                        [id, user_id, embedding_mode, duration_ms, memory_ids, query, ts],
-                    ),
+                    // Enforce tenant scoping on telemetry insert when OM_STRICT_TENANT is enabled
+                    // to avoid unscoped telemetry being written in strict tenant modes.
+                    (() => {
+                        const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
+                        if (strict && (user_id === null || user_id === undefined || user_id === '')) {
+                            const msg = `Tenant-scoped write (ins_stream_telemetry) requires user_id when OM_STRICT_TENANT=true`;
+                            logger.error({ component: 'DB' }, `[DB] ${msg}`);
+                            throw new Error(msg);
+                        }
+                        return run_async(
+                            `insert into "${sc}"."openmemory_stream_telemetry"(id,user_id,embedding_mode,duration_ms,memory_ids,query,ts) values($1,$2,$3,$4,$5,$6,$7) on conflict(id) do update set user_id=excluded.user_id,embedding_mode=excluded.embedding_mode,duration_ms=excluded.duration_ms,memory_ids=excluded.memory_ids,query=excluded.query,ts=excluded.ts`,
+                            [id, user_id, embedding_mode, duration_ms, memory_ids, query, ts],
+                        );
+                    })(),
             },
             upd_log: {
                 // Match call-site signature used elsewhere: upd_log.run(status, err, id)
@@ -931,16 +1035,17 @@ async function initDb() {
             },
         };
     } else {
+        // Get runtime capabilities and log the choice
+        const capabilities = detectSQLiteCapabilities();
+        logger.info({ component: "DB", runtime: capabilities.runtime, recommended: capabilities.recommended },
+            `[DB] Using ${capabilities.recommended} SQLite implementation`);
+
         const db_path = process.env.OM_DB_PATH || env.db_path || "./data/openmemory.sqlite";
         const dir = path.dirname(db_path);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-        // Instantiate SQLite in strict mode to fail early on invalid SQL and
-        // help ensure a deterministic runtime for tests and migrations.
-        // The `strict` option causes Bun's sqlite to throw for mistakes that
-        // would otherwise be ignored, which aids debugging and CI validation.
-        const db = new Database(db_path, { strict: true });
-        // retain reference for cleanup
+        // Use cross-runtime SQLite database
+        const db = await createSQLiteDatabase(db_path);
         _sqliteDb = db;
 
         // Tune pragmas for reliability in multi-process test environments.
@@ -1194,10 +1299,24 @@ async function initDb() {
             },
             upd_mean_vec: {
                 run: (...p) => {
-                    // Preserve backward-compatible ordering: (mean_dim, mean_vec, id [, user_id])
-                    let mean_dim: any, mean_vec: any, id: any, user_id: any;
-                    if (p.length === 4) [mean_dim, mean_vec, id, user_id] = p as any[];
-                    else[mean_dim, mean_vec, id] = p as any[];
+                    // Preserve backward-compatible ordering and support the
+                    // canonical `id-first` signature used in TypeScript. Accept
+                    // either (mean_dim, mean_vec, id [, user_id]) or
+                    // (id, mean_dim, mean_vec [, user_id]). Detect by arg
+                    // types: if the first arg is a string or UUID-like, treat
+                    // the first param as `id`.
+                    let id: any, mean_dim: any, mean_vec: any, user_id: any;
+                    if (p.length === 4) {
+                        // Heuristic: if first param is a string, assume id-first
+                        if (typeof p[0] === 'string') [id, mean_dim, mean_vec, user_id] = p as any[];
+                        else[mean_dim, mean_vec, id, user_id] = p as any[];
+                    } else if (p.length === 3) {
+                        if (typeof p[0] === 'string') [id, mean_dim, mean_vec] = p as any[];
+                        else[mean_dim, mean_vec, id] = p as any[];
+                    } else if (p.length === 2) {
+                        // support some legacy calls that only pass mean_dim/mean_vec
+                        [mean_dim, mean_vec] = p as any[];
+                    }
                     const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
                     if (strict && (user_id === null || user_id === undefined || user_id === "")) {
                         const msg = `Tenant-scoped write (upd_mean_vec) requires user_id when OM_STRICT_TENANT=true`;
@@ -1209,10 +1328,17 @@ async function initDb() {
             },
             upd_compressed_vec: {
                 run: (...p) => {
-                    // (compressed_vec, id [, user_id])
-                    let compressed_vec: any, id: any, user_id: any;
-                    if (p.length === 3) [compressed_vec, id, user_id] = p as any[];
-                    else[compressed_vec, id] = p as any[];
+                    // Support both (id, compressed_vec [, user_id]) and the
+                    // legacy SQLite callshape (compressed_vec, id [, user_id]).
+                    let id: any, compressed_vec: any, user_id: any;
+                    if (p.length === 3) {
+                        // If first arg is a string we assume id-first ordering.
+                        if (typeof p[0] === 'string') [id, compressed_vec, user_id] = p as any[];
+                        else[compressed_vec, id, user_id] = p as any[];
+                    } else if (p.length === 2) {
+                        if (typeof p[0] === 'string') [id, compressed_vec] = p as any[];
+                        else[compressed_vec, id] = p as any[];
+                    }
                     const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
                     if (strict && (user_id === null || user_id === undefined || user_id === "")) {
                         const msg = `Tenant-scoped write (upd_compressed_vec) requires user_id when OM_STRICT_TENANT=true`;
@@ -1239,11 +1365,16 @@ async function initDb() {
             },
             upd_seen: {
                 run: (...p) => {
-                    // Preserve backward-compatible ordering:
-                    // (last_seen_at, salience, updated_at, id [, user_id])
-                    let last_seen_at: any, salience: any, updated_at: any, id: any, user_id: any;
-                    if (p.length === 5) [last_seen_at, salience, updated_at, id, user_id] = p as any[];
-                    else[last_seen_at, salience, updated_at, id] = p as any[];
+                    // Accept both canonical `id-first` and legacy `lastSeen-first`
+                    // forms. Heuristic: if first param is a string assume id-first.
+                    let id: any, last_seen_at: any, salience: any, updated_at: any, user_id: any;
+                    if (p.length === 5) {
+                        if (typeof p[0] === 'string') [id, last_seen_at, salience, updated_at, user_id] = p as any[];
+                        else[last_seen_at, salience, updated_at, id, user_id] = p as any[];
+                    } else if (p.length === 4) {
+                        if (typeof p[0] === 'string') [id, last_seen_at, salience, updated_at] = p as any[];
+                        else[last_seen_at, salience, updated_at, id] = p as any[];
+                    }
                     const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
                     if (strict && (user_id === null || user_id === undefined || user_id === "")) {
                         const msg = `Tenant-scoped write (upd_seen) requires user_id when OM_STRICT_TENANT=true`;
@@ -1633,7 +1764,17 @@ async function initDb() {
             },
             ins_stream_telemetry: {
                 run: (id: string, user_id: string | null, embedding_mode: string | null, duration_ms: number, memory_ids: string, query: string, ts: number) =>
-                    exec("insert or replace into stream_telemetry(id,user_id,embedding_mode,duration_ms,memory_ids,query,ts) values(?,?,?,?,?,?,?)", [id, user_id, embedding_mode, duration_ms, memory_ids, query, ts]),
+                    // Enforce tenant scoping on telemetry insert when OM_STRICT_TENANT is enabled
+                    // to avoid unscoped telemetry being written in strict tenant modes.
+                    (() => {
+                        const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
+                        if (strict && (user_id === null || user_id === undefined || user_id === '')) {
+                            const msg = `Tenant-scoped write (ins_stream_telemetry) requires user_id when OM_STRICT_TENANT=true`;
+                            logger.error({ component: 'DB' }, `[DB] ${msg}`);
+                            throw new Error(msg);
+                        }
+                        return exec("insert or replace into stream_telemetry(id,user_id,embedding_mode,duration_ms,memory_ids,query,ts) values(?,?,?,?,?,?,?)", [id, user_id, embedding_mode, duration_ms, memory_ids, query, ts]);
+                    })(),
             },
             ins_user: {
                 run: (...p) =>

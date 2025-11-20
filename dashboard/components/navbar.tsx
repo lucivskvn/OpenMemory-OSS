@@ -7,12 +7,6 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080"
 export default function Navbar() {
     const [backendStatus, setBackendStatus] = useState<'online' | 'offline' | 'checking'>('checking')
 
-    useEffect(() => {
-        checkBackendStatus()
-        const interval = setInterval(checkBackendStatus, 5000)
-        return () => clearInterval(interval)
-    }, [])
-
     const checkBackendStatus = async () => {
         try {
             const controller = new AbortController()
@@ -33,6 +27,19 @@ export default function Navbar() {
             setBackendStatus('offline')
         }
     }
+
+    useEffect(() => {
+        // Defer initial check to avoid calling setState synchronously during effect execution
+        const initialTimeout = setTimeout(() => {
+            void checkBackendStatus()
+        }, 0)
+
+        const interval = setInterval(checkBackendStatus, 5000)
+        return () => {
+            clearTimeout(initialTimeout)
+            clearInterval(interval)
+        }
+    }, [])
 
     return (
         <nav className="fixed top-0 w-full p-2 pl-20 z-40">

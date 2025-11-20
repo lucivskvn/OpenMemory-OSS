@@ -3,6 +3,28 @@ import { initDb, run_async, all_async } from "./core/db";
 import { env } from "./core/cfg";
 import logger from "./core/logger";
 
+// Test seam: allow deterministic capture of migration logs in tests.
+export const __TEST: {
+    logHook?: ((level: string, meta: any, msg: string, ...args: any[]) => void) | null;
+    reset?: () => void;
+} = {
+    logHook: null,
+    reset() {
+        this.logHook = null;
+    },
+};
+
+function migrateLog(level: 'debug' | 'info' | 'warn' | 'error', meta: any, msg: string, ...args: any[]) {
+    try {
+        const hook = (__TEST as any)?.logHook;
+        if (typeof hook === 'function') {
+            try { hook(level, meta, msg, ...args); } catch (_e) { }
+        }
+    } catch (_e) { }
+    const fn = (logger as any)[level] || logger.info;
+    fn.call(logger, meta, msg, ...args);
+}
+
 const SCHEMA_DEFINITIONS = {
     memories: `create table if not exists memories(id text primary key,user_id text,segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,meta text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0)`,
     vectors: `create table if not exists vectors(id text not null,sector text not null,user_id text,v blob not null,dim integer not null,primary key(id,sector,user_id))`,
@@ -52,7 +74,7 @@ async function get_existing_indexes(): Promise<Set<string>> {
 }
 
 export async function run_migrations() {
-    logger.info({ component: "MIGRATE" }, "[MIGRATE] Starting automatic migration...");
+    if (env.log_migrate) logger.info({ component: "MIGRATE" }, "[MIGRATE] Starting automatic migration...");
 
     // If the metadata backend is Postgres, avoid running SQLite-specific
     // migrations here. Postgres DDL differs from the SQLite schema above
@@ -61,7 +83,7 @@ export async function run_migrations() {
     // provide a Postgres migration implementation. Skipping avoids
     // accidental attempts to query sqlite_master on Postgres.
     if (env.metadata_backend === "postgres") {
-        logger.info({ component: "MIGRATE" }, "[MIGRATE] OM_METADATA_BACKEND=postgres detected, skipping SQLite-style migrations. Ensure Postgres migrations are applied separately.");
+        if (env.log_migrate) logger.info({ component: "MIGRATE" }, "[MIGRATE] OM_METADATA_BACKEND=postgres detected, skipping SQLite-style migrations. Ensure Postgres migrations are applied separately.");
         return;
     }
 
@@ -73,7 +95,7 @@ export async function run_migrations() {
             await initDb();
         }
     } catch (e) {
-        logger.error({ component: "MIGRATE", err: e }, "[MIGRATE] Failed to initialize DB helpers: %o", e);
+        logger.error({ component: "MIGRATE", error_code: 'migrate_init_failed', err: e }, "[MIGRATE] Failed to initialize DB helpers: %o", e);
         throw e;
     }
 
@@ -85,7 +107,7 @@ export async function run_migrations() {
 
     for (const [table_name, schema] of Object.entries(SCHEMA_DEFINITIONS)) {
         if (!existing_tables.has(table_name)) {
-            logger.info({ component: "MIGRATE", table: table_name }, `[MIGRATE] Creating table: ${table_name}`);
+            if (env.log_migrate) logger.info({ component: "MIGRATE", table: table_name }, `[MIGRATE] Creating table: ${table_name}`);
             const statements = schema.split(";").filter((s) => s.trim());
             for (const stmt of statements) {
                 if (stmt.trim()) {
@@ -100,17 +122,17 @@ export async function run_migrations() {
         const match = index_sql.match(/create index if not exists (\w+)/);
         const index_name = match ? match[1] : null;
         if (index_name && !existing_indexes.has(index_name)) {
-            logger.info({ component: "MIGRATE", index: index_name }, `[MIGRATE] Creating index: ${index_name}`);
+            if (env.log_migrate) logger.info({ component: "MIGRATE", index: index_name }, `[MIGRATE] Creating index: ${index_name}`);
             await run_async(index_sql);
             created_indexes++;
         }
     }
 
-    logger.info({ component: "MIGRATE", created_tables, created_indexes }, `[MIGRATE] Migration complete: ${created_tables} tables, ${created_indexes} indexes created`);
+    if (env.log_migrate) logger.info({ component: "MIGRATE", created_tables, created_indexes }, `[MIGRATE] Migration complete: ${created_tables} tables, ${created_indexes} indexes created`);
 
     const final_tables = await get_existing_tables();
-    logger.info({ component: "MIGRATE", total_tables: final_tables.size }, `[MIGRATE] Total tables: ${final_tables.size}`);
-    logger.info({ component: "MIGRATE", tables: Array.from(final_tables) }, `[MIGRATE] Tables: ${Array.from(final_tables).join(", ")}`);
+    if (env.log_migrate) logger.info({ component: "MIGRATE", total_tables: final_tables.size }, `[MIGRATE] Total tables: ${final_tables.size}`);
+    if (env.log_migrate) logger.info({ component: "MIGRATE", tables: Array.from(final_tables) }, `[MIGRATE] Tables: ${Array.from(final_tables).join(", ")}`);
 
     // Post-migration verification: ensure multi-tenant columns and indexes exist
     try {
@@ -131,9 +153,9 @@ export async function run_migrations() {
             }
         }
 
-        logger.info({ component: "MIGRATE" }, "[MIGRATE] verification ok");
+        if (env.log_migrate) logger.info({ component: "MIGRATE" }, "[MIGRATE] verification ok");
     } catch (e) {
-        logger.error({ component: "MIGRATE", err: e }, "[MIGRATE] verification failed: %o", e);
+        logger.error({ component: "MIGRATE", error_code: 'migrate_verification_failed', err: e }, "[MIGRATE] verification failed: %o", e);
         throw e;
     }
 }

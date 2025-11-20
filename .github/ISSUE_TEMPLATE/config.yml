@@ -4,7 +4,7 @@ contact_links:
     url: "https://github.com/lucivskvn/openmemory-OSS/discussions"
     about: "Ask questions and discuss ideas with the community"
   - name: "📖 Documentation"
-    url: "https://github.com/openmemory/openmemory/wiki"
+    url: "https://github.com/lucivskvn/openmemory-OSS/wiki"
     about: "Check out the project documentation"
   - name: "🔒 Security Issue"
     url: "https://github.com/lucivskvn/openmemory-OSS/security/advisories/new"

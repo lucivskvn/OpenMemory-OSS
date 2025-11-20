@@ -10,6 +10,9 @@ import logger from "./logger";
 const is_pg = env.metadata_backend === "postgres";
 
 const log = (msg: string) => logger.info({ component: "MIGRATE" }, "[MIGRATE] %s", msg);
+const log = (msg: string) => {
+    if (env.log_migrate) logger.info({ component: "MIGRATE" }, "[MIGRATE] %s", msg);
+};
 
 interface Migration {
     version: string;
@@ -135,7 +138,7 @@ async function run_sqlite_migration(db: any, m: Migration): Promise<void> {
         await new Promise<void>((ok, no) => {
             db.run(sql, (err: any) => {
                 if (err && !err.message.includes("duplicate column")) {
-                    logger.error({ component: "MIGRATE", err }, "[MIGRATE] SQL error: %o", err);
+                    logger.error({ component: "MIGRATE", error_code: 'migrate_sql_error', err }, "[MIGRATE] SQL error: %o", err);
                     return no(err);
                 }
                 ok();
@@ -230,7 +233,7 @@ async function run_pg_migration(m: Migration): Promise<void> {
                 !e.message.includes("already exists") &&
                 !e.message.includes("duplicate")
             ) {
-                logger.error({ component: "MIGRATE", err: e }, "[MIGRATE] PG error: %o", e);
+                logger.error({ component: "MIGRATE", error_code: 'migrate_pg_error', err: e }, "[MIGRATE] PG error: %o", e);
                 throw e;
             }
         }
@@ -270,7 +273,7 @@ export async function run_migrations() {
             // eslint-disable-next-line @typescript-eslint/no-var-requires
             sqlite3 = await import("sqlite3");
         } catch (e) {
-            logger.error({ component: "MIGRATE", err: e }, "[MIGRATE] sqlite3 module not available. This legacy migration helper requires the 'sqlite3' package. Prefer running `bun src/migrate.ts` from the backend directory which uses Bun-friendly migrations, or install sqlite3 in this environment.");
+            logger.error({ component: "MIGRATE", error_code: 'migrate_sqlite3_missing', err: e }, "[MIGRATE] sqlite3 module not available. This legacy migration helper requires the 'sqlite3' package. Prefer running `bun src/migrate.ts` from the backend directory which uses Bun-friendly migrations, or install sqlite3 in this environment.");
             throw new Error("sqlite3 module not available. Use backend/src/migrate.ts or install sqlite3 to run this helper.");
         }
 

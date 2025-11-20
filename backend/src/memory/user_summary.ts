@@ -87,6 +87,33 @@ export const gen_user_summary_async = async (
     return gen_user_summary(mems);
 };
 
+// Test hook to capture user summary logs deterministically in tests that use
+// logger spy helpers which may not always succeed in CI and other environments.
+export const __TEST: {
+    logHook?: ((level: string, meta: any, msg: string, ...args: any[]) => void) | null;
+    reset?: () => void;
+} = {
+    logHook: null,
+    reset() {
+        this.logHook = null;
+    },
+};
+
+function userSummaryLog(level: 'debug' | 'info' | 'warn' | 'error', meta: any, msg: string, ...args: any[]) {
+    try {
+        try {
+            const hook = (__TEST as any)?.logHook;
+            if (typeof hook === 'function') {
+                try { hook(level, meta, msg, ...args); } catch (_) { }
+            }
+        } catch (_) { }
+        const fn = (logger as any)[level] || logger.info;
+        fn.call(logger, meta, msg, ...args);
+    } catch (e) {
+        try { console.error('[USER_SUMMARY] logging failure', e); } catch (_err) { }
+    }
+}
+
 export const update_user_summary = async (user_id: string): Promise<void> => {
     const summary = await gen_user_summary_async(user_id);
     const now = Date.now();
@@ -111,7 +138,7 @@ export const auto_update_user_summaries = async (): Promise<{
             await update_user_summary(uid as string);
             updated++;
         } catch (e) {
-            logger.error({ component: "USER_SUMMARY", uid, err: e }, `[USER_SUMMARY] Failed for ${uid}: %o`, e);
+            userSummaryLog('error', { component: "USER_SUMMARY", uid, err: e }, `[USER_SUMMARY] Failed for ${uid}: %o`, e);
         }
     }
 
@@ -126,7 +153,7 @@ export const start_user_summary_reflection = () => {
     timer = setInterval(
         () =>
             auto_update_user_summaries().catch((e) =>
-                logger.error({ component: "USER_SUMMARY", err: e }, "[USER_SUMMARY] %o", e),
+                userSummaryLog('error', { component: "USER_SUMMARY", err: e }, "[USER_SUMMARY] %o", e),
             ),
         int,
     );

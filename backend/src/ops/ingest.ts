@@ -4,6 +4,7 @@ import { rid, now, j } from "../utils";
 import { extractText, ExtractionResult } from "./extract";
 import logger from "../core/logger";
 import { getNormalizedFileSize, logFileProcessing } from "../utils/file";
+import { addTemporalTag, extractTemporalMetadata } from "../temporal/temporal";
 
 const LG = 8000,
     SEC = 3000;
@@ -215,7 +216,13 @@ export async function ingestDocument(
 }
 
 // Test seam to set a mock implementation for ingestDocument.
-export function setIngestDocumentForTests(mock: (t: string, data: string | Buffer, meta?: Record<string, unknown>, cfg?: ingestion_cfg, user_id?: string | null) => Promise<IngestionResult>) {
+export function setIngestDocumentForTests(mock?: ((t: string, data: string | Buffer, meta?: Record<string, unknown>, cfg?: ingestion_cfg, user_id?: string | null) => Promise<IngestionResult>) | null) {
+    // Accept `null`/`undefined` to clear the seam so tests don't leak
+    // their mocked behavior to other tests that reuse the module.
+    if (mock === undefined || mock === null) {
+        delete (ingestDocument as any)._mock;
+        return;
+    }
     (ingestDocument as any)._mock = mock;
 }
 
@@ -394,6 +401,29 @@ export async function ingestDocumentFromFile(
         // Keep existing mismatch warning when both are present and differ
         const result = await ingestDocument(effectiveType, buffer, meta, cfg, user_id);
         logger.info({ component: 'INGEST', file: filePath, duration: Date.now() - start }, 'Completed ingestion');
+
+        // Temporal tagging integration: currently an in-memory/logging stub.
+        // Persistence will be wired in a later phase where temporal metadata
+        // is stored in the database alongside memory objects.
+        // Integrate temporal tagging for multi-modal content
+        const isMultiModal = effectiveType.startsWith("image/") || effectiveType.startsWith("audio/") || effectiveType.startsWith("video/");
+        if (isMultiModal) {
+            const temporalMetadata = extractTemporalMetadata(effectiveType, buffer.buffer);
+            if (temporalMetadata) {
+                // Find the main memory object to tag (assuming single strategy for multi-modal)
+                // In a full implementation, this would need to handle root-child strategy as well
+                if (result.strategy === "single") {
+                    const memoryObject = {
+                        id: result.root_memory_id,
+                        metadata: { ...result.extraction }
+                    };
+                    // Add temporal tag (this is a simplified integration - full implementation would persist)
+                    addTemporalTag(memoryObject, temporalMetadata);
+                    logger.info({ component: 'INGEST', temporalType: temporalMetadata.type }, 'Temporal tag attached to multi-modal content');
+                }
+            }
+        }
+
         return result;
     } catch (e) {
         logger.error({ component: 'INGEST', file: filePath, err: e }, 'File ingestion failed');

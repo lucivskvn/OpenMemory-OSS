@@ -58,6 +58,29 @@ return new Response(stream, { headers: { 'Content-Type': 'text/event-stream' } }
 - Store the hashed `OM_API_KEY` in your deployment environment or GitHub repository secrets.
 - The repository includes a PR-time workflow that validates `OM_API_KEY` looks hashed; the workflow is intentionally skipped when the secret is not present (so forks and external PRs aren't blocked).
 
+### Test seams and runtime flags
+
+- `OM_TEST_MODE` — when set to `1` in tests we turn on test-mode behaviors used by unit tests to make SSE and streaming deterministic, to allow deterministic embed provider behavior (e.g. forcing synthetic embeddings) and to enable test-only seams. Do not set this in production.
+
+- `OM_LOG_MIGRATE` — set to `true` to log detailed automatic migration steps during server startup. Default is `false` in CI to reduce noise. This gate also allows receiving structured `error_code` values from migration errors for easier machine-scanning.
+
+- `setAdminApiKeyForTests()` — a code-level test seam (exported from `backend/src/core/cfg.ts`) that tests call to set a hashed `OM_ADMIN_API_KEY` dynamically for the running test server. Use this instead of restarting the server to populate an admin key for telemetry or admin-only endpoints during test runs.
+
+- `__TEST_ollama` — an injectable seam on the embed provider used by unit tests to simulate an Ollama server's health, installed model tags, and management actions. This seam overrides the network path for `/embed/ollama/*` endpoints so tests don't rely on an external Ollama instance. To use it, import or reference the embed module in your test and set `embedMod.__TEST_ollama = { health: {...}, tags: [...] }`.
+
+Example usage in tests (jest/bun-style):
+
+```ts
+import * as embedMod from '../../backend/src/memory/embed';
+
+embedMod.__TEST_ollama = { health: { available: true, version: 'v-test' }, tags: ['embed-small', 'embed-large'] };
+process.env.OM_TEST_MODE = '1';
+
+// Optionally set hashed admin key via runtime seam
+import { setAdminApiKeyForTests } from '../../backend/src/core/cfg';
+await setAdminApiKeyForTests(await hashFn('my-admin-secret'));
+```
+
 ## Migration steps
 
 1. Generate a hashed key with the helper script above.

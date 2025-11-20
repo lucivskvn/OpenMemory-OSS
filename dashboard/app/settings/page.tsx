@@ -421,15 +421,11 @@ const SETTING_METADATA: Record<string, SettingInfo> = {
     }
 }
 
-export default function settings() {
+export default function Settings() {
     const [settings, setSettings] = useState<Record<string, string>>({})
     const [loading, setLoading] = useState(true)
     const [saving, setSaving] = useState(false)
     const [message, setMessage] = useState("")
-
-    useEffect(() => {
-        loadSettings()
-    }, [])
 
     const loadSettings = async () => {
         try {
@@ -453,7 +449,7 @@ export default function settings() {
         setSettings(prev => ({ ...prev, [key]: value }))
     }
 
-    const handlesave = async () => {
+    const handleSave = async () => {
         setSaving(true)
         setMessage("")
 
@@ -481,6 +477,10 @@ export default function settings() {
             setSaving(false)
         }
     }
+
+    useEffect(() => {
+        loadSettings()
+    }, [])
 
     if (loading) {
         return (
@@ -588,7 +588,7 @@ export default function settings() {
 
                 <div className="flex gap-3">
                     <button
-                        onClick={handlesave}
+                        onClick={handleSave}
                         disabled={saving}
                         className="flex-1 rounded-full p-3 pl-4 bg-blue-600 hover:bg-blue-700 border border-blue-700 transition-colors flex items-center justify-center gap-2 text-white font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                     >

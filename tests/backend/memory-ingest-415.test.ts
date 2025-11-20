@@ -44,4 +44,6 @@ test("POST /memory/ingest maps UnsupportedContentTypeError to 415", async () => 
     expect(j.err).toBe("unsupported_media_type");
 
     await serverInfo.stop();
+    // Restore ingestion seam so other tests are not affected
+    try { (ingestMod as any).setIngestDocumentForTests(null); } catch (e) { }
 });

@@ -359,6 +359,31 @@ import {
     log_maint_op,
 } from "../core/db";
 import logger from "../core/logger";
+// Test seam: allow deterministic capture of HSG logs.
+export const __TEST: {
+    logHook?: ((level: string, meta: any, msg: string, ...args: any[]) => void) | null;
+    reset?: () => void;
+} = {
+    logHook: null,
+    reset() {
+        this.logHook = null;
+    },
+};
+
+function hsgLog(level: 'debug' | 'info' | 'warn' | 'error', meta: any, msg: string, ...args: any[]) {
+    try {
+        try {
+            const hook = (__TEST as any)?.logHook;
+            if (typeof hook === 'function') {
+                try { hook(level, meta, msg, ...args); } catch (_) { }
+            }
+        } catch (_) { }
+        const fn = (logger as any)[level] || logger.info;
+        fn.call(logger, meta, msg, ...args);
+    } catch (e) {
+        try { console.error('[HSG] logging failure', e); } catch (_err) { }
+    }
+}
 export async function create_cross_sector_waypoints(
     prim_id: string,
     prim_sec: string,
@@ -663,7 +688,7 @@ setInterval(async () => {
             );
             await q.ins_waypoint.run(a, b, memA.user_id || null, new_wt, wp?.created_at || now, now);
         } catch (e) {
-            logger.error({ component: "HSG", err: e }, "[HSG] coact update failed");
+            hsgLog('error', { component: "HSG", err: e }, "[HSG] coact update failed");
         }
     }
 }, 1000);
@@ -962,7 +987,7 @@ export async function add_hsg_memory(
         const seg_cnt = seg_cnt_res?.c ?? 0;
         if (seg_cnt >= env.seg_size) {
             cur_seg++;
-            logger.info({ component: "HSG" }, `[HSG] Rotated to segment ${cur_seg} (previous segment full: ${seg_cnt} memories)`);
+            hsgLog('info', { component: "HSG" }, `[HSG] Rotated to segment ${cur_seg} (previous segment full: ${seg_cnt} memories)`);
         }
         const stored_content = extract_essence(
             content,
@@ -1019,7 +1044,9 @@ export async function add_hsg_memory(
         if (tier === "smart" && mean_vec.length > 128) {
             const comp = compress_vec_for_storage(mean_vec, 128);
             const comp_buf = vectorToBuffer(comp);
-            await q.upd_compressed_vec.run(comp_buf, id);
+            // `q.upd_compressed_vec.run` prefers (id, compressed_vec) in
+            // TypeScript signatures; ensure we use that canonical ordering.
+            await q.upd_compressed_vec.run(id, comp_buf);
         }
 
         await create_single_waypoint(id, mean_vec, now, user_id);
@@ -1042,7 +1069,10 @@ export async function reinforce_memory(
     const mem = await q.get_mem.get(id, null);
     if (!mem) throw new Error(`Memory ${id} not found`);
     const new_sal = Math.min(reinforcement.max_salience, mem.salience + boost);
-    await q.upd_seen.run(Date.now(), new_sal, Date.now(), id);
+    // canonical (id, last_seen_at, salience, updated_at) ordering -- aligns
+    // with TS types and our Postgres helpers while the SQLite wrapper
+    // accepts either ordering for backwards compatibility.
+    await q.upd_seen.run(id, Date.now(), new_sal, Date.now());
     if (new_sal > 0.8) await log_maint_op("consolidate", 1);
 }
 export async function update_memory(

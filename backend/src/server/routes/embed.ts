@@ -1,6 +1,6 @@
 import { env } from '../../core/cfg';
 import logger from '../../core/logger';
-import { getEmbeddingInfo, getOllamaHealth, updateRuntimeConfig } from '../../memory/embed';
+import { getEmbeddingInfo, getOllamaHealth, updateRuntimeConfig, __TEST_ollama } from '../../memory/embed';
 
 /**
  * In-memory cache for Ollama management endpoints only.
@@ -136,11 +136,32 @@ export function embed(app: any): void {
             let startTs = Date.now();
 
             try {
+                // Test seam: if an Ollama tag list has been injected for tests,
+                // use that instead of calling the external service. This allows
+                // tests to run without a live Ollama instance.
+                if ((__TEST_ollama as any).tags !== undefined) {
+                    const tags = typeof (__TEST_ollama as any).tags === 'function' ? await (__TEST_ollama as any).tags() : (__TEST_ollama as any).tags;
+                    const models = tags.models || tags;
+                    const result = {
+                        models: models.map((m: any) => ({ name: m.name || m, size: m.size || 0, modified_at: m.modified_at || null })),
+                        count: models.length,
+                        ollama_url: baseUrl,
+                        context: { generated_at: new Date().toISOString(), ollama_url: baseUrl }
+                    };
+                    setCache('ollama_list', result, 30000);
+                    return new Response(JSON.stringify({ ...result, cached: false }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+                }
                 modelName = tag && tag !== 'latest' ? `${model}:${tag}` : model;
 
                 logger.info({ component: 'EMBED', modelName, mcp_task_id }, 'Pulling Ollama model...');
 
                 // Long model downloads can legitimately take up to a minute or more
+                // Test seam for pull: allow tests to override the pull behavior
+                if ((__TEST_ollama as any).pull) {
+                    const simulated = typeof (__TEST_ollama as any).pull === 'function' ? await (__TEST_ollama as any).pull(modelName) : (__TEST_ollama as any).pull;
+                    return new Response(JSON.stringify(simulated), { status: 200, headers: { 'Content-Type': 'application/json' } });
+                }
+
                 let response;
                 response = await retryFetch(
                     `${baseUrl}/api/pull`,
@@ -219,6 +240,25 @@ export function embed(app: any): void {
      */
     app.get('/embed/ollama/list', async () => {
         try {
+            // Test seam: if tests injected tags, return them directly and
+            // bypass external network call. This prevents flakiness when
+            // Ollama isn't available in CI.
+            if ((__TEST_ollama as any).tags !== undefined) {
+                const tags = typeof (__TEST_ollama as any).tags === 'function' ? await (__TEST_ollama as any).tags() : (__TEST_ollama as any).tags;
+                const models = tags.models || tags;
+                const result = {
+                    models: models.map((m: any) => ({ name: m.name || m, size: m.size || 0, modified_at: m.modified_at || null })),
+                    count: models.length,
+                    ollama_url: baseUrl,
+                    context: { generated_at: new Date().toISOString(), ollama_url: baseUrl }
+                };
+                // Invalidate cache and serve fresh data
+                cache.delete('ollama_list');
+                setCache('ollama_list', result, 30000);
+                logger.info({ component: 'EMBED', count: models.length }, 'Retrieved Ollama model list (test seam)');
+                return new Response(JSON.stringify({ ...result, cached: false }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            }
+
             // Check cache first (30s TTL)
             const cached = getCache('ollama_list');
             if (cached) {
@@ -357,6 +397,16 @@ export function embed(app: any): void {
             }
 
             try {
+                // Support a test seam for delete as well to avoid relying on
+                // a running Ollama instance in unit tests.
+                if ((__TEST_ollama as any).delete) {
+                    const out = typeof (__TEST_ollama as any).delete === 'function' ? await (__TEST_ollama as any).delete(model) : (__TEST_ollama as any).delete;
+                    // Invalidate cache so list returns fresh results
+                    cache.delete('ollama_list');
+                    cache.delete('ollama_status');
+                    return new Response(JSON.stringify(out), { status: 200, headers: { 'Content-Type': 'application/json' } });
+                }
+
                 const response = await retryFetch(
                     `${baseUrl}/api/delete`,
                     {
@@ -568,19 +618,28 @@ export function embed(app: any): void {
             const embeddingInfo = await getEmbeddingInfo();
 
             let result: any = {
-                kind: embeddingInfo.kind,
+                kind: embeddingInfo.kind,  // Canonical provider field (treat 'provider' as deprecated alias)
+                provider: embeddingInfo.provider,  // Explicit provider field
                 dimensions: embeddingInfo.dimensions,
                 mode: embeddingInfo.mode,
+                // Explicit batching field: always present regardless of provider, matches OM_EMBED_MODE
+                batch_mode: embeddingInfo.mode,
                 batch_support: embeddingInfo.batch_support,
                 advanced_parallel: embeddingInfo.advanced_parallel,
                 embed_delay_ms: embeddingInfo.embed_delay_ms,
+                // Distinct SIMD fields: global affects all providers, router affects router_cpu only
+                // Runtime-aware flags from getEmbeddingInfo() (reflects POST updates)
+                simd_global_enabled: embeddingInfo.simd_global_enabled,
+                simd_router_enabled: embeddingInfo.simd_router_enabled,
+                // Legacy alias for backward compatibility (deprecated, will be removed)
+                simd_enabled: env.global_simd_enabled,
                 context: { timestamp: new Date().toISOString() }
             };
 
             // Add provider-specific fields
             if (embeddingInfo.provider === 'router_cpu') {
                 result.router_enabled = embeddingInfo.router_enabled;
-                result.simd_enabled = embeddingInfo.simd_enabled;
+
                 result.fallback_enabled = embeddingInfo.fallback_enabled;
                 result.cache_ttl_ms = embeddingInfo.cache_ttl_ms;
                 result.sector_models = embeddingInfo.sector_models;
@@ -659,18 +718,10 @@ export function embed(app: any): void {
      */
     app.post('/embed/config', async (req: Request, ctx: any) => {
         try {
-            // Authentication check
-            const apiKey = req.headers.get('x-api-key');
-            if (env.api_key && (!apiKey || apiKey !== env.api_key)) {
-                return new Response(
-                    JSON.stringify({
-                        error: 'Unauthorized',
-                        error_code: 'authentication_required',
-                        context: { timestamp: new Date().toISOString() }
-                    }),
-                    { status: 401, headers: { 'Content-Type': 'application/json' } }
-                );
-            }
+            // Authentication and authorization for POST requests is handled by
+            // the global `authenticate_api_request` middleware. Avoid handling
+            // auth here to prevent duplicate or inconsistent checks (e.g. hashed
+            // API keys) — rely on the centralized middleware for uniform behavior.
 
             // Prefer parsed body from server middleware when available
             let body: any = (ctx && (ctx as any).body) ? (ctx as any).body : undefined;
@@ -682,104 +733,152 @@ export function embed(app: any): void {
                 }
             }
 
-            // Destructuring: primary 'provider', fallback to 'mode' for backward compatibility
-            const { provider: mode, mode: legacyMode, router_simd_enabled, router_fallback_enabled, embed_mode, ...rest } = body || {};
-            const effectiveMode = mode || legacyMode;
+            // Destructuring: support both embed_mode and legacy mode field
+            const { provider, embed_mode, mode, router_simd_enabled, router_fallback_enabled, global_simd_enabled, ...rest } = body || {};
 
-            if (!effectiveMode) {
+            // Determine effective mode from either embed_mode or legacy mode field
+            const effectiveMode = embed_mode ?? mode;
+
+            // Require provider only when we're actually changing providers, not just embed_mode
+            if (provider === undefined && effectiveMode === undefined && global_simd_enabled === undefined) {
                 return new Response(
                     JSON.stringify({
-                        error: 'provider or mode required',
+                        error: 'invalid_request',
                         error_code: 'invalid_request',
-                        message: 'Specify provider: openai, gemini, ollama, local, router_cpu, or synthetic',
+                        message: 'Specify at least one of: provider (openai, gemini, ollama, local, router_cpu, synthetic), embed_mode ("simple", "advanced"), or global_simd_enabled (boolean)',
                         context: { timestamp: new Date().toISOString(), path: '/embed/config' }
                     }),
                     { status: 400, headers: { 'Content-Type': 'application/json' } }
                 );
             }
 
-            // Validate embed_mode if provided
-            if (embed_mode !== undefined && !['simple', 'advanced'].includes(embed_mode)) {
+            // Validate effective mode if provided
+            if (effectiveMode !== undefined && !['simple', 'advanced'].includes(effectiveMode)) {
                 return new Response(
                     JSON.stringify({
                         error: 'Invalid embed_mode',
                         error_code: 'invalid_embed_mode',
                         message: 'embed_mode must be "simple" or "advanced"',
-                        context: { timestamp: new Date().toISOString(), embed_mode, path: '/embed/config' }
+                        context: { timestamp: new Date().toISOString(), embed_mode: effectiveMode, path: '/embed/config' }
                     }),
                     { status: 400, headers: { 'Content-Type': 'application/json' } }
                 );
             }
 
-            const validProviders = ['openai', 'gemini', 'ollama', 'local', 'router_cpu', 'synthetic'];
-            if (!validProviders.includes(effectiveMode)) {
-                return new Response(
-                    JSON.stringify({
-                        error: 'Invalid provider',
-                        error_code: 'invalid_provider',
-                        message: `provider must be one of: ${validProviders.join(', ')}`,
-                        context: { timestamp: new Date().toISOString(), provider: effectiveMode, path: '/embed/config' }
-                    }),
-                    { status: 400, headers: { 'Content-Type': 'application/json' } }
-                );
+            // Validate provider if provided
+            if (provider !== undefined) {
+                const validProviders = ['openai', 'gemini', 'ollama', 'local', 'router_cpu', 'synthetic'];
+                if (!validProviders.includes(provider)) {
+                    return new Response(
+                        JSON.stringify({
+                            error: 'Invalid provider',
+                            error_code: 'invalid_provider',
+                            message: `Invalid provider "${provider}": provider must be one of: ${validProviders.join(', ')}`,
+                            context: { timestamp: new Date().toISOString(), provider: provider, path: '/embed/config' }
+                        }),
+                        { status: 400, headers: { 'Content-Type': 'application/json' } }
+                    );
+                }
             }
 
             // Invalidate configuration cache to force fresh retrieval
             cache.delete('embed_config_basic');
             cache.delete('embed_config_detailed');
 
-            let updates: any = { effectiveMode };
-
-            // Apply router-specific updates and validate
-            if (effectiveMode === 'router_cpu') {
-                if (typeof router_simd_enabled === 'boolean') {
-                    updates.router_simd_enabled = router_simd_enabled;
-                }
-                if (typeof router_fallback_enabled === 'boolean') {
-                    updates.router_fallback_enabled = router_fallback_enabled;
-                }
-            }
-
-            const legacy_mode_used = !!legacyMode && !mode;
-            if (legacy_mode_used) {
-                logger.warn({ component: 'EMBED' }, '[EMBED] Legacy "mode" field used - recommend client update to "provider"');
-            }
+            // Before applying runtimeUpdates, call getEmbeddingInfo to compute previous_provider/previous_mode from the current runtime configuration
+            const embeddingInfoBefore = await getEmbeddingInfo();
+            const previous_provider = embeddingInfoBefore.provider;
+            const previous_mode = embeddingInfoBefore.mode;
 
             logger.info({
                 component: 'EMBED',
-                previous_provider: env.embed_kind,
-                new_provider: effectiveMode,
+                previous_provider,
+                new_provider: provider,
                 embed_mode,
-                legacy_mode_used,
-                updates: { router_simd_enabled, router_fallback_enabled, embed_mode, ...rest }
+                updates: { router_simd_enabled, router_fallback_enabled, global_simd_enabled, ...rest }
             }, 'Updating embedding configuration');
 
-            // Apply runtime configuration changes
-            updateRuntimeConfig({
-                embed_kind: effectiveMode,
-                ...(effectiveMode === 'router_cpu' ? { router_simd_enabled, router_fallback_enabled } : {}),
-                ...(embed_mode ? { embed_mode } : {})
-            });
+            // Build runtime config updates
+            const runtimeUpdates: any = {};
+            if (provider !== undefined) {
+                runtimeUpdates.embed_kind = provider;
+                if (provider === 'router_cpu') {
+                    runtimeUpdates.router_simd_enabled = router_simd_enabled;
+                    runtimeUpdates.router_fallback_enabled = router_fallback_enabled;
+                }
+            }
+            if (effectiveMode !== undefined) {
+                runtimeUpdates.embed_mode = effectiveMode;
+            }
+            // When global_simd_enabled is present in request body, map it to a single runtime field
+            if (global_simd_enabled !== undefined) {
+                runtimeUpdates.global_simd_enabled = global_simd_enabled;
+            }
+
+            // Apply runtime configuration changes for things that are safe to
+            // update without a restart (e.g., embed_mode or runtime toggles).
+            // For provider changes (which require a restart) avoid mutating
+            // the runtime configuration so tests and callers do not observe
+            // partial state changes before a full restart.
+            if (provider === undefined) {
+                updateRuntimeConfig(runtimeUpdates);
+            } else {
+                // Only allow non-provider runtime updates to be applied
+                const safeUpdates: any = { ...runtimeUpdates };
+                delete safeUpdates.embed_kind;
+                if (Object.keys(safeUpdates).length > 0) updateRuntimeConfig(safeUpdates);
+            }
+
+            // After applying non-provider overrides, recompute the effective provider and mode
+            // (or trust that provider changes are restart-gated and note that explicitly)
+            const embeddingInfoAfter = await getEmbeddingInfo();
+
+            // Build response message dynamically
+            let message = '';
+            const updatesApplied: any = {};
+
+            if (provider !== undefined) {
+                message += `Provider updated to ${provider}`;
+                updatesApplied.provider = provider;
+                if (provider === 'router_cpu') {
+                    updatesApplied.router_simd_enabled = router_simd_enabled;
+                    updatesApplied.router_fallback_enabled = router_fallback_enabled;
+                }
+            }
+
+            if (effectiveMode !== undefined) {
+                if (message) message += ', ';
+                message += `embed_mode updated to ${effectiveMode}`;
+                updatesApplied.embed_mode = effectiveMode;
+            }
+
+            if (global_simd_enabled !== undefined) {
+                if (message) message += ', ';
+                message += `global SIMD ${global_simd_enabled ? 'enabled' : 'disabled'}`;
+                updatesApplied.global_simd_enabled = global_simd_enabled;
+            }
+
+            // Determine if restart is required: only when provider changes actually require restart
+            // Batch-mode-only changes do not require restart
+            const restartRequired = provider !== undefined;
 
             return new Response(
                 JSON.stringify({
                     status: 'configuration_updated',
-                    message: `Provider updated to ${effectiveMode}`,
-                    previous_provider: env.embed_kind,
-                    new_provider: effectiveMode,
-                    previous_mode: env.embed_kind, // Legacy field for compatibility
-                    new_mode: effectiveMode, // Legacy field for compatibility
-                    updates_applied: {
-                        provider: effectiveMode,
-                        ...(effectiveMode === 'router_cpu' ? { router_simd_enabled, router_fallback_enabled } : {}),
-                        ...(embed_mode ? { embed_mode } : {})
-                    },
-                    restart_required: true,
+                    message,
+                    previous_provider,
+                    new_provider: provider ?? embeddingInfoAfter.provider,
+                    previous_mode, // Legacy field for compatibility
+                    new_mode: effectiveMode ?? embeddingInfoAfter.mode, // Legacy field for compatibility
+                    updates_applied: updatesApplied,
+                    restart_required: restartRequired,
                     context: {
                         distinction_note: 'Note: embed_kind selects provider (e.g., router_cpu); embed_mode controls batching (simple/advanced) via OM_EMBED_MODE env var. Use "provider" field for future compatibility.',
                         timestamp: new Date().toISOString(),
-                        requested_provider: effectiveMode,
-                        current_provider: effectiveMode
+                        requested_provider: provider,
+                        requested_embed_mode: effectiveMode,
+                        current_provider: provider ?? embeddingInfoAfter.provider,
+                        current_embed_mode: effectiveMode ?? embeddingInfoAfter.mode
                     }
                 }),
                 { status: 200, headers: { 'Content-Type': 'application/json' } }

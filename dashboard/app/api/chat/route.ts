@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server'
 import { API_BASE_URL, getHeaders, getServerHeaders } from '@/lib/api'
+import { streamText } from 'ai'
 
 interface MemoryReference {
     id: string
@@ -226,6 +227,36 @@ export async function POST(request: NextRequest) {
             }
         } catch (error) {
             console.error('Error querying memories:', error)
+        }
+
+        // Try AI SDK streaming if available; it may be stubbed or not present in
+        // every environment. This is a best-effort integration: if the AI SDK
+        // is present and the `streamText` function is available, use it and
+        // return `toUIMessageStreamResponse()`. Otherwise fall back to the
+        // existing ReadableStream SSE-based fallback.
+        if (typeof streamText === 'function') {
+            try {
+                // Use a memoryModel that reproduces the same behavior as the
+                // SSE fallback. The provider integration is optional, so we
+                // cast to `any` here to avoid type errors for some providers.
+                const memoryModel = {
+                    api: async () => ({
+                        shouldStream: true,
+                        supportsStructuredOutputs: false
+                    }),
+                }
+
+                const result = await streamText({
+                    model: memoryModel as any,
+                    prompt: `Generate a memory-augmented response for: "${query}"`,
+                })
+
+                if (result && typeof result.toUIMessageStreamResponse === 'function') {
+                    return result.toUIMessageStreamResponse()
+                }
+            } catch (err) {
+                console.warn('AI SDK streaming integration skipped (streamText call failed):', String(err))
+            }
         }
 
         // For now, use the original approach since AI SDK v5 streaming is complex

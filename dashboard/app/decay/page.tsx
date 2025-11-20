@@ -22,7 +22,7 @@ interface memory {
     salience: number
 }
 
-export default function decay() {
+export default function Decay() {
     const chartref = useRef<HTMLCanvasElement>(null)
     const chartInstance = useRef<Chart | null>(null)
     const [stats, setstats] = useState<decaystats[]>([])

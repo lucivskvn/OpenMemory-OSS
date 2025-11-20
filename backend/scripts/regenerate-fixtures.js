@@ -7,6 +7,13 @@ function ensureDir(p) {
     if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
 }
 
+/**
+ * Create a PDF at filePath with the provided pages collection.
+ * Each page entry is an object: { text, fontSize, options }
+ * @param {string} filePath
+ * @param {Array<object>} pages
+ * @returns {Promise<void>}
+ */
 async function writePdf(filePath, pages) {
     return new Promise((resolve, reject) => {
         const doc = new PDFDocument();
@@ -23,6 +30,10 @@ async function writePdf(filePath, pages) {
     });
 }
 
+/**
+ * Regenerate the PDF fixtures used in tests/fixtures. This is a local dev helper.
+ * @returns {Promise<void>}
+ */
 async function main() {
     const fixturesDirBackend = path.join(__dirname, '..', 'tests', 'fixtures');
     const fixturesDirRoot = path.join(__dirname, '..', '..', 'tests', 'fixtures');

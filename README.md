@@ -143,9 +143,12 @@ Requirements:
 - Bun v1.3.2 or higher
 - SQLite 3.40 or higher (included)
 - Optional: OpenAI/Gemini API key or Ollama
+- For Debian/Ubuntu-based distros (e.g., Linux Mint 22 / Ubuntu 24.04): See `docs/deployment/linux-mint-22-setup.md` for setup including Min 22 users should install `podman`, `podman-compose`, `build-essential`, and `libssl-dev`, and the Bun v1.3.2 installer command. Install build tools with `sudo apt update && sudo apt install -y curl unzip ca-certificates build-essential libssl-dev git pkg-config` before `bun install` to support native dependency compilation. Note: Bun installs to `$HOME/.bun/bin`; ensure this directory is on PATH with `export PATH="$HOME/.bun/bin:$PATH"`.
 
 > [!NOTE]
 > This project now uses Bun as its runtime.
+
+> **Linux Mint 22 Users:** This project is optimized for Linux Mint 22 (Ubuntu 24.04 base) with Bun v1.3.2. See `docs/deployment/linux-mint-22-setup.md` for system dependencies and `docs/testing/linux-mint-22-testing.md` for comprehensive testing instructions.
 
 #### Bun-native development notes
 
@@ -155,6 +158,19 @@ Requirements:
 - OIDC / Deployment: See detailed deployment notes for OIDC-enabled deployments at `docs/deployment/oidc-setup.md`.
 - Use the centralized helper for API key hashing and verification at `backend/src/utils/crypto.ts`.
 - When editing backend TypeScript, add `@types/bun` to devDependencies and include Bun typings in `tsconfig.json` to avoid type errors in CI and editors.
+
+### Pinned CLI tools (bunx)
+
+We prefer `bunx` instead of `npx` for running pinned tools (formatters, small CLI helpers). `bunx -p <pkg>@<ver> <cmd>` runs a pinned version of a binary without changing your project dependencies or lockfile, matching CI behavior. Example:
+
+```bash
+# Run a pinned version of Prettier (matches CI)
+bunx -p prettier@3.3.3 prettier --write .
+```
+
+If Bun is not available, you can fall back to `npx`/`npm`/`node` locally, though PRs that change default tooling are expected to mention Node compatibility.
+
+- Note for Mint 22 / Ubuntu 24.04: Native modules (e.g., crypto/OpenSSL-linked) require `build-essential` and `libssl-dev` via apt; install if `bun install` fails with header errors. Integrates with AGENTS.md Bun patterns (@types/bun, tsconfig.json) and Podman rootless setup.
 
 > [!NOTE]
 > **New in v1.3.1:** Bun.file() migration for extract/ingest yields ~2–3× faster document processing. CI has been hardened with SHA-pinned actions, Trivy scanning, and SLSA attestations. See [CHANGELOG.md](CHANGELOG.md) for details.
@@ -189,6 +205,21 @@ We recommend enabling `OM_EXTRACT_DNS_CHECK=true` in production deployments to r
 
 The server runs on `http://localhost:8080`.
 
+### Linux Mint 22 / Ubuntu 24.04 Quickstart
+
+If you're using Linux Mint 22 (Ubuntu 24.04 base), this optimized setup includes Podman for containerization:
+
+```bash
+sudo apt update && sudo apt install -y curl unzip ca-certificates build-essential libssl-dev git pkg-config podman podman-compose podman-docker
+# Optional: jq and vim for convenience
+# sudo apt install -y jq vim
+curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.2"
+export PATH="$HOME/.bun/bin:$PATH"
+loginctl enable-linger $(whoami)
+```
+
+This installs dependencies, Bun v1.3.2, and configures Podman for rootless usage. See `docs/deployment/linux-mint-22-setup.md` for GPU and rootless Podman details.
+
 ### Docker Setup
 
 ```bash
@@ -196,6 +227,9 @@ docker compose up --build -d
 ```
 
 This starts OpenMemory on port 8080. Data persists in `/data/openmemory.sqlite`.
+
+> [!NOTE]
+> **Linux Mint 22 Users**: Linux Mint 22 (Ubuntu 24.04 base) is a supported deployment path with optimized setup. Prefer Podman for rootless container management. See `docs/deployment/linux-mint-22-setup.md` for Podman setup, GPU passthrough, and Bun v1.3.2 pinning.
 
 ### Ollama Sidecar (Local Models)
 
@@ -216,7 +250,7 @@ Router CPU requires consistent dimensions across sector models; startup validati
 
 When deploying with Docker/Podman, model files are stored in a named volume `ollama_models`. For rootless Podman, create the volume with `podman volume create ollama_models --driver local --opt o=uid=$(id -u),gid=$(id -g)`.
 
-### Dashboard Setup
+### Dashboard Setup (Bun)
 
 The dashboard provides a web interface to visualize and manage your memories.
 
@@ -225,22 +259,38 @@ Requirements:
 - Bun v1.3.2 or higher
 - Running OpenMemory backend (on port 8080)
 
+#### Quick Start (Bun)
+
 ```bash
 cd dashboard
-bun install
+bun install --frozen-lockfile
 bun run dev
 ```
 
-The dashboard runs on `http://localhost:8080`.
+The dashboard runs on http://localhost:3000.
 
-**Configuration (.env.local):**
+#### Environment Configuration
+
+Create `.env.local` in the dashboard directory:
 
 ```bash
-# OpenMemory backend URL
 NEXT_PUBLIC_API_URL=http://localhost:8080
+NEXT_PUBLIC_API_KEY=your-api-key-here
+```
 
-# Optional: API key if backend has OM_API_KEY configured
-NEXT_PUBLIC_API_KEY=your_api_key_here
+#### Verification
+
+```bash
+bun run verify:bun  # Verify Bun and Next.js compatibility
+```
+
+#### Node.js Fallback
+
+If you prefer Node.js for dashboard development:
+
+```bash
+npm install
+npm run dev:node
 ```
 
 **Features:**
@@ -251,6 +301,22 @@ NEXT_PUBLIC_API_KEY=your_api_key_here
 - View waypoint connections and memory graphs
 - Monitor system health and performance
 - Manage user memories and summaries
+- Ollama model management (pull, list, delete, switch)
+
+**Bun Compatibility:**
+
+The dashboard is fully compatible with Bun v1.3.2+ and uses Vercel AI SDK v5.0.93 for chat functionality. All scripts use `bunx` for optimal performance. Node.js fallback scripts are available for compatibility.
+
+### AI SDK Verification (Dashboard)
+
+To validate the AI SDK is installed and running with Bun on Linux Mint 22, run:
+
+```bash
+cd dashboard
+bun run verify:ai-sdk
+```
+
+This script runs checks for Bun version, AI SDK importability, Web API availability (fetch, ReadableStream, TextEncoder), and basic streaming support. For a manual checklist and more detail, see `dashboard/AI_SDK_VERIFICATION.md`.
 
 **Production Build:**
 
@@ -286,8 +352,8 @@ OpenMemory uses Hierarchical Memory Decomposition (HMD):
 - Backend: TypeScript on Bun v1.3.2 (Bun.serve, Bun.file(), Bun.password)
 - Storage: SQLite or PostgreSQL
 - Security: GitHub Actions with SHA-pinned actions, OIDC-ready workflows, Trivy + SLSA attestations (see `docs/security/github-actions-hardening.md`)
-- Note: The backend supports PostgreSQL when requested. It prefers Bun's native Postgres client when available; if Bun Postgres isn't present in the runtime, the backend will fall back to the Node `pg` package at runtime (the repository already includes `pg` as a fallback dependency in `backend/package.json`). To enable Postgres-backed storage set `OM_METADATA_BACKEND=postgres` and consult `backend/README.md` for operational details and CI configuration.
-- Embeddings: E5/BGE/OpenAI/Gemini/Ollama/router_cpu (single-expert-per-sector router over Ollama, not SB-MoE)
+- Note: The backend supports PostgreSQL when requested. It prefers Bun's native Postgres client when available; if Bun Postgres isn't present in the runtime, the backend will fall back to the Node `pg` package at runtime (the repository already includes `pg` as a fallback dependency in `backend/package.json`). To enable Postgres-backed storage set `OM_METADATA_BACKEND=postgres` and consult `backend/README.md` for operational details and CI configuration. Only simple single-host TCP connection strings are supported via OM_PG_CONNECTION_STRING; multi-host or socket-style URIs are not supported and fall back to discrete OM_PG_* environment variables.
+- Embeddings: E5/BGE/OpenAI/Gemini/Ollama/router_cpu (single-expert-per-sector router over Ollama models, not an SB-MoE or Granit/Liquid MoE implementation)
 - Scheduler: Bun timers (setInterval) for decay and maintenance
 
 **Query flow:**
@@ -372,6 +438,147 @@ GET /api/temporal/compare?subject=OpenAI&time1=2023-01-01&time2=2024-12-01
 
 ---
 
+## 6. SQLite Backup & Restore
+
+OpenMemory provides comprehensive SQLite backup functionality with zero-downtime operations, SQL dump exports, and optional cloud storage integration.
+
+### Features
+
+- **Zero-downtime backups** - Online backups using Bun's `node:sqlite` API with WAL checkpointing
+- **SQL dump export** - Portable SQL exports for cross-platform compatibility
+- **VACUUM INTO compaction** - Compacted backups with automatic defragmentation
+- **Cloud integration** - Automatic upload to Supabase Storage (1GB free tier)
+- **Integrity verification** - Automatic `PRAGMA integrity_check` validation
+- **Progress tracking** - Real-time backup progress for large databases
+- **Multi-tenant support** - User-level filtering and isolation during restores
+
+### API Endpoints
+
+| Method | Endpoint | Description |
+| ------ | -------- | ----------- |
+| `POST` | `/admin/backup` | Trigger immediate backup (optional cloud upload) |
+| `GET` | `/admin/backup/list` | List available backups (local + cloud) |
+| `POST` | `/admin/backup/restore` | Restore from backup with integrity verification |
+| `GET` | `/admin/backup/status` | Check backup health (last backup, disk space, WAL size) |
+
+### Dashboard Integration
+
+The web dashboard provides a complete backup management interface at `/backups`:
+
+- **Health monitoring** - Database size, WAL size, disk usage, last backup time
+- **Manual backup** - Local backup with optional cloud storage
+- **Backup listing** - View all available backups with metadata
+- **One-click restore** - Restore with confirmation dialogs and integrity checks
+- **Progress tracking** - Real-time progress bars for long-running operations (SSE-driven)
+- **Integrity feedback** - Toast notifications and alerts post-restore with verification results
+- **Error handling** - Sonner toast library for all operations with proper error states
+
+### Configuration
+
+```bash
+# Local backup directory
+OM_BACKUP_DIR=./data/backups
+
+# Automatic cleanup (days to retain)
+OM_BACKUP_RETENTION_DAYS=7
+
+# Enable Supabase Storage upload
+OM_BACKUP_CLOUD_ENABLED=false
+
+# Automatic scheduled backups
+OM_BACKUP_AUTO_SCHEDULE=false
+
+# Cron expression for scheduling
+OM_BACKUP_SCHEDULE_CRON=0 2 * * *
+```
+
+### Usage Examples
+
+#### Manual Backup
+
+```bash
+curl -X POST http://localhost:8080/admin/backup \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-admin-key" \
+  -d '{"cloud": false}'
+```
+
+#### Restore from Backup
+
+```bash
+curl -X POST http://localhost:8080/admin/backup/restore \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-admin-key" \
+  -d '{"filename": "backup-2025-01-01T020000.db", "location": "local"}'
+```
+
+#### Health Status
+
+```bash
+curl http://localhost:8080/admin/backup/status \
+  -H "Authorization: Bearer your-admin-key"
+```
+
+Response:
+```json
+{
+  "lastBackup": "2025-01-01T02:00:00.000Z",
+  "backupCount": 5,
+  "databaseSize": 5242880,
+  "walSize": 1024000,
+  "diskSpace": {
+    "available": 10737418240,
+    "total": 107374182400
+  },
+  "cloudEnabled": false,
+  "autoSchedule": false
+}
+```
+
+### Performance Characteristics
+
+| Operation | Typical Time | Storage Impact |
+| ---------- | ------------ | -------------- |
+| Full backup | <2s (10k records) | Database size + WAL |
+| SQL export | <5s | 30-50% of DB size |
+| VACUUM INTO | <10s | Defragmented size |
+| Restore | <3s | Atomic replacement |
+| Integrity check | <1s | No additional storage |
+
+### Disaster Recovery
+
+1. **Point-in-time recovery** - Manual backups provide recovery to backup time
+2. **Integrity verification** - Automatic checks prevent corruption
+3. **Atomic operations** - Restore operations are all-or-nothing
+4. **Multi-tenant isolation** - User data remains isolated during restores
+
+### Security
+
+- **Admin-only access** - All backup endpoints require admin API key authentication
+- **Encrypted cloud storage** - Supabase Storage provides server-side encryption
+- **Audit trails** - All operations are logged with structured logging
+- **No secrets in backups** - Environment variables and secrets are not included
+
+### Migration Tools
+
+For migrating existing OpenMemory installations:
+
+```bash
+cd backend
+
+# Create backup before migration
+bun run backup:create
+
+# Restore from backup after migration
+bun run backup:restore
+```
+
+### Integration
+
+Backup operations integrate with OpenMemory's temporal tagging for full memory preservation. Multi-modal content (images, audio, video) with temporal metadata is fully preserved across backup and restore operations.
+
+---
+
 ## 6. Migration Tool
 
 Migrate your existing memories from Zep, Mem0, or Supermemory to OpenMemory with our standalone migration tool.
@@ -398,6 +605,9 @@ bun index.js --from mem0 --api-key YOUR_KEY --verify
 - ✅ Built-in verification mode
 - ✅ Progress tracking and resume support
 - ✅ JSONL export format for portability
+### Documentation
+
+- For code-level docs and JSDoc/TSDoc guidelines see `docs/development/jsdoc-guidelines.md`.
 
 ### Example Commands
 
@@ -419,7 +629,6 @@ bun index.js --from supermemory --api-key SM_KEY --rate-limit 25
 
 ---
 
-## 7. CLI Tool
 
 OpenMemory includes a command-line tool for quick memory operations.
 
@@ -622,13 +831,34 @@ Queries per second with concurrent users:
 | 50    | 650 | 75 ms           | 180 ms          |
 | 100   | 900 | 110 ms          | 280 ms          |
 
+### Benchmark Methodology
+
+All benchmarks are reproducible on Linux Mint 22 (Ubuntu 24.04 base) with Bun v1.3.2:
+
+- **Hardware:** Ryzen 5 5600H, 16GB RAM (reference configuration)
+- **Test Suite:** `bun run test:benchmarks` - Automated competitor comparison
+- **Metrics:** Recall@K, P95 latency, cost per 1M embeddings, QPS, memory usage
+- **Competitors:** Mem0 v1.0.x, Zep v0.x (public benchmark data from Nov 2025)
+- **CI:** Automated regression detection on every PR (see `.github/workflows/ci.yml`)
+
+Run benchmarks locally:
+
+```bash
+cd backend
+bun run test:benchmarks  # Competitor comparison
+bun run benchmark:embed  # SIMD performance
+bun run benchmark:report # Generate HTML report
+```
+
+View historical benchmarks in GitHub Actions artifacts (90-day retention).
+
 **Router CPU Mode (CPU-Only)**:
 
 - QPS: 50-100 with 2-3 models loaded
 - Latency: 150-300ms (Ollama inference + routing)
 - Memory: 2-4GB RAM base usage
 - Benefits: 10-15% overhead vs single model, 20-30% SIMD gains when enabled
-- Note: transformers.js 3.x and IBM/Liquid MoE integration are deferred to a later phase, and that current CPU optimization is via `router_cpu` plus SIMD fusion.
+- Note: transformers.js 3.x and IBM/Liquid MoE integration are explicitly deferred and not included in the current router_cpu implementation, which focuses on single-expert-per-sector Ollama routing with SIMD acceleration.
 
 ### 9.3 Self-Hosted Cost
 

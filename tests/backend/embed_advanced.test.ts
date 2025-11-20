@@ -96,17 +96,23 @@ test("local embed warns and returns synthetic when local model missing", async (
     delete cfgLocal.env.local_model_path;
     cfgLocal.env.vec_dim = Number(process.env.OM_VEC_DIM) || cfgLocal.env.vec_dim;
 
-    // spy on logger.warn and then import embed module so embeds use the spied logger
-    const spy = spyLoggerMethod(logger, 'warn');
-    embedMod = await import(EMBED_PATH);
+    // Capture warnings via embedLog's test hook mechanism
+    let warnCaptured = false;
+    const embedMod: any = await import(EMBED_PATH);
+    if (embedMod && embedMod.__TEST) {
+        embedMod.__TEST.logHook = (lvl: any, meta: any, msg: any) => {
+            if (lvl === 'warn' && msg.includes('Local model missing')) {
+                warnCaptured = true;
+            }
+        };
+    }
     installDefaultProviders(embedMod);
     const db = await import("../../backend/src/core/db.test-entry");
     await db.initDb();
     const out = await embedMod.embedMultiSector("eid-local", "hello world", ["semantic"], undefined, "u_local");
     expect(Array.isArray(out)).toBe(true);
     expect(out.length).toBeGreaterThan(0);
-    expect(spy.called).toBe(true);
-    spy.restore();
+    expect(warnCaptured).toBe(true);
 });
 
 test("gemini retries on 429 and succeeds, logging rate-limit warning", async () => {
@@ -135,6 +141,7 @@ test("gemini retries on 429 and succeeds, logging rate-limit warning", async () 
 
     // spy on logger.warn and import embed module afterwards
     const spyWarnHandle = spyLoggerMethod(logger, 'warn');
+    try { const embedMod: any = await import(EMBED_PATH); if (embedMod && embedMod.__TEST) embedMod.__TEST.logHook = (_lvl: any, _meta: any, _msg: any) => { }; } catch (e) { }
     // ensure core cfg is set to use gemini for this import-time binding
     const cfg = await import("../../backend/src/core/cfg");
     cfg.env.embed_kind = "gemini";
@@ -164,6 +171,7 @@ test("gemini fails after retries and falls back to synthetic, logging error", as
 
     // spy on logger.error and import embed module afterwards
     const spyErrHandle = spyLoggerMethod(logger, 'error');
+    try { const embedMod: any = await import(EMBED_PATH); if (embedMod && embedMod.__TEST) embedMod.__TEST.logHook = (_lvl: any, _meta: any, _msg: any) => { }; } catch (e) { }
 
     const cfg2 = await import("../../backend/src/core/cfg");
     cfg2.env.embed_kind = "gemini";

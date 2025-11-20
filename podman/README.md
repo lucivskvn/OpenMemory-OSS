@@ -11,6 +11,18 @@ Notes:
 
 - These quadlets are examples only. Validate and adapt to your environment before use.
 
+## Linux Mint 22 / Ubuntu 24.04 Installation
+
+For Linux Mint 22 (Ubuntu 24.04 base) users, install Podman and related tools:
+
+```bash
+sudo apt update && sudo apt install -y podman podman-compose podman-docker
+podman --version
+podman run --rm -it docker.io/library/alpine:3.16 uname -a
+```
+
+This contains the builds from Ubuntu and automatically inherits Mint's package updates. See `docs/deployment/linux-mint-22-setup.md` for Podman rootless setup, GPU passthrough, and other system dependencies.
+
 ## Additional guidance
 
 Quickstart (systemd + Podman quadlets):
@@ -140,6 +152,46 @@ cd backend
 podman build -t ghcr.io/lucivskvn/openmemory-OSS:latest .
 # or pull the published image
 podman pull ghcr.io/lucivskvn/openmemory-OSS:latest
+
+## GPU Passthrough Examples
+
+For local development with GPUs, follow the steps below depending on your GPU vendor.
+
+### NVIDIA (RTX 3050 Mobile)
+
+1. Install drivers and NVIDIA Container Toolkit:
+
+Note: On Ubuntu 24.04 / Linux Mint 22, `nvidia-container-toolkit` and `nvidia-ctk` packages may require enabling the official NVIDIA container toolkit repository first. Follow NVIDIA's installation guide (https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) or run the repository setup script involving `curl | gpg` and adding the repo to `sources.list.d` before running `apt install`.
+
+Driver minor versions may change based on distro packaging, but this guide assumes the 580 series for CUDA 12.4+ support. See `docs/deployment/gpu-optimization.md` for detailed GPU tuning recommendations and troubleshooting.
+
+```bash
+sudo apt install -y nvidia-driver-580 nvidia-utils-580 nvidia-ctk nvidia-container-toolkit
+sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+```
+
+2. Run container with CDI GPU devices:
+
+```bash
+podman run --rm --device nvidia.com/gpu=all --security-opt label=disable ghcr.io/lucivskvn/openmemory-OSS:latest nvidia-smi
+```
+
+### AMD (Radeon 660M / Vulkan)
+
+1. Install Vulkan drivers and tools:
+
+```bash
+sudo apt install -y mesa-vulkan-drivers vulkan-tools
+sudo usermod -aG render,video $(whoami)
+```
+
+2. Run container with DRI devices for Vulkan:
+
+```bash
+podman run --rm --device /dev/dri --device /dev/kfd -v /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro ghcr.io/lucivskvn/openmemory-OSS:latest vulkaninfo | head
+```
+
+See `docs/deployment/gpu-optimization.md` for tuning Ollama and additional GPU options.
 ```
 
 1. Use the example quadlets or `podman run` for an ephemeral test (rootless example shown):

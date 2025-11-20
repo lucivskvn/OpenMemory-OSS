@@ -1,10 +1,15 @@
-# DEPRECATED: moved to backend/bunfig.toml to align with test working-directory
-# This file is intentionally left as a stub to avoid accidental pickup by
-# older environments. The canonical bun configuration for the backend now
-# lives at `backend/bunfig.toml`. Keep this file only to avoid accidental
-# discovery by older Bun versions or tools that expect a root bunfig.
+# Root Bun configuration used by repo-level tests/utilities.
+# Backend still uses `backend/bunfig.toml` for service-specific settings.
 
-# See `backend/bunfig.toml` for the authoritative configuration used by
-# CI and local development. Remove this stub when all developer tooling
-# and CI pipelines have been updated to reference the backend bunfig.
+[install]
+# Ensure deterministic installs for CI; tests may run at repo root.
+frozen-lockfile = true
+isolated = true
+
+[install.alias]
+# Map 'ai/react' subpath to '@ai-sdk/react' package for runtime resolution
+"ai/react" = "@ai-sdk/react"
+
+[test]
+coverage = true
 

@@ -106,6 +106,20 @@ export const SECTORS: Record<SectorType, SectorInfo> = {
     }
 }
 export class OpenMemory {
+    /**
+     * JavaScript/TypeScript SDK client for the OpenMemory backend.
+     *
+     * Example:
+     * ```ts
+     * import OpenMemory from 'openmemory'
+     * const client = new OpenMemory({ apiKey: process.env.OPENMEMORY_API_KEY, baseUrl: 'http://localhost:8080' })
+     * const health = await client.health()
+     * ```
+     *
+     * @param options.apiKey - Optional API key used in Authorization header.
+     * @param options.baseUrl - Base URL for the backend (default: http://localhost:8080)
+     * @param options.timeout - Request timeout in milliseconds.
+     */
     private baseUrl: string
     private apiKey: string
     private timeout: number

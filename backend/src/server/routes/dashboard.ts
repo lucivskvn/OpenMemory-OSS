@@ -369,7 +369,7 @@ export function dash(app: any) {
         }
     });
 
-    app.post("/dashboard/telemetry/stream", async (req: Request, ctx: Context) => {
+    async function telemetryStreamHandler(req: Request, ctx: Context) {
         try {
             const b = ctx.body as any;
             if (!b) return new Response(JSON.stringify({ err: "missing_body" }), { status: 400 });
@@ -398,6 +398,18 @@ export function dash(app: any) {
                 if (!ok) {
                     return new Response(JSON.stringify({ err: 'invalid_admin_key' }), { status: 403 });
                 }
+                // Mark as admin for subsequent tenant checks
+                (req as any).isAdmin = true;
+            }
+
+            // Determine admin status (set above when admin key present)
+            const isAdmin = !!(req as any).isAdmin;
+
+            // Tenant enforcement: when OM_STRICT_TENANT=true, require user_id
+            // to be present (unless caller is admin) to avoid writing global telemetry.
+            const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+            if (strict && !user_id && !isAdmin) {
+                return new Response(JSON.stringify({ err: 'user_id_required', message: 'user_id required when OM_STRICT_TENANT=true' }), { status: 400 });
             }
 
             await q.ins_stream_telemetry.run(id, user_id, embedding_mode, duration_ms, memory_ids, query, Date.now());
@@ -407,7 +419,18 @@ export function dash(app: any) {
             logger.error({ component: 'DASHBOARD', err: e }, 'Failed to persist stream telemetry');
             return new Response(JSON.stringify({ err: 'internal' }), { status: 500 });
         }
-    });
+    }
+
+    app.post("/dashboard/telemetry/stream", telemetryStreamHandler);
+    // Attach the handler to the module-level seam for tests. This assignment
+    // happens after telemetryStreamHandler is defined and after the `dash`
+    // function is invoked by server startup.
+    __TEST_telemetryStreamHandler = telemetryStreamHandler;
+
+    // Test seam: allow tests to import the telemetry handler directly to avoid
+    // starting an HTTP server when asserting control flow. Only available in
+    // test mode to avoid exporting internals in production.
+    // Test seam: export handler for direct invocation in unit tests.
 
     app.get("/dashboard/telemetry", async (req: Request, ctx: Context) => {
         try {
@@ -470,64 +493,11 @@ export function dash(app: any) {
             return new Response(JSON.stringify({ err: 'internal' }), { status: 500 });
         }
     });
-
-    app.get("/dashboard/telemetry/export", async (req: Request, ctx: Context) => {
-        try {
-            // admin check mirrors GET /dashboard/telemetry
-            let isAdmin = false;
-            if (env.admin_api_key) {
-                const provided = req.headers.get("x-admin-key") || req.headers.get("x-api-key") || ((req.headers.get("authorization") || "").startsWith("Bearer ") ? req.headers.get("authorization")!.slice(7) : null);
-                if (!provided) {
-                    return new Response(JSON.stringify({ err: "admin_key_required" }), { status: 403 });
-                }
-                if (!isHashedKey(env.admin_api_key)) {
-                    logger.error({ component: 'DASHBOARD', err: 'Plaintext admin key configured' }, 'OM_ADMIN_API_KEY must be configured as a hashed value');
-                    return new Response(JSON.stringify({ err: 'server_config' }), { status: 500 });
-                }
-                isAdmin = await verifyPassword(provided, env.admin_api_key);
-                if (!isAdmin) {
-                    return new Response(JSON.stringify({ err: 'invalid_admin_key' }), { status: 403 });
-                }
-            }
-
-            const limit = parseInt(ctx.query.get("limit") || "50");
-            const offset = parseInt(ctx.query.get("offset") || "0");
-            const user_id = ctx.query.get("user_id") || undefined;
-            const embedding_mode = ctx.query.get("embedding_mode") || undefined;
-
-            const table = is_pg ? `"${process.env.OM_PG_SCHEMA || 'public'}"."openmemory_stream_telemetry"` : 'stream_telemetry';
-            let sql: string;
-            let params: any[];
-            if (is_pg) {
-                sql = `select id,user_id,embedding_mode,duration_ms,memory_ids,query,ts from ${table} where ($1 is null or user_id=$1) and ($2 is null or embedding_mode=$2) order by ts desc limit $3 offset $4`;
-                params = [user_id || null, embedding_mode || null, limit, offset];
-            } else {
-                sql = `select id,user_id,embedding_mode,duration_ms,memory_ids,query,ts from ${table} where (? is null or user_id=?) and (? is null or embedding_mode=?) order by ts desc limit ? offset ?`;
-                params = [user_id || null, user_id || null, embedding_mode || null, embedding_mode || null, limit, offset];
-            }
-
-            const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-            if (strict && !user_id && !isAdmin) {
-                return new Response(JSON.stringify({ error: "user_id_required", message: "user_id parameter is required when OM_STRICT_TENANT=true" }), { status: 400 });
-            }
-
-            const rows = await all_async(sql, params);
-
-            // Build CSV
-            const csvHeader = ["id", "user_id", "embedding_mode", "duration_ms", "memory_ids", "query", "ts"].join(",") + "\n";
-            const csvBody = rows.map((r: any) => {
-                const memory_ids = typeof r.memory_ids === 'string' ? r.memory_ids : JSON.stringify(r.memory_ids || []);
-                // escape quotes
-                const quoteEscape = (s: any) => (s === null || s === undefined ? '' : String(s).replace(/"/g, '""'));
-                return [r.id, r.user_id, r.embedding_mode, r.duration_ms, quoteEscape(memory_ids), quoteEscape(r.query), r.ts].map((c) => `"${c}"`).join(",");
-            }).join("\n");
-
-            const csv = csvHeader + csvBody;
-            const headers = new Headers({ 'Content-Type': 'text/csv', 'Content-Disposition': 'attachment; filename="telemetry.csv"' });
-            return new Response(csv, { headers });
-        } catch (e: any) {
-            logger.error({ component: "DASHBOARD", err: e }, "Failed to export telemetry");
-            return new Response(JSON.stringify({ err: 'internal' }), { status: 500 });
-        }
-    });
 }
+
+// Test seam: expose a telemetry handler reference at the module level so tests
+// can import it after `dash()` attaches handlers. This avoids exporting inner
+// function references before they are defined and keeps the seam available
+// only for tests.
+export let __TEST_telemetryStreamHandler: any = undefined;
+export const __TEST_getTelemetryHandler = () => __TEST_telemetryStreamHandler;
