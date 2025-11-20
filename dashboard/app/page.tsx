@@ -1,5 +1,5 @@
 "use client"
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Bar } from "react-chartjs-2"
 import {
     Chart as ChartJS,
@@ -12,6 +12,8 @@ import {
 } from "chart.js"
 import Sidebar from "@/components/sidebar"
 import { API_BASE_URL, getHeaders, getEmbeddingConfig } from "@/lib/api"
+import { formatTime } from "@/lib/time"
+import { formatNumber } from "@/lib/number"
 import { StatCard } from "@/components/dashboard/StatCard"
 import { HealthMetric } from "@/components/dashboard/HealthMetric"
 import { EmbeddingModeSelector } from "@/components/embedding/EmbeddingModeSelector"
@@ -35,16 +37,8 @@ export default function Dashboard() {
     const [telemetry, setTelemetry] = useState<any[]>([])
     const [embeddingHealth, setEmbeddingHealth] = useState<any | null>(null)
 
-    useEffect(() => {
-        fetchDashboardData()
-        fetchBackendHealth()
-        const dataInterval = setInterval(fetchDashboardData, 30000)
-        const healthInterval = setInterval(fetchBackendHealth, 60000) // 1 minute
-        return () => {
-            clearInterval(dataInterval)
-            clearInterval(healthInterval)
-        }
-    }, [])
+    // Stable timestamp to avoid impure Date calls inside render
+    const [now] = useState(() => Date.now())
 
     const fetchDashboardData = async () => {
         try {
@@ -93,6 +87,8 @@ export default function Dashboard() {
                     embeddingProvider: embedRes.kind || 'Unknown',
                     embeddingMode: embedRes.mode || 'N/A',
                     simdEnabled: embedRes.simd_enabled || false,
+                    simdGlobal: embedRes.simd_global_enabled || false,
+                    simdRouter: embedRes.simd_router_enabled || false,
                 }));
             }
 
@@ -111,12 +107,7 @@ export default function Dashboard() {
             if (activityRes.ok) {
                 const activity = await activityRes.json()
                 setLogs(activity.activities?.map((a: any) => ({
-                    time: new Date(a.timestamp).toLocaleTimeString("en-US", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                        second: "2-digit",
-                        hour12: false,
-                    }),
+                    time: formatTime(a.timestamp, { timeOnly: true }),
                     event: a.type.replace('_', ' '),
                     sector: a.sector,
                     salience: a.salience?.toFixed(2),
@@ -200,6 +191,21 @@ export default function Dashboard() {
         }
     }
 
+    useEffect(() => {
+        // Defer initial checks to avoid calling setState synchronously in effect
+        const initialTimeout = setTimeout(() => {
+            void fetchDashboardData()
+            void fetchBackendHealth()
+        }, 0)
+
+        const dataInterval = setInterval(fetchDashboardData, 30000)
+        const healthInterval = setInterval(fetchBackendHealth, 60000)
+        return () => {
+            clearInterval(dataInterval)
+            clearInterval(healthInterval)
+            clearTimeout(initialTimeout)
+        }
+    }, [])
     const timePeriods = [
         { value: "today", label: "Today" },
         { value: "1d", label: "1D" },
@@ -248,7 +254,7 @@ export default function Dashboard() {
                 <div className="grid grid-cols-4 gap-4 mb-6 xl:grid-cols-8">
                     <StatCard
                         label="Total Memories"
-                        value={healthMetrics.totalMemories?.toLocaleString() || "0"}
+                        value={formatNumber(healthMetrics.totalMemories) || "0"}
                         status="Stable"
                         statusColor={getStatusColor("Stable")}
                     />
@@ -266,7 +272,7 @@ export default function Dashboard() {
                     />
                     <StatCard
                         label="API Requests"
-                        value={(healthMetrics.totalRequests || 0).toLocaleString()}
+                        value={formatNumber(healthMetrics.totalRequests) || "0"}
                         status="High"
                         statusColor={getStatusColor("High")}
                     />
@@ -334,7 +340,7 @@ export default function Dashboard() {
                                 <div className="space-y-1 max-h-64 overflow-y-auto">
                                     {telemetry.length > 0 ? telemetry.map((t, idx) => (
                                         <div key={idx} className="bg-transparent rounded px-2 py-2 grid grid-cols-6 gap-2 text-xs text-[#9ca3af] hover:bg-transparent border border-transparent transition-colors">
-                                            <span className="text-[#6b7280]">{new Date(t.ts || Date.now()).toLocaleTimeString()}</span>
+                                            <span className="text-[#6b7280]">{formatTime(t.ts || now, { timeOnly: true })}</span>
                                             <span className="col-span-1">{t.user_id || 'anonymous'}</span>
                                             <span className="text-[#9ca3af]">{t.embedding_mode || 'n/a'}</span>
                                             <span>{t.duration_ms}</span>
@@ -471,7 +477,7 @@ export default function Dashboard() {
                             </div>
                             <div className="bg-transparent rounded p-2 border border-[#27272a] hover:border-zinc-600 transition-colors duration-200 text-center">
                                 <p className="text-xs text-[#8a8a8a] mb-1">Total</p>
-                                <p className="text-lg font-bold text-[#f4f4f5]">{(qpsStats.total || 0).toLocaleString()}k</p>
+                                <p className="text-lg font-bold text-[#f4f4f5]">{formatNumber(qpsStats.total || 0)}k</p>
                             </div>
                             <div className="bg-transparent rounded p-2 border border-[#27272a] hover:border-zinc-600 transition-colors duration-200 text-center">
                                 <p className="text-xs text-[#8a8a8a] mb-1">Errors</p>
@@ -669,9 +675,21 @@ export default function Dashboard() {
                                 <span className="text-[#e6e6e6]">{embeddingHealth?.mode || 'N/A'}</span>
                             </div>
                             <div className="flex justify-between border-b border-[#27272a] pb-2">
-                                <span>SIMD Enabled</span>
-                                <span className={`${embeddingHealth?.simd_enabled ? 'text-[#22c55e]' : 'text-[#f87171]'}`}>
-                                    {embeddingHealth?.simd_enabled ? 'Yes' : 'No'}
+                                <span>SIMD Global</span>
+                                <span className={`${systemHealth?.simdGlobal ? 'text-[#22c55e]' : 'text-[#f87171]'}`}>
+                                    {systemHealth?.simdGlobal ? 'Yes' : 'No'}
+                                </span>
+                            </div>
+                            <div className="flex justify-between border-b border-[#27272a] pb-2">
+                                <span>SIMD Router</span>
+                                <span className={`${systemHealth?.simdRouter ? 'text-[#22c55e]' : 'text-[#f87171]'}`}>
+                                    {systemHealth?.simdRouter ? 'Yes' : 'No'}
+                                </span>
+                            </div>
+                            <div className="flex justify-between border-b border-[#27272a] pb-2">
+                                <span>SIMD Legacy</span>
+                                <span className={`${systemHealth?.simdEnabled ? 'text-[#22c55e]' : 'text-[#f87171]'}`}>
+                                    {systemHealth?.simdEnabled ? 'Yes' : 'No'}
                                 </span>
                             </div>
                         </div>

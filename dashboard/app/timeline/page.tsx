@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { API_BASE_URL, getHeaders } from "@/lib/api"
 
 interface event {
@@ -13,18 +13,14 @@ interface event {
     salience?: number
 }
 
-export default function timeline() {
+export default function Timeline() {
     const [filter, setfilter] = useState("all")
     const [events, setevents] = useState<event[]>([])
     const [loading, setloading] = useState(true)
     const [error, seterror] = useState<string | null>(null)
     const [limit, setlimit] = useState(50)
 
-    useEffect(() => {
-        fetchactivity()
-    }, [limit])
-
-    async function fetchactivity() {
+    const fetchactivity = useCallback(async () => {
         setloading(true)
         seterror(null)
         try {
@@ -47,7 +43,13 @@ export default function timeline() {
         } finally {
             setloading(false)
         }
-    }
+    }, [limit])
+
+    useEffect(() => {
+        fetchactivity()
+    }, [limit, fetchactivity])
+
+    // fetchactivity moved above to satisfy hooks exhaustive-deps
 
     function determineType(activity: any): "create" | "update" | "decay" | "reflect" {
         if (activity.salience < 0.3) return "decay"

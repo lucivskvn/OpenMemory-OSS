@@ -25,10 +25,10 @@ See `CONTRIBUTING.md` for developer setup and Bun guidance.
 Agents accept a single JSON/YAML instruction payload with the following schema. This standardizes requests and outputs for automated workflows.
 
 ```json
-{
-  "type": "object",
-  "properties": {
-    "id": {"type": "string"},
+-
+Agent example task (integration):
+- Goal: "Integrate `useChat` from AI SDK v5.0.93 into chat page"
+- Description: Replace custom state management in `dashboard/app/chat/page.tsx` with `useChat` hook from `ai/react`. Update `api/chat/route.ts` to use `streamText` for LLM responses. Add tests for streaming. Verify with `bun run verify:ai-sdk` and `bun run test:benchmarks`.
     "goal": {"type": "string"},
     "files": {"type": "array", "items": {"type": "string"}},
     "constraints": {"type": "array", "items": {"type": "string"}},
@@ -39,6 +39,28 @@ Agents accept a single JSON/YAML instruction payload with the following schema. 
   "required": ["id","goal"]
 }
 ```
+
+## Dashboard and AI SDK Integration
+
+When an agent is assigned to add or modify dashboard AI features, follow these guidelines:
+
+- Confirm the AI SDK version: `cd dashboard && bun pm ls ai` (expect `ai@5.0.93`).
+- Verify the SDK and runtime: `cd dashboard && bun run verify:ai-sdk` (runs automated checks for Bun version, OS, imports and web API compatibility).
+- `useChat` is available from `ai/react` for client chat usage but may not be integrated in the current code; `dashboard/app/chat/page.tsx` uses a custom streaming fallback. Use `useChat` when you implement PHASE 6.5.
+- The current server-side chat streaming is implemented using a `ReadableStream` SSE flow in `dashboard/app/api/chat/route.ts`; integrate `streamText()` when migrating to AI SDK native streaming in a future phase.
+- Use Server Actions, RSC streaming (`createStreamableValue`), or `streamUI` for generative UI; test on Bun by importing `ai/rsc` in a small script.
+
+- Goal: "Integrate `useChat` from AI SDK v5.0.93 into chat page"
+
+Agent example task (integration):
+
+- Goal: "Integrate `useChat` from AI SDK v5.0.93 into chat page"
+- Steps:
+  1. Run `bun run verify:ai-sdk` to ensure runtime and SDK imports are sound.
+  2. Replace custom message management with `useChat` from `ai/react`.
+  3. Update `dashboard/app/api/chat/route.ts` to use `streamText()` for LLM streaming.
+  4. Add tests for streaming and memory injection; run `bun test` and `bun run test:benchmarks`.
+  5. Document the changes in `docs/deployment/dashboard-bun-migration.md` and `dashboard/AI_SDK_VERIFICATION.md`.
 
 Minimum fields:
 

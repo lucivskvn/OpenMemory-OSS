@@ -1,42 +1,32 @@
 #!/usr/bin/env bun
 
-// Usage:
-//   bun run scripts/hash-api-key.ts "my-plaintext-key"
-//   or set OM_PLAIN_API_KEY env and run without args
+/**
+ * Hash an API key using Bun.password.hash (argon2id by default).
+ *
+ * Usage:
+ *   bun run backend/scripts/hash-api-key.ts <plaintext-key>
+ *   or set OM_PLAIN_API_KEY env var and run without args.
+ *
+ * This script prints the hashed API key to stdout. Do NOT commit the plaintext key.
+ *
+ * Example:
+ *   export OM_PLAIN_API_KEY="my-secret"
+ *   bun run backend/scripts/hash-api-key.ts
+ */
 
-const key = process.argv[2] || process.env.OM_PLAIN_API_KEY;
+const key = process.argv[2] || process.env.OM_PLAIN_API_KEY || process.env.OPENMEMORY_API_KEY || process.env.OM_API_KEY;
+
 if (!key) {
-    console.error("Usage: bun run scripts/hash-api-key.ts <plaintext-key>\nOr set OM_PLAIN_API_KEY env var.");
+    console.error('Usage: bun run backend/scripts/hash-api-key.ts <plaintext-key>\nOr set OM_PLAIN_API_KEY env var.');
     process.exit(1);
 }
 
 try {
-    // Use Bun's password hash (argon2id by default in Bun). Top-level await supported.
+    // Bun has a global `Bun` object which provides secure hashing helpers.
+    // Use the stable async hash API. We intentionally avoid printing the plaintext key.
     const hashed = await Bun.password.hash(key);
-    // Print the hashed value only (do not print the plaintext)
     console.log(hashed);
-} catch (e) {
-    console.error("Failed to hash API key:", e);
+} catch (err) {
+    console.error('Failed to hash API key:', err instanceof Error ? err.message : String(err));
     process.exit(2);
 }
-
-// Usage: bun run backend/scripts/hash-api-key.ts <your-api-key>
-const apiKey = process.argv[2] || process.env.OPENMEMORY_API_KEY || process.env.OM_API_KEY;
-
-if (!apiKey) {
-    console.error("Usage: bun run backend/scripts/hash-api-key.ts <your-api-key>");
-    process.exit(1);
-}
-
-export { };
-
-(async () => {
-    try {
-        // @ts-ignore - Bun global in runtime
-        const hashedKey = await Bun.password.hash(apiKey);
-        console.log(hashedKey);
-    } catch (e) {
-        console.error('Hashing failed:', e instanceof Error ? e.message : String(e));
-        process.exit(2);
-    }
-})();

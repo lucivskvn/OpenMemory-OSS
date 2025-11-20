@@ -1,5 +1,7 @@
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
+import logger from "./logger";
+
 interface model_cfg {
     [sector: string]: Record<string, string>;
 }
@@ -22,7 +24,7 @@ export const load_models = (): model_cfg => {
             return cfg;
         }
         cfg = parsed;
-        console.log(`[MODELS] Loaded models.yml (${Object.keys(cfg).length} sectors)`);
+        logger.info({ sectors: Object.keys(cfg).length }, 'Loaded models.yml');
         return cfg;
     } catch (e) {
         console.error("[MODELS] Failed to parse models.yml:", e);

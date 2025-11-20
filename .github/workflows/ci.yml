@@ -13,7 +13,7 @@ permissions:
 jobs:
   detect-changes:
     name: Detect changed paths
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       dashboard_changed: ${{ steps.filter.outputs.dashboard }}
       ide_changed: ${{ steps.filter.outputs.ide }}
@@ -40,7 +40,7 @@ jobs:
   # Prettier job moved to top-level (not nested under detect-changes)
   prettier_format:
     name: Prettier format check (repo-wide)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Run early to fail fast on formatting issues across backend, dashboard, IDE
     steps:
       - name: Checkout
@@ -60,7 +60,7 @@ jobs:
   test-backend:
     needs: [prettier_format]
     name: Backend tests (SQLite)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       OM_PORT: 8080
       OM_STRICT_TENANT: 'true'
@@ -131,7 +131,7 @@ jobs:
   test-backend-postgres:
     needs: [prettier_format]
     name: Backend tests (Postgres)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:15
@@ -242,7 +242,7 @@ jobs:
   publish-docker:
     name: Build and publish Docker image
     needs: [test-backend, test-backend-postgres]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: production
     permissions:
       contents: read
@@ -281,7 +281,7 @@ jobs:
           subject-digest: ${{ steps.build-and-push.outputs.digest }}
   security-scan:
     name: Security scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Scoped permissions: top-level permissions remain minimal; this job
     # requires `security-events: write` to upload SARIF to the Security tab.
     # We explicitly scope `contents: read` here for clarity.
@@ -346,7 +346,7 @@ jobs:
 
   build_dashboard:
     name: Build Dashboard (Next.js)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [detect-changes, prettier_format]
     if: needs.detect-changes.outputs.dashboard_changed == 'true' || github.event_name == 'workflow_dispatch'
     steps:
@@ -375,7 +375,8 @@ jobs:
 
   build_ide:
     name: Build IDE Extension
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+
     needs: [detect-changes, prettier_format]
     if: needs.detect-changes.outputs.ide_changed == 'true' || github.event_name == 'workflow_dispatch'
     steps:
@@ -401,3 +402,108 @@ jobs:
         working-directory: IDE
         run: |
           bun run compile
+
+  benchmark-and-e2e:
+    name: Benchmark & E2E (Ubuntu 24.04 parity)
+    needs: [test-backend, test-backend-postgres, build_dashboard]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      OM_RUN_BENCHMARK_TESTS: true
+      OM_RUN_PERF_TESTS: true
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+      OM_TEST_MODE: '1'
+      OM_SKIP_BACKGROUND: 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.1
+        with:
+          bun-version: "1.3.2"
+
+      - name: Install backend deps
+        working-directory: backend
+        run: bun install --frozen-lockfile --no-save
+
+      - name: Install dashboard deps
+        working-directory: dashboard
+        run: bun install --frozen-lockfile --no-save
+
+      - name: Start backend server in background
+        run: |
+          cd backend
+          bun run start &
+          echo $! > /tmp/server_pid
+
+      - name: Wait for backend health
+        run: |
+          for i in {1..40}; do
+            curl -sSf http://127.0.0.1:8080/health && break || sleep 0.25
+          done
+
+      - name: Run E2E tests
+        working-directory: backend
+        run: |
+          mkdir -p ../tests/e2e/results
+          bun test ../tests/e2e/ --reporter=json | tee ../tests/e2e/results/e2e-${{ github.run_id }}.json
+
+      - name: Run competitor benchmarks
+        working-directory: backend
+        run: |
+          mkdir -p ../tests/benchmarks/results
+          bun test ../tests/benchmarks/ --reporter=json | tee ../tests/benchmarks/results/competitor-comparison-${{ github.run_id }}.json
+
+      - name: Generate benchmark report
+        working-directory: backend
+        run: bun ../scripts/benchmark-utils.ts report
+
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@3e0fae48b6f61b0010b496c9be0b22932de132a0
+        with:
+          name: benchmarks
+          retention-days: 90
+          path: |
+            tests/benchmarks/results/*.json
+            tests/benchmarks/reports/*.html
+            tests/benchmarks/reports/*.md
+
+      - name: Upload e2e artifacts
+        uses: actions/upload-artifact@3e0fae48b6f61b0010b496c9be0b22932de132a0
+        with:
+          name: e2e-results
+          retention-days: 30
+          path: tests/e2e/results/*.json
+
+      - name: Compare benchmarks
+        working-directory: backend
+        run: |
+          if [ -f ../tests/benchmarks/results/*.json ]; then
+            # In CI, download previous benchmark from main branch for regression detection
+            mkdir -p prev-benchmarks
+            if [ -n "$GITHUB_TOKEN" ]; then
+              gh run download $(gh run list --branch main --limit 1 --json databaseId | jq -r '.[0].databaseId' 2>/dev/null) \
+                --repo ${{ github.repository }} --dir prev-benchmarks --name benchmarks || true
+            fi
+            # Compare current vs previous (auto-detects from artifacts if available)
+            bun ../scripts/benchmark-utils.ts compare prev-benchmarks/tests/benchmarks/results/*.json || exit 1
+          fi
+
+      - name: Comment with benchmark comparison on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'tests/benchmarks/reports';
+            const files = fs.existsSync(path) ? fs.readdirSync(path).filter(f => f.startsWith('comparison-') && f.endsWith('.md')) : [];
+            if (files.length === 0) return;
+            const filename = files.sort().pop();
+            const body = fs.readFileSync(`${path}/${filename}`, 'utf8');
+            await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
+
+      - name: Stop backend
+        run: kill `cat /tmp/server_pid` || true

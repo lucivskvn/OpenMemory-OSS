@@ -119,6 +119,15 @@ PY
     return $?
   fi
 
+  # Prefer Bun if installed (bun is a drop-in replacement for node in many cases
+  # and is the runtime we prefer for development). Keep node fallback for systems
+  # where bun isn't available.
+  if command -v bun >/dev/null 2>&1; then
+    echo "'nc' and 'python3' not found; using bun TCP check"
+    bun -e "const net = require('net'); const host=process.env.HOST || '127.0.0.1'; const port = parseInt(process.env.PORT || '5432'); let attempts = 0; const max = 30; const interval = 2000; function tryConnect(){ const s = new net.Socket(); s.setTimeout(1000); s.once('connect', ()=>{ console.log('Postgres is reachable via bun'); process.exit(0); }); s.once('error', ()=>{ attempts++; if(attempts>=max){ console.error('timeout'); process.exit(2);} setTimeout(tryConnect, interval); }); s.connect(port, host); } tryConnect();"
+    return $?
+  fi
+
   if command -v node >/dev/null 2>&1; then
     echo "'nc' and 'python3' not found; using node TCP check"
     node - <<'NODE'

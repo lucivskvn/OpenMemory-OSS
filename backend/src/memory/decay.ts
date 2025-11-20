@@ -80,6 +80,33 @@ const cooldown = 60000;
 export const inc_q = () => active_q++;
 export const dec_q = () => active_q--;
 
+// Test seam: allow tests to capture DECAY-specific logs without relying
+// on fragile pino spies. Tests can set `__TEST.logHook` to intercept calls.
+export const __TEST: {
+    logHook?: ((level: string, meta: any, msg: string, ...args: any[]) => void) | null;
+    reset?: () => void;
+} = {
+    logHook: null,
+    reset() {
+        this.logHook = null;
+    },
+};
+
+function decayLog(level: 'debug' | 'info' | 'warn' | 'error', meta: any, msg: string, ...args: any[]) {
+    try {
+        try {
+            const hook = (__TEST as any)?.logHook;
+            if (typeof hook === 'function') {
+                try { hook(level, meta, msg, ...args); } catch (_) { }
+            }
+        } catch (_) { }
+        const fn = (logger as any)[level] || logger.info;
+        fn.call(logger, meta, msg, ...args);
+    } catch (e) {
+        try { console.error('[DECAY] log failure', e); } catch (_err) { }
+    }
+}
+
 const pick_tier = (m: any, now_ts: number): "hot" | "warm" | "cold" => {
     const dt = Math.max(0, now_ts - (m.last_seen_at || m.updated_at || now_ts));
     const recent = dt < 6 * 86_400_000;
@@ -219,12 +246,12 @@ const top_keywords = (t: string, k = 5): string[] => {
 
 export const apply_decay = async () => {
     if (active_q > 0) {
-        logger.info({ component: "DECAY" }, `[DECAY] skipped - ${active_q} active queries`);
+        decayLog('info', { component: "DECAY" }, `[DECAY] skipped - ${active_q} active queries`);
         return;
     }
     const now_ts = Date.now();
     if (now_ts - last_decay < cooldown) {
-        logger.info({ component: "DECAY" }, `[DECAY] skipped - cooldown active (${((cooldown - (now_ts - last_decay)) / 1000).toFixed(0)}s remaining)`);
+        decayLog('info', { component: "DECAY" }, `[DECAY] skipped - cooldown active (${((cooldown - (now_ts - last_decay)) / 1000).toFixed(0)}s remaining)`);
         return;
     }
     last_decay = now_ts;
@@ -365,7 +392,7 @@ export const apply_decay = async () => {
     }
 
     const tot = performance.now() - t0;
-    logger.info({ component: "DECAY" }, `[DECAY-2.0] ${tot_chg}/${tot_proc} | tiers: hot=${tier_counts.hot} warm=${tier_counts.warm} cold=${tier_counts.cold} | compressed=${tot_comp} fingerprinted=${tot_fp} | ${tot.toFixed(1)}ms across ${segments.length} segments`);
+    decayLog('info', { component: "DECAY" }, `[DECAY-2.0] ${tot_chg}/${tot_proc} | tiers: hot=${tier_counts.hot} warm=${tier_counts.warm} cold=${tier_counts.cold} | compressed=${tot_comp} fingerprinted=${tot_fp} | ${tot.toFixed(1)}ms across ${segments.length} segments`);
 };
 
 export const on_query_hit = async (
@@ -411,6 +438,6 @@ export const on_query_hit = async (
     }
 
     if (updated) {
-        logger.info({ component: "DECAY" }, `[DECAY-2.0] regenerated/reinforced memory ${mem_id}`);
+        decayLog('info', { component: "DECAY" }, `[DECAY-2.0] regenerated/reinforced memory ${mem_id}`);
     }
 };

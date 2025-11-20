@@ -1,7 +1,8 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { API_BASE_URL, getHeaders } from "@/lib/api"
+import { formatTime } from "@/lib/time"
 
 interface mem {
     id: string
@@ -25,7 +26,7 @@ const sectorColors: Record<string, string> = {
     reflective: "purple"
 }
 
-export default function memories() {
+export default function Memories() {
     const [mems, setmems] = useState<mem[]>([])
     const [srch, setsrch] = useState("")
     const [filt, setfilt] = useState("all")
@@ -48,13 +49,7 @@ export default function memories() {
         }
     }, [])
 
-    useEffect(() => {
-        if (apiKey) {
-            fetchMems()
-        }
-    }, [page, filt, apiKey])
-
-    async function fetchMems() {
+    const fetchMems = useCallback(async () => {
         setloading(true)
         seterror(null)
         try {
@@ -71,7 +66,15 @@ export default function memories() {
         } finally {
             setloading(false)
         }
-    }
+    }, [page, filt])
+
+    useEffect(() => {
+        if (apiKey) {
+            fetchMems()
+        }
+    }, [page, filt, apiKey, fetchMems])
+
+    // fetchMems moved above and memoized with useCallback to satisfy react-hooks/exhaustive-deps
 
     async function handleSearch() {
         if (!srch.trim()) {
@@ -304,7 +307,7 @@ export default function memories() {
                                                         Salience: {(mem.salience * 100).toFixed(0)}%
                                                     </span>
                                                     <span className="text-xs text-stone-500">
-                                                        {new Date(mem.created_at).toLocaleDateString()}
+                                                        {formatTime(mem.created_at, { dateOnly: true })}
                                                     </span>
                                                     {mem.tags?.map(tag => (
                                                         <span key={tag} className="bg-stone-800 rounded px-2 py-0.5 text-xs text-stone-400">

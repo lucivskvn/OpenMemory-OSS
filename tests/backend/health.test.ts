@@ -3,6 +3,11 @@ import path from "path";
 import fs from "fs";
 
 async function startServerForTest() {
+    // Enable test-mode before importing the server so it allows ephemeral
+    // (port 0) binding and skips background jobs like the decay/prune
+    // workers which can cause test flakiness.
+    process.env.OM_TEST_MODE = '1';
+    process.env.OM_SKIP_BACKGROUND = 'true';
     const tmpDir = path.resolve(process.cwd(), "tmp");
     if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
     const tmpDb = path.join(tmpDir, `openmemory-health-${process.pid}-${Date.now()}.sqlite`);
@@ -15,7 +20,7 @@ async function startServerForTest() {
     const mod = await import("../../backend/src/server/index.ts");
     if (mod && typeof mod.startServer === "function") {
         // Prefer to start on an ephemeral port in tests to avoid collisions.
-        await mod.startServer({ port: 0, dbPath: tmpDb });
+        await mod.startServer({ port: 0, dbPath: tmpDb, waitUntilReady: true });
     } else {
         // Fallback: if the module doesn't export startServer for some reason,
         // rely on the module's auto-start side-effect.

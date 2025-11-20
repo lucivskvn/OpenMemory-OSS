@@ -45,7 +45,7 @@ This Code of Conduct applies both within project spaces (e.g., issues, PRs, Disc
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting the maintainers at **bob@holacorp.net**.  
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting the maintainers at **security@cavira.app**.
 All complaints will be reviewed and investigated promptly and fairly.
 
 Maintainers are obligated to respect the privacy and security of the reporter of any incident.

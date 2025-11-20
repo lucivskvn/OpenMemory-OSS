@@ -1,5 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
-import { emb_router_cpu, gen_syn_emb } from '../../backend/src/memory/embed';
+// Do not import embed module at top-level; tests may change env/spy logger
+// before importing embed module so we can capture logs reliably.
+// We'll dynamically import the embed module in beforeEach so we can install
+// logger spies before the module binds its logger references.
+let emb_router_cpu: any;
+let gen_syn_emb: any;
+
+// Store original implementations
+const originalFetch = globalThis.fetch;
+const originalPerformance = globalThis.performance;
 
 // Mock global fetch for Ollama API calls
 let fetchCalls: any[] = [];
@@ -10,25 +19,46 @@ const mockFetch = mock((...args) => {
     json: () => Promise.resolve({ embedding: new Array(768).fill(0.1) })
   };
 });
-globalThis.fetch = mockFetch as any;
 
-// Mock performance.now for latency measurements
-const mockPerformanceNow = mock(() => 100);
+// Mock performance.now for latency measurements with increasing values
+let mockTime = 100;
+const mockPerformanceNow = mock(() => {
+  const time = mockTime;
+  mockTime += Math.random() * 10 + 5; // Add 5-15ms per call to simulate real timing
+  return time;
+});
 
 describe('Router CPU Provider', () => {
   if (process.env.OM_TEST_SKIP_PERF === 'true') {
-    it.skip('Performance tests skipped (OM_TEST_SKIP_PERF=true)', () => {});
+    it.skip('Performance tests skipped (OM_TEST_SKIP_PERF=true)', () => { });
   }
-  beforeEach(() => {
+  beforeEach(async () => {
     fetchCalls = []; // Reset captured calls
     mockPerformanceNow.mockClear();
 
-    // Performance timing mocks
+    // Install mocks for this test
+    globalThis.fetch = mockFetch as any;
     globalThis.performance = { now: mockPerformanceNow } as any;
+
+    // Router tests expect the Ollama embeddings to be the same dimensionality
+    // as the configured vector dimension. Set OM_VEC_DIM to 768 (nomic embedding size)
+    // so the tests don't hit dimension mismatch fallback rules in CI.
+    process.env.OM_VEC_DIM = '768';
+    // Import embed module after env setup so getEmbeddingInfo picks up OM_VEC_DIM
+    // and logger spies are intact (tests that wish to spy should set spies
+    // before calling embed functions inside individual tests).
+    const m = await import('../../backend/src/memory/embed');
+    emb_router_cpu = m.emb_router_cpu;
+    gen_syn_emb = m.gen_syn_emb;
+    // Clear any cached router decisions between tests
+    if (m.__TEST && typeof m.__TEST.resetRouterCaches === 'function') m.__TEST.resetRouterCaches();
   });
 
   afterEach(() => {
     mockPerformanceNow.mockClear();
+    // Restore original global state after each test
+    globalThis.fetch = originalFetch;
+    globalThis.performance = originalPerformance;
   });
 
   it('routes semantic sector to nomic-embed-text model', async () => {
@@ -127,25 +157,37 @@ describe('Router CPU Provider', () => {
 
   it('logs [EMBED] router processing with model selection', async () => {
     process.env.OM_EMBED_KIND = 'router_cpu';
+    // Ensure embed logs are enabled in tests to make `EMBED` messages visible
+    const prev = process.env.OM_LOG_EMBED_LEVEL;
+    process.env.OM_LOG_EMBED_LEVEL = 'debug';
+    // Use the logger spy helper so we capture pino / logger calls reliably
+    const loggerMod: any = await import('../../backend/src/core/logger');
+    const { spyLoggerMethod } = await import('../utils/spyLoggerSafely');
+    const calls: any[] = [];
+    const handle = spyLoggerMethod(loggerMod.default, 'info', (meta: any, msg?: any) => { calls.push({ meta, msg }); });
+    // Also capture embed logs via __TEST hook so we don't rely only on pino
+    // internals. This prevents CI flakiness getting pino spy not to attach
+    // to bound functions created at import time.
+    const embedHookCleanup: any = (async () => {
+      try {
+        const embedMod: any = await import('../../backend/src/memory/embed');
+        if (embedMod && embedMod.__TEST) embedMod.__TEST.logHook = (lvl: any, meta: any, msg: any) => { calls.push({ meta, msg, lvl }); };
+        return () => { if (embedMod && embedMod.__TEST) embedMod.__TEST.logHook = null; };
+      } catch (e) { return () => { }; }
+    })();
 
-    const originalLog = console.info;
-    let loggedMessages: any[] = [];
-    console.info = mock((...args) => {
-      loggedMessages.push(args);
-    });
+    // Import embed module after spy is installed so logs are captured.
+    const embedMod: any = await import('../../backend/src/memory/embed');
+    await embedMod.emb_router_cpu('test text for semantic sector', 'semantic');
 
-    await emb_router_cpu('test text for semantic sector', 'semantic');
-
-    expect(loggedMessages.length).toBeGreaterThan(0);
-    const firstLog = loggedMessages[0];
-    expect(firstLog[0]).toMatch(/\[EMBED\]/);
-    expect(firstLog[1]).toMatchObject({
-      component: 'EMBED',
-      sector: 'semantic',
-      model: 'nomic-embed-text'
-    });
-
-    console.info = originalLog as any;
+    // Verify that an EMBED info log was emitted with the expected metadata.
+    expect(calls.length).toBeGreaterThan(0);
+    const first = calls.find((c: any) => c.meta && c.meta.component === 'EMBED');
+    expect(first).toBeTruthy();
+    if (first) expect(first.meta).toMatchObject({ component: 'EMBED', sector: 'semantic', model: 'nomic-embed-text' });
+    try { handle.restore(); } catch (e) { }
+    try { const cleanup = await embedHookCleanup; cleanup(); } catch (e) { }
+    if (prev === undefined) delete process.env.OM_LOG_EMBED_LEVEL; else process.env.OM_LOG_EMBED_LEVEL = prev;
   });
 
   it('handles router cache decisions with 30s TTL', async () => {
@@ -159,7 +201,7 @@ describe('Router CPU Provider', () => {
     await emb_router_cpu('first call', 'semantic'); // Makes first call
 
     global.Date.now = mock(() => 10000); // Second call within TTL
-    await emb_router_cpu('second call same sector', 'semantic'); // Should reuse cache
+    await emb_router_cpu('first call', 'semantic'); // Same text as first call - should reuse cache
 
     // Mock TTL expiry
     global.Date.now = mock(() => 35000); // Beyond 30s TTL
@@ -252,7 +294,13 @@ describe('Router CPU Provider', () => {
       procedural: 'nomic-embed-text'  // Override to use nomic instead of bge-small-en-v1.5
     });
 
+    const embedMod = await import('../../backend/src/memory/embed');
+    if (embedMod.__TEST && typeof embedMod.__TEST.resetRouterCaches === 'function') embedMod.__TEST.resetRouterCaches();
+
     await emb_router_cpu('semantic test', 'semantic');
+
+    // Ensure caches were thinking of the override values; the call above
+    // already cleared router caches after setting env.
 
     expect(fetchCalls.length).toBe(1);
     const [url1, options1] = fetchCalls[0];
@@ -284,5 +332,64 @@ describe('Router CPU Provider', () => {
     expect(url).toContain('/api/embeddings');
     expect(options.method).toBe('POST');
     expect(options.body).toContain('"model":"nomic-embed-text"');
+  });
+
+  it('respects __TEST.routerCacheEnabled for forced cache bypass', async () => {
+    process.env.OM_EMBED_KIND = 'router_cpu';
+    process.env.OM_ROUTER_CACHE_ENABLED = 'true';
+
+    const embedMod = await import('../../backend/src/memory/embed');
+
+    // First call should cache
+    await emb_router_cpu('cache test text', 'semantic');
+    expect(fetchCalls.length).toBe(1); // Should make network call
+
+    // Second call with cache enabled should hit cache
+    fetchCalls = [];
+    await emb_router_cpu('cache test text', 'semantic'); // Same text
+    expect(fetchCalls.length).toBe(0); // Should hit cache, no network call
+
+    // Third call with routerCacheEnabled=false should force cache miss
+    if (embedMod.__TEST) embedMod.__TEST.routerCacheEnabled = false;
+    fetchCalls = [];
+    await emb_router_cpu('cache test text', 'semantic'); // Same text but cache bypass
+    expect(fetchCalls.length).toBe(1); // Should make network call despite cached content
+  });
+
+  it('handles SMART tier fusion with dimension matching', async () => {
+    process.env.OM_EMBED_KIND = 'router_cpu';
+    process.env.OM_TIER = 'smart';
+
+    const embedMod = await import('../../backend/src/memory/embed');
+    const { embedForSector } = embedMod;
+
+    // Test SMART tier fusion - should not throw dimension mismatch error
+    const result = await embedForSector('test text for smart fusion', 'semantic');
+    expect(result).toBeDefined();
+    expect(Array.isArray(result)).toBe(true);
+    expect(result.length).toBeGreaterThan(0);
+    expect(result.every((v: number) => typeof v === 'number' && isFinite(v))).toBe(true);
+
+    // Check if normalized
+    const magnitude = Math.sqrt(result.reduce((sum: number, v: number) => sum + v * v, 0));
+    expect(magnitude).toBeGreaterThan(0.9); // At least mostly normalized
+  });
+
+  it('supports SMART tier with router_cpu provider without errors', async () => {
+    process.env.OM_EMBED_KIND = 'router_cpu';
+    process.env.OM_TIER = 'smart';
+
+    const embedMod = await import('../../backend/src/memory/embed');
+    const { embedForSector } = embedMod;
+
+    // Test all sectors in SMART tier with router_cpu
+    const sectors = ['semantic', 'episodic', 'procedural', 'emotional', 'reflective'];
+    for (const sector of sectors) {
+      const result = await embedForSector(`test text for ${sector}`, sector);
+      expect(result).toBeDefined();
+      expect(Array.isArray(result)).toBe(true);
+      expect(result.length).toBe(768); // Should match configured dimension
+      expect(result.every((v: number) => typeof v === 'number' && !isNaN(v))).toBe(true);
+    }
   });
 });

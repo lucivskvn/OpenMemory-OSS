@@ -14,13 +14,16 @@ import { start_user_summary_reflection, stop_user_summary_reflection } from "../
 import { req_tracker_mw } from "./routes/dashboard";
 import { request_logger_mw } from "./middleware/request_logger";
 import { showBanner } from "./banner";
+import { backupDatabase, enforceBackupRetention } from "../utils/backup.js";
+import * as cron from "node-cron";
 
-const ASC_B64 = "ICAgX19fICAgICAgICAgICAgICAgICAgIF9fICBfXyAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAogIC8gXyBcIF8gX18gICBfX18gXyBfXyB8ICBcLyAgfCBfX18gXyBfXyBfX18gICBfX18gIF8gX18gXyAgIF8gCiB8IHwgfCB8ICdfIFwgLyBfIFwgJ18gXHwgfFwvfCB8LyBfIFwgJ18gYCBfIFwgLyBfIFx8ICdfX3wgfCB8IHwKIHwgfF98IHwgfF8pIHwgIF9fLyB8IHwgfCB8ICB8IHwgIF9fLyB8IHwgfCB8IHwgKF8pIHwgfCAgfCB8X3wgfAogIFxfX18vfCAuX18vIFxfX198X3wgfF98X3wgIHxffFxfX198X3wgfF98IHxffFxfX18vfF98ICAgXF9fLCB8CiAgICAgICB8X3wgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICB8X19fLyA=";
+const ASC_B64 = "ICAgX19fICAgICAgICAgICAgICAgICAgIF9fICBfXyAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIAogIC8gXyBcIF8gX18gICBfX18gXyBfXyB8ICBcLyAgfCBfX18gXyBfXyBfX18gICBfX18gIF8gX18gXyAgIF8gCiB8IHwgfCB8ICdfIFwgLyBfIFwgJ18gXHwgfFwvfCB8LyBfIFwgJ18gYCBfIFwgLyBfIFx8ICdfX3wgfCB8IHwKIHwgfF98IHwgfF8pIHwgIF9fLyB8IHwgfCB8ICB8IHwgIF9fLyB8IHwgfCB8IHwgKF8pIHwgfCAgfCB8X3wgfAogIFxfX18vfCAuX18vIFxfX198X3wgfF98X3wgIHxffFxfX18vfF98ICAgXF9fLCB8CiAgICAgICB8X3wgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICB8X19fLyA=";
 const ASC = Buffer.from(ASC_B64, "base64").toString("utf8");
 
 let serverApp: ReturnType<typeof createServer> | null = null;
 let decayIntervalId: any = null;
 let pruneIntervalId: any = null;
+let backupCronJob: cron.ScheduledTask | null = null;
 
 // Exported CORS middleware factory so tests can import and exercise it.
 // See comments below for behavior and opt-out using `ctx.skipCors`.
@@ -128,7 +131,7 @@ export function corsMiddleware() {
     };
 }
 
-export async function startServer(options?: { port?: number; dbPath?: string }) {
+export async function startServer(options?: { port?: number; dbPath?: string; waitUntilReady?: boolean }) {
     // Allow tests or callers to override DB path or port programmatically.
     if (options?.dbPath !== undefined) {
         process.env.OM_DB_PATH = options.dbPath;
@@ -137,9 +140,21 @@ export async function startServer(options?: { port?: number; dbPath?: string }) 
             (env as any).db_path = options.dbPath;
         } catch (e) { }
     }
+    const requestedPort = options?.port ?? env.port;
+    // Forbid port 0 (OS-assigned ephemeral) except in test mode to prevent production accidents
+    if (requestedPort === 0 && process.env.OM_TEST_MODE !== '1') {
+        const error = new Error('Port 0 (OS-assigned ephemeral) forbidden in production. Use OM_TEST_MODE=1 for tests or specify a fixed port.');
+        logger.error({ component: 'SERVER', error_code: 'port_zero_forbidden', port: requestedPort }, error.message);
+        throw error;
+    }
     if (options?.port !== undefined) process.env.OM_PORT = String(options.port);
 
     await initDb();
+    // Clear any runtime embedding overrides to avoid leakage between test runs.
+    try {
+        const embedMod = await import('../memory/embed');
+        if (typeof embedMod.resetRuntimeConfig === 'function') embedMod.resetRuntimeConfig();
+    } catch (e) { /* ignore if not available */ }
 
     // Ensure DB migrations are applied for the selected DB path by importing the
     // top-level migration runner which uses the DB helpers already initialized
@@ -148,7 +163,7 @@ export async function startServer(options?: { port?: number; dbPath?: string }) 
     // migrate script explicitly.
     try {
         if (process.env.OM_SKIP_MIGRATE === "true") {
-            logger.info({ component: "MIGRATE" }, "Skipping automatic in-process migrations due to OM_SKIP_MIGRATE=true");
+            if (env.log_migrate) logger.info({ component: "MIGRATE" }, "Skipping automatic in-process migrations due to OM_SKIP_MIGRATE=true");
         } else {
             // Import the migration module and, if it exposes `run_migrations`, call
             // and await it to ensure migrations finish before the server starts.
@@ -160,7 +175,7 @@ export async function startServer(options?: { port?: number; dbPath?: string }) 
             }
         }
     } catch (e) {
-        logger.warn({ component: "MIGRATE", err: e }, "Automatic migrations could not be applied in-process; continuing");
+        logger.warn({ component: "MIGRATE", error_code: "migrate_application_failed", err: e }, "Automatic migrations could not be applied in-process; continuing");
     }
 
     const app = createServer({ max_payload_size: env.max_payload_size });
@@ -193,7 +208,13 @@ export async function startServer(options?: { port?: number; dbPath?: string }) 
     const decayIntervalMs = env.decay_interval_minutes * 60 * 1000;
     logger.info({ component: "DECAY", interval_minutes: env.decay_interval_minutes, interval_ms: decayIntervalMs }, "[DECAY] Decay process configured");
 
-    decayIntervalId = setInterval(async () => {
+    // Allow tests to disable background work for deterministic behavior. When
+    // `OM_TEST_MODE=1` is set, or when `OM_SKIP_BACKGROUND=true` is configured,
+    // skip scheduling or running background jobs like decay/prune/reflection.
+    const skipBackground = process.env.OM_SKIP_BACKGROUND === 'true' || process.env.OM_TEST_MODE === '1';
+
+    if (!skipBackground) {
+        decayIntervalId = setInterval(async () => {
         logger.info({ component: "DECAY" }, "[DECAY] Running HSG decay process...");
         try {
             const result = await run_decay_process();
@@ -201,9 +222,13 @@ export async function startServer(options?: { port?: number; dbPath?: string }) 
         } catch (error) {
             logger.error({ component: "DECAY", err: error }, "[DECAY] Decay process failed");
         }
-    }, decayIntervalMs);
+        }, decayIntervalMs);
+    } else {
+        logger.info({ component: "DECAY" }, "Skipping background decay because OM_SKIP_BACKGROUND or OM_TEST_MODE is set");
+    }
 
-    pruneIntervalId = setInterval(
+    if (!skipBackground) {
+        pruneIntervalId = setInterval(
         async () => {
             logger.info({ component: "PRUNE" }, "[PRUNE] Pruning weak waypoints...");
             try {
@@ -214,16 +239,61 @@ export async function startServer(options?: { port?: number; dbPath?: string }) 
             }
         },
         7 * 24 * 60 * 60 * 1000,
-    );
+        );
+    } else {
+        logger.info({ component: "PRUNE" }, "Skipping periodic waypoint pruning because OM_SKIP_BACKGROUND or OM_TEST_MODE is set");
+    }
 
-    run_decay_process()
-        .then((result: any) => {
-            logger.info({ component: "INIT", decayed: result.decayed, processed: result.processed }, "[INIT] Initial decay process completed");
-        })
-        .catch((err) => logger.error({ component: "INIT", err }, "[INIT] Initial decay failed"));
+    if (!skipBackground) {
+        run_decay_process()
+            .then((result: any) => {
+                logger.info({ component: "INIT", decayed: result.decayed, processed: result.processed }, "[INIT] Initial decay process completed");
+            })
+            .catch((err) => logger.error({ component: "INIT", err }, "[INIT] Initial decay failed"));
+    } else {
+        logger.info({ component: "INIT" }, "Skipping initial decay because OM_SKIP_BACKGROUND or OM_TEST_MODE is set");
+    }
 
-    start_reflection();
-    start_user_summary_reflection();
+    if (!skipBackground && env.backup_auto_schedule) {
+        logger.info({ component: "BACKUP", cron: env.backup_schedule_cron, dir: env.backup_dir }, "[BACKUP] Scheduling automatic backups");
+        backupCronJob = cron.schedule(env.backup_schedule_cron, async () => {
+            logger.info({ component: "BACKUP" }, "[BACKUP] Running scheduled backup...");
+            try {
+                const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+                const backupFilename = `backup-auto-${timestamp}.db`;
+                const destPath = `${env.backup_dir}/${backupFilename}`;
+
+                await backupDatabase({
+                    sourcePath: env.db_path,
+                    destPath
+                });
+
+                // Enforce retention policy after successful backup
+                const removedCount = await enforceBackupRetention(env.backup_dir, env.backup_retention_days);
+                if (removedCount > 0) {
+                    logger.info({ component: "BACKUP", removed: removedCount }, "[BACKUP] Retention policy enforced");
+                }
+
+                logger.info({ component: "BACKUP", filename: backupFilename }, "[BACKUP] Scheduled backup completed");
+            } catch (error) {
+                logger.error({ component: "BACKUP", err: error }, "[BACKUP] Scheduled backup failed");
+            }
+        }, {
+            scheduled: false // Don't start immediately, wait for server to be ready
+        });
+
+        // Start the cron job
+        backupCronJob.start();
+    } else {
+        logger.info({ component: "BACKUP" }, "Skipping automatic backup scheduling because disabled, OM_SKIP_BACKGROUND, or OM_TEST_MODE is set");
+    }
+
+    if (!skipBackground) {
+        start_reflection();
+        start_user_summary_reflection();
+    } else {
+        logger.info({ component: "REFLECT" }, "Skipping background reflections because OM_SKIP_BACKGROUND or OM_TEST_MODE is set");
+    }
 
     const listenPort = options?.port ?? env.port;
     logger.info({ component: "SERVER", port: listenPort }, `[SERVER] Starting server...`);
@@ -243,11 +313,40 @@ export async function startServer(options?: { port?: number; dbPath?: string }) 
         process.env.OM_PORT = String(actualPort);
     } catch (e) { }
 
+    // Optionally wait until the server returns a healthy status to avoid
+    // races in tests that make immediate HTTP requests after start.
+    if (options?.waitUntilReady) {
+        const timeoutMs = Number(process.env.OM_TEST_SERVER_READY_TIMEOUT) || 2000;
+        const start = Date.now();
+        let lastErr: any = null;
+        while (Date.now() - start < timeoutMs) {
+            try {
+                // Use the original global fetch if tests have overridden it to
+                // block external network requests. Tests set `globalThis.__ORIG_FETCH`
+                // to the original fetch before they overwrite `fetch` to prevent
+                // accidental external calls. Prefer that if available so in-test
+                // health checks continue to work.
+                const rawFetch: typeof fetch = (globalThis as any).__ORIG_FETCH ?? (globalThis as any).fetch ?? fetch;
+                const resp = await rawFetch(`http://127.0.0.1:${actualPort}/health`);
+                if (resp && resp.status === 200) {
+                    break;
+                }
+            } catch (e) {
+                lastErr = e;
+            }
+            await new Promise((r) => setTimeout(r, 50));
+        }
+        if (Date.now() - start >= timeoutMs) {
+            logger.warn({ component: 'SERVER', err: lastErr }, `[SERVER] Waited ${timeoutMs}ms for /health but it did not return 200; continuing`);
+        }
+    }
+
     return {
         port: actualPort,
         stop: async () => {
             if (decayIntervalId) clearInterval(decayIntervalId as any);
             if (pruneIntervalId) clearInterval(pruneIntervalId as any);
+            if (backupCronJob) backupCronJob.stop();
             try {
                 stop_reflection();
             } catch (e) { }
@@ -262,6 +361,7 @@ export async function startServer(options?: { port?: number; dbPath?: string }) 
 export async function stopServer() {
     if (decayIntervalId) clearInterval(decayIntervalId as any);
     if (pruneIntervalId) clearInterval(pruneIntervalId as any);
+    if (backupCronJob) backupCronJob.stop();
     try {
         stop_reflection();
     } catch (e) { }

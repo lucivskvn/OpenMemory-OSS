@@ -26,7 +26,9 @@ yarn-error.log*
 bun.lock
 *.lockb
 **/*.lockb
-dashboard/bun.lock
+# Exception: Allow dashboard bun.lock(b) to be committed
+!dashboard/bun.lockb
+!dashboard/bun.lock
 backend/bun.lock
 IDE/bun.lock
 
@@ -60,6 +62,18 @@ htmlcov/
 tests/**/verify_tenant_*.sqlite
 tests/**/verify_tenant_*.sqlite*
 
+# Benchmark and E2E results (generated artifacts)
+tests/benchmarks/results/*.json
+tests/benchmarks/reports/*.html
+tests/benchmarks/reports/*.md
+tests/benchmarks/reports/*.json
+tests/e2e/results/*.json
+
+# Keep directory structure tracked
+!tests/benchmarks/results/.gitkeep
+!tests/benchmarks/reports/.gitkeep
+!tests/e2e/results/.gitkeep
+
 # Persistent data directories (local DB during development)
 data/
 
@@ -74,9 +88,13 @@ data/
 tmp/
 tmp_restore/
 *.tmp
+*.bak
+*.orig
+*.backup
+*.swp
+*~
 logs/
 *.log
-benchmark/
 exports/
 *.vsix
 

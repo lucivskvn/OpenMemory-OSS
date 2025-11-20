@@ -83,6 +83,114 @@ Workflow snippet (SHA-pinned):
 - Ensure the specific job has `permissions: id-token: write` (job-level) and `contents: read` minimal top-level permissions.
 - Use SHA-pinned action versions when possible for supply-chain hygiene.
 
+## Bun.secrets and local secrets management
+
+For local development, prefer `Bun.secrets` when possible to avoid storing secrets in plain-text `.env` files.
+
+```javascript
+// Access secrets via Bun.secrets.get('MY_SECRET')
+const jwtSecret = Bun.secrets.get('OM_JWT_SECRET') || process.env.OM_JWT_SECRET;
+```
+
+In production use a system secrets manager (AWS Secrets Manager, Vault, GCP Secret Manager) and inject secrets into the GitHub Actions job via cloud-specific OIDC credentials rather than repo secrets. The `backend/scripts/hash-api-key.ts` helper supports hashing a plaintext API key for secure storage in `OM_API_KEY`.
+
+## Application OIDC configuration (Linux Mint 22 / Ubuntu 24.04)
+
+When deploying OpenMemory on Linux Mint 22 (Ubuntu 24.04), you can enable JWT-based authentication by configuring OIDC providers. Unlike GitHub Actions OIDC which is cloud-focused, this configures the application itself to accept JWT tokens from identity providers.
+
+### Environment Variables
+
+Set the following in your OpenMemory environment:
+
+```bash
+# Required for JWT mode
+OM_AUTH_PROVIDER=jwt
+OM_JWT_SECRET=your-jwt-signing-secret-or-jwks-url
+OM_JWT_ISSUER=https://your-identity-provider.com
+OM_JWT_AUDIENCE=urn:openmemory:production
+
+# Optional: For Supabase managed auth instead
+OM_AUTH_PROVIDER=supabase
+```
+
+**Note:** See JWT/OIDC vs HTTP API key behavior in SECURITY.md. Ensure `OM_API_KEY` remains configured when using JWT/OIDC features.
+
+**Note:** Missing `OM_JWT_SECRET` will prevent startup in production modes (production/standard/langgraph). See `SECURITY.md` and `backend/src/core/cfg.ts` for detailed behavior and validation logic.
+
+### Loading Secrets on Mint 22
+
+#### Option 1: systemd User Environment File
+
+Create a user-specific environment file:
+
+```bash
+# Create directory for systemd user files
+mkdir -p ~/.config/systemd/user
+
+# Create environment file for OpenMemory
+cat > ~/.config/systemd/user/openmemory.env << EOF
+OM_AUTH_PROVIDER=jwt
+OM_JWT_SECRET=your-secure-secret-here
+OM_JWT_ISSUER=https://auth.yourdomain.com
+OM_JWT_AUDIENCE=openmemory-prod
+EOF
+
+# Make the file readable only by owner
+chmod 600 ~/.config/systemd/user/openmemory.env
+```
+
+Then reference it in your systemd service unit file:
+
+```ini
+[Service]
+EnvironmentFile=%h/.config/systemd/user/openmemory.env
+```
+
+#### Option 2: Podman Quadlet .env File
+
+If using Podman quadlets, load from a `.env` file:
+
+```bash
+# .env file in your deployment directory
+OM_AUTH_PROVIDER=jwt
+OM_JWT_SECRET=your-secure-secret-here
+OM_JWT_ISSUER=https://auth.yourdomain.com
+OM_JWT_AUDIENCE=openmemory-prod
+```
+
+#### Option 3: Bun.secrets (Recommended for Local Development)
+
+For local development, use Bun's built-in secrets management:
+
+```bash
+# Set secrets (these persist across sessions)
+bun run --env-file .env bun -e "
+Bun.secrets.set('OM_JWT_SECRET', 'your-secret-here');
+Bun.secrets.set('OM_JWT_ISSUER', 'https://auth.yourdomain.com');
+Bun.secrets.set('OM_JWT_AUDIENCE', 'openmemory-prod');
+"
+```
+
+The application will automatically use `Bun.secrets.get()` as a fallback to `process.env`.
+
+### Production Secrets
+
+For production deployments, prefer a dedicated secrets manager:
+
+- **AWS**: Use AWS Secrets Manager with OIDC-assumed roles
+- **Vault**: HashiCorp Vault with AppRole or Kubernetes auth
+- **GCP**: Secret Manager with workload identity
+- **Azure**: Key Vault with managed identity
+
+### Security Notes
+
+- Regularly rotate `OM_JWT_SECRET` keys
+- Always validate `iss` and `aud` claims in JWT tokens
+- Store secrets encrypted at rest
+- Use hardware security modules (HSM) for critical deployments
+- See `SECURITY.md` for additional JWT hardening practices
+- Refer to `backend/src/core/cfg.ts` for complete environment variable validation
+
 ## Migration checklist
 
 - [ ] Create cloud-side OIDC provider and role/service-account

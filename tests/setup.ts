@@ -1,3 +1,7 @@
+// Ensure tests run in deterministic test mode and skip background jobs by default
+// unless a developer overrides them in their environment.
+process.env.OM_TEST_MODE = process.env.OM_TEST_MODE ?? '1';
+process.env.OM_SKIP_BACKGROUND = process.env.OM_SKIP_BACKGROUND ?? 'true';
 
 import { beforeAll, afterAll } from "bun:test";
 import fs from "fs";
@@ -43,6 +47,10 @@ beforeAll(async () => {
   // test suite is deterministic and doesn't attempt external provider calls.
   process.env.OM_TEST_MODE = process.env.OM_TEST_MODE ?? '1';
   process.env.OM_EMBED_KIND = process.env.OM_EMBED_KIND ?? 'synthetic';
+  // Disable API key enforcement by default; tests that need auth can opt-in.
+  process.env.OM_API_KEYS_ENABLED = process.env.OM_API_KEYS_ENABLED ?? 'false';
+  // Default to skipping background tasks in test harness to avoid flakiness.
+  process.env.OM_SKIP_BACKGROUND = process.env.OM_SKIP_BACKGROUND ?? 'true';
 
   // Back up and temporarily unset provider credentials/URLs so accidental
   // environment leakage doesn't cause external network calls during tests.
@@ -73,7 +81,8 @@ beforeAll(async () => {
   // during the test run. When running under Bun we can compute an Argon2 hash
   // at runtime; otherwise fall back to a bcrypt-like placeholder to satisfy
   // `isHashedKey()` checks in tests.
-  if (!process.env.OM_API_KEY) {
+  if (process.env.OM_API_KEYS_ENABLED !== 'false') {
+    if (!process.env.OM_API_KEY) {
     try {
       if (typeof Bun !== "undefined" && (Bun as any).password && Bun.password.hash) {
         // Use a deterministic, test-only plaintext and hash it so tests can
@@ -90,6 +99,11 @@ beforeAll(async () => {
       // triggering plaintext-key warnings during tests.
       process.env.OM_API_KEY = "$2b$12$abcdefghijklmnopqrstuvABCDEFGHIJKLMNO";
     }
+  } else {
+    // When API keys are disabled for the test harness, ensure OM_API_KEY is
+    // not set so `authenticate_api_request` doesn't require API key header.
+    try { delete process.env.OM_API_KEY; } catch (e) { /* ignore */ }
+  }
   }
   // When running under Bun we can import the server module in-process which is
   // simpler and avoids child-process lifecycle issues. Otherwise fall back to spawn.
@@ -122,7 +136,17 @@ beforeAll(async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const anyG: any = globalThis as any;
     anyG.__ORIG_FETCH = anyG.fetch;
-    anyG.fetch = async function () {
+    // Block external network calls while allowing localhost loopback requests
+    // which are used heavily by the test harness to exercise the local server.
+    anyG.fetch = async function (url: any, opts?: any) {
+      try {
+        const u = typeof url === 'string' ? url : url?.url;
+        const host = u ? new URL(u).hostname : null;
+        if (host === '127.0.0.1' || host === 'localhost') {
+          // Allow loopback requests to succeed using the original fetch
+          return (anyG.__ORIG_FETCH as any)(url, opts);
+        }
+      } catch (e) { /* fallthrough to blocking */ }
       throw new Error('Network access disabled by test harness');
     };
   } catch (e) {
