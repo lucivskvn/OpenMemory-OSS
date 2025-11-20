@@ -1735,4 +1735,6 @@ export const log_maint_op = async (
     }
 };
 
+export const getRawDb = () => _sqliteDb;
+
 export { q, transaction, all_async, get_async, run_async, memories_table, initDb };

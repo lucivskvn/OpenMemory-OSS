@@ -9,6 +9,7 @@ import { temporal } from "./temporal";
 import { dash } from "./dashboard";
 import { agent } from "./agent";
 import { embed } from "./embed";
+import { backup } from "./backup";
 
 export function routes(app: any) {
     sys(app);
@@ -22,5 +23,6 @@ export function routes(app: any) {
     dash(app);
     agent(app);
     embed(app);
+    backup(app);
 }
 

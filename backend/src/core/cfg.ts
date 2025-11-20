@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { S3Client } from "@aws-sdk/client-s3";
 
 const envSchema = z.object({
     // Server configuration
@@ -19,6 +20,14 @@ const envSchema = z.object({
     OM_PG_SSL: z.enum(["disable", "require"]).optional(),
     OM_PG_SCHEMA: z.string().optional(),
     OM_PG_TABLE: z.string().optional(),
+
+    // Backup configuration
+    OM_BACKUP_CLOUD_ENABLED: z.coerce.boolean().default(false),
+    OM_BUCKET_NAME: z.string().optional(),
+    OM_BUCKET_REGION: z.string().default("us-east-1"),
+    OM_BUCKET_ENDPOINT: z.string().optional(),
+    OM_BUCKET_ACCESS_KEY: z.string().optional(),
+    OM_BUCKET_SECRET_KEY: z.string().optional(),
 
     // Embedding and Vector configuration
     OM_EMBED_KIND: z.enum(["openai", "gemini", "ollama", "local", "router_cpu", "synthetic"]).default("synthetic"),
@@ -109,6 +118,13 @@ export const env = {
 
     metadata_backend: parsedEnv.OM_METADATA_BACKEND,
     db_path: parsedEnv.OM_DB_PATH,
+
+    backup_cloud_enabled: parsedEnv.OM_BACKUP_CLOUD_ENABLED,
+    bucket_name: parsedEnv.OM_BUCKET_NAME,
+    bucket_region: parsedEnv.OM_BUCKET_REGION,
+    bucket_endpoint: parsedEnv.OM_BUCKET_ENDPOINT,
+    bucket_access_key: parsedEnv.OM_BUCKET_ACCESS_KEY,
+    bucket_secret_key: parsedEnv.OM_BUCKET_SECRET_KEY,
 
     // Support legacy OM_EMBEDDINGS env var: prefer it when present
     embed_kind: parsedEnv.OM_EMBEDDINGS ?? parsedEnv.OM_EMBED_KIND,
@@ -201,6 +217,13 @@ export function getConfig() {
         metadata_backend: p.OM_METADATA_BACKEND,
         db_path: p.OM_DB_PATH,
 
+        backup_cloud_enabled: p.OM_BACKUP_CLOUD_ENABLED,
+        bucket_name: p.OM_BUCKET_NAME,
+        bucket_region: p.OM_BUCKET_REGION,
+        bucket_endpoint: p.OM_BUCKET_ENDPOINT,
+        bucket_access_key: p.OM_BUCKET_ACCESS_KEY,
+        bucket_secret_key: p.OM_BUCKET_SECRET_KEY,
+
         embed_kind: p.OM_EMBEDDINGS ?? p.OM_EMBED_KIND,
         vec_dim: p.OM_VEC_DIM,
         embed_mode: p.OM_EMBED_MODE,
@@ -262,4 +285,17 @@ export function getConfig() {
 
         keyword_min_length: p.OM_KEYWORD_MIN_LENGTH,
     };
+}
+
+export function getS3Client() {
+    const config = getConfig();
+    return new S3Client({
+        region: config.bucket_region,
+        endpoint: config.bucket_endpoint,
+        credentials: {
+            accessKeyId: config.bucket_access_key || "",
+            secretAccessKey: config.bucket_secret_key || "",
+        },
+        forcePathStyle: true,
+    });
 }
