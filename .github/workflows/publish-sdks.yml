@@ -10,6 +10,10 @@ on:
       - 'sdk-py/**'
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   detect-changes:
     runs-on: ubuntu-latest
@@ -52,6 +56,16 @@ jobs:
           VERSION=$(bun -p "require('./package.json').version")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Publishing @openmemory/sdk@$VERSION"
+
+      - name: Cache bun (sdk-js)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun
+            sdk-js/.bun
+          key: ${{ runner.os }}-bun-deps-sdk-js-${{ hashFiles('sdk-js/bun.lock','sdk-js/bun.lockb') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-deps-sdk-js-
 
       - name: install deps
         run: cd sdk-js && bun install --frozen-lockfile
