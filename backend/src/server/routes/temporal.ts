@@ -30,11 +30,9 @@ export const create_temporal_fact = async (req: any, res: any) => {
             req.body;
 
         if (!subject || !predicate || !object) {
-            return res
-                .status(400)
-                .json({
-                    error: "Missing required fields: subject, predicate, object",
-                });
+            return res.status(400).json({
+                error: "Missing required fields: subject, predicate, object",
+            });
         }
 
         const valid_from_date = valid_from ? new Date(valid_from) : new Date();
@@ -72,11 +70,9 @@ export const get_temporal_fact = async (req: any, res: any) => {
         const { subject, predicate, object, at, min_confidence } = req.query;
 
         if (!subject && !predicate && !object) {
-            return res
-                .status(400)
-                .json({
-                    error: "At least one of subject, predicate, or object is required",
-                });
+            return res.status(400).json({
+                error: "At least one of subject, predicate, or object is required",
+            });
         }
 
         const at_date = at ? new Date(at) : new Date();
@@ -201,11 +197,9 @@ export const update_temporal_fact = async (req: any, res: any) => {
         }
 
         if (confidence === undefined && metadata === undefined) {
-            return res
-                .status(400)
-                .json({
-                    error: "At least one of confidence or metadata must be provided",
-                });
+            return res.status(400).json({
+                error: "At least one of confidence or metadata must be provided",
+            });
         }
 
         const conf =
@@ -295,11 +289,9 @@ export const search_temporal_facts = async (req: any, res: any) => {
         }
 
         if (!["subject", "predicate", "object"].includes(field)) {
-            return res
-                .status(400)
-                .json({
-                    error: "Field must be one of: subject, predicate, object",
-                });
+            return res.status(400).json({
+                error: "Field must be one of: subject, predicate, object",
+            });
         }
 
         const at_date = at ? new Date(at) : undefined;
@@ -361,11 +353,9 @@ export const compare_facts = async (req: any, res: any) => {
         const { subject, time1, time2 } = req.query;
 
         if (!subject || !time1 || !time2) {
-            return res
-                .status(400)
-                .json({
-                    error: "subject, time1, and time2 parameters are required",
-                });
+            return res.status(400).json({
+                error: "subject, time1, and time2 parameters are required",
+            });
         }
 
         const t1 = new Date(time1);

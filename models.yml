@@ -46,11 +46,11 @@ reflective:
 # Use OM_ROUTER_DIM_TOLERANCE (default 0.1) for acceptable variance.
 # Mixed dimensions trigger warnings or failures based on OM_ROUTER_VALIDATE_STRICT.
 router_cpu:
-  episodic: nomic-embed-text      # For temporal event sequences (768d)
-  semantic: nomic-embed-text      # For meaning-based similarity (768d)
-  procedural: bge-small-en-v1.5   # For action patterns and instructions (384d, use OM_VEC_DIM=384 or expect 10% tolerance)
-  emotional: nomic-embed-text     # For affective content (768d)
-  reflective: nomic-embed-text    # For introspective analysis (768d)
+  episodic: nomic-embed-text # For temporal event sequences (768d)
+  semantic: nomic-embed-text # For meaning-based similarity (768d)
+  procedural: bge-small-en-v1.5 # For action patterns and instructions (384d, use OM_VEC_DIM=384 or expect 10% tolerance)
+  emotional: nomic-embed-text # For affective content (768d)
+  reflective: nomic-embed-text # For introspective analysis (768d)
 
 # SideCar Setup (Ollama)
 # The docker-compose.yml includes an Ollama service configured as a sidecar.
