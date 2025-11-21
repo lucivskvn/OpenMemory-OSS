@@ -1,12 +1,18 @@
-"use client";
+'use client';
 
-import { useState, useEffect } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Switch } from "@/components/ui/switch";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { useState, useEffect } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Switch } from '@/components/ui/switch';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 import {
   AlertDialog,
@@ -18,7 +24,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
+} from '@/components/ui/alert-dialog';
 import {
   Table,
   TableBody,
@@ -26,10 +32,10 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table";
-import { Progress } from "@/components/ui/progress";
-import { StatCard } from "@/components/dashboard/StatCard";
-import { API_BASE_URL, getHeaders } from "@/lib/api";
+} from '@/components/ui/table';
+import { Progress } from '@/components/ui/progress';
+import { StatCard } from '@/components/dashboard/StatCard';
+import { API_BASE_URL, getHeaders } from '@/lib/api';
 import {
   Database,
   HardDrive,
@@ -39,9 +45,9 @@ import {
   AlertTriangle,
   CheckCircle,
   Trash2,
-  RefreshCw
-} from "lucide-react";
-import { toast, Toaster } from "sonner";
+  RefreshCw,
+} from 'lucide-react';
+import { toast, Toaster } from 'sonner';
 
 interface BackupStatus {
   lastBackup: string | null;
@@ -62,14 +68,14 @@ interface BackupMetadata {
   filename: string;
   size: number;
   createdAt: string;
-  location: "local" | "cloud";
+  location: 'local' | 'cloud';
 }
 
 interface BackupResponse {
   success: boolean;
   filename: string;
   path: string;
-  location: "local" | "cloud";
+  location: 'local' | 'cloud';
   timestamp: string;
 }
 
@@ -80,10 +86,13 @@ export default function BackupsPage() {
   const [backupInProgress, setBackupInProgress] = useState(false);
   const [restoreInProgress, setRestoreInProgress] = useState(false);
   const [backupProgress, setBackupProgress] = useState(0);
-  const [progressMessage, setProgressMessage] = useState("");
-  const [integrityStatus, setIntegrityStatus] = useState<{ ok: boolean; message: string; } | null>(null);
+  const [progressMessage, setProgressMessage] = useState('');
+  const [integrityStatus, setIntegrityStatus] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
   const [scheduleEnabled, setScheduleEnabled] = useState(false);
-  const [scheduleFreq, setScheduleFreq] = useState("daily");
+  const [scheduleFreq, setScheduleFreq] = useState('daily');
   const [retentionDays, setRetentionDays] = useState(7);
 
   useEffect(() => {
@@ -97,11 +106,11 @@ export default function BackupsPage() {
       setScheduleEnabled(status.autoSchedule);
       // Map cron to frequency option
       const cronFreqMap: { [key: string]: string } = {
-        "0 * * * *": "hourly",
-        "0 2 * * *": "daily",
-        "0 2 * * 1": "weekly"
+        '0 * * * *': 'hourly',
+        '0 2 * * *': 'daily',
+        '0 2 * * 1': 'weekly',
       };
-      setScheduleFreq(cronFreqMap[status.scheduleCron] || "daily");
+      setScheduleFreq(cronFreqMap[status.scheduleCron] || 'daily');
       setRetentionDays(status.retentionDays);
     }
   }, [status]);
@@ -124,7 +133,7 @@ export default function BackupsPage() {
         setStatus(data);
       }
     } catch (error) {
-      console.error("Failed to fetch backup status:", error);
+      console.error('Failed to fetch backup status:', error);
     }
   };
 
@@ -138,17 +147,17 @@ export default function BackupsPage() {
         setBackups(data.backups || []);
       }
     } catch (error) {
-      console.error("Failed to fetch backups:", error);
+      console.error('Failed to fetch backups:', error);
     } finally {
       setLoading(false);
     }
   };
 
   const formatBytes = (bytes: number) => {
-    const sizes = ["Bytes", "KB", "MB", "GB"];
-    if (bytes === 0) return "0 Bytes";
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    if (bytes === 0) return '0 Bytes';
     const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    return Math.round(bytes / Math.pow(1024, i) * 100) / 100 + " " + sizes[i];
+    return Math.round((bytes / Math.pow(1024, i)) * 100) / 100 + ' ' + sizes[i];
   };
 
   const formatDate = (dateString: string) => {
@@ -158,13 +167,13 @@ export default function BackupsPage() {
   const handleBackup = async (cloud = false) => {
     setBackupInProgress(true);
     setBackupProgress(0);
-    setProgressMessage("");
+    setProgressMessage('');
 
     try {
       const response = await fetch(`${API_BASE_URL}/admin/backup`, {
         method: 'POST',
         headers: getHeaders(),
-        body: JSON.stringify({ cloud })
+        body: JSON.stringify({ cloud }),
       });
 
       if (!response.ok) {
@@ -181,61 +190,66 @@ export default function BackupsPage() {
       // Use polling for progress updates
       const pollInterval = setInterval(async () => {
         try {
-          const pollResponse = await fetch(`${API_BASE_URL}/admin/backup/progress/${sessionId}`, {
-            headers: {
-              ...getHeaders(),
-              "Accept": "application/json"
-            }
-          });
+          const pollResponse = await fetch(
+            `${API_BASE_URL}/admin/backup/progress/${sessionId}`,
+            {
+              headers: {
+                ...getHeaders(),
+                Accept: 'application/json',
+              },
+            },
+          );
 
           if (pollResponse.ok) {
             const data = await pollResponse.json();
             if (data.percentage !== undefined) {
               setBackupProgress(data.percentage === -1 ? 0 : data.percentage);
-              setProgressMessage(data.message || "");
+              setProgressMessage(data.message || '');
 
               if (data.percentage === 100) {
                 setBackupInProgress(false);
-                setProgressMessage("");
-                toast.success("Backup completed successfully");
+                setProgressMessage('');
+                toast.success('Backup completed successfully');
                 fetchBackups();
                 fetchBackupStatus();
                 clearInterval(pollInterval);
               } else if (data.percentage === -1) {
                 setBackupInProgress(false);
-                setProgressMessage("");
-                toast.error(data.message || "Backup failed");
+                setProgressMessage('');
+                toast.error(data.message || 'Backup failed');
                 clearInterval(pollInterval);
               }
             }
           } else {
-            throw new Error("Polling failed");
+            throw new Error('Polling failed');
           }
         } catch (pollError) {
-          console.error("Polling error:", pollError);
-          toast.error("Progress tracking failed");
+          console.error('Polling error:', pollError);
+          toast.error('Progress tracking failed');
           setBackupInProgress(false);
-          setProgressMessage("");
+          setProgressMessage('');
           clearInterval(pollInterval);
         }
       }, 500);
-
     } catch (error: any) {
-      console.error("Backup failed:", error);
-      toast.error("Backup failed: " + error.message);
+      console.error('Backup failed:', error);
+      toast.error('Backup failed: ' + error.message);
       setBackupInProgress(false);
-      setProgressMessage("");
+      setProgressMessage('');
     }
   };
 
-  const handleRestore = async (filename: string, location: "local" | "cloud") => {
+  const handleRestore = async (
+    filename: string,
+    location: 'local' | 'cloud',
+  ) => {
     setRestoreInProgress(true);
 
     try {
       const response = await fetch(`${API_BASE_URL}/admin/backup/restore`, {
         method: 'POST',
         headers: getHeaders(),
-        body: JSON.stringify({ filename, location })
+        body: JSON.stringify({ filename, location }),
       });
 
       const result = await response.json();
@@ -243,7 +257,7 @@ export default function BackupsPage() {
       if (result.success) {
         setIntegrityStatus({
           ok: result.integrityChecked ?? true,
-          message: result.message || 'Integrity check passed'
+          message: result.message || 'Integrity check passed',
         });
         toast.success('Restore completed successfully');
       } else {
@@ -253,7 +267,7 @@ export default function BackupsPage() {
       await fetchBackups();
       await fetchBackupStatus();
     } catch (error: any) {
-      console.error("Restore failed:", error);
+      console.error('Restore failed:', error);
       toast.error('Restore failed: ' + error.message);
     } finally {
       setRestoreInProgress(false);
@@ -264,21 +278,21 @@ export default function BackupsPage() {
     try {
       // Map frequency to cron expression
       const freqCronMap: { [key: string]: string } = {
-        "hourly": "0 * * * *",
-        "daily": "0 2 * * *",
-        "weekly": "0 2 * * 1"
+        hourly: '0 * * * *',
+        daily: '0 2 * * *',
+        weekly: '0 2 * * 1',
       };
 
       const payload = {
         autoSchedule: scheduleEnabled,
-        scheduleCron: freqCronMap[scheduleFreq] || "0 2 * * *",
-        retentionDays: Math.max(1, Math.min(30, retentionDays)) // Clamp to 1-30 days
+        scheduleCron: freqCronMap[scheduleFreq] || '0 2 * * *',
+        retentionDays: Math.max(1, Math.min(30, retentionDays)), // Clamp to 1-30 days
       };
 
       const response = await fetch(`${API_BASE_URL}/admin/backup/config`, {
         method: 'POST',
         headers: getHeaders(),
-        body: JSON.stringify(payload)
+        body: JSON.stringify(payload),
       });
 
       if (response.ok) {
@@ -288,27 +302,33 @@ export default function BackupsPage() {
         toast.error('Failed to save scheduling configuration');
       }
     } catch (error: any) {
-      console.error("Save schedule failed:", error);
+      console.error('Save schedule failed:', error);
       toast.error('Failed to save scheduling configuration: ' + error.message);
     }
   };
 
-
-
   const getDiskUsageInfo = () => {
     if (!status?.diskSpace) {
-      return { percentage: 0, status: "Unknown", statusColor: "text-gray-500", warning: false };
+      return {
+        percentage: 0,
+        status: 'Unknown',
+        statusColor: 'text-gray-500',
+        warning: false,
+      };
     }
 
-    const percentage = ((status.diskSpace.total - status.diskSpace.available) / status.diskSpace.total) * 100;
+    const percentage =
+      ((status.diskSpace.total - status.diskSpace.available) /
+        status.diskSpace.total) *
+      100;
     const availableBytes = status.diskSpace.available;
     const warning = availableBytes < 1024 * 1024 * 1024; // 1GB
 
     return {
       percentage: Math.round(percentage * 10) / 10, // Round to 1 decimal
       status: `${percentage.toFixed(1)}%`,
-      statusColor: warning ? "text-orange-500" : "text-green-500",
-      warning
+      statusColor: warning ? 'text-orange-500' : 'text-green-500',
+      warning,
     };
   };
 
@@ -333,7 +353,12 @@ export default function BackupsPage() {
     <div className="container mx-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold">Database Backups</h1>
-        <Button onClick={() => { fetchBackupStatus(); fetchBackups(); }}>
+        <Button
+          onClick={() => {
+            fetchBackupStatus();
+            fetchBackups();
+          }}
+        >
           <RefreshCw className="w-4 h-4 mr-2" />
           Refresh
         </Button>
@@ -343,21 +368,21 @@ export default function BackupsPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           label="Last Backup"
-          value={status?.lastBackup ? formatDate(status.lastBackup) : "Never"}
+          value={status?.lastBackup ? formatDate(status.lastBackup) : 'Never'}
           status="Info"
           statusColor="text-blue-500"
         />
 
         <StatCard
           label="Backup Count"
-          value={status?.backupCount?.toString() || "0"}
+          value={status?.backupCount?.toString() || '0'}
           status="Good"
           statusColor="text-green-500"
         />
 
         <StatCard
           label="Database Size"
-          value={status ? formatBytes(status.databaseSize) : "Unknown"}
+          value={status ? formatBytes(status.databaseSize) : 'Unknown'}
           status="Good"
           statusColor="text-purple-500"
         />
@@ -365,7 +390,7 @@ export default function BackupsPage() {
         <StatCard
           label="Disk Usage"
           value={diskInfo.status}
-          status={diskInfo.warning ? "Warning" : "Good"}
+          status={diskInfo.warning ? 'Warning' : 'Good'}
           statusColor={diskInfo.statusColor}
         />
       </div>
@@ -383,7 +408,7 @@ export default function BackupsPage() {
               className="flex items-center gap-2"
             >
               <Database className="w-4 h-4" />
-              {backupInProgress ? "Backing up..." : "Backup Now"}
+              {backupInProgress ? 'Backing up...' : 'Backup Now'}
             </Button>
 
             {status?.cloudEnabled && (
@@ -394,7 +419,7 @@ export default function BackupsPage() {
                 className="flex items-center gap-2"
               >
                 <Upload className="w-4 h-4" />
-                {backupInProgress ? "Backing up..." : "Backup to Cloud"}
+                {backupInProgress ? 'Backing up...' : 'Backup to Cloud'}
               </Button>
             )}
 
@@ -414,19 +439,23 @@ export default function BackupsPage() {
               </div>
               <Progress value={backupProgress} className="w-full" />
               {progressMessage && (
-                <p className="text-sm text-muted-foreground">{progressMessage}</p>
+                <p className="text-sm text-muted-foreground">
+                  {progressMessage}
+                </p>
               )}
             </div>
           )}
 
-          {status?.diskSpace && status.diskSpace.available < 1024 * 1024 * 1024 && (
-            <div className="flex items-center gap-2 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
-              <AlertTriangle className="w-4 h-4 text-yellow-600" />
-              <span className="text-sm text-yellow-800">
-                Low disk space available: {formatBytes(status.diskSpace.available)}
-              </span>
-            </div>
-          )}
+          {status?.diskSpace &&
+            status.diskSpace.available < 1024 * 1024 * 1024 && (
+              <div className="flex items-center gap-2 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
+                <AlertTriangle className="w-4 h-4 text-yellow-600" />
+                <span className="text-sm text-yellow-800">
+                  Low disk space available:{' '}
+                  {formatBytes(status.diskSpace.available)}
+                </span>
+              </div>
+            )}
         </CardContent>
       </Card>
 
@@ -459,7 +488,9 @@ export default function BackupsPage() {
                 <SelectContent>
                   <SelectItem value="hourly">Hourly</SelectItem>
                   <SelectItem value="daily">Daily at 2:00 AM</SelectItem>
-                  <SelectItem value="weekly">Weekly on Monday at 2:00 AM</SelectItem>
+                  <SelectItem value="weekly">
+                    Weekly on Monday at 2:00 AM
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -471,7 +502,9 @@ export default function BackupsPage() {
                 min="1"
                 max="30"
                 value={retentionDays}
-                onChange={(e) => setRetentionDays(parseInt(e.target.value) || 7)}
+                onChange={(e) =>
+                  setRetentionDays(parseInt(e.target.value) || 7)
+                }
                 className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
               />
               <div className="text-sm text-muted-foreground">
@@ -493,7 +526,7 @@ export default function BackupsPage() {
         </CardHeader>
         {integrityStatus && (
           <div className="mb-4">
-            <Alert variant={integrityStatus.ok ? "default" : "destructive"}>
+            <Alert variant={integrityStatus.ok ? 'default' : 'destructive'}>
               <CheckCircle className={`w-4 h-4`} />
               <AlertDescription>{integrityStatus.message}</AlertDescription>
             </Alert>
@@ -525,7 +558,11 @@ export default function BackupsPage() {
                     <TableCell>{formatBytes(backup.size)}</TableCell>
                     <TableCell>{formatDate(backup.createdAt)}</TableCell>
                     <TableCell>
-                      <Badge variant={backup.location === "cloud" ? "default" : "secondary"}>
+                      <Badge
+                        variant={
+                          backup.location === 'cloud' ? 'default' : 'secondary'
+                        }
+                      >
                         {backup.location}
                       </Badge>
                     </TableCell>
@@ -545,16 +582,25 @@ export default function BackupsPage() {
                           </AlertDialogTrigger>
                           <AlertDialogContent>
                             <AlertDialogHeader>
-                              <AlertDialogTitle>Restore Database</AlertDialogTitle>
+                              <AlertDialogTitle>
+                                Restore Database
+                              </AlertDialogTitle>
                               <AlertDialogDescription>
-                                Are you sure you want to restore the database from {backup.filename}?
-                                This will replace the current database. Make sure you have a backup of the current state.
+                                Are you sure you want to restore the database
+                                from {backup.filename}? This will replace the
+                                current database. Make sure you have a backup of
+                                the current state.
                               </AlertDialogDescription>
                             </AlertDialogHeader>
                             <AlertDialogFooter>
                               <AlertDialogCancel>Cancel</AlertDialogCancel>
                               <AlertDialogAction
-                                onClick={() => handleRestore(backup.filename, backup.location)}
+                                onClick={() =>
+                                  handleRestore(
+                                    backup.filename,
+                                    backup.location,
+                                  )
+                                }
                                 className="bg-red-600 hover:bg-red-700"
                               >
                                 Restore

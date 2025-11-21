@@ -7,6 +7,7 @@ Notes:
 - When mounting host directories into containers on SELinux-enabled systems, use the `:Z` option on volumes to apply a shared label, e.g.
 
   volumes:
+
   - ./data:/app/data:Z
 
 - These quadlets are examples only. Validate and adapt to your environment before use.
@@ -84,7 +85,7 @@ consumption from the full Ollama image.
   in development, run the sidecar with an empty `OM_OLLAMA_MODELS` value or use
   `OM_OLLAMA_SAFE=1` to run the lightweight stub instead.
 
-- `podman compose` can be configured to run an *external* compose provider (e.g.,
+- `podman compose` can be configured to run an _external_ compose provider (e.g.,
   the Docker Compose shim). The CLI prints a message like:
 
   "Executing external compose provider '/home/user/.local/bin/docker-compose'"
@@ -147,7 +148,7 @@ the heavy model downloads that can consume memory and disk.
 
 1. Build the image locally or pull from registry:
 
-```bash
+````bash
 cd backend
 podman build -t ghcr.io/lucivskvn/openmemory-OSS:latest .
 # or pull the published image
@@ -168,7 +169,7 @@ Driver minor versions may change based on distro packaging, but this guide assum
 ```bash
 sudo apt install -y nvidia-driver-580 nvidia-utils-580 nvidia-ctk nvidia-container-toolkit
 sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
-```
+````
 
 2. Run container with CDI GPU devices:
 
@@ -192,14 +193,15 @@ podman run --rm --device /dev/dri --device /dev/kfd -v /usr/share/vulkan/icd.d:/
 ```
 
 See `docs/deployment/gpu-optimization.md` for tuning Ollama and additional GPU options.
-```
+
+````
 
 1. Use the example quadlets or `podman run` for an ephemeral test (rootless example shown):
 
 ```bash
 # rootless quick test (binds a user-owned host path into /data)
 podman run --userns=keep-id -p 8080:8080 -v $HOME/.local/share/openmemory:/data:Z ghcr.io/lucivskvn/openmemory-OSS:latest
-```
+````
 
 Notes:
 

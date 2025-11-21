@@ -1,136 +1,150 @@
-import fs from "fs";
-import path from "path";
-import os from "os";
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 
 // Ensure each test run uses an isolated temporary sqlite DB to avoid locks and cross-test interference
-const tmpDir = path.resolve(process.cwd(), "tmp");
+const tmpDir = path.resolve(process.cwd(), 'tmp');
 if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
-process.env.OM_DB_PATH = path.join(tmpDir, `openmemory-test-${process.pid}-${Date.now()}.sqlite`);
+process.env.OM_DB_PATH = path.join(
+  tmpDir,
+  `openmemory-test-${process.pid}-${Date.now()}.sqlite`,
+);
 
-import { describe, test, expect, beforeEach, afterAll } from "bun:test";
-import { initDb, q, transaction, closeDb } from "../../backend/src/core/db.test-entry";
-import { env } from "../../backend/src/core/cfg";
+import { describe, test, expect, beforeEach, afterAll } from 'bun:test';
+import {
+  initDb,
+  q,
+  transaction,
+  closeDb,
+} from '../../backend/src/core/db.test-entry';
+import { env } from '../../backend/src/core/cfg';
 
 // This test suite validates the database layer, running tests for both
 // SQLite and PostgreSQL if configured.
 
-const is_pg = env.metadata_backend === "postgres";
+const is_pg = env.metadata_backend === 'postgres';
 
 describe(`Database Layer (${is_pg ? 'PostgreSQL' : 'SQLite'})`, () => {
-    beforeEach(async () => {
-        // For SQLite, the initDb in the server will handle in-memory.
-        // For Postgres, we might need a more complex setup if we were to drop tables,
-        // but for these tests, we'll just ensure data isolation via user_id.
-        if (!is_pg) {
-            // Re-initialize the database for each test to ensure isolation for SQLite.
-            await initDb();
-        }
-    });
+  beforeEach(async () => {
+    // For SQLite, the initDb in the server will handle in-memory.
+    // For Postgres, we might need a more complex setup if we were to drop tables,
+    // but for these tests, we'll just ensure data isolation via user_id.
+    if (!is_pg) {
+      // Re-initialize the database for each test to ensure isolation for SQLite.
+      await initDb();
+    }
+  });
 
-    test("should insert and retrieve a user", async () => {
-        const userId = `test-user-${Date.now()}`;
-        const now = Date.now();
+  test('should insert and retrieve a user', async () => {
+    const userId = `test-user-${Date.now()}`;
+    const now = Date.now();
 
-        await transaction.begin();
-        await q.ins_user.run(userId, "initial summary", 0, now, now);
-        await transaction.commit();
+    await transaction.begin();
+    await q.ins_user.run(userId, 'initial summary', 0, now, now);
+    await transaction.commit();
 
-        const user: any = await q.get_user.get(userId);
+    const user: any = await q.get_user.get(userId);
 
-        expect(user).not.toBeNull();
-        expect(user.user_id).toBe(userId);
-        expect(user.summary).toBe("initial summary");
-    });
+    expect(user).not.toBeNull();
+    expect(user.user_id).toBe(userId);
+    expect(user.summary).toBe('initial summary');
+  });
 
-    test("should maintain multi-tenant data isolation", async () => {
-        const userId1 = `iso-user-1-${Date.now()}`;
-        const userId2 = `iso-user-2-${Date.now()}`;
-        const now = Date.now();
+  test('should maintain multi-tenant data isolation', async () => {
+    const userId1 = `iso-user-1-${Date.now()}`;
+    const userId2 = `iso-user-2-${Date.now()}`;
+    const now = Date.now();
 
-        await transaction.begin();
-        // Insert memories for two different users
-        // Use legacy ins_mem parameter ordering (id, content, primary_sector, tags, meta, created_at, updated_at, last_seen_at, salience, decay_lambda, version, user_id, mean_dim, mean_vec, compressed_vec)
-        // Use canonical 18-arg ins_mem ordering (id, user_id, segment, content, simhash, primary_sector, tags, meta, created_at, updated_at, last_seen_at, salience, decay_lambda, version, mean_dim, mean_vec, compressed_vec, feedback_score)
-        await q.ins_mem.run(
-            `mem1-${now}`,
-            userId1,
-            0,
-            "content1",
-            "",
-            "episodic",
-            JSON.stringify([]),
-            JSON.stringify({}),
-            now,
-            now,
-            now,
-            1.0,
-            0.99,
-            1,
-            0,
-            Buffer.alloc(0),
-            Buffer.alloc(0),
-            0,
-        );
-        await q.ins_mem.run(
-            `mem2-${now}`,
-            userId2,
-            0,
-            "content2",
-            "",
-            "episodic",
-            JSON.stringify([]),
-            JSON.stringify({}),
-            now,
-            now,
-            now,
-            1.0,
-            0.99,
-            1,
-            0,
-            Buffer.alloc(0),
-            Buffer.alloc(0),
-            0,
-        );
-        await transaction.commit();
+    await transaction.begin();
+    // Insert memories for two different users
+    // Use legacy ins_mem parameter ordering (id, content, primary_sector, tags, meta, created_at, updated_at, last_seen_at, salience, decay_lambda, version, user_id, mean_dim, mean_vec, compressed_vec)
+    // Use canonical 18-arg ins_mem ordering (id, user_id, segment, content, simhash, primary_sector, tags, meta, created_at, updated_at, last_seen_at, salience, decay_lambda, version, mean_dim, mean_vec, compressed_vec, feedback_score)
+    await q.ins_mem.run(
+      `mem1-${now}`,
+      userId1,
+      0,
+      'content1',
+      '',
+      'episodic',
+      JSON.stringify([]),
+      JSON.stringify({}),
+      now,
+      now,
+      now,
+      1.0,
+      0.99,
+      1,
+      0,
+      Buffer.alloc(0),
+      Buffer.alloc(0),
+      0,
+    );
+    await q.ins_mem.run(
+      `mem2-${now}`,
+      userId2,
+      0,
+      'content2',
+      '',
+      'episodic',
+      JSON.stringify([]),
+      JSON.stringify({}),
+      now,
+      now,
+      now,
+      1.0,
+      0.99,
+      1,
+      0,
+      Buffer.alloc(0),
+      Buffer.alloc(0),
+      0,
+    );
+    await transaction.commit();
 
-        // Fetch memories for each user
-        const user1Mems = await q.all_mem_by_user.all(userId1, 10, 0);
-        const user2Mems = await q.all_mem_by_user.all(userId2, 10, 0);
+    // Fetch memories for each user
+    const user1Mems = await q.all_mem_by_user.all(userId1, 10, 0);
+    const user2Mems = await q.all_mem_by_user.all(userId2, 10, 0);
 
-        // Verify that each user only sees their own data
-        expect(user1Mems).toHaveLength(1);
-        expect(user1Mems[0].content).toBe("content1");
+    // Verify that each user only sees their own data
+    expect(user1Mems).toHaveLength(1);
+    expect(user1Mems[0].content).toBe('content1');
 
-        expect(user2Mems).toHaveLength(1);
-        expect(user2Mems[0].content).toBe("content2");
-    });
+    expect(user2Mems).toHaveLength(1);
+    expect(user2Mems[0].content).toBe('content2');
+  });
 
-    test("transaction should rollback on error", async () => {
-        const userId = `rollback-user-${Date.now()}`;
-        try {
-            await transaction.begin();
-            await q.ins_user.run(userId, "this should not be committed", 0, Date.now(), Date.now());
-            // Force an error to trigger rollback
-            throw new Error("Test rollback");
-        } catch (e: any) {
-            if (e.message === "Test rollback") {
-                await transaction.rollback();
-            } else {
-                // If another error occurred, re-throw it
-                throw e;
-            }
-        }
+  test('transaction should rollback on error', async () => {
+    const userId = `rollback-user-${Date.now()}`;
+    try {
+      await transaction.begin();
+      await q.ins_user.run(
+        userId,
+        'this should not be committed',
+        0,
+        Date.now(),
+        Date.now(),
+      );
+      // Force an error to trigger rollback
+      throw new Error('Test rollback');
+    } catch (e: any) {
+      if (e.message === 'Test rollback') {
+        await transaction.rollback();
+      } else {
+        // If another error occurred, re-throw it
+        throw e;
+      }
+    }
 
-        const user = await q.get_user.get(userId);
-        // Depending on the driver/library this may be `null` or `undefined` when not found.
-        expect(user == null).toBe(true);
-    });
+    const user = await q.get_user.get(userId);
+    // Depending on the driver/library this may be `null` or `undefined` when not found.
+    expect(user == null).toBe(true);
+  });
 });
 
 afterAll(async () => {
-    try {
-        await closeDb();
-    } catch (e) {
-        // best-effort cleanup
-    }
+  try {
+    await closeDb();
+  } catch (e) {
+    // best-effort cleanup
+  }
 });

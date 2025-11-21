@@ -95,7 +95,7 @@ JSON outputs to `tests/benchmarks/results/`:
 {
   "metric": "recall@5",
   "value": 0.95,
-  "baseline": 0.90,
+  "baseline": 0.9,
   "change_percent": 5.6,
   "status": "pass",
   "hardware": "Ryzen 5 5600H",
@@ -127,7 +127,7 @@ See `.github/workflows/ci.yml` benchmark job:
 
 - Hardware: 2-core Ubuntu 24.04 runner
 - Triggers: Every PR and main branch push
-- Artifacts: 90-day retention for comparison-*.json/md
+- Artifacts: 90-day retention for comparison-\*.json/md
 
 ### Assertions
 

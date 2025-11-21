@@ -10,7 +10,8 @@ import logger from "./logger";
 const is_pg = env.metadata_backend === "postgres";
 
 const log = (msg: string) => {
-    if (env.log_migrate) logger.info({ component: "MIGRATE" }, "[MIGRATE] %s", msg);
+    if (env.log_migrate)
+        logger.info({ component: "MIGRATE" }, "[MIGRATE] %s", msg);
 };
 
 interface Migration {
@@ -110,7 +111,11 @@ async function set_db_version_sqlite(db: any, version: string): Promise<void> {
     });
 }
 
-async function check_column_exists_sqlite(db: any, table: string, column: string): Promise<boolean> {
+async function check_column_exists_sqlite(
+    db: any,
+    table: string,
+    column: string,
+): Promise<boolean> {
     return new Promise((ok, no) => {
         db.all(`PRAGMA table_info(${table})`, (err: any, rows: any[]) => {
             if (err) return no(err);
@@ -128,7 +133,9 @@ async function run_sqlite_migration(db: any, m: Migration): Promise<void> {
         "user_id",
     );
     if (has_user_id) {
-        log(`Migration ${m.version} already applied (user_id exists), skipping`);
+        log(
+            `Migration ${m.version} already applied (user_id exists), skipping`,
+        );
         await set_db_version_sqlite(db, m.version);
         return;
     }
@@ -137,7 +144,15 @@ async function run_sqlite_migration(db: any, m: Migration): Promise<void> {
         await new Promise<void>((ok, no) => {
             db.run(sql, (err: any) => {
                 if (err && !err.message.includes("duplicate column")) {
-                    logger.error({ component: "MIGRATE", error_code: 'migrate_sql_error', err }, "[MIGRATE] SQL error: %o", err);
+                    logger.error(
+                        {
+                            component: "MIGRATE",
+                            error_code: "migrate_sql_error",
+                            err,
+                        },
+                        "[MIGRATE] SQL error: %o",
+                        err,
+                    );
                     return no(err);
                 }
                 ok();
@@ -208,7 +223,9 @@ async function run_pg_migration(m: Migration): Promise<void> {
     const has_user_id = await check_column_exists_pg(mt, "user_id");
 
     if (has_user_id) {
-        log(`Migration ${m.version} already applied (user_id exists), skipping`);
+        log(
+            `Migration ${m.version} already applied (user_id exists), skipping`,
+        );
         await set_db_version_pg(m.version);
         return;
     }
@@ -232,7 +249,15 @@ async function run_pg_migration(m: Migration): Promise<void> {
                 !e.message.includes("already exists") &&
                 !e.message.includes("duplicate")
             ) {
-                logger.error({ component: "MIGRATE", error_code: 'migrate_pg_error', err: e }, "[MIGRATE] PG error: %o", e);
+                logger.error(
+                    {
+                        component: "MIGRATE",
+                        error_code: "migrate_pg_error",
+                        err: e,
+                    },
+                    "[MIGRATE] PG error: %o",
+                    e,
+                );
                 throw e;
             }
         }
@@ -272,8 +297,17 @@ export async function run_migrations() {
             // eslint-disable-next-line @typescript-eslint/no-var-requires
             sqlite3 = await import("sqlite3");
         } catch (e) {
-            logger.error({ component: "MIGRATE", error_code: 'migrate_sqlite3_missing', err: e }, "[MIGRATE] sqlite3 module not available. This legacy migration helper requires the 'sqlite3' package. Prefer running `bun src/migrate.ts` from the backend directory which uses Bun-friendly migrations, or install sqlite3 in this environment.");
-            throw new Error("sqlite3 module not available. Use backend/src/migrate.ts or install sqlite3 to run this helper.");
+            logger.error(
+                {
+                    component: "MIGRATE",
+                    error_code: "migrate_sqlite3_missing",
+                    err: e,
+                },
+                "[MIGRATE] sqlite3 module not available. This legacy migration helper requires the 'sqlite3' package. Prefer running `bun src/migrate.ts` from the backend directory which uses Bun-friendly migrations, or install sqlite3 in this environment.",
+            );
+            throw new Error(
+                "sqlite3 module not available. Use backend/src/migrate.ts or install sqlite3 to run this helper.",
+            );
         }
 
         const db = new sqlite3.Database(db_path);

@@ -1,37 +1,41 @@
-const { spawn } = require('child_process')
-const path = require('path')
+const { spawn } = require('child_process');
+const path = require('path');
 
-console.log('🧠 OpenMemory Backend Example')
-console.log('=============================')
+console.log('🧠 OpenMemory Backend Example');
+console.log('=============================');
 
-const backendPath = path.join(__dirname, '..', '..', 'backend')
-process.chdir(backendPath)
+const backendPath = path.join(__dirname, '..', '..', 'backend');
+process.chdir(backendPath);
 
-console.log('Starting OpenMemory server...')
+console.log('Starting OpenMemory server...');
 
 // Prefer Bun when available (Bun is the recommended runtime); fall back to
 // npm for environments that still rely on Node tooling.
 const useBun = (() => {
-    try {
-        const { spawnSync } = require('child_process');
-        const r = spawnSync('bun', ['--version'], { stdio: 'ignore', shell: true });
-        return r.status === 0;
-    } catch (e) {
-        return false;
-    }
+  try {
+    const { spawnSync } = require('child_process');
+    const r = spawnSync('bun', ['--version'], { stdio: 'ignore', shell: true });
+    return r.status === 0;
+  } catch (e) {
+    return false;
+  }
 })();
 
-const server = spawn(useBun ? 'bun' : 'npm', useBun ? ['run', 'start'] : ['start'], {
+const server = spawn(
+  useBun ? 'bun' : 'npm',
+  useBun ? ['run', 'start'] : ['start'],
+  {
     stdio: 'inherit',
-    shell: true
-})
+    shell: true,
+  },
+);
 
 server.on('close', (code) => {
-    console.log(`Server exited with code ${code}`)
-})
+  console.log(`Server exited with code ${code}`);
+});
 
 process.on('SIGINT', () => {
-    console.log('\nShutting down server...')
-    server.kill('SIGINT')
-    process.exit(0)
-})
+  console.log('\nShutting down server...');
+  server.kill('SIGINT');
+  process.exit(0);
+});

@@ -14,13 +14,24 @@ const agentRequestSchema = z.object({
 });
 
 const agentResponseSchema = z.object({
-    status: z.enum(["accepted", "in_progress", "completed", "blocked", "rejected"]),
+    status: z.enum([
+        "accepted",
+        "in_progress",
+        "completed",
+        "blocked",
+        "rejected",
+    ]),
     patch: z.string().optional(),
     summary: z.string().optional(),
-    tests: z.record(z.string(), z.object({
-        status: z.string(),
-        output: z.string(),
-    })).optional(),
+    tests: z
+        .record(
+            z.string(),
+            z.object({
+                status: z.string(),
+                output: z.string(),
+            }),
+        )
+        .optional(),
     artifacts: z.array(z.string()).optional(),
 });
 
@@ -35,16 +46,30 @@ export function agent(app: any) {
         if (ctx.body === undefined || ctx.body === null) {
             try {
                 let text: string | undefined = undefined;
-                if (typeof (req as any).clone === 'function') {
-                    try { text = await (req as any).clone().text(); } catch (e) { text = undefined; }
+                if (typeof (req as any).clone === "function") {
+                    try {
+                        text = await (req as any).clone().text();
+                    } catch (e) {
+                        text = undefined;
+                    }
                 }
-                if (!text && typeof (req as any).text === 'function') {
-                    try { text = await req.text(); } catch (e) { text = undefined; }
+                if (!text && typeof (req as any).text === "function") {
+                    try {
+                        text = await req.text();
+                    } catch (e) {
+                        text = undefined;
+                    }
                 }
                 if (text && text.length) {
-                    try { ctx.body = JSON.parse(text); } catch (e) { /* leave as null; validation will catch */ }
+                    try {
+                        ctx.body = JSON.parse(text);
+                    } catch (e) {
+                        /* leave as null; validation will catch */
+                    }
                 }
-            } catch (e) { /* ignore and fall through to validation */ }
+            } catch (e) {
+                /* ignore and fall through to validation */
+            }
         }
 
         const validation = agentRequestSchema.safeParse(ctx.body);
@@ -53,51 +78,69 @@ export function agent(app: any) {
                 JSON.stringify({
                     status: "rejected",
                     error: "invalid_request",
-                    issues: validation.error.issues
+                    issues: validation.error.issues,
                 }),
-                { status: 400, headers: { "Content-Type": "application/json" } }
+                {
+                    status: 400,
+                    headers: { "Content-Type": "application/json" },
+                },
             );
         }
 
         const request = validation.data;
 
         try {
-            logger.info({ component: "AGENT", request_id: request.id }, `[AGENT] Received agent request: ${request.goal}`);
+            logger.info(
+                { component: "AGENT", request_id: request.id },
+                `[AGENT] Received agent request: ${request.goal}`,
+            );
 
             // For now, return a basic response indicating the endpoint is available
             // but the full agent implementation is not yet complete
             const response = {
                 status: "accepted" as const,
                 summary: `Agent request '${request.id}' received. Goal: ${request.goal}. Full agent implementation pending.`,
-                artifacts: []
+                artifacts: [],
             };
 
             // Validate response matches expected schema
             const responseValidation = agentResponseSchema.safeParse(response);
             if (!responseValidation.success) {
-                logger.error({ component: "AGENT", err: responseValidation.error }, "[AGENT] Response validation failed");
+                logger.error(
+                    { component: "AGENT", err: responseValidation.error },
+                    "[AGENT] Response validation failed",
+                );
                 throw new Error("Internal response validation failed");
             }
 
-            logger.info({ component: "AGENT", request_id: request.id, status: response.status }, `[AGENT] Responded to agent request`);
+            logger.info(
+                {
+                    component: "AGENT",
+                    request_id: request.id,
+                    status: response.status,
+                },
+                `[AGENT] Responded to agent request`,
+            );
 
             return new Response(JSON.stringify(response), {
                 status: 200,
-                headers: { "Content-Type": "application/json" }
+                headers: { "Content-Type": "application/json" },
             });
-
         } catch (e: any) {
-            logger.error({ component: "AGENT", request_id: request.id, err: e }, `[AGENT] Error processing agent request: ${e.message}`);
+            logger.error(
+                { component: "AGENT", request_id: request.id, err: e },
+                `[AGENT] Error processing agent request: ${e.message}`,
+            );
 
             const errorResponse = {
                 status: "rejected" as const,
                 summary: `Error processing agent request: ${e.message}`,
-                artifacts: []
+                artifacts: [],
             };
 
             return new Response(JSON.stringify(errorResponse), {
                 status: 500,
-                headers: { "Content-Type": "application/json" }
+                headers: { "Content-Type": "application/json" },
             });
         }
     });

@@ -36,7 +36,7 @@ export function sys(app: any) {
         // Avoid network calls when Ollama isn't the active provider
         const embeddingInfo = await getEmbeddingInfo();
         let ollamaHealth;
-        if (embeddingInfo.kind !== 'ollama') {
+        if (embeddingInfo.kind !== "ollama") {
             ollamaHealth = null;
         } else {
             ollamaHealth = await getOllamaHealth();
@@ -46,7 +46,13 @@ export function sys(app: any) {
         if (ollamaHealth === null) {
             ollama = { configured: false, available: false };
         } else {
-            ollama = { configured: true, available: ollamaHealth.available, version: ollamaHealth.version, models_loaded: ollamaHealth.models_loaded, error: ollamaHealth.error ?? undefined };
+            ollama = {
+                configured: true,
+                available: ollamaHealth.available,
+                version: ollamaHealth.version,
+                models_loaded: ollamaHealth.models_loaded,
+                error: ollamaHealth.error ?? undefined,
+            };
         }
         const payload = {
             ok: true,
@@ -81,7 +87,10 @@ export function sys(app: any) {
                 headers: { "Content-Type": "application/json" },
             });
         } catch (unexpected_error_fetching_sectors) {
-            return new Response(JSON.stringify({ err: "internal" }), { status: 500, headers: { "Content-Type": "application/json" } });
+            return new Response(JSON.stringify({ err: "internal" }), {
+                status: 500,
+                headers: { "Content-Type": "application/json" },
+            });
         }
     });
 

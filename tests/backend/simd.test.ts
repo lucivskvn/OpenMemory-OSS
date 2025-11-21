@@ -4,12 +4,11 @@ import {
   dotProduct,
   normalize,
   fuseVectors,
-  SIMD_SUPPORTED
+  SIMD_SUPPORTED,
 } from '../../backend/src/utils/simd';
 import { gen_syn_emb } from '../../backend/src/memory/embed';
 
 describe('SIMD Vector Operations', () => {
-
   describe('benchmarkSimd', () => {
     it('returns performance comparison between SIMD and JS implementations', async () => {
       const result = await benchmarkSimd(256, 100);
@@ -53,7 +52,10 @@ describe('SIMD Vector Operations', () => {
       const result = dotProduct(a, b);
       expect(result).toBeCloseTo(1.0, 5); // Identical vectors
 
-      const orthogonal = dotProduct(new Float32Array([1, 0]), new Float32Array([0, 1]));
+      const orthogonal = dotProduct(
+        new Float32Array([1, 0]),
+        new Float32Array([0, 1]),
+      );
       expect(orthogonal).toBeCloseTo(0.0, 5); // Orthogonal vectors
     });
 
@@ -131,14 +133,16 @@ describe('SIMD Vector Operations', () => {
 
       // Manual calculation: [0.8*0.7 + 0.4*0.3, 0.6*0.7 + 0.8*0.3] = [0.56 + 0.12, 0.42 + 0.24] = [0.68, 0.66]
       // fuseVectors normalizes the weighted sum, so we expect the normalized result
-      const expectedDot = 0.68*0.68 + 0.66*0.66;
+      const expectedDot = 0.68 * 0.68 + 0.66 * 0.66;
       const expectedNorm = Math.sqrt(expectedDot);
 
       expect(result[0]).toBeCloseTo(0.68 / expectedNorm, 3);
       expect(result[1]).toBeCloseTo(0.66 / expectedNorm, 3);
 
       // Verify unit length (fuseVectors returns normalized result)
-      const actualNorm = Math.sqrt(result[0]*result[0] + result[1]*result[1]);
+      const actualNorm = Math.sqrt(
+        result[0] * result[0] + result[1] * result[1],
+      );
       expect(actualNorm).toBeCloseTo(1.0, 5);
     });
 
@@ -151,7 +155,9 @@ describe('SIMD Vector Operations', () => {
       const result = fuseVectors(syn, sem, weights);
 
       // fuseVectors already returns a normalized result, verify unit length directly
-      const actualNorm = Math.sqrt(result[0]*result[0] + result[1]*result[1]);
+      const actualNorm = Math.sqrt(
+        result[0] * result[0] + result[1] * result[1],
+      );
       expect(actualNorm).toBeCloseTo(1.0, 5);
 
       // Should be biased toward syn vector (semantic emphasis for episodic)
@@ -162,7 +168,9 @@ describe('SIMD Vector Operations', () => {
       const syn = new Float32Array([1, 2]);
       const sem = new Float32Array([1, 2, 3]);
 
-      expect(() => fuseVectors(syn, sem, [0.5, 0.5])).toThrow('Vector length mismatch');
+      expect(() => fuseVectors(syn, sem, [0.5, 0.5])).toThrow(
+        'Vector length mismatch',
+      );
     });
   });
 
@@ -209,7 +217,11 @@ describe('SIMD Vector Operations', () => {
 
       const mockWasmModule = {
         memory: new WebAssembly.Memory({ initial: 1 }),
-        dot_product: function (_ptrA: number, _ptrB: number, _len: number): number {
+        dot_product: function (
+          _ptrA: number,
+          _ptrB: number,
+          _len: number,
+        ): number {
           // Proper WASM implementation should use both ptrA and ptrB for dot product
           const memory = new Float32Array(this.memory.buffer);
 
@@ -223,7 +235,8 @@ describe('SIMD Vector Operations', () => {
           // Simplified malloc for test purposes: allocate sequential chunks so
           // each call returns a unique pointer. Start at offset 0 and increment
           // by `size` bytes each allocation.
-          if (typeof (this as any)._nextPtr === 'undefined') (this as any)._nextPtr = 0;
+          if (typeof (this as any)._nextPtr === 'undefined')
+            (this as any)._nextPtr = 0;
           const p = (this as any)._nextPtr;
           (this as any)._nextPtr += _size;
           return p;
@@ -234,9 +247,16 @@ describe('SIMD Vector Operations', () => {
         normalize: function (_ptr: number, _len: number): void {
           // Not tested here but required by interface
         },
-        fuse_vectors: function (_synPtr: number, _semPtr: number, _resultPtr: number, _len: number, _synWeight: number, _semWeight: number): void {
+        fuse_vectors: function (
+          _synPtr: number,
+          _semPtr: number,
+          _resultPtr: number,
+          _len: number,
+          _synWeight: number,
+          _semWeight: number,
+        ): void {
           // Not tested here but required by interface
-        }
+        },
       };
 
       // Test vectors for dot product
@@ -266,7 +286,6 @@ describe('SIMD Vector Operations', () => {
         // Verify it would match JS implementation if WASM was working
         const jsResult = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
         expect(result).toBe(jsResult);
-
       } finally {
         mockWasmModule.free(ptrA);
         mockWasmModule.free(ptrB);
@@ -291,7 +310,12 @@ describe('SIMD Vector Operations', () => {
     it('supports optional SIMD vector fusion in router mode', () => {
       // This test verifies the SIMD functions are ready for router_cpu mode
       const syn = new Float32Array(gen_syn_emb('test text', 'semantic'));
-      const sem = new Float32Array([0.1, 0.2, 0.3, ...Array(syn.length - 3).fill(0.1)]);
+      const sem = new Float32Array([
+        0.1,
+        0.2,
+        0.3,
+        ...Array(syn.length - 3).fill(0.1),
+      ]);
 
       // Should not throw when SIMD is available
       const result = fuseVectors(syn, sem, [0.6, 0.4]);
@@ -301,11 +325,11 @@ describe('SIMD Vector Operations', () => {
 
     it('performs sector-aware fusion with performance benefits', () => {
       const sectorWeights: Record<string, [number, number]> = {
-        episodic: [0.65, 0.35],    // More semantic for episodic
-        semantic: [0.6, 0.4],     // Balanced for semantic
-        procedural: [0.55, 0.45],  // More synthetic for procedural (faster models)
-        emotional: [0.58, 0.42],   // Slightly more semantic for emotional
-        reflective: [0.62, 0.38],  // More semantic for reflective
+        episodic: [0.65, 0.35], // More semantic for episodic
+        semantic: [0.6, 0.4], // Balanced for semantic
+        procedural: [0.55, 0.45], // More synthetic for procedural (faster models)
+        emotional: [0.58, 0.42], // Slightly more semantic for emotional
+        reflective: [0.62, 0.38], // More semantic for reflective
       };
 
       const syn = new Float32Array([0.8, 0.6, 0.4]);
@@ -364,20 +388,26 @@ describe('SIMD Vector Operations', () => {
       const result = fuseVectors(syn, sem, weights);
 
       // Verify base normalization (should already be unit length)
-      const initialNorm = Math.sqrt(result[0]*result[0] + result[1]*result[1]);
+      const initialNorm = Math.sqrt(
+        result[0] * result[0] + result[1] * result[1],
+      );
       expect(initialNorm).toBeCloseTo(1.0, 5);
 
       // Test double-normalization effects
       const doubleNormalized = [...result]; // Copy
       normalize(doubleNormalized as any); // Type assertion needed but functionally correct
 
-      const finalNorm = Math.sqrt(doubleNormalized[0]*doubleNormalized[0] + doubleNormalized[1]*doubleNormalized[1]);
+      const finalNorm = Math.sqrt(
+        doubleNormalized[0] * doubleNormalized[0] +
+          doubleNormalized[1] * doubleNormalized[1],
+      );
       expect(finalNorm).toBeCloseTo(1.0, 5);
 
       // Verify idempotent property (double normalization changes norm negligibly)
       const maxChange = Math.max(
         Math.abs(doubleNormalized[0] - result[0]),
-        Math.abs(doubleNormalized[1] - result[1]));
+        Math.abs(doubleNormalized[1] - result[1]),
+      );
       expect(maxChange).toBeLessThan(1e-6); // Should be extremely small for well-conditioned vectors
     });
   });

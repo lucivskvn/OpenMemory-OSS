@@ -2,7 +2,10 @@ import { env } from "./cfg";
 import fs from "node:fs";
 import path from "node:path";
 import logger from "./logger";
-import { createSQLiteDatabase, detectSQLiteCapabilities } from "./sqlite-runtime";
+import {
+    createSQLiteDatabase,
+    detectSQLiteCapabilities,
+} from "./sqlite-runtime";
 
 /**
  * Typed q helper signatures
@@ -12,48 +15,144 @@ import { createSQLiteDatabase, detectSQLiteCapabilities } from "./sqlite-runtime
  * trailing `user_id`) are supported at runtime but are considered
  * deprecated for application code when `OM_STRICT_TENANT=true` is used.
  */
-type RunIdUserOptional = { run: (id: string, user_id?: string | null) => Promise<void> };
-type RunIdSectorUserOptional = { run: (id: string, sector: string, user_id?: string | null) => Promise<void> };
-type RunIdUserOptionalGeneric = { run: (id: string, ...rest: any[]) => Promise<void> };
+type RunIdUserOptional = {
+    run: (id: string, user_id?: string | null) => Promise<void>;
+};
+type RunIdSectorUserOptional = {
+    run: (id: string, sector: string, user_id?: string | null) => Promise<void>;
+};
+type RunIdUserOptionalGeneric = {
+    run: (id: string, ...rest: any[]) => Promise<void>;
+};
 
 type q_type = {
     // Complex/variable signature: keep flexible for existing callers
     ins_mem: { run: (...p: any[]) => Promise<void> };
     // Prefer normalized signatures for vector/mean updates used by apps
-    upd_mean_vec: { run: (id: string, mean_dim: number, mean_vec: Buffer | Uint8Array | any, user_id?: string | null) => Promise<void> };
-    upd_compressed_vec: { run: (id: string, compressed_vec: Buffer | Uint8Array | any, user_id?: string | null) => Promise<void> };
-    upd_feedback: { run: (id: string, feedback_score: number, user_id?: string | null) => Promise<void> };
-    upd_seen: { run: (id: string, last_seen_at: number, salience: number, updated_at: number, user_id?: string | null) => Promise<void> };
-    upd_mem: { run: (content: string, tags: string, meta: string, updated_at: number, id: string, user_id?: string | null) => Promise<void> };
-    upd_mem_with_sector: { run: (content: string, primary_sector: string, tags: string, meta: string, updated_at: number, id: string, user_id?: string | null) => Promise<void> };
+    upd_mean_vec: {
+        run: (
+            id: string,
+            mean_dim: number,
+            mean_vec: Buffer | Uint8Array | any,
+            user_id?: string | null,
+        ) => Promise<void>;
+    };
+    upd_compressed_vec: {
+        run: (
+            id: string,
+            compressed_vec: Buffer | Uint8Array | any,
+            user_id?: string | null,
+        ) => Promise<void>;
+    };
+    upd_feedback: {
+        run: (
+            id: string,
+            feedback_score: number,
+            user_id?: string | null,
+        ) => Promise<void>;
+    };
+    upd_seen: {
+        run: (
+            id: string,
+            last_seen_at: number,
+            salience: number,
+            updated_at: number,
+            user_id?: string | null,
+        ) => Promise<void>;
+    };
+    upd_mem: {
+        run: (
+            content: string,
+            tags: string,
+            meta: string,
+            updated_at: number,
+            id: string,
+            user_id?: string | null,
+        ) => Promise<void>;
+    };
+    upd_mem_with_sector: {
+        run: (
+            content: string,
+            primary_sector: string,
+            tags: string,
+            meta: string,
+            updated_at: number,
+            id: string,
+            user_id?: string | null,
+        ) => Promise<void>;
+    };
     del_mem: { run: (id: string, user_id?: string | null) => Promise<void> };
     get_mem: { get: (id: string, user_id?: string | null) => Promise<any> };
-    get_mem_by_simhash: { get: (simhash: string, user_id?: string | null) => Promise<any> };
-    all_mem: { all: (limit: number, offset: number, user_id?: string | null) => Promise<any[]> };
+    get_mem_by_simhash: {
+        get: (simhash: string, user_id?: string | null) => Promise<any>;
+    };
+    all_mem: {
+        all: (
+            limit: number,
+            offset: number,
+            user_id?: string | null,
+        ) => Promise<any[]>;
+    };
     all_mem_by_sector: {
-        all: (sector: string, limit: number, offset: number, user_id?: string | null) => Promise<any[]>;
+        all: (
+            sector: string,
+            limit: number,
+            offset: number,
+            user_id?: string | null,
+        ) => Promise<any[]>;
     };
     all_mem_by_user: {
         all: (user_id: string, limit: number, offset: number) => Promise<any[]>;
     };
     all_mem_by_user_and_sector: {
-        all: (user_id: string, sector: string, limit: number, offset: number) => Promise<any[]>;
+        all: (
+            user_id: string,
+            sector: string,
+            limit: number,
+            offset: number,
+        ) => Promise<any[]>;
     };
     get_segment_count: { get: (segment: number) => Promise<any> };
     get_max_segment: { get: () => Promise<any> };
     get_segments: { all: () => Promise<any[]> };
     get_mem_by_segment: { all: (segment: number) => Promise<any[]> };
     ins_vec: { run: (...p: any[]) => Promise<void> };
-    get_vec: { get: (id: string, sector: string, user_id?: string | null) => Promise<any> };
-    get_vecs_by_id: { all: (id: string, user_id?: string | null) => Promise<any[]> };
-    get_vecs_by_sector: { all: (sector: string, user_id?: string | null) => Promise<any[]> };
-    get_vecs_batch: { all: (ids: string[], sector: string, user_id?: string | null) => Promise<any[]> };
+    get_vec: {
+        get: (
+            id: string,
+            sector: string,
+            user_id?: string | null,
+        ) => Promise<any>;
+    };
+    get_vecs_by_id: {
+        all: (id: string, user_id?: string | null) => Promise<any[]>;
+    };
+    get_vecs_by_sector: {
+        all: (sector: string, user_id?: string | null) => Promise<any[]>;
+    };
+    get_vecs_batch: {
+        all: (
+            ids: string[],
+            sector: string,
+            user_id?: string | null,
+        ) => Promise<any[]>;
+    };
     del_vec: { run: (...p: any[]) => Promise<void> };
     del_vec_sector: { run: (...p: any[]) => Promise<void> };
     ins_waypoint: { run: (...p: any[]) => Promise<void> };
-    get_neighbors: { all: (src: string, user_id?: string | null) => Promise<any[]> };
-    get_waypoints_by_src: { all: (src: string, user_id?: string | null) => Promise<any[]> };
-    get_waypoint: { get: (src: string, dst: string, user_id?: string | null) => Promise<any> };
+    get_neighbors: {
+        all: (src: string, user_id?: string | null) => Promise<any[]>;
+    };
+    get_waypoints_by_src: {
+        all: (src: string, user_id?: string | null) => Promise<any[]>;
+    };
+    get_waypoint: {
+        get: (
+            src: string,
+            dst: string,
+            user_id?: string | null,
+        ) => Promise<any>;
+    };
     upd_waypoint: { run: (...p: any[]) => Promise<void> };
     del_waypoints: { run: (...p: any[]) => Promise<void> };
     prune_waypoints: { run: (threshold: number) => Promise<void> };
@@ -61,11 +160,23 @@ type q_type = {
     upd_log: { run: (...p: any[]) => Promise<void> };
     get_pending_logs: { all: () => Promise<any[]> };
     get_failed_logs: { all: () => Promise<any[]> };
-    get_stream_telemetry: { all: (limit?: number, offset?: number) => Promise<any[]> };
+    get_stream_telemetry: {
+        all: (limit?: number, offset?: number) => Promise<any[]>;
+    };
     ins_user: { run: (...p: any[]) => Promise<void> };
     get_user: { get: (user_id: string) => Promise<any> };
     upd_user_summary: { run: (...p: any[]) => Promise<void> };
-    ins_stream_telemetry: { run: (id: string, user_id: string | null, embedding_mode: string | null, duration_ms: number, memory_ids: string, query: string, ts: number) => Promise<void> };
+    ins_stream_telemetry: {
+        run: (
+            id: string,
+            user_id: string | null,
+            embedding_mode: string | null,
+            duration_ms: number,
+            memory_ids: string,
+            query: string,
+            ts: number,
+        ) => Promise<void>;
+    };
 };
 
 let run_async: (sql: string, p?: any[]) => Promise<void>;
@@ -91,11 +202,11 @@ let _sqliteDb: any = null; // Cross-runtime SQLite instance
 function sanitizeConnectionString(connStr: string): string {
     try {
         const url = new URL(connStr);
-        url.password = '***';
+        url.password = "***";
         return url.toString();
     } catch {
         // If URL parsing fails, mark as invalid without logging raw string
-        return '(invalid connection string - not parseable as URL)';
+        return "(invalid connection string - not parseable as URL)";
     }
 }
 
@@ -106,56 +217,101 @@ function sanitizeConnectionString(connStr: string): string {
  * cause the function to return an empty options object, and initDb() then falls back to discrete OM_PG_*
  * environment variables.
  */
-export function parsePgConnectionString(connStr: string | undefined, logger: any): any {
+export function parsePgConnectionString(
+    connStr: string | undefined,
+    logger: any,
+): any {
     let opts: any = {};
     if (connStr) {
         try {
             // Subset implementation: supports only simple host:port/database URIs; does not support libpq socket or multi-host forms
             const u = new URL(connStr);
             // Check for multi-host libpq URIs (unsupported)
-            if (u.hostname.includes(',')) {
-                logger.warn({ component: 'DB', connection_string: sanitizeConnectionString(connStr) }, '[DB] Multi-host libpq URIs are unsupported; comma-separated hostnames are not supported. The connection string is being ignored and discrete OM_PG_* variables will be used instead. Falling back to OM_PG_HOST, OM_PG_PORT, OM_PG_DB, OM_PG_USER, and OM_PG_PASSWORD');
+            if (u.hostname.includes(",")) {
+                logger.warn(
+                    {
+                        component: "DB",
+                        connection_string: sanitizeConnectionString(connStr),
+                    },
+                    "[DB] Multi-host libpq URIs are unsupported; comma-separated hostnames are not supported. The connection string is being ignored and discrete OM_PG_* variables will be used instead. Falling back to OM_PG_HOST, OM_PG_PORT, OM_PG_DB, OM_PG_USER, and OM_PG_PASSWORD",
+                );
                 return {};
             }
             // Check for unexpected query parameters (only sslmode and host are honored)
             const params = Array.from(u.searchParams.keys());
-            if (params.some(p => p !== 'sslmode' && p !== 'host')) {
-                logger.warn({ component: 'DB', connection_string: sanitizeConnectionString(connStr) }, '[DB] Additional query string parameters are ignored; only sslmode and host are honored, others are not supported');
+            if (params.some((p) => p !== "sslmode" && p !== "host")) {
+                logger.warn(
+                    {
+                        component: "DB",
+                        connection_string: sanitizeConnectionString(connStr),
+                    },
+                    "[DB] Additional query string parameters are ignored; only sslmode and host are honored, others are not supported",
+                );
             }
             // Optionally detect socket-style URIs (host=/path/to/socket)
-            const hostParam = u.searchParams.get('host');
-            if (hostParam && hostParam.startsWith('/')) {
-                logger.warn({ component: 'DB', connection_string: sanitizeConnectionString(connStr) }, '[DB] Socket-style URIs are unsupported; host=/path/to/socket patterns are not supported. The connection string is being ignored and discrete OM_PG_* variables will be used instead. Falling back to OM_PG_HOST, OM_PG_PORT, OM_PG_DB, OM_PG_USER, and OM_PG_PASSWORD');
+            const hostParam = u.searchParams.get("host");
+            if (hostParam && hostParam.startsWith("/")) {
+                logger.warn(
+                    {
+                        component: "DB",
+                        connection_string: sanitizeConnectionString(connStr),
+                    },
+                    "[DB] Socket-style URIs are unsupported; host=/path/to/socket patterns are not supported. The connection string is being ignored and discrete OM_PG_* variables will be used instead. Falling back to OM_PG_HOST, OM_PG_PORT, OM_PG_DB, OM_PG_USER, and OM_PG_PASSWORD",
+                );
                 return {};
             }
             opts.host = u.hostname;
             opts.port = u.port ? +u.port : undefined;
             // URL pathname: split on '/', filter empty parts, take last segment for database name
-            opts.database = u.pathname ? u.pathname.split('/').filter(part => part.length > 0).pop() : undefined;
+            opts.database = u.pathname
+                ? u.pathname
+                      .split("/")
+                      .filter((part) => part.length > 0)
+                      .pop()
+                : undefined;
             if (u.username) opts.user = decodeURIComponent(u.username);
             if (u.password) opts.password = decodeURIComponent(u.password);
             // libpq-style sslmode in query string (disable | require | verify-full)
-            const sslmode = u.searchParams.get('sslmode');
-            if (sslmode === 'require') opts.ssl = { rejectUnauthorized: false };
-            else if (sslmode === 'disable') opts.ssl = false;
-            else if (sslmode === 'verify-full') opts.ssl = { rejectUnauthorized: true };
+            const sslmode = u.searchParams.get("sslmode");
+            if (sslmode === "require") opts.ssl = { rejectUnauthorized: false };
+            else if (sslmode === "disable") opts.ssl = false;
+            else if (sslmode === "verify-full")
+                opts.ssl = { rejectUnauthorized: true };
 
             // Validate URL scheme
             if (u.protocol !== "postgres:" && u.protocol !== "postgresql:") {
-                logger.warn({ component: 'DB', connection_string: sanitizeConnectionString(connStr) }, '[DB] Invalid protocol in OM_PG_CONNECTION_STRING; only postgres:// or postgresql:// are supported, falling back to individual OM_PG_* env vars');
+                logger.warn(
+                    {
+                        component: "DB",
+                        connection_string: sanitizeConnectionString(connStr),
+                    },
+                    "[DB] Invalid protocol in OM_PG_CONNECTION_STRING; only postgres:// or postgresql:// are supported, falling back to individual OM_PG_* env vars",
+                );
                 return {};
             }
 
             // Sanity check for required fields
             if (!opts.database) {
-                logger.warn({ component: 'DB', connection_string: sanitizeConnectionString(connStr) }, '[DB] Incomplete connection string in OM_PG_CONNECTION_STRING; missing database, falling back to individual OM_PG_* env vars');
+                logger.warn(
+                    {
+                        component: "DB",
+                        connection_string: sanitizeConnectionString(connStr),
+                    },
+                    "[DB] Incomplete connection string in OM_PG_CONNECTION_STRING; missing database, falling back to individual OM_PG_* env vars",
+                );
                 return {};
             }
         } catch (e) {
             // If the connection string is malformed, log a warning, fail silently and fall back
             // to discrete env vars. Avoid noisy logs in test environments to
             // keep behavior deterministic for unit tests that validate fallbacks.
-            logger.warn({ component: 'DB', connection_string: sanitizeConnectionString(connStr) }, '[DB] Failed to parse OM_PG_CONNECTION_STRING; falling back to OM_PG_* env vars');
+            logger.warn(
+                {
+                    component: "DB",
+                    connection_string: sanitizeConnectionString(connStr),
+                },
+                "[DB] Failed to parse OM_PG_CONNECTION_STRING; falling back to OM_PG_* env vars",
+            );
             return {};
         }
     }
@@ -168,20 +324,36 @@ export function parsePgConnectionString(connStr: string | undefined, logger: any
  * For sensitive methods, warns or throws when user_id is missing in non-strict mode.
  */
 function checkTenantScope(helperName: string, user_id: any, params: any = {}) {
-    const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
-    if (strict && (user_id === null || user_id === undefined || user_id === '')) {
-        const msg = `Tenant-scoped ${helperName.slice(helperName.lastIndexOf('_') + 1)} requires user_id when OM_STRICT_TENANT=true`;
-        logger.error({ component: 'DB', helper: helperName, ...params }, `[DB] ${msg}`);
+    const strict =
+        (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+    if (
+        strict &&
+        (user_id === null || user_id === undefined || user_id === "")
+    ) {
+        const msg = `Tenant-scoped ${helperName.slice(helperName.lastIndexOf("_") + 1)} requires user_id when OM_STRICT_TENANT=true`;
+        logger.error(
+            { component: "DB", helper: helperName, ...params },
+            `[DB] ${msg}`,
+        );
         throw new Error(msg);
     }
-    if (!strict && (user_id === null || user_id === undefined || user_id === '')) {
-        const warnLegacy = process.env.OM_WARN_LEGACY_TENANT_CALLS === 'true';
+    if (
+        !strict &&
+        (user_id === null || user_id === undefined || user_id === "")
+    ) {
+        const warnLegacy = process.env.OM_WARN_LEGACY_TENANT_CALLS === "true";
         const msg = `${helperName} called without user_id in non-strict tenant mode. This may return global data.`;
         if (warnLegacy) {
-            logger.error({ component: 'DB', helper: helperName, ...params }, `[DB] SENSITIVE: ${msg} OM_WARN_LEGACY_TENANT_CALLS=true, throwing.`);
+            logger.error(
+                { component: "DB", helper: helperName, ...params },
+                `[DB] SENSITIVE: ${msg} OM_WARN_LEGACY_TENANT_CALLS=true, throwing.`,
+            );
             throw new Error(`Legacy call blocked: ${msg}`);
         } else {
-            logger.warn({ component: 'DB', helper: helperName, ...params }, `[DB] SENSITIVE: ${msg} Consider enabling OM_STRICT_TENANT or OM_WARN_LEGACY_TENANT_CALLS.`);
+            logger.warn(
+                { component: "DB", helper: helperName, ...params },
+                `[DB] SENSITIVE: ${msg} Consider enabling OM_STRICT_TENANT or OM_WARN_LEGACY_TENANT_CALLS.`,
+            );
         }
     }
 }
@@ -200,7 +372,8 @@ function warnIfMissingUserId(sql: string, p: any[] = []) {
         if (!/user_id/.test(sql)) return;
 
         const userIdIndexes: number[] = [];
-        const debugFallback = (process.env.OM_DB_DEBUG_USER_SCOPE || "false") === "true";
+        const debugFallback =
+            (process.env.OM_DB_DEBUG_USER_SCOPE || "false") === "true";
 
         // Postgres-style placeholders: user_id=$N
         const pgRe = /user_id\s*=\s*\$(\d+)/gi;
@@ -230,18 +403,24 @@ function warnIfMissingUserId(sql: string, p: any[] = []) {
                 }
             }
         } else if (Array.isArray(p) && debugFallback) {
-            shouldWarn = p.some((x) => x === null || x === undefined || x === "");
+            shouldWarn = p.some(
+                (x) => x === null || x === undefined || x === "",
+            );
         }
 
         if (shouldWarn) {
-            const short = sql.length > 200 ? sql.slice(0, 200) + '...' : sql;
+            const short = sql.length > 200 ? sql.slice(0, 200) + "..." : sql;
             const msg = `[DB] DB query referencing user_id invoked without user_id parameter: ${short}`;
-            logger.warn({ component: 'DB', sql: short }, msg);
-            if ((process.env.OM_DB_CONSOLE || '').toLowerCase() === 'true') console.warn(msg);
+            logger.warn({ component: "DB", sql: short }, msg);
+            if ((process.env.OM_DB_CONSOLE || "").toLowerCase() === "true")
+                console.warn(msg);
         }
     } catch (e) {
         // Non-fatal: log parsing failures at warn level to avoid noisy errors
-        logger.warn({ component: 'DB', err: e }, '[DB] Failed to parse SQL for user_id parameter positions; skipping noisy heuristic. Set OM_DB_DEBUG_USER_SCOPE=true to enable verbose heuristics.');
+        logger.warn(
+            { component: "DB", err: e },
+            "[DB] Failed to parse SQL for user_id parameter positions; skipping noisy heuristic. Set OM_DB_DEBUG_USER_SCOPE=true to enable verbose heuristics.",
+        );
     }
 }
 
@@ -251,11 +430,16 @@ async function initDb() {
     // Allow runtime overrides via process.env to support tests or programmatic
     // callers that change OM_DB_PATH or OM_METADATA_BACKEND mid-process. Fall
     // back to the parsed `env` values when process.env vars are not present.
-    const desiredPath = (process.env.OM_METADATA_BACKEND === "postgres"
-        ? "postgres"
-        : process.env.OM_DB_PATH || env.db_path || "./data/openmemory.sqlite");
+    const desiredPath =
+        process.env.OM_METADATA_BACKEND === "postgres"
+            ? "postgres"
+            : process.env.OM_DB_PATH ||
+              env.db_path ||
+              "./data/openmemory.sqlite";
     if (_initialized_db_path === desiredPath) return;
-    const is_pg = (process.env.OM_METADATA_BACKEND || env.metadata_backend) === "postgres";
+    const is_pg =
+        (process.env.OM_METADATA_BACKEND || env.metadata_backend) ===
+        "postgres";
     // Tenant enforcement is controlled by the environment variable
     // `OM_STRICT_TENANT`. Do not set a default here so test harnesses and
     // programmatic callers can control tenant mode explicitly.
@@ -285,7 +469,8 @@ async function initDb() {
     if (is_pg) {
         // Allow operators to explicitly disable Postgres attempt via OM_ENABLE_PG=false
         if (process.env.OM_ENABLE_PG === "false") {
-            const msg = "OM_ENABLE_PG=false - Postgres support disabled in this runtime. Set OM_ENABLE_PG=true to enable Bun Postgres or use OM_METADATA_BACKEND=sqlite to use SQLite instead.";
+            const msg =
+                "OM_ENABLE_PG=false - Postgres support disabled in this runtime. Set OM_ENABLE_PG=true to enable Bun Postgres or use OM_METADATA_BACKEND=sqlite to use SQLite instead.";
             logger.error({ component: "DB" }, msg);
             throw new Error(msg);
         }
@@ -295,7 +480,12 @@ async function initDb() {
         // preserves the existing query/transaction semantics so CI and
         // non-Bun environments continue to work.
         const bunRuntime = (globalThis as any).Bun;
-        const bunPg = bunRuntime && (bunRuntime.connectPostgres || bunRuntime.postgres || bunRuntime.Postgres || bunRuntime.PostgresClient);
+        const bunPg =
+            bunRuntime &&
+            (bunRuntime.connectPostgres ||
+                bunRuntime.postgres ||
+                bunRuntime.Postgres ||
+                bunRuntime.PostgresClient);
 
         // (fallback logic moved to use the already-declared opts below)
 
@@ -312,7 +502,10 @@ async function initDb() {
         // the connection string is absent or invalid.
         // The connection string is read dynamically via getConfig() to support
         // hot-reload semantics in tests that modify process.env after module import.
-        let opts: any = parsePgConnectionString((await import("./cfg")).getConfig().pg_connection_string, logger);
+        let opts: any = parsePgConnectionString(
+            (await import("./cfg")).getConfig().pg_connection_string,
+            logger,
+        );
 
         // If no connection string parts were parsed, fall back to discrete env vars
         if (!opts.host) {
@@ -320,12 +513,14 @@ async function initDb() {
                 process.env.OM_PG_SSL === "require"
                     ? { rejectUnauthorized: false }
                     : process.env.OM_PG_SSL === "disable"
-                        ? false
-                        : undefined;
+                      ? false
+                      : undefined;
             const db_name = process.env.OM_PG_DB || "openmemory";
             opts = {
                 host: process.env.OM_PG_HOST,
-                port: process.env.OM_PG_PORT ? +process.env.OM_PG_PORT : undefined,
+                port: process.env.OM_PG_PORT
+                    ? +process.env.OM_PG_PORT
+                    : undefined,
                 database: db_name,
                 user: process.env.OM_PG_USER,
                 password: process.env.OM_PG_PASSWORD,
@@ -345,8 +540,13 @@ async function initDb() {
                     try {
                         bunClient = new (bunPg as any)(opts);
                     } catch (e) {
-                        if (typeof (bunRuntime as any).connectPostgres === "function") {
-                            bunClient = (bunRuntime as any).connectPostgres(opts);
+                        if (
+                            typeof (bunRuntime as any).connectPostgres ===
+                            "function"
+                        ) {
+                            bunClient = (bunRuntime as any).connectPostgres(
+                                opts,
+                            );
                         } else {
                             bunClient = null;
                         }
@@ -372,12 +572,25 @@ async function initDb() {
                 _pgPool = pool;
                 _pgClient = client;
                 bunClient = client;
-                logger.info({ component: "DB" }, "[DB] Using node 'pg' client as Postgres backend fallback");
+                logger.info(
+                    { component: "DB" },
+                    "[DB] Using node 'pg' client as Postgres backend fallback",
+                );
             }
         } catch (e) {
-            const bunInfo = bunRuntime && bunRuntime.version ? `Bun version: ${bunRuntime.version}` : "Bun runtime: not detected or lacks Postgres support";
-            logger.error({ component: "DB", err: e }, "[DB] No Postgres client available. Bun Postgres not found and node 'pg' import failed. " + bunInfo + ". If you want to use SQLite, set OM_METADATA_BACKEND=sqlite.");
-            throw new Error("Postgres client unavailable: install 'pg' or run Bun with Postgres support.");
+            const bunInfo =
+                bunRuntime && bunRuntime.version
+                    ? `Bun version: ${bunRuntime.version}`
+                    : "Bun runtime: not detected or lacks Postgres support";
+            logger.error(
+                { component: "DB", err: e },
+                "[DB] No Postgres client available. Bun Postgres not found and node 'pg' import failed. " +
+                    bunInfo +
+                    ". If you want to use SQLite, set OM_METADATA_BACKEND=sqlite.",
+            );
+            throw new Error(
+                "Postgres client unavailable: install 'pg' or run Bun with Postgres support.",
+            );
         }
 
         // Record Bun client (if present) for cleanup, and verify connection
@@ -385,7 +598,10 @@ async function initDb() {
         try {
             await bunClient.query("SELECT 1");
         } catch (e) {
-            logger.error({ component: "DB", err: e }, "[DB] Bun Postgres client failed to connect");
+            logger.error(
+                { component: "DB", err: e },
+                "[DB] Bun Postgres client failed to connect",
+            );
             throw e;
         }
 
@@ -396,7 +612,8 @@ async function initDb() {
         const v = `"${sc}"."${process.env.OM_VECTOR_TABLE || "openmemory_vectors"}"`;
         const w = `"${sc}"."openmemory_waypoints"`;
         const l = `"${sc}"."openmemory_embed_logs"`;
-        const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
+        const strict =
+            (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
 
         // Timed exec wrapper for logging and optional user-scoped guard
         const timedExec = async (sql: string, p: any[] = []) => {
@@ -405,9 +622,23 @@ async function initDb() {
                 const res = await bunClient.query(sql, p);
                 const dur = Date.now() - start;
                 if (process.env.OM_DB_LOG === "true") {
-                    const msg = `[DB] DB query (${dur}ms): ${sql.length > 200 ? sql.slice(0, 200) + '...' : sql}`;
-                    logger.info({ component: "DB", sql: sql.length > 200 ? sql.slice(0, 200) + '...' : sql, duration_ms: dur }, msg);
-                    if ((process.env.OM_DB_CONSOLE || "").toLowerCase() === "true") console.log(msg);
+                    const msg = `[DB] DB query (${dur}ms): ${sql.length > 200 ? sql.slice(0, 200) + "..." : sql}`;
+                    logger.info(
+                        {
+                            component: "DB",
+                            sql:
+                                sql.length > 200
+                                    ? sql.slice(0, 200) + "..."
+                                    : sql,
+                            duration_ms: dur,
+                        },
+                        msg,
+                    );
+                    if (
+                        (process.env.OM_DB_CONSOLE || "").toLowerCase() ===
+                        "true"
+                    )
+                        console.log(msg);
                 }
                 // Centralized user-scope warning helper (keeps behavior identical)
                 warnIfMissingUserId(sql, p);
@@ -415,7 +646,8 @@ async function initDb() {
             } catch (e) {
                 const msg = `[DB] DB query error: ${String(e)} SQL: ${sql}`;
                 logger.error({ component: "DB", sql, err: e }, msg);
-                if ((process.env.OM_DB_CONSOLE || "").toLowerCase() === "true") console.error(msg, e);
+                if ((process.env.OM_DB_CONSOLE || "").toLowerCase() === "true")
+                    console.error(msg, e);
                 throw e;
             }
         };
@@ -423,8 +655,10 @@ async function initDb() {
         run_async = async (sql: string, p: any[] = []) => {
             await timedExec(sql, p);
         };
-        get_async = async (sql: string, p: any[] = []) => (await timedExec(sql, p))[0];
-        all_async = async (sql: string, p: any[] = []) => await timedExec(sql, p);
+        get_async = async (sql: string, p: any[] = []) =>
+            (await timedExec(sql, p))[0];
+        all_async = async (sql: string, p: any[] = []) =>
+            await timedExec(sql, p);
 
         transaction = {
             begin: async () => {
@@ -453,7 +687,9 @@ async function initDb() {
                     txDepth = 0;
                 } else {
                     txDepth--;
-                    await bunClient.query(`ROLLBACK TO SAVEPOINT sp_${txDepth}`);
+                    await bunClient.query(
+                        `ROLLBACK TO SAVEPOINT sp_${txDepth}`,
+                    );
                 }
             },
         };
@@ -461,67 +697,104 @@ async function initDb() {
         // Ensure necessary tables exist (awaited)
         try {
             await bunClient.query(
-                `create table if not exists ${m}(id uuid primary key,user_id text${strict ? ' not null' : ''},segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,meta text,created_at bigint,updated_at bigint,last_seen_at bigint,salience double precision,decay_lambda double precision,version integer default 1,mean_dim integer,mean_vec bytea,compressed_vec bytea,feedback_score double precision default 0)`
+                `create table if not exists ${m}(id uuid primary key,user_id text${strict ? " not null" : ""},segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,meta text,created_at bigint,updated_at bigint,last_seen_at bigint,salience double precision,decay_lambda double precision,version integer default 1,mean_dim integer,mean_vec bytea,compressed_vec bytea,feedback_score double precision default 0)`,
             );
             await bunClient.query(
-                `create table if not exists ${v}(id uuid,sector text,user_id text,v bytea,dim integer not null,primary key(id,sector,user_id))`
+                `create table if not exists ${v}(id uuid,sector text,user_id text,v bytea,dim integer not null,primary key(id,sector,user_id))`,
             );
             await bunClient.query(
-                `create table if not exists ${w}(src_id text,dst_id text not null,user_id text,weight double precision not null,created_at bigint,updated_at bigint,primary key(src_id,user_id))`
+                `create table if not exists ${w}(src_id text,dst_id text not null,user_id text,weight double precision not null,created_at bigint,updated_at bigint,primary key(src_id,user_id))`,
             );
             await bunClient.query(
-                `create table if not exists ${l}(id text primary key,model text,status text,ts bigint,err text)`
+                `create table if not exists ${l}(id text primary key,model text,status text,ts bigint,err text)`,
             );
             await bunClient.query(
-                `create table if not exists "${sc}"."openmemory_stream_telemetry"(id text primary key,user_id text${strict ? ' not null' : ''},embedding_mode text,duration_ms bigint,memory_ids jsonb,query text,ts bigint)`
+                `create table if not exists "${sc}"."openmemory_stream_telemetry"(id text primary key,user_id text${strict ? " not null" : ""},embedding_mode text,duration_ms bigint,memory_ids jsonb,query text,ts bigint)`,
             );
             await bunClient.query(
-                `create table if not exists "${sc}"."openmemory_users"(user_id text primary key,summary text,reflection_count integer default 0,created_at bigint,updated_at bigint)`
+                `create table if not exists "${sc}"."openmemory_users"(user_id text primary key,summary text,reflection_count integer default 0,created_at bigint,updated_at bigint)`,
             );
             // Ensure maintenance/statistics and temporal tables exist in Postgres
             // to match the SQLite branch. These tables power maintenance logging
             // (`log_maint_op`) and temporal facts/edges features used in tests
             // and some domain workflows.
             await bunClient.query(
-                `create table if not exists "${sc}"."openmemory_stats"(id bigserial primary key,type text not null,count integer default 1,ts bigint not null)`
+                `create table if not exists "${sc}"."openmemory_stats"(id bigserial primary key,type text not null,count integer default 1,ts bigint not null)`,
             );
             await bunClient.query(
-                `create table if not exists "${sc}"."openmemory_temporal_facts"(id text primary key,subject text not null,predicate text not null,object text not null,valid_from bigint not null,valid_to bigint,confidence double precision not null check(confidence >= 0 and confidence <= 1),last_updated bigint not null,metadata text,unique(subject,predicate,object,valid_from))`
+                `create table if not exists "${sc}"."openmemory_temporal_facts"(id text primary key,subject text not null,predicate text not null,object text not null,valid_from bigint not null,valid_to bigint,confidence double precision not null check(confidence >= 0 and confidence <= 1),last_updated bigint not null,metadata text,unique(subject,predicate,object,valid_from))`,
             );
             await bunClient.query(
-                `create table if not exists "${sc}"."openmemory_temporal_edges"(id text primary key,source_id text not null,target_id text not null,relation_type text not null,valid_from bigint not null,valid_to bigint,weight double precision not null,metadata text)`
+                `create table if not exists "${sc}"."openmemory_temporal_edges"(id text primary key,source_id text not null,target_id text not null,relation_type text not null,valid_from bigint not null,valid_to bigint,weight double precision not null,metadata text)`,
             );
             // Create helpful indexes similar to the SQLite branch
-            await bunClient.query(`create index if not exists "idx_stats_ts" on "${sc}"."openmemory_stats"(ts)`);
-            await bunClient.query(`create index if not exists "idx_stream_telemetry_ts" on "${sc}"."openmemory_stream_telemetry"(ts)`);
-            await bunClient.query(`create index if not exists "idx_temporal_subject" on "${sc}"."openmemory_temporal_facts"(subject)`);
-            await bunClient.query(`create index if not exists "idx_temporal_predicate" on "${sc}"."openmemory_temporal_facts"(predicate)`);
-            await bunClient.query(`create index if not exists "idx_temporal_validity" on "${sc}"."openmemory_temporal_facts"(valid_from,valid_to)`);
-            await bunClient.query(`create index if not exists "idx_edges_source" on "${sc}"."openmemory_temporal_edges"(source_id)`);
-            await bunClient.query(`create index if not exists "idx_edges_target" on "${sc}"."openmemory_temporal_edges"(target_id)`);
+            await bunClient.query(
+                `create index if not exists "idx_stats_ts" on "${sc}"."openmemory_stats"(ts)`,
+            );
+            await bunClient.query(
+                `create index if not exists "idx_stream_telemetry_ts" on "${sc}"."openmemory_stream_telemetry"(ts)`,
+            );
+            await bunClient.query(
+                `create index if not exists "idx_temporal_subject" on "${sc}"."openmemory_temporal_facts"(subject)`,
+            );
+            await bunClient.query(
+                `create index if not exists "idx_temporal_predicate" on "${sc}"."openmemory_temporal_facts"(predicate)`,
+            );
+            await bunClient.query(
+                `create index if not exists "idx_temporal_validity" on "${sc}"."openmemory_temporal_facts"(valid_from,valid_to)`,
+            );
+            await bunClient.query(
+                `create index if not exists "idx_edges_source" on "${sc}"."openmemory_temporal_edges"(source_id)`,
+            );
+            await bunClient.query(
+                `create index if not exists "idx_edges_target" on "${sc}"."openmemory_temporal_edges"(target_id)`,
+            );
 
             // Strict tenant schema enforcement: add not null constraints and backfill checks
             if (strict) {
                 // Check for existing null user_ids that would violate new constraints
-                const nullMemories = await bunClient.query(`select count(*) as cnt from ${m} where user_id is null`);
+                const nullMemories = await bunClient.query(
+                    `select count(*) as cnt from ${m} where user_id is null`,
+                );
                 if ((nullMemories.rows[0] as any).cnt > 0) {
-                    throw new Error(`Strict tenant mode enabled but found ${(nullMemories.rows[0] as any).cnt} memories with null user_id. Backfill or disable OM_STRICT_TENANT.`);
+                    throw new Error(
+                        `Strict tenant mode enabled but found ${(nullMemories.rows[0] as any).cnt} memories with null user_id. Backfill or disable OM_STRICT_TENANT.`,
+                    );
                 }
-                const nullTelemetry = await bunClient.query(`select count(*) as cnt from "${sc}"."openmemory_stream_telemetry" where user_id is null`);
+                const nullTelemetry = await bunClient.query(
+                    `select count(*) as cnt from "${sc}"."openmemory_stream_telemetry" where user_id is null`,
+                );
                 if ((nullTelemetry.rows[0] as any).cnt > 0) {
-                    throw new Error(`Strict tenant mode enabled but found ${(nullTelemetry.rows[0] as any).cnt} stream_telemetry with null user_id. Backfill or disable OM_STRICT_TENANT.`);
+                    throw new Error(
+                        `Strict tenant mode enabled but found ${(nullTelemetry.rows[0] as any).cnt} stream_telemetry with null user_id. Backfill or disable OM_STRICT_TENANT.`,
+                    );
                 }
 
                 // Add combined indexes for query optimization
-                await bunClient.query(`create index if not exists "idx_memories_user_sector" on ${m}(user_id, primary_sector)`);
-                await bunClient.query(`create index if not exists "idx_memories_user_segment" on ${m}(user_id, segment)`);
-                await bunClient.query(`create index if not exists "idx_vectors_user_sector" on ${v}(user_id, sector)`);
-                await bunClient.query(`create index if not exists "idx_waypoints_user_dst" on ${w}(user_id, dst_id)`);
-                await bunClient.query(`create index if not exists "idx_stream_telemetry_user" on "${sc}"."openmemory_stream_telemetry"(user_id)`);
-                await bunClient.query(`create index if not exists "idx_stream_telemetry_user_ts" on "${sc}"."openmemory_stream_telemetry"(user_id, ts)`);
+                await bunClient.query(
+                    `create index if not exists "idx_memories_user_sector" on ${m}(user_id, primary_sector)`,
+                );
+                await bunClient.query(
+                    `create index if not exists "idx_memories_user_segment" on ${m}(user_id, segment)`,
+                );
+                await bunClient.query(
+                    `create index if not exists "idx_vectors_user_sector" on ${v}(user_id, sector)`,
+                );
+                await bunClient.query(
+                    `create index if not exists "idx_waypoints_user_dst" on ${w}(user_id, dst_id)`,
+                );
+                await bunClient.query(
+                    `create index if not exists "idx_stream_telemetry_user" on "${sc}"."openmemory_stream_telemetry"(user_id)`,
+                );
+                await bunClient.query(
+                    `create index if not exists "idx_stream_telemetry_user_ts" on "${sc}"."openmemory_stream_telemetry"(user_id, ts)`,
+                );
             }
         } catch (e) {
-            logger.error({ component: "DB", err: e }, "[DB] Failed to create tables with Bun Postgres client");
+            logger.error(
+                { component: "DB", err: e },
+                "[DB] Failed to create tables with Bun Postgres client",
+            );
             throw e;
         }
 
@@ -537,9 +810,26 @@ async function initDb() {
             ins_mem: {
                 run: (...p) => {
                     const mapParams = (args: any[]) => {
+                        // console.log('DEBUG ins_mem args:', args.length, args);
                         if (!args || args.length === 0) return args;
                         if (args.length === 18) return args;
-                        const [id, content, primary_sector, tags, meta, created_at, updated_at, last_seen_at, salience, decay_lambda, version, user_id, mean_dim, mean_vec, compressed_vec] = args;
+                        const [
+                            id,
+                            content,
+                            primary_sector,
+                            tags,
+                            meta,
+                            created_at,
+                            updated_at,
+                            last_seen_at,
+                            salience,
+                            decay_lambda,
+                            version,
+                            user_id,
+                            mean_dim,
+                            mean_vec,
+                            compressed_vec,
+                        ] = args;
                         const segment = 0;
                         const simhash = null;
                         const feedback_score = 0;
@@ -566,11 +856,21 @@ async function initDb() {
                     };
                     const params = mapParams(p);
                     // Enforce tenant scoping for inserts when OM_STRICT_TENANT is enabled
-                    const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
-                    const user_id = Array.isArray(params) && params.length > 1 ? params[1] : null;
-                    if (strict && (user_id === null || user_id === undefined || user_id === '')) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    const user_id =
+                        Array.isArray(params) && params.length > 1
+                            ? params[1]
+                            : null;
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped write (ins_mem) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: 'DB' }, `[DB] ${msg}`);
+                        logger.error({ component: "DB" }, `[DB] ${msg}`);
                         throw new Error(msg);
                     }
                     return run_async(
@@ -583,10 +883,18 @@ async function initDb() {
                 run: (...p) => {
                     // Normalize parameters: (id, mean_dim, mean_vec [, user_id])
                     let id: any, mean_dim: any, mean_vec: any, user_id: any;
-                    if (p.length === 4) [id, mean_dim, mean_vec, user_id] = p as any[];
-                    else[id, mean_dim, mean_vec] = p as any[];
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    if (p.length === 4)
+                        [id, mean_dim, mean_vec, user_id] = p as any[];
+                    else [id, mean_dim, mean_vec] = p as any[];
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped write (upd_mean_vec) requires user_id when OM_STRICT_TENANT=true`;
                         logger.error({ component: "DB", id }, `[DB] ${msg}`);
                         throw new Error(msg);
@@ -601,10 +909,18 @@ async function initDb() {
                 run: (...p) => {
                     // Normalize parameters: (id, compressed_vec [, user_id])
                     let id: any, compressed_vec: any, user_id: any;
-                    if (p.length === 3) [id, compressed_vec, user_id] = p as any[];
-                    else[id, compressed_vec] = p as any[];
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    if (p.length === 3)
+                        [id, compressed_vec, user_id] = p as any[];
+                    else [id, compressed_vec] = p as any[];
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped write (upd_compressed_vec) requires user_id when OM_STRICT_TENANT=true`;
                         logger.error({ component: "DB", id }, `[DB] ${msg}`);
                         throw new Error(msg);
@@ -619,10 +935,18 @@ async function initDb() {
                 run: (...p) => {
                     // Normalize parameters: (id, feedback_score [, user_id])
                     let id: any, feedback_score: any, user_id: any;
-                    if (p.length === 3) [id, feedback_score, user_id] = p as any[];
-                    else[id, feedback_score] = p as any[];
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    if (p.length === 3)
+                        [id, feedback_score, user_id] = p as any[];
+                    else [id, feedback_score] = p as any[];
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped write (upd_feedback) requires user_id when OM_STRICT_TENANT=true`;
                         logger.error({ component: "DB", id }, `[DB] ${msg}`);
                         throw new Error(msg);
@@ -636,11 +960,24 @@ async function initDb() {
             upd_seen: {
                 run: (...p) => {
                     // Normalize parameters: (id, last_seen_at, salience, updated_at [, user_id])
-                    let id: any, last_seen_at: any, salience: any, updated_at: any, user_id: any;
-                    if (p.length === 5) [id, last_seen_at, salience, updated_at, user_id] = p as any[];
-                    else[id, last_seen_at, salience, updated_at] = p as any[];
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    let id: any,
+                        last_seen_at: any,
+                        salience: any,
+                        updated_at: any,
+                        user_id: any;
+                    if (p.length === 5)
+                        [id, last_seen_at, salience, updated_at, user_id] =
+                            p as any[];
+                    else [id, last_seen_at, salience, updated_at] = p as any[];
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped write (upd_seen) requires user_id when OM_STRICT_TENANT=true`;
                         logger.error({ component: "DB", id }, `[DB] ${msg}`);
                         throw new Error(msg);
@@ -654,11 +991,25 @@ async function initDb() {
             upd_mem: {
                 run: (...p) => {
                     // Normalize parameters: (content, tags, meta, updated_at, id [, user_id])
-                    let content: any, tags: any, meta: any, updated_at: any, id: any, user_id: any;
-                    if (p.length === 6) [content, tags, meta, updated_at, id, user_id] = p as any[];
-                    else[content, tags, meta, updated_at, id] = p as any[];
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    let content: any,
+                        tags: any,
+                        meta: any,
+                        updated_at: any,
+                        id: any,
+                        user_id: any;
+                    if (p.length === 6)
+                        [content, tags, meta, updated_at, id, user_id] =
+                            p as any[];
+                    else [content, tags, meta, updated_at, id] = p as any[];
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped write (upd_mem) requires user_id when OM_STRICT_TENANT=true`;
                         logger.error({ component: "DB", id }, `[DB] ${msg}`);
                         throw new Error(msg);
@@ -672,18 +1023,50 @@ async function initDb() {
             upd_mem_with_sector: {
                 run: (...p) => {
                     // Normalize parameters: (content, primary_sector, tags, meta, updated_at, id [, user_id])
-                    let content: any, primary_sector: any, tags: any, meta: any, updated_at: any, id: any, user_id: any;
-                    if (p.length === 7) [content, primary_sector, tags, meta, updated_at, id, user_id] = p as any[];
-                    else[content, primary_sector, tags, meta, updated_at, id] = p as any[];
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    let content: any,
+                        primary_sector: any,
+                        tags: any,
+                        meta: any,
+                        updated_at: any,
+                        id: any,
+                        user_id: any;
+                    if (p.length === 7)
+                        [
+                            content,
+                            primary_sector,
+                            tags,
+                            meta,
+                            updated_at,
+                            id,
+                            user_id,
+                        ] = p as any[];
+                    else
+                        [content, primary_sector, tags, meta, updated_at, id] =
+                            p as any[];
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped write (upd_mem_with_sector) requires user_id when OM_STRICT_TENANT=true`;
                         logger.error({ component: "DB", id }, `[DB] ${msg}`);
                         throw new Error(msg);
                     }
                     return run_async(
                         `update ${m} set content=$1,primary_sector=$2,tags=$3,meta=$4,updated_at=$5,version=version+1 where id=$6 and ($7 is null or user_id=$7)`,
-                        [content, primary_sector, tags, meta, updated_at, id, user_id],
+                        [
+                            content,
+                            primary_sector,
+                            tags,
+                            meta,
+                            updated_at,
+                            id,
+                            user_id,
+                        ],
                     );
                 },
             },
@@ -692,8 +1075,15 @@ async function initDb() {
                     // Accept either (id) or (id, user_id)
                     const id = p[0];
                     const user_id = p.length > 1 ? p[1] : null;
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped write (del_mem) requires user_id when OM_STRICT_TENANT=true`;
                         logger.error({ component: "DB", id }, `[DB] ${msg}`);
                         throw new Error(msg);
@@ -706,7 +1096,7 @@ async function initDb() {
             },
             get_mem: {
                 get: (id, user_id = null) => {
-                    checkTenantScope('get_mem', user_id, { id });
+                    checkTenantScope("get_mem", user_id, { id });
                     return get_async(
                         `select * from ${m} where id=$1 and ($2 is null or user_id=$2)`,
                         [id, user_id],
@@ -715,10 +1105,20 @@ async function initDb() {
             },
             get_mem_by_simhash: {
                 get: (simhash, user_id = null) => {
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped read (get_mem_by_simhash) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: "DB", simhash }, `[DB] ${msg}`);
+                        logger.error(
+                            { component: "DB", simhash },
+                            `[DB] ${msg}`,
+                        );
                         throw new Error(msg);
                     }
                     return get_async(
@@ -729,7 +1129,7 @@ async function initDb() {
             },
             all_mem: {
                 all: (limit, offset, user_id = null) => {
-                    checkTenantScope('all_mem', user_id);
+                    checkTenantScope("all_mem", user_id);
                     if (user_id) {
                         return all_async(
                             `select * from ${m} where user_id=$3 order by created_at desc limit $1 offset $2`,
@@ -744,10 +1144,20 @@ async function initDb() {
             },
             all_mem_by_sector: {
                 all: (sector, limit, offset, user_id = null) => {
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped read (all_mem_by_sector) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: "DB", sector }, `[DB] ${msg}`);
+                        logger.error(
+                            { component: "DB", sector },
+                            `[DB] ${msg}`,
+                        );
                         throw new Error(msg);
                     }
                     if (user_id) {
@@ -764,10 +1174,17 @@ async function initDb() {
             },
             all_mem_by_user_and_sector: {
                 all: (user_id, sector, limit, offset) => {
-                    const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
-                    if (strict && (user_id === null || user_id === undefined || user_id === '')) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped read (all_mem_by_user_and_sector) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: 'DB' }, `[DB] ${msg}`);
+                        logger.error({ component: "DB" }, `[DB] ${msg}`);
                         throw new Error(msg);
                     }
                     return all_async(
@@ -778,9 +1195,10 @@ async function initDb() {
             },
             get_segment_count: {
                 get: (segment) =>
-                    get_async(`select count(*) as c from ${m} where segment=$1`, [
-                        segment,
-                    ]),
+                    get_async(
+                        `select count(*) as c from ${m} where segment=$1`,
+                        [segment],
+                    ),
             },
             get_max_segment: {
                 get: () =>
@@ -812,10 +1230,20 @@ async function initDb() {
             },
             get_vec: {
                 get: (id, sector, user_id = null) => {
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped read (get_vec) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: "DB", id, sector }, `[DB] ${msg}`);
+                        logger.error(
+                            { component: "DB", id, sector },
+                            `[DB] ${msg}`,
+                        );
                         throw new Error(msg);
                     }
                     return get_async(
@@ -826,32 +1254,65 @@ async function initDb() {
             },
             get_vecs_by_id: {
                 all: (id, user_id = null) => {
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped read (get_vecs_by_id) requires user_id when OM_STRICT_TENANT=true`;
                         logger.error({ component: "DB", id }, `[DB] ${msg}`);
                         throw new Error(msg);
                     }
-                    return all_async(`select sector,v,dim from ${v} where id=$1 and ($2 is null or user_id=$2)`, [id, user_id]);
+                    return all_async(
+                        `select sector,v,dim from ${v} where id=$1 and ($2 is null or user_id=$2)`,
+                        [id, user_id],
+                    );
                 },
             },
             get_vecs_by_sector: {
                 all: (sector, user_id = null) => {
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped read (get_vecs_by_sector) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: "DB", sector }, `[DB] ${msg}`);
+                        logger.error(
+                            { component: "DB", sector },
+                            `[DB] ${msg}`,
+                        );
                         throw new Error(msg);
                     }
-                    return all_async(`select id,v,dim from ${v} where sector=$1 and ($2 is null or user_id=$2)`, [sector, user_id]);
+                    return all_async(
+                        `select id,v,dim from ${v} where sector=$1 and ($2 is null or user_id=$2)`,
+                        [sector, user_id],
+                    );
                 },
             },
             get_vecs_batch: {
                 all: (ids: string[], sector: string, user_id = null) => {
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped read (get_vecs_batch) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: "DB", sector }, `[DB] ${msg}`);
+                        logger.error(
+                            { component: "DB", sector },
+                            `[DB] ${msg}`,
+                        );
                         throw new Error(msg);
                     }
                     if (!ids.length) return Promise.resolve([]);
@@ -869,13 +1330,23 @@ async function initDb() {
                     // params: id, user_id?
                     const id = p[0];
                     const user_id = p.length > 1 ? p[1] : null;
-                    const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
-                    if (strict && (user_id === null || user_id === undefined || user_id === '')) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped write (del_vec) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: 'DB', id }, `[DB] ${msg}`);
+                        logger.error({ component: "DB", id }, `[DB] ${msg}`);
                         throw new Error(msg);
                     }
-                    return run_async(`delete from ${v} where id=$1 and ($2 is null or user_id=$2)`, [id, user_id]);
+                    return run_async(
+                        `delete from ${v} where id=$1 and ($2 is null or user_id=$2)`,
+                        [id, user_id],
+                    );
                 },
             },
             del_vec_sector: {
@@ -883,13 +1354,26 @@ async function initDb() {
                     const id = p[0];
                     const sector = p[1];
                     const user_id = p.length > 2 ? p[2] : null;
-                    const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
-                    if (strict && (user_id === null || user_id === undefined || user_id === '')) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped write (del_vec_sector) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: 'DB', id, sector }, `[DB] ${msg}`);
+                        logger.error(
+                            { component: "DB", id, sector },
+                            `[DB] ${msg}`,
+                        );
                         throw new Error(msg);
                     }
-                    return run_async(`delete from ${v} where id=$1 and sector=$2 and ($3 is null or user_id=$3)`, [id, sector, user_id]);
+                    return run_async(
+                        `delete from ${v} where id=$1 and sector=$2 and ($3 is null or user_id=$3)`,
+                        [id, sector, user_id],
+                    );
                 },
             },
             ins_waypoint: {
@@ -901,8 +1385,15 @@ async function initDb() {
             },
             get_neighbors: {
                 all: (src, user_id = null) => {
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped read (get_neighbors) requires user_id when OM_STRICT_TENANT=true`;
                         logger.error({ component: "DB", src }, `[DB] ${msg}`);
                         throw new Error(msg);
@@ -915,8 +1406,15 @@ async function initDb() {
             },
             get_waypoints_by_src: {
                 all: (src, user_id = null) => {
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped read (get_waypoints_by_src) requires user_id when OM_STRICT_TENANT=true`;
                         logger.error({ component: "DB", src }, `[DB] ${msg}`);
                         throw new Error(msg);
@@ -929,10 +1427,20 @@ async function initDb() {
             },
             get_waypoint: {
                 get: (src, dst, user_id = null) => {
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped read (get_waypoint) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: "DB", src, dst }, `[DB] ${msg}`);
+                        logger.error(
+                            { component: "DB", src, dst },
+                            `[DB] ${msg}`,
+                        );
                         throw new Error(msg);
                     }
                     return get_async(
@@ -946,8 +1454,13 @@ async function initDb() {
                 // but normalize here: expect run(src, dst, weight, updated_at, user_id)
                 run: (...p) => {
                     // normalize parameters into (src, dst, weight, updated_at, user_id)
-                    let src: any, dst: any, weight: any, updated_at: any, user_id: any;
-                    if (p.length === 5) [src, dst, weight, updated_at, user_id] = p;
+                    let src: any,
+                        dst: any,
+                        weight: any,
+                        updated_at: any,
+                        user_id: any;
+                    if (p.length === 5)
+                        [src, dst, weight, updated_at, user_id] = p;
                     else if (p.length === 4) [src, dst, weight, updated_at] = p;
                     else if (p.length === 3) [src, dst, weight] = p;
                     else if (p.length === 2) [src, dst] = p;
@@ -959,10 +1472,20 @@ async function initDb() {
                         src = p[2];
                         dst = p[3];
                     }
-                    const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
-                    if (strict && (user_id === null || user_id === undefined || user_id === '')) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped write (upd_waypoint) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: 'DB', src, dst }, `[DB] ${msg}`);
+                        logger.error(
+                            { component: "DB", src, dst },
+                            `[DB] ${msg}`,
+                        );
                         throw new Error(msg);
                     }
                     return run_async(
@@ -976,13 +1499,27 @@ async function initDb() {
                     // keep a user_id optional guard; callers can pass (src, dst, user_id) or (src, dst)
                     ((): Promise<void> => {
                         const [src, dst, user_id = null] = p as any[];
-                        const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
-                        if (strict && (user_id === null || user_id === undefined || user_id === '')) {
+                        const strict =
+                            (
+                                process.env.OM_STRICT_TENANT || ""
+                            ).toLowerCase() === "true";
+                        if (
+                            strict &&
+                            (user_id === null ||
+                                user_id === undefined ||
+                                user_id === "")
+                        ) {
                             const msg = `Tenant-scoped write (del_waypoints) requires user_id when OM_STRICT_TENANT=true`;
-                            logger.error({ component: 'DB', src, dst }, `[DB] ${msg}`);
+                            logger.error(
+                                { component: "DB", src, dst },
+                                `[DB] ${msg}`,
+                            );
                             throw new Error(msg);
                         }
-                        return run_async(`delete from ${w} where (src_id=$1 or dst_id=$2) and ($3 is null or user_id=$3)`, [src, dst, user_id]);
+                        return run_async(
+                            `delete from ${w} where (src_id=$1 or dst_id=$2) and ($3 is null or user_id=$3)`,
+                            [src, dst, user_id],
+                        );
                     })(),
             },
             prune_waypoints: {
@@ -996,30 +1533,59 @@ async function initDb() {
                     ),
             },
             ins_stream_telemetry: {
-                run: (id: string, user_id: string | null, embedding_mode: string | null, duration_ms: number, memory_ids: string, query: string, ts: number) =>
+                run: (
+                    id: string,
+                    user_id: string | null,
+                    embedding_mode: string | null,
+                    duration_ms: number,
+                    memory_ids: string,
+                    query: string,
+                    ts: number,
+                ) =>
                     // Enforce tenant scoping on telemetry insert when OM_STRICT_TENANT is enabled
                     // to avoid unscoped telemetry being written in strict tenant modes.
                     (() => {
-                        const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
-                        if (strict && (user_id === null || user_id === undefined || user_id === '')) {
+                        const strict =
+                            (
+                                process.env.OM_STRICT_TENANT || ""
+                            ).toLowerCase() === "true";
+                        if (
+                            strict &&
+                            (user_id === null ||
+                                user_id === undefined ||
+                                user_id === "")
+                        ) {
                             const msg = `Tenant-scoped write (ins_stream_telemetry) requires user_id when OM_STRICT_TENANT=true`;
-                            logger.error({ component: 'DB' }, `[DB] ${msg}`);
+                            logger.error({ component: "DB" }, `[DB] ${msg}`);
                             throw new Error(msg);
                         }
                         return run_async(
                             `insert into "${sc}"."openmemory_stream_telemetry"(id,user_id,embedding_mode,duration_ms,memory_ids,query,ts) values($1,$2,$3,$4,$5,$6,$7) on conflict(id) do update set user_id=excluded.user_id,embedding_mode=excluded.embedding_mode,duration_ms=excluded.duration_ms,memory_ids=excluded.memory_ids,query=excluded.query,ts=excluded.ts`,
-                            [id, user_id, embedding_mode, duration_ms, memory_ids, query, ts],
+                            [
+                                id,
+                                user_id,
+                                embedding_mode,
+                                duration_ms,
+                                memory_ids,
+                                query,
+                                ts,
+                            ],
                         );
                     })(),
             },
             upd_log: {
                 // Match call-site signature used elsewhere: upd_log.run(status, err, id)
                 run: (...p) =>
-                    run_async(`update ${l} set status=$1,err=$2 where id=$3`, p),
+                    run_async(
+                        `update ${l} set status=$1,err=$2 where id=$3`,
+                        p,
+                    ),
             },
             get_pending_logs: {
                 all: () =>
-                    all_async(`select * from ${l} where status=$1`, ["pending"]),
+                    all_async(`select * from ${l} where status=$1`, [
+                        "pending",
+                    ]),
             },
             get_failed_logs: {
                 all: () =>
@@ -1037,10 +1603,17 @@ async function initDb() {
             },
             all_mem_by_user: {
                 all: (user_id, limit, offset) => {
-                    const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
-                    if (strict && (user_id === null || user_id === undefined || user_id === '')) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped read (all_mem_by_user) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: 'DB' }, `[DB] ${msg}`);
+                        logger.error({ component: "DB" }, `[DB] ${msg}`);
                         throw new Error(msg);
                     }
                     return all_async(
@@ -1074,10 +1647,17 @@ async function initDb() {
     } else {
         // Get runtime capabilities and log the choice
         const capabilities = detectSQLiteCapabilities();
-        logger.info({ component: "DB", runtime: capabilities.runtime, recommended: capabilities.recommended },
-            `[DB] Using ${capabilities.recommended} SQLite implementation`);
+        logger.info(
+            {
+                component: "DB",
+                runtime: capabilities.runtime,
+                recommended: capabilities.recommended,
+            },
+            `[DB] Using ${capabilities.recommended} SQLite implementation`,
+        );
 
-        const db_path = process.env.OM_DB_PATH || env.db_path || "./data/openmemory.sqlite";
+        const db_path =
+            process.env.OM_DB_PATH || env.db_path || "./data/openmemory.sqlite";
         const dir = path.dirname(db_path);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
@@ -1102,7 +1682,8 @@ async function initDb() {
         if (process.env.OM_DB_LOG === "true") {
             const msg = "[DB] SQLite PRAGMA journal_mode=WAL enabled";
             logger.info({ component: "DB" }, msg);
-            if ((process.env.OM_DB_CONSOLE || "").toLowerCase() === "true") console.log(msg);
+            if ((process.env.OM_DB_CONSOLE || "").toLowerCase() === "true")
+                console.log(msg);
         }
         // Use NORMAL locking mode to avoid holding exclusive locks across processes
         // which can cause SQLITE_BUSY during parallel test runs or when a test helper
@@ -1110,111 +1691,138 @@ async function initDb() {
         db.run("PRAGMA locking_mode=NORMAL");
 
         // Determine strict tenant mode for conditional schema constraints
-        const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
+        const strict =
+            (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
 
         // Create core tables first (memories, vectors, waypoints, etc.)
-        const user_id_constraint = strict ? ' not null' : '';
+        const user_id_constraint = strict ? " not null" : "";
         db.run(
-            `create table if not exists memories(id text primary key,user_id text${user_id_constraint},segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,meta text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0)`
+            `create table if not exists memories(id text primary key,user_id text${user_id_constraint},segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,meta text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0)`,
         );
         db.run(
-            `create table if not exists vectors(id text,sector text,user_id text,v blob,dim integer not null,primary key(id,sector,user_id))`
+            `create table if not exists vectors(id text,sector text,user_id text,v blob,dim integer not null,primary key(id,sector,user_id))`,
         );
         db.run(
-            `create table if not exists waypoints(src_id text,dst_id text not null,user_id text,weight real not null,created_at integer,updated_at integer,primary key(src_id,user_id))`
+            `create table if not exists waypoints(src_id text,dst_id text not null,user_id text,weight real not null,created_at integer,updated_at integer,primary key(src_id,user_id))`,
         );
         db.run(
-            `create table if not exists embed_logs(id text primary key,model text,status text,ts integer,err text)`
+            `create table if not exists embed_logs(id text primary key,model text,status text,ts integer,err text)`,
         );
         db.run(
-            `create table if not exists stream_telemetry(id text primary key,user_id text${user_id_constraint},embedding_mode text,duration_ms integer,memory_ids text,query text,ts integer)`
+            `create table if not exists stream_telemetry(id text primary key,user_id text${user_id_constraint},embedding_mode text,duration_ms integer,memory_ids text,query text,ts integer)`,
         );
         db.run(
-            `create table if not exists users(user_id text primary key,summary text,reflection_count integer default 0,created_at integer,updated_at integer)`
+            `create table if not exists users(user_id text primary key,summary text,reflection_count integer default 0,created_at integer,updated_at integer)`,
         );
 
         // Strict tenant schema enforcement and backfill checks for SQLite
         if (strict) {
             // Check for existing null user_ids that would violate new constraints (SQLite doesn't enforce NOT NULL until data insertion)
-            const nullMemories = db.prepare("select count(*) as cnt from memories where user_id is null").get();
+            const nullMemories = db
+                .prepare(
+                    "select count(*) as cnt from memories where user_id is null",
+                )
+                .get();
             if ((nullMemories as any).cnt > 0) {
-                throw new Error(`Strict tenant mode enabled but found ${(nullMemories as any).cnt} memories with null user_id. Backfill or disable OM_STRICT_TENANT.`);
+                throw new Error(
+                    `Strict tenant mode enabled but found ${(nullMemories as any).cnt} memories with null user_id. Backfill or disable OM_STRICT_TENANT.`,
+                );
             }
-            const nullTelemetry = db.prepare("select count(*) as cnt from stream_telemetry where user_id is null").get();
+            const nullTelemetry = db
+                .prepare(
+                    "select count(*) as cnt from stream_telemetry where user_id is null",
+                )
+                .get();
             if ((nullTelemetry as any).cnt > 0) {
-                throw new Error(`Strict tenant mode enabled but found ${(nullTelemetry as any).cnt} stream_telemetry with null user_id. Backfill or disable OM_STRICT_TENANT.`);
+                throw new Error(
+                    `Strict tenant mode enabled but found ${(nullTelemetry as any).cnt} stream_telemetry with null user_id. Backfill or disable OM_STRICT_TENANT.`,
+                );
             }
 
             // Add combined indexes for query optimization
-            db.run("create index if not exists idx_memories_user_sector on memories(user_id, primary_sector)");
-            db.run("create index if not exists idx_memories_user_segment on memories(user_id, segment)");
-            db.run("create index if not exists idx_vectors_user_sector on vectors(user_id, sector)");
-            db.run("create index if not exists idx_waypoints_user_dst on waypoints(user_id, dst_id)");
-            db.run("create index if not exists idx_stream_telemetry_user on stream_telemetry(user_id)");
-            db.run("create index if not exists idx_stream_telemetry_user_ts on stream_telemetry(user_id, ts)");
+            db.run(
+                "create index if not exists idx_memories_user_sector on memories(user_id, primary_sector)",
+            );
+            db.run(
+                "create index if not exists idx_memories_user_segment on memories(user_id, segment)",
+            );
+            db.run(
+                "create index if not exists idx_vectors_user_sector on vectors(user_id, sector)",
+            );
+            db.run(
+                "create index if not exists idx_waypoints_user_dst on waypoints(user_id, dst_id)",
+            );
+            db.run(
+                "create index if not exists idx_stream_telemetry_user on stream_telemetry(user_id)",
+            );
+            db.run(
+                "create index if not exists idx_stream_telemetry_user_ts on stream_telemetry(user_id, ts)",
+            );
         }
 
         // Create temporal and extra tables
         db.run(
-            `create table if not exists stats(id integer primary key autoincrement,type text not null,count integer default 1,ts integer not null)`
+            `create table if not exists stats(id integer primary key autoincrement,type text not null,count integer default 1,ts integer not null)`,
         );
         db.run(
-            `create table if not exists temporal_facts(id text primary key,subject text not null,predicate text not null,object text not null,valid_from integer not null,valid_to integer,confidence real not null check(confidence >= 0 and confidence <= 1),last_updated integer not null,metadata text,unique(subject,predicate,object,valid_from))`
+            `create table if not exists temporal_facts(id text primary key,subject text not null,predicate text not null,object text not null,valid_from integer not null,valid_to integer,confidence real not null check(confidence >= 0 and confidence <= 1),last_updated integer not null,metadata text,unique(subject,predicate,object,valid_from))`,
         );
         db.run(
-            `create table if not exists temporal_edges(id text primary key,source_id text not null,target_id text not null,relation_type text not null,valid_from integer not null,valid_to integer,weight real not null,metadata text,foreign key(source_id) references temporal_facts(id),foreign key(target_id) references temporal_facts(id))`
+            `create table if not exists temporal_edges(id text primary key,source_id text not null,target_id text not null,relation_type text not null,valid_from integer not null,valid_to integer,weight real not null,metadata text,foreign key(source_id) references temporal_facts(id),foreign key(target_id) references temporal_facts(id))`,
         );
         db.run("create index if not exists idx_stats_ts on stats(ts)");
         db.run(
-            "create index if not exists idx_memories_segment on memories(segment)"
+            "create index if not exists idx_memories_segment on memories(segment)",
         );
         db.run(
-            "create index if not exists idx_memories_simhash on memories(simhash)"
+            "create index if not exists idx_memories_simhash on memories(simhash)",
         );
         db.run(
-            "create index if not exists idx_memories_ts on memories(last_seen_at)"
+            "create index if not exists idx_memories_ts on memories(last_seen_at)",
         );
         db.run(
-            "create index if not exists idx_memories_user on memories(user_id)"
+            "create index if not exists idx_memories_user on memories(user_id)",
         );
         db.run(
-            "create index if not exists idx_vectors_user on vectors(user_id)"
+            "create index if not exists idx_vectors_user on vectors(user_id)",
         );
         db.run(
-            "create index if not exists idx_waypoints_src on waypoints(src_id)"
+            "create index if not exists idx_waypoints_src on waypoints(src_id)",
         );
         db.run(
-            "create index if not exists idx_waypoints_dst on waypoints(dst_id)"
+            "create index if not exists idx_waypoints_dst on waypoints(dst_id)",
         );
         db.run(
-            "create index if not exists idx_waypoints_user on waypoints(user_id)"
+            "create index if not exists idx_waypoints_user on waypoints(user_id)",
         );
         db.run("create index if not exists idx_stats_ts on stats(ts)");
         db.run("create index if not exists idx_stats_type on stats(type)");
         db.run(
-            "create index if not exists idx_temporal_subject on temporal_facts(subject)"
+            "create index if not exists idx_temporal_subject on temporal_facts(subject)",
         );
         db.run(
-            "create index if not exists idx_temporal_predicate on temporal_facts(predicate)"
+            "create index if not exists idx_temporal_predicate on temporal_facts(predicate)",
         );
         db.run(
-            "create index if not exists idx_temporal_validity on temporal_facts(valid_from,valid_to)"
+            "create index if not exists idx_temporal_validity on temporal_facts(valid_from,valid_to)",
         );
         db.run(
-            "create index if not exists idx_temporal_composite on temporal_facts(subject,predicate,valid_from,valid_to)"
+            "create index if not exists idx_temporal_composite on temporal_facts(subject,predicate,valid_from,valid_to)",
         );
         db.run(
-            "create index if not exists idx_edges_source on temporal_edges(source_id)"
+            "create index if not exists idx_edges_source on temporal_edges(source_id)",
         );
         db.run(
-            "create index if not exists idx_edges_target on temporal_edges(target_id)"
+            "create index if not exists idx_edges_target on temporal_edges(target_id)",
         );
         db.run(
-            "create index if not exists idx_edges_validity on temporal_edges(valid_from,valid_to)"
+            "create index if not exists idx_edges_validity on temporal_edges(valid_from,valid_to)",
         );
 
         memories_table = "memories";
-        const SLOW_MS = process.env.OM_DB_SLOW_MS ? +process.env.OM_DB_SLOW_MS : 50;
+        const SLOW_MS = process.env.OM_DB_SLOW_MS
+            ? +process.env.OM_DB_SLOW_MS
+            : 50;
 
         // NOTE: Removed unused `_hasUserIdParam` helper. The user-scope
         // warning logic below performs SQL parsing to determine parameter
@@ -1222,14 +1830,33 @@ async function initDb() {
         // avoids a separate heuristic helper that produced false positives.
 
         const exec = (sql: string, p: any[] = []) => {
-            const start = (globalThis as any).performance?.now ? (globalThis as any).performance.now() : Date.now();
+            const start = (globalThis as any).performance?.now
+                ? (globalThis as any).performance.now()
+                : Date.now();
             try {
-                db.prepare(sql).run(...p);
-                const dur = ((globalThis as any).performance?.now ? (globalThis as any).performance.now() : Date.now()) - start;
+                db.prepare(sql).run(p);
+                const dur =
+                    ((globalThis as any).performance?.now
+                        ? (globalThis as any).performance.now()
+                        : Date.now()) - start;
                 if (process.env.OM_DB_LOG === "true" && dur > SLOW_MS) {
                     const msg = `[DB] DB slow query (${Math.round(dur)}ms): ${sql.length > 200 ? sql.slice(0, 200) + "..." : sql}`;
-                    logger.info({ component: "DB", sql: sql.length > 200 ? sql.slice(0, 200) + "..." : sql, duration_ms: Math.round(dur) }, msg);
-                    if ((process.env.OM_DB_CONSOLE || "").toLowerCase() === "true") console.log(msg);
+                    logger.info(
+                        {
+                            component: "DB",
+                            sql:
+                                sql.length > 200
+                                    ? sql.slice(0, 200) + "..."
+                                    : sql,
+                            duration_ms: Math.round(dur),
+                        },
+                        msg,
+                    );
+                    if (
+                        (process.env.OM_DB_CONSOLE || "").toLowerCase() ===
+                        "true"
+                    )
+                        console.log(msg);
                 }
                 warnIfMissingUserId(sql, p);
                 return Promise.resolve();
@@ -1240,37 +1867,81 @@ async function initDb() {
         };
 
         const one = (sql: string, p: any[] = []) => {
-            const start = (globalThis as any).performance?.now ? (globalThis as any).performance.now() : Date.now();
+            const start = (globalThis as any).performance?.now
+                ? (globalThis as any).performance.now()
+                : Date.now();
             try {
-                const row = db.prepare(sql).get(...p);
-                const dur = ((globalThis as any).performance?.now ? (globalThis as any).performance.now() : Date.now()) - start;
+                const row = db.prepare(sql).get(p);
+                const dur =
+                    ((globalThis as any).performance?.now
+                        ? (globalThis as any).performance.now()
+                        : Date.now()) - start;
                 if (process.env.OM_DB_LOG === "true" && dur > SLOW_MS) {
                     const msg = `[DB] DB slow query (${Math.round(dur)}ms): ${sql.length > 200 ? sql.slice(0, 200) + "..." : sql}`;
-                    logger.info({ component: "DB", sql: sql.length > 200 ? sql.slice(0, 200) + "..." : sql, duration_ms: Math.round(dur) }, msg);
-                    if ((process.env.OM_DB_CONSOLE || "").toLowerCase() === "true") console.log(msg);
+                    logger.info(
+                        {
+                            component: "DB",
+                            sql:
+                                sql.length > 200
+                                    ? sql.slice(0, 200) + "..."
+                                    : sql,
+                            duration_ms: Math.round(dur),
+                        },
+                        msg,
+                    );
+                    if (
+                        (process.env.OM_DB_CONSOLE || "").toLowerCase() ===
+                        "true"
+                    )
+                        console.log(msg);
                 }
                 warnIfMissingUserId(sql, p);
                 return Promise.resolve(row);
             } catch (e) {
-                logger.error({ component: "DB", sql, err: e }, "[DB] DB query error");
+                logger.error(
+                    { component: "DB", sql, err: e },
+                    "[DB] DB query error",
+                );
                 return Promise.reject(e);
             }
         };
 
         const many = (sql: string, p: any[] = []) => {
-            const start = (globalThis as any).performance?.now ? (globalThis as any).performance.now() : Date.now();
+            const start = (globalThis as any).performance?.now
+                ? (globalThis as any).performance.now()
+                : Date.now();
             try {
-                const rows = db.prepare(sql).all(...p);
-                const dur = ((globalThis as any).performance?.now ? (globalThis as any).performance.now() : Date.now()) - start;
+                const rows = db.prepare(sql).all(p);
+                const dur =
+                    ((globalThis as any).performance?.now
+                        ? (globalThis as any).performance.now()
+                        : Date.now()) - start;
                 if (process.env.OM_DB_LOG === "true" && dur > SLOW_MS) {
                     const msg = `[DB] DB slow query (${Math.round(dur)}ms): ${sql.length > 200 ? sql.slice(0, 200) + "..." : sql}`;
-                    logger.info({ component: "DB", sql: sql.length > 200 ? sql.slice(0, 200) + "..." : sql, duration_ms: Math.round(dur) }, msg);
-                    if ((process.env.OM_DB_CONSOLE || "").toLowerCase() === "true") console.log(msg);
+                    logger.info(
+                        {
+                            component: "DB",
+                            sql:
+                                sql.length > 200
+                                    ? sql.slice(0, 200) + "..."
+                                    : sql,
+                            duration_ms: Math.round(dur),
+                        },
+                        msg,
+                    );
+                    if (
+                        (process.env.OM_DB_CONSOLE || "").toLowerCase() ===
+                        "true"
+                    )
+                        console.log(msg);
                 }
                 warnIfMissingUserId(sql, p);
                 return Promise.resolve(rows as any[]);
             } catch (e) {
-                logger.error({ component: "DB", sql, err: e }, "DB query error");
+                logger.error(
+                    { component: "DB", sql, err: e },
+                    "DB query error",
+                );
                 return Promise.reject(e);
             }
         };
@@ -1318,7 +1989,23 @@ async function initDb() {
                     const mapParams = (args: any[]) => {
                         if (!args || args.length === 0) return args;
                         if (args.length === 18) return args;
-                        const [id, content, primary_sector, tags, meta, created_at, updated_at, last_seen_at, salience, decay_lambda, version, user_id, mean_dim, mean_vec, compressed_vec] = args;
+                        const [
+                            id,
+                            content,
+                            primary_sector,
+                            tags,
+                            meta,
+                            created_at,
+                            updated_at,
+                            last_seen_at,
+                            salience,
+                            decay_lambda,
+                            version,
+                            user_id,
+                            mean_dim,
+                            mean_vec,
+                            compressed_vec,
+                        ] = args;
                         const segment = 0;
                         const simhash = null;
                         const feedback_score = 0;
@@ -1345,11 +2032,24 @@ async function initDb() {
                     };
                     const params = mapParams(p);
                     // Enforce tenant scoping for inserts when OM_STRICT_TENANT is enabled
-                    const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
-                    const user_id = Array.isArray(params) && params.length > 1 ? params[1] : null;
-                    if (strict && (user_id === null || user_id === undefined || user_id === '')) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    const user_id =
+                        Array.isArray(params) && params.length > 1
+                            ? params[1]
+                            : null;
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped write (ins_mem) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: 'DB', id: params && params[0] }, `[DB] ${msg}`);
+                        logger.error(
+                            { component: "DB", id: params && params[0] },
+                            `[DB] ${msg}`,
+                        );
                         throw new Error(msg);
                     }
                     return exec(
@@ -1369,22 +2069,34 @@ async function initDb() {
                     let id: any, mean_dim: any, mean_vec: any, user_id: any;
                     if (p.length === 4) {
                         // Heuristic: if first param is a string, assume id-first
-                        if (typeof p[0] === 'string') [id, mean_dim, mean_vec, user_id] = p as any[];
-                        else[mean_dim, mean_vec, id, user_id] = p as any[];
+                        if (typeof p[0] === "string")
+                            [id, mean_dim, mean_vec, user_id] = p as any[];
+                        else [mean_dim, mean_vec, id, user_id] = p as any[];
                     } else if (p.length === 3) {
-                        if (typeof p[0] === 'string') [id, mean_dim, mean_vec] = p as any[];
-                        else[mean_dim, mean_vec, id] = p as any[];
+                        if (typeof p[0] === "string")
+                            [id, mean_dim, mean_vec] = p as any[];
+                        else [mean_dim, mean_vec, id] = p as any[];
                     } else if (p.length === 2) {
                         // support some legacy calls that only pass mean_dim/mean_vec
                         [mean_dim, mean_vec] = p as any[];
                     }
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped write (upd_mean_vec) requires user_id when OM_STRICT_TENANT=true`;
                         logger.error({ component: "DB", id }, `[DB] ${msg}`);
                         throw new Error(msg);
                     }
-                    return exec("update memories set mean_dim=?,mean_vec=? where id=? and (? is null or user_id=?)", [mean_dim, mean_vec, id, user_id, user_id]);
+                    return exec(
+                        "update memories set mean_dim=?,mean_vec=? where id=? and (? is null or user_id=?)",
+                        [mean_dim, mean_vec, id, user_id, user_id],
+                    );
                 },
             },
             upd_compressed_vec: {
@@ -1394,68 +2106,131 @@ async function initDb() {
                     let id: any, compressed_vec: any, user_id: any;
                     if (p.length === 3) {
                         // If first arg is a string we assume id-first ordering.
-                        if (typeof p[0] === 'string') [id, compressed_vec, user_id] = p as any[];
-                        else[compressed_vec, id, user_id] = p as any[];
+                        if (typeof p[0] === "string")
+                            [id, compressed_vec, user_id] = p as any[];
+                        else [compressed_vec, id, user_id] = p as any[];
                     } else if (p.length === 2) {
-                        if (typeof p[0] === 'string') [id, compressed_vec] = p as any[];
-                        else[compressed_vec, id] = p as any[];
+                        if (typeof p[0] === "string")
+                            [id, compressed_vec] = p as any[];
+                        else [compressed_vec, id] = p as any[];
                     }
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped write (upd_compressed_vec) requires user_id when OM_STRICT_TENANT=true`;
                         logger.error({ component: "DB", id }, `[DB] ${msg}`);
                         throw new Error(msg);
                     }
-                    return exec("update memories set compressed_vec=? where id=? and (? is null or user_id=?)", [compressed_vec, id, user_id, user_id]);
+                    return exec(
+                        "update memories set compressed_vec=? where id=? and (? is null or user_id=?)",
+                        [compressed_vec, id, user_id, user_id],
+                    );
                 },
             },
             upd_feedback: {
                 run: (...p) => {
                     // Preserve backward-compatible ordering: (feedback_score, id [, user_id])
                     let feedback_score: any, id: any, user_id: any;
-                    if (p.length === 3) [feedback_score, id, user_id] = p as any[];
-                    else[feedback_score, id] = p as any[];
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    if (p.length === 3)
+                        [feedback_score, id, user_id] = p as any[];
+                    else [feedback_score, id] = p as any[];
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped write (upd_feedback) requires user_id when OM_STRICT_TENANT=true`;
                         logger.error({ component: "DB", id }, `[DB] ${msg}`);
                         throw new Error(msg);
                     }
-                    return exec("update memories set feedback_score=? where id=? and (? is null or user_id=?)", [feedback_score, id, user_id, user_id]);
+                    return exec(
+                        "update memories set feedback_score=? where id=? and (? is null or user_id=?)",
+                        [feedback_score, id, user_id, user_id],
+                    );
                 },
             },
             upd_seen: {
                 run: (...p) => {
                     // Accept both canonical `id-first` and legacy `lastSeen-first`
                     // forms. Heuristic: if first param is a string assume id-first.
-                    let id: any, last_seen_at: any, salience: any, updated_at: any, user_id: any;
+                    let id: any,
+                        last_seen_at: any,
+                        salience: any,
+                        updated_at: any,
+                        user_id: any;
                     if (p.length === 5) {
-                        if (typeof p[0] === 'string') [id, last_seen_at, salience, updated_at, user_id] = p as any[];
-                        else[last_seen_at, salience, updated_at, id, user_id] = p as any[];
+                        if (typeof p[0] === "string")
+                            [id, last_seen_at, salience, updated_at, user_id] =
+                                p as any[];
+                        else
+                            [last_seen_at, salience, updated_at, id, user_id] =
+                                p as any[];
                     } else if (p.length === 4) {
-                        if (typeof p[0] === 'string') [id, last_seen_at, salience, updated_at] = p as any[];
-                        else[last_seen_at, salience, updated_at, id] = p as any[];
+                        if (typeof p[0] === "string")
+                            [id, last_seen_at, salience, updated_at] =
+                                p as any[];
+                        else
+                            [last_seen_at, salience, updated_at, id] =
+                                p as any[];
                     }
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped write (upd_seen) requires user_id when OM_STRICT_TENANT=true`;
                         logger.error({ component: "DB", id }, `[DB] ${msg}`);
                         throw new Error(msg);
                     }
                     return exec(
                         "update memories set last_seen_at=?,salience=?,updated_at=? where id=? and (? is null or user_id=?)",
-                        [last_seen_at, salience, updated_at, id, user_id, user_id],
+                        [
+                            last_seen_at,
+                            salience,
+                            updated_at,
+                            id,
+                            user_id,
+                            user_id,
+                        ],
                     );
                 },
             },
             upd_mem: {
                 run: (...p) => {
                     // Preserve backward-compatible ordering: (content, tags, meta, updated_at, id [, user_id])
-                    let content: any, tags: any, meta: any, updated_at: any, id: any, user_id: any;
-                    if (p.length === 6) [content, tags, meta, updated_at, id, user_id] = p as any[];
-                    else[content, tags, meta, updated_at, id] = p as any[];
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    let content: any,
+                        tags: any,
+                        meta: any,
+                        updated_at: any,
+                        id: any,
+                        user_id: any;
+                    if (p.length === 6)
+                        [content, tags, meta, updated_at, id, user_id] =
+                            p as any[];
+                    else [content, tags, meta, updated_at, id] = p as any[];
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped write (upd_mem) requires user_id when OM_STRICT_TENANT=true`;
                         logger.error({ component: "DB", id }, `[DB] ${msg}`);
                         throw new Error(msg);
@@ -1470,18 +2245,51 @@ async function initDb() {
                 run: (...p) => {
                     // Preserve backward-compatible ordering:
                     // (content, primary_sector, tags, meta, updated_at, id [, user_id])
-                    let content: any, primary_sector: any, tags: any, meta: any, updated_at: any, id: any, user_id: any;
-                    if (p.length === 7) [content, primary_sector, tags, meta, updated_at, id, user_id] = p as any[];
-                    else[content, primary_sector, tags, meta, updated_at, id] = p as any[];
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    let content: any,
+                        primary_sector: any,
+                        tags: any,
+                        meta: any,
+                        updated_at: any,
+                        id: any,
+                        user_id: any;
+                    if (p.length === 7)
+                        [
+                            content,
+                            primary_sector,
+                            tags,
+                            meta,
+                            updated_at,
+                            id,
+                            user_id,
+                        ] = p as any[];
+                    else
+                        [content, primary_sector, tags, meta, updated_at, id] =
+                            p as any[];
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped write (upd_mem_with_sector) requires user_id when OM_STRICT_TENANT=true`;
                         logger.error({ component: "DB", id }, `[DB] ${msg}`);
                         throw new Error(msg);
                     }
                     return exec(
                         "update memories set content=?,primary_sector=?,tags=?,meta=?,updated_at=?,version=version+1 where id=? and (? is null or user_id=?)",
-                        [content, primary_sector, tags, meta, updated_at, id, user_id, user_id],
+                        [
+                            content,
+                            primary_sector,
+                            tags,
+                            meta,
+                            updated_at,
+                            id,
+                            user_id,
+                            user_id,
+                        ],
                     );
                 },
             },
@@ -1490,32 +2298,62 @@ async function initDb() {
                     // Accept either (id) or (id, user_id)
                     const id = p[0];
                     const user_id = p.length > 1 ? p[1] : null;
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped write (del_mem) requires user_id when OM_STRICT_TENANT=true`;
                         logger.error({ component: "DB", id }, `[DB] ${msg}`);
                         throw new Error(msg);
                     }
-                    return exec("delete from memories where id=? and (? is null or user_id=?)", [id, user_id, user_id]);
+                    return exec(
+                        "delete from memories where id=? and (? is null or user_id=?)",
+                        [id, user_id, user_id],
+                    );
                 },
             },
             get_mem: {
                 get: (id, user_id = null) => {
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped read (get_mem) requires user_id when OM_STRICT_TENANT=true`;
                         logger.error({ component: "DB", id }, `[DB] ${msg}`);
                         throw new Error(msg);
                     }
-                    return one("select * from memories where id=? and (? is null or user_id=?)", [id, user_id, user_id]);
+                    return one(
+                        "select * from memories where id=? and (? is null or user_id=?)",
+                        [id, user_id, user_id],
+                    );
                 },
             },
             get_mem_by_simhash: {
                 get: (simhash, user_id = null) => {
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped read (get_mem_by_simhash) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: "DB", simhash }, `[DB] ${msg}`);
+                        logger.error(
+                            { component: "DB", simhash },
+                            `[DB] ${msg}`,
+                        );
                         throw new Error(msg);
                     }
                     return one(
@@ -1526,8 +2364,15 @@ async function initDb() {
             },
             all_mem: {
                 all: (limit, offset, user_id = null) => {
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped read (all_mem) requires user_id when OM_STRICT_TENANT=true`;
                         logger.error({ component: "DB" }, `[DB] ${msg}`);
                         throw new Error(msg);
@@ -1546,10 +2391,20 @@ async function initDb() {
             },
             all_mem_by_sector: {
                 all: (sector, limit, offset, user_id = null) => {
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped read (all_mem_by_sector) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: "DB", sector }, `[DB] ${msg}`);
+                        logger.error(
+                            { component: "DB", sector },
+                            `[DB] ${msg}`,
+                        );
                         throw new Error(msg);
                     }
                     if (user_id) {
@@ -1607,44 +2462,90 @@ async function initDb() {
             },
             get_vec: {
                 get: (id, sector, user_id = null) => {
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped read (get_vec) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: "DB", id, sector }, `[DB] ${msg}`);
+                        logger.error(
+                            { component: "DB", id, sector },
+                            `[DB] ${msg}`,
+                        );
                         throw new Error(msg);
                     }
                     // user_id optional guard
-                    return one("select v,dim from vectors where id=? and sector=? and (? is null or user_id=?)", [id, sector, user_id, user_id]);
+                    return one(
+                        "select v,dim from vectors where id=? and sector=? and (? is null or user_id=?)",
+                        [id, sector, user_id, user_id],
+                    );
                 },
             },
             get_vecs_by_id: {
                 all: (id, user_id = null) => {
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped read (get_vecs_by_id) requires user_id when OM_STRICT_TENANT=true`;
                         logger.error({ component: "DB", id }, `[DB] ${msg}`);
                         throw new Error(msg);
                     }
-                    return many("select sector,v,dim from vectors where id=? and (? is null or user_id=?)", [id, user_id, user_id]);
+                    return many(
+                        "select sector,v,dim from vectors where id=? and (? is null or user_id=?)",
+                        [id, user_id, user_id],
+                    );
                 },
             },
             get_vecs_by_sector: {
                 all: (sector, user_id = null) => {
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped read (get_vecs_by_sector) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: "DB", sector }, `[DB] ${msg}`);
+                        logger.error(
+                            { component: "DB", sector },
+                            `[DB] ${msg}`,
+                        );
                         throw new Error(msg);
                     }
-                    return many("select id,v,dim from vectors where sector=? and (? is null or user_id=?)", [sector, user_id, user_id]);
+                    return many(
+                        "select id,v,dim from vectors where sector=? and (? is null or user_id=?)",
+                        [sector, user_id, user_id],
+                    );
                 },
             },
             get_vecs_batch: {
                 all: (ids: string[], sector: string, user_id = null) => {
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped read (get_vecs_batch) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: "DB", sector }, `[DB] ${msg}`);
+                        logger.error(
+                            { component: "DB", sector },
+                            `[DB] ${msg}`,
+                        );
                         throw new Error(msg);
                     }
                     if (!ids.length) return Promise.resolve([]);
@@ -1659,35 +2560,69 @@ async function initDb() {
             del_vec: {
                 run: (...p) => {
                     const [id, user_id = null] = p as any[];
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped write (del_vec) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: 'DB', id }, `[DB] ${msg}`);
+                        logger.error({ component: "DB", id }, `[DB] ${msg}`);
                         throw new Error(msg);
                     }
-                    return exec("delete from vectors where id=? and (? is null or user_id=?)", [id, user_id, user_id]);
+                    return exec(
+                        "delete from vectors where id=? and (? is null or user_id=?)",
+                        [id, user_id, user_id],
+                    );
                 },
             },
             del_vec_sector: {
                 run: (...p) => {
                     const [id, sector, user_id = null] = p as any[];
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped write (del_vec_sector) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: 'DB', id, sector }, `[DB] ${msg}`);
+                        logger.error(
+                            { component: "DB", id, sector },
+                            `[DB] ${msg}`,
+                        );
                         throw new Error(msg);
                     }
-                    return exec("delete from vectors where id=? and sector=? and (? is null or user_id=?)", [id, sector, user_id, user_id]);
+                    return exec(
+                        "delete from vectors where id=? and sector=? and (? is null or user_id=?)",
+                        [id, sector, user_id, user_id],
+                    );
                 },
             },
             ins_waypoint: {
                 run: (...p) =>
                     ((): Promise<void> => {
                         const [src, dst, user_id] = p as any[];
-                        const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                        if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                        const strict =
+                            (
+                                process.env.OM_STRICT_TENANT || ""
+                            ).toLowerCase() === "true";
+                        if (
+                            strict &&
+                            (user_id === null ||
+                                user_id === undefined ||
+                                user_id === "")
+                        ) {
                             const msg = `Tenant-scoped write (ins_waypoint) requires user_id when OM_STRICT_TENANT=true`;
-                            logger.error({ component: 'DB', src, dst }, `[DB] ${msg}`);
+                            logger.error(
+                                { component: "DB", src, dst },
+                                `[DB] ${msg}`,
+                            );
                             throw new Error(msg);
                         }
                         return exec(
@@ -1698,8 +2633,15 @@ async function initDb() {
             },
             get_neighbors: {
                 all: (src, user_id = null) => {
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped read (get_neighbors) requires user_id when OM_STRICT_TENANT=true`;
                         logger.error({ component: "DB", src }, `[DB] ${msg}`);
                         throw new Error(msg);
@@ -1712,8 +2654,15 @@ async function initDb() {
             },
             get_waypoints_by_src: {
                 all: (src, user_id = null) => {
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped read (get_waypoints_by_src) requires user_id when OM_STRICT_TENANT=true`;
                         logger.error({ component: "DB", src }, `[DB] ${msg}`);
                         throw new Error(msg);
@@ -1726,10 +2675,20 @@ async function initDb() {
             },
             get_waypoint: {
                 get: (src, dst, user_id = null) => {
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped read (get_waypoint) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: "DB", src, dst }, `[DB] ${msg}`);
+                        logger.error(
+                            { component: "DB", src, dst },
+                            `[DB] ${msg}`,
+                        );
                         throw new Error(msg);
                     }
                     return one(
@@ -1741,8 +2700,13 @@ async function initDb() {
             upd_waypoint: {
                 run: (...p) => {
                     // Normalize inputs: prefer (src, dst, weight, updated_at, user_id)
-                    let src: any, dst: any, weight: any, updated_at: any, user_id: any;
-                    if (p.length === 5) [src, dst, weight, updated_at, user_id] = p;
+                    let src: any,
+                        dst: any,
+                        weight: any,
+                        updated_at: any,
+                        user_id: any;
+                    if (p.length === 5)
+                        [src, dst, weight, updated_at, user_id] = p;
                     else if (p.length === 4) [src, dst, weight, updated_at] = p;
                     else if (p.length === 3) [src, dst, weight] = p;
                     else if (p.length === 2) [src, dst] = p;
@@ -1753,10 +2717,20 @@ async function initDb() {
                         src = p[2];
                         dst = p[3];
                     }
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped write (upd_waypoint) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: 'DB', src, dst }, `[DB] ${msg}`);
+                        logger.error(
+                            { component: "DB", src, dst },
+                            `[DB] ${msg}`,
+                        );
                         throw new Error(msg);
                     }
                     return exec(
@@ -1768,13 +2742,26 @@ async function initDb() {
             del_waypoints: {
                 run: (...p) => {
                     const [src, dst, user_id = null] = p as any[];
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped write (del_waypoints) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: 'DB', src, dst }, `[DB] ${msg}`);
+                        logger.error(
+                            { component: "DB", src, dst },
+                            `[DB] ${msg}`,
+                        );
                         throw new Error(msg);
                     }
-                    return exec("delete from waypoints where (src_id=? or dst_id=?) and (? is null or user_id=?)", [src, dst, user_id, user_id]);
+                    return exec(
+                        "delete from waypoints where (src_id=? or dst_id=?) and (? is null or user_id=?)",
+                        [src, dst, user_id, user_id],
+                    );
                 },
             },
             prune_waypoints: {
@@ -1793,7 +2780,9 @@ async function initDb() {
             },
             get_pending_logs: {
                 all: () =>
-                    many("select * from embed_logs where status=?", ["pending"]),
+                    many("select * from embed_logs where status=?", [
+                        "pending",
+                    ]),
             },
             get_failed_logs: {
                 all: () =>
@@ -1811,10 +2800,17 @@ async function initDb() {
             },
             all_mem_by_user: {
                 all: (user_id, limit, offset) => {
-                    const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
-                    if (strict && (user_id === null || user_id === undefined || user_id === '')) {
+                    const strict =
+                        (process.env.OM_STRICT_TENANT || "").toLowerCase() ===
+                        "true";
+                    if (
+                        strict &&
+                        (user_id === null ||
+                            user_id === undefined ||
+                            user_id === "")
+                    ) {
                         const msg = `Tenant-scoped read (all_mem_by_user) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: 'DB' }, `[DB] ${msg}`);
+                        logger.error({ component: "DB" }, `[DB] ${msg}`);
                         throw new Error(msg);
                     }
                     return many(
@@ -1824,17 +2820,44 @@ async function initDb() {
                 },
             },
             ins_stream_telemetry: {
-                run: (id: string, user_id: string | null, embedding_mode: string | null, duration_ms: number, memory_ids: string, query: string, ts: number) =>
+                run: (
+                    id: string,
+                    user_id: string | null,
+                    embedding_mode: string | null,
+                    duration_ms: number,
+                    memory_ids: string,
+                    query: string,
+                    ts: number,
+                ) =>
                     // Enforce tenant scoping on telemetry insert when OM_STRICT_TENANT is enabled
                     // to avoid unscoped telemetry being written in strict tenant modes.
                     (() => {
-                        const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
-                        if (strict && (user_id === null || user_id === undefined || user_id === '')) {
+                        const strict =
+                            (
+                                process.env.OM_STRICT_TENANT || ""
+                            ).toLowerCase() === "true";
+                        if (
+                            strict &&
+                            (user_id === null ||
+                                user_id === undefined ||
+                                user_id === "")
+                        ) {
                             const msg = `Tenant-scoped write (ins_stream_telemetry) requires user_id when OM_STRICT_TENANT=true`;
-                            logger.error({ component: 'DB' }, `[DB] ${msg}`);
+                            logger.error({ component: "DB" }, `[DB] ${msg}`);
                             throw new Error(msg);
                         }
-                        return exec("insert or replace into stream_telemetry(id,user_id,embedding_mode,duration_ms,memory_ids,query,ts) values(?,?,?,?,?,?,?)", [id, user_id, embedding_mode, duration_ms, memory_ids, query, ts]);
+                        return exec(
+                            "insert or replace into stream_telemetry(id,user_id,embedding_mode,duration_ms,memory_ids,query,ts) values(?,?,?,?,?,?,?)",
+                            [
+                                id,
+                                user_id,
+                                embedding_mode,
+                                duration_ms,
+                                memory_ids,
+                                query,
+                                ts,
+                            ],
+                        );
                     })(),
             },
             ins_user: {
@@ -1874,53 +2897,71 @@ export async function closeDb(): Promise<void> {
         if (_pgClient) {
             try {
                 // If this is a node `pg` client from pool.connect(), release it
-                if (typeof _pgClient.release === 'function') {
-                    try { _pgClient.release(); } catch (e) { /* ignore */ }
+                if (typeof _pgClient.release === "function") {
+                    try {
+                        _pgClient.release();
+                    } catch (e) {
+                        /* ignore */
+                    }
                 }
                 // If client exposes end/close, await it
-                if (typeof _pgClient.end === 'function') {
+                if (typeof _pgClient.end === "function") {
                     await _pgClient.end();
-                } else if (typeof _pgClient.close === 'function') {
+                } else if (typeof _pgClient.close === "function") {
                     await _pgClient.close();
                 }
             } catch (e) {
-                logger.warn({ component: 'DB', err: e }, '[DB] Error while closing Postgres client');
+                logger.warn(
+                    { component: "DB", err: e },
+                    "[DB] Error while closing Postgres client",
+                );
             }
             _pgClient = null;
         }
         if (_pgPool) {
             try {
-                if (typeof _pgPool.end === 'function') await _pgPool.end();
+                if (typeof _pgPool.end === "function") await _pgPool.end();
             } catch (e) {
-                logger.warn({ component: 'DB', err: e }, '[DB] Error while closing Postgres pool');
+                logger.warn(
+                    { component: "DB", err: e },
+                    "[DB] Error while closing Postgres pool",
+                );
             }
             _pgPool = null;
         }
     } catch (e) {
-        logger.warn({ component: 'DB', err: e }, '[DB] Unexpected error during Postgres shutdown');
+        logger.warn(
+            { component: "DB", err: e },
+            "[DB] Unexpected error during Postgres shutdown",
+        );
     }
 
     // Close SQLite DB handle if present
     try {
         if (_sqliteDb) {
             try {
-                if (typeof (_sqliteDb as any).close === 'function') {
+                if (typeof (_sqliteDb as any).close === "function") {
                     // Bun sqlite `Database.close()` is synchronous; wrap in Promise.resolve
                     await Promise.resolve((_sqliteDb as any).close());
                 }
             } catch (e) {
-                logger.warn({ component: 'DB', err: e }, '[DB] Error while closing SQLite handle');
+                logger.warn(
+                    { component: "DB", err: e },
+                    "[DB] Error while closing SQLite handle",
+                );
             }
             _sqliteDb = null;
         }
     } catch (e) {
-        logger.warn({ component: 'DB', err: e }, '[DB] Unexpected error during SQLite shutdown');
+        logger.warn(
+            { component: "DB", err: e },
+            "[DB] Unexpected error during SQLite shutdown",
+        );
     }
 
     // Reset initialized path so subsequent initDb() re-initializes
     _initialized_db_path = null;
 }
-
 
 export const log_maint_op = async (
     type: "decay" | "reflect" | "consolidate",
@@ -1933,8 +2974,19 @@ export const log_maint_op = async (
             Date.now(),
         ]);
     } catch (e) {
-        logger.error({ component: "DB", err: e, operation: "log_maint_op" }, "[DB] Maintenance log error");
+        logger.error(
+            { component: "DB", err: e, operation: "log_maint_op" },
+            "[DB] Maintenance log error",
+        );
     }
 };
 
-export { q, transaction, all_async, get_async, run_async, memories_table, initDb };
+export {
+    q,
+    transaction,
+    all_async,
+    get_async,
+    run_async,
+    memories_table,
+    initDb,
+};

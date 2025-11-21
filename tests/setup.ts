@@ -3,9 +3,9 @@
 process.env.OM_TEST_MODE = process.env.OM_TEST_MODE ?? '1';
 process.env.OM_SKIP_BACKGROUND = process.env.OM_SKIP_BACKGROUND ?? 'true';
 
-import { beforeAll, afterAll } from "bun:test";
-import fs from "fs";
-import path from "path";
+import { beforeAll, afterAll } from 'bun:test';
+import fs from 'fs';
+import path from 'path';
 
 // Prefer Bun.spawn when available (more compatible when tests run under Bun),
 // fall back to child_process.spawn for Node environments.
@@ -13,7 +13,8 @@ let spawnFn: any;
 try {
   // Bun exposes a global Bun.spawn
   // @ts-ignore
-  if (typeof Bun !== "undefined" && (Bun as any).spawn) spawnFn = (Bun as any).spawn;
+  if (typeof Bun !== 'undefined' && (Bun as any).spawn)
+    spawnFn = (Bun as any).spawn;
 } catch (e) {
   // ignore
 }
@@ -21,7 +22,7 @@ if (!spawnFn) {
   // dynamic import to avoid node/bun mismatch at load time
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   // @ts-ignore
-  const child = await import("child_process");
+  const child = await import('child_process');
   spawnFn = child.spawn;
 }
 
@@ -29,18 +30,25 @@ let serverProcess: any;
 
 beforeAll(async () => {
   const DEBUG = process.env.TEST_DEBUG === '1';
-  if (DEBUG) console.log("[TEST SETUP] Starting backend server for integration tests...");
+  if (DEBUG)
+    console.log(
+      '[TEST SETUP] Starting backend server for integration tests...',
+    );
 
   // Create a temporary DB path for the server instance so tests run isolated
-  const tmpDir = path.resolve(process.cwd(), "tmp");
+  const tmpDir = path.resolve(process.cwd(), 'tmp');
   if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
-  const tmpDb = path.join(tmpDir, `openmemory-server-${process.pid}-${Date.now()}.sqlite`);
+  const tmpDb = path.join(
+    tmpDir,
+    `openmemory-server-${process.pid}-${Date.now()}.sqlite`,
+  );
 
   // Start the server directly from source, passing OM_DB_PATH env so it uses the temp DB
   // Disable noisy DB user-scope warnings by default for the test suite. Tests that
   // specifically assert the presence of these warnings (e.g. db-console.test.ts)
   // will enable OM_DB_USER_SCOPE_WARN explicitly in their own environment.
-  process.env.OM_DB_USER_SCOPE_WARN = process.env.OM_DB_USER_SCOPE_WARN || "false";
+  process.env.OM_DB_USER_SCOPE_WARN =
+    process.env.OM_DB_USER_SCOPE_WARN || 'false';
 
   // Default test harness settings: enable test-mode hooks and prefer synthetic
   // embeddings unless a developer explicitly overrides them. This ensures the
@@ -83,39 +91,48 @@ beforeAll(async () => {
   // `isHashedKey()` checks in tests.
   if (process.env.OM_API_KEYS_ENABLED !== 'false') {
     if (!process.env.OM_API_KEY) {
-    try {
-      if (typeof Bun !== "undefined" && (Bun as any).password && Bun.password.hash) {
-        // Use a deterministic, test-only plaintext and hash it so tests can
-        // exercise hashed-key flows without leaking secrets.
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const hashed = await Bun.password.hash("test-integration-key");
-        process.env.OM_API_KEY = hashed;
-      } else {
-        // A bcrypt-style placeholder that satisfies `isHashedKey()` regex.
-        process.env.OM_API_KEY = "$2b$12$abcdefghijklmnopqrstuvABCDEFGHIJKLMNO";
+      try {
+        if (
+          typeof Bun !== 'undefined' &&
+          (Bun as any).password &&
+          Bun.password.hash
+        ) {
+          // Use a deterministic, test-only plaintext and hash it so tests can
+          // exercise hashed-key flows without leaking secrets.
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          const hashed = await Bun.password.hash('test-integration-key');
+          process.env.OM_API_KEY = hashed;
+        } else {
+          // A bcrypt-style placeholder that satisfies `isHashedKey()` regex.
+          process.env.OM_API_KEY =
+            '$2b$12$abcdefghijklmnopqrstuvABCDEFGHIJKLMNO';
+        }
+      } catch (e) {
+        // If hashing fails for any reason, set a bcrypt-like placeholder to avoid
+        // triggering plaintext-key warnings during tests.
+        process.env.OM_API_KEY = '$2b$12$abcdefghijklmnopqrstuvABCDEFGHIJKLMNO';
       }
-    } catch (e) {
-      // If hashing fails for any reason, set a bcrypt-like placeholder to avoid
-      // triggering plaintext-key warnings during tests.
-      process.env.OM_API_KEY = "$2b$12$abcdefghijklmnopqrstuvABCDEFGHIJKLMNO";
+    } else {
+      // When API keys are disabled for the test harness, ensure OM_API_KEY is
+      // not set so `authenticate_api_request` doesn't require API key header.
+      try {
+        delete process.env.OM_API_KEY;
+      } catch (e) {
+        /* ignore */
+      }
     }
-  } else {
-    // When API keys are disabled for the test harness, ensure OM_API_KEY is
-    // not set so `authenticate_api_request` doesn't require API key header.
-    try { delete process.env.OM_API_KEY; } catch (e) { /* ignore */ }
-  }
   }
   // When running under Bun we can import the server module in-process which is
   // simpler and avoids child-process lifecycle issues. Otherwise fall back to spawn.
-  if (typeof Bun !== "undefined") {
+  if (typeof Bun !== 'undefined') {
     // Set OM_DB_PATH for the imported server module
     process.env.OM_DB_PATH = tmpDb;
     // Importing the module will run its top-level code which starts the server
-    await import("../backend/src/server/index.ts");
+    await import('../backend/src/server/index.ts');
     serverProcess = null; // no external process to manage
   } else {
-    serverProcess = spawnFn("bun", ["run", "backend/src/server/index.ts"], {
-      stdio: ["ignore", "pipe", "pipe"], // ignore stdin, pipe stdout/stderr
+    serverProcess = spawnFn('bun', ['run', 'backend/src/server/index.ts'], {
+      stdio: ['ignore', 'pipe', 'pipe'], // ignore stdin, pipe stdout/stderr
       detached: true, // IMPORTANT: Allows us to kill the process group
       env: { ...process.env, OM_DB_PATH: tmpDb },
     });
@@ -123,8 +140,12 @@ beforeAll(async () => {
 
   // Log server output for debugging (only when TEST_DEBUG=1)
   if (serverProcess && process.env.TEST_DEBUG === '1') {
-    serverProcess.stdout.on('data', (data: any) => console.log(`[SERVER]: ${data}`));
-    serverProcess.stderr.on('data', (data: any) => console.error(`[SERVER ERROR]: ${data}`));
+    serverProcess.stdout.on('data', (data: any) =>
+      console.log(`[SERVER]: ${data}`),
+    );
+    serverProcess.stderr.on('data', (data: any) =>
+      console.error(`[SERVER ERROR]: ${data}`),
+    );
   }
 
   // Wait for the server to be healthy before running tests
@@ -146,7 +167,9 @@ beforeAll(async () => {
           // Allow loopback requests to succeed using the original fetch
           return (anyG.__ORIG_FETCH as any)(url, opts);
         }
-      } catch (e) { /* fallthrough to blocking */ }
+      } catch (e) {
+        /* fallthrough to blocking */
+      }
       throw new Error('Network access disabled by test harness');
     };
   } catch (e) {
@@ -155,7 +178,8 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
-  if (process.env.TEST_DEBUG === '1') console.log("[TEST SETUP] Stopping backend server...");
+  if (process.env.TEST_DEBUG === '1')
+    console.log('[TEST SETUP] Stopping backend server...');
   if (serverProcess && serverProcess.pid) {
     // Kill the entire process group to ensure the server and any children are terminated
     process.kill(-serverProcess.pid, 'SIGKILL');
@@ -177,25 +201,25 @@ afterAll(() => {
       const anyG: any = globalThis as any;
       if (anyG.__ORIG_FETCH) anyG.fetch = anyG.__ORIG_FETCH;
       delete anyG.__ORIG_FETCH;
-    } catch (e) { }
+    } catch (e) {}
   } catch (e) {
     // ignore
   }
 });
 
-
 async function waitForHealthCheck(retries = 30, interval = 1000) {
-    for (let i = 0; i < retries; i++) {
-        try {
-            const response = await fetch('http://localhost:8080/health');
-          if (response.ok) {
-        if (process.env.TEST_DEBUG === '1') console.log('[TEST SETUP] Server is healthy and ready!');
+  for (let i = 0; i < retries; i++) {
+    try {
+      const response = await fetch('http://localhost:8080/health');
+      if (response.ok) {
+        if (process.env.TEST_DEBUG === '1')
+          console.log('[TEST SETUP] Server is healthy and ready!');
         return;
       }
-        } catch (e) {
-            // Ignore fetch errors while waiting for the server to start
-        }
-        await new Promise(resolve => setTimeout(resolve, interval));
+    } catch (e) {
+      // Ignore fetch errors while waiting for the server to start
     }
-    throw new Error(`Server did not become healthy after ${retries} attempts.`);
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
+  throw new Error(`Server did not become healthy after ${retries} attempts.`);
 }

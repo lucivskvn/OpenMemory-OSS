@@ -5,7 +5,9 @@ import logger from "./core/logger";
 
 // Test seam: allow deterministic capture of migration logs in tests.
 export const __TEST: {
-    logHook?: ((level: string, meta: any, msg: string, ...args: any[]) => void) | null;
+    logHook?:
+        | ((level: string, meta: any, msg: string, ...args: any[]) => void)
+        | null;
     reset?: () => void;
 } = {
     logHook: null,
@@ -14,13 +16,20 @@ export const __TEST: {
     },
 };
 
-function migrateLog(level: 'debug' | 'info' | 'warn' | 'error', meta: any, msg: string, ...args: any[]) {
+function migrateLog(
+    level: "debug" | "info" | "warn" | "error",
+    meta: any,
+    msg: string,
+    ...args: any[]
+) {
     try {
         const hook = (__TEST as any)?.logHook;
-        if (typeof hook === 'function') {
-            try { hook(level, meta, msg, ...args); } catch (_e) { }
+        if (typeof hook === "function") {
+            try {
+                hook(level, meta, msg, ...args);
+            } catch (_e) {}
         }
-    } catch (_e) { }
+    } catch (_e) {}
     const fn = (logger as any)[level] || logger.info;
     fn.call(logger, meta, msg, ...args);
 }
@@ -74,7 +83,11 @@ async function get_existing_indexes(): Promise<Set<string>> {
 }
 
 export async function run_migrations() {
-    if (env.log_migrate) logger.info({ component: "MIGRATE" }, "[MIGRATE] Starting automatic migration...");
+    if (env.log_migrate)
+        logger.info(
+            { component: "MIGRATE" },
+            "[MIGRATE] Starting automatic migration...",
+        );
 
     // If the metadata backend is Postgres, avoid running SQLite-specific
     // migrations here. Postgres DDL differs from the SQLite schema above
@@ -83,7 +96,11 @@ export async function run_migrations() {
     // provide a Postgres migration implementation. Skipping avoids
     // accidental attempts to query sqlite_master on Postgres.
     if (env.metadata_backend === "postgres") {
-        if (env.log_migrate) logger.info({ component: "MIGRATE" }, "[MIGRATE] OM_METADATA_BACKEND=postgres detected, skipping SQLite-style migrations. Ensure Postgres migrations are applied separately.");
+        if (env.log_migrate)
+            logger.info(
+                { component: "MIGRATE" },
+                "[MIGRATE] OM_METADATA_BACKEND=postgres detected, skipping SQLite-style migrations. Ensure Postgres migrations are applied separately.",
+            );
         return;
     }
 
@@ -91,11 +108,18 @@ export async function run_migrations() {
     // when invoked; callers may import this module before DB init, so guard
     // and initialize here if necessary.
     try {
-        if (typeof run_async !== "function" || typeof all_async !== "function") {
+        if (
+            typeof run_async !== "function" ||
+            typeof all_async !== "function"
+        ) {
             await initDb();
         }
     } catch (e) {
-        logger.error({ component: "MIGRATE", error_code: 'migrate_init_failed', err: e }, "[MIGRATE] Failed to initialize DB helpers: %o", e);
+        logger.error(
+            { component: "MIGRATE", error_code: "migrate_init_failed", err: e },
+            "[MIGRATE] Failed to initialize DB helpers: %o",
+            e,
+        );
         throw e;
     }
 
@@ -107,7 +131,11 @@ export async function run_migrations() {
 
     for (const [table_name, schema] of Object.entries(SCHEMA_DEFINITIONS)) {
         if (!existing_tables.has(table_name)) {
-            if (env.log_migrate) logger.info({ component: "MIGRATE", table: table_name }, `[MIGRATE] Creating table: ${table_name}`);
+            if (env.log_migrate)
+                logger.info(
+                    { component: "MIGRATE", table: table_name },
+                    `[MIGRATE] Creating table: ${table_name}`,
+                );
             const statements = schema.split(";").filter((s) => s.trim());
             for (const stmt of statements) {
                 if (stmt.trim()) {
@@ -122,40 +150,75 @@ export async function run_migrations() {
         const match = index_sql.match(/create index if not exists (\w+)/);
         const index_name = match ? match[1] : null;
         if (index_name && !existing_indexes.has(index_name)) {
-            if (env.log_migrate) logger.info({ component: "MIGRATE", index: index_name }, `[MIGRATE] Creating index: ${index_name}`);
+            if (env.log_migrate)
+                logger.info(
+                    { component: "MIGRATE", index: index_name },
+                    `[MIGRATE] Creating index: ${index_name}`,
+                );
             await run_async(index_sql);
             created_indexes++;
         }
     }
 
-    if (env.log_migrate) logger.info({ component: "MIGRATE", created_tables, created_indexes }, `[MIGRATE] Migration complete: ${created_tables} tables, ${created_indexes} indexes created`);
+    if (env.log_migrate)
+        logger.info(
+            { component: "MIGRATE", created_tables, created_indexes },
+            `[MIGRATE] Migration complete: ${created_tables} tables, ${created_indexes} indexes created`,
+        );
 
     const final_tables = await get_existing_tables();
-    if (env.log_migrate) logger.info({ component: "MIGRATE", total_tables: final_tables.size }, `[MIGRATE] Total tables: ${final_tables.size}`);
-    if (env.log_migrate) logger.info({ component: "MIGRATE", tables: Array.from(final_tables) }, `[MIGRATE] Tables: ${Array.from(final_tables).join(", ")}`);
+    if (env.log_migrate)
+        logger.info(
+            { component: "MIGRATE", total_tables: final_tables.size },
+            `[MIGRATE] Total tables: ${final_tables.size}`,
+        );
+    if (env.log_migrate)
+        logger.info(
+            { component: "MIGRATE", tables: Array.from(final_tables) },
+            `[MIGRATE] Tables: ${Array.from(final_tables).join(", ")}`,
+        );
 
     // Post-migration verification: ensure multi-tenant columns and indexes exist
     try {
         const requiredTablesWithUserCol = ["memories", "vectors", "waypoints"];
         for (const t of requiredTablesWithUserCol) {
             const cols = await all_async(`PRAGMA table_info(${t})`);
-            const hasUser = Array.isArray(cols) && cols.some((c: any) => c && (c.name === "user_id"));
+            const hasUser =
+                Array.isArray(cols) &&
+                cols.some((c: any) => c && c.name === "user_id");
             if (!hasUser) {
-                throw new Error(`[MIGRATE] verification failed: table ${t} missing user_id column`);
+                throw new Error(
+                    `[MIGRATE] verification failed: table ${t} missing user_id column`,
+                );
             }
         }
 
         const existingIndexes = await get_existing_indexes();
-        const requiredIndexes = ["idx_memories_user", "idx_vectors_user", "idx_waypoints_user"];
+        const requiredIndexes = [
+            "idx_memories_user",
+            "idx_vectors_user",
+            "idx_waypoints_user",
+        ];
         for (const idx of requiredIndexes) {
             if (!existingIndexes.has(idx)) {
-                throw new Error(`[MIGRATE] verification failed: missing index ${idx}`);
+                throw new Error(
+                    `[MIGRATE] verification failed: missing index ${idx}`,
+                );
             }
         }
 
-        if (env.log_migrate) logger.info({ component: "MIGRATE" }, "[MIGRATE] verification ok");
+        if (env.log_migrate)
+            logger.info({ component: "MIGRATE" }, "[MIGRATE] verification ok");
     } catch (e) {
-        logger.error({ component: "MIGRATE", error_code: 'migrate_verification_failed', err: e }, "[MIGRATE] verification failed: %o", e);
+        logger.error(
+            {
+                component: "MIGRATE",
+                error_code: "migrate_verification_failed",
+                err: e,
+            },
+            "[MIGRATE] verification failed: %o",
+            e,
+        );
         throw e;
     }
 }
@@ -168,12 +231,20 @@ export async function run_migrations() {
 // top-level await and import.meta checks to remain compatible with the
 // project's TS compilation settings; instead inspect process.argv.
 try {
-    const maybeScript = typeof process !== "undefined" && process.argv && process.argv[1] && /migrate(\.ts|\.js)$/.test(process.argv[1]);
+    const maybeScript =
+        typeof process !== "undefined" &&
+        process.argv &&
+        process.argv[1] &&
+        /migrate(\.ts|\.js)$/.test(process.argv[1]);
     if (maybeScript) {
         run_migrations()
             .then(() => process.exit(0))
             .catch((err) => {
-                logger.error({ component: "MIGRATE", err }, "[MIGRATE] Error: %o", err);
+                logger.error(
+                    { component: "MIGRATE", err },
+                    "[MIGRATE] Error: %o",
+                    err,
+                );
                 process.exit(1);
             });
     }

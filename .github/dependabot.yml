@@ -1,65 +1,65 @@
 version: 2
 updates:
-  - package-ecosystem: "github-actions"
-    directory: "/"
+  - package-ecosystem: 'github-actions'
+    directory: '/'
     schedule:
-      interval: "weekly"
-  - package-ecosystem: "docker"
-    directory: "/"
+      interval: 'weekly'
+  - package-ecosystem: 'docker'
+    directory: '/'
     schedule:
-      interval: "weekly"
+      interval: 'weekly'
     # Optionally limit to images used by the repo (left open to catch Dockerfile base image updates)
     # allow:
     #   - dependency-type: "all"
 
   # NPM updates for JS/TS subprojects (backend, dashboard, IDE)
-  - package-ecosystem: "npm"
-    directory: "/backend"
+  - package-ecosystem: 'npm'
+    directory: '/backend'
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: 'weekly'
+      day: 'monday'
     open-pull-requests-limit: 10
     labels:
-      - "dependencies"
-      - "security"
+      - 'dependencies'
+      - 'security'
     commit-message:
-      prefix: "chore(deps)"
+      prefix: 'chore(deps)'
 
-  - package-ecosystem: "npm"
-    directory: "/dashboard"
+  - package-ecosystem: 'npm'
+    directory: '/dashboard'
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: 'weekly'
+      day: 'monday'
     open-pull-requests-limit: 10
     labels:
-      - "dependencies"
-      - "security"
+      - 'dependencies'
+      - 'security'
     commit-message:
-      prefix: "chore(deps)"
+      prefix: 'chore(deps)'
 
-  - package-ecosystem: "npm"
-    directory: "/IDE"
+  - package-ecosystem: 'npm'
+    directory: '/IDE'
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: 'weekly'
+      day: 'monday'
     open-pull-requests-limit: 10
     labels:
-      - "dependencies"
-      - "security"
+      - 'dependencies'
+      - 'security'
     commit-message:
-      prefix: "chore(deps)"
+      prefix: 'chore(deps)'
 
   # Python (pip) updates for sdk-py
-  - package-ecosystem: "pip"
-    directory: "/sdk-py"
+  - package-ecosystem: 'pip'
+    directory: '/sdk-py'
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: 'weekly'
+      day: 'monday'
     open-pull-requests-limit: 5
     labels:
-      - "dependencies"
-      - "security"
+      - 'dependencies'
+      - 'security'
     commit-message:
-      prefix: "chore(deps)"
+      prefix: 'chore(deps)'
     allow:
-      - dependency-type: "all"
+      - dependency-type: 'all'

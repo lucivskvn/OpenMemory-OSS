@@ -4,9 +4,9 @@ This directory contains the backend server for OpenMemory. It is a Bun + TypeScr
 
 ## Important operational notes
 
-- The server expects the `OM_API_KEY` environment variable to be a hashed value (argon2-compatible). Plaintext API keys are rejected by default to reduce the risk of accidental secret leakage.
+-   The server expects the `OM_API_KEY` environment variable to be a hashed value (argon2-compatible). Plaintext API keys are rejected by default to reduce the risk of accidental secret leakage.
 
-- A helper script is included to generate a hashed API key:
+-   A helper script is included to generate a hashed API key:
 
 ```bash
 cd backend
@@ -40,7 +40,7 @@ Note: enabling credentials requires careful consideration of Access-Control-Allo
 
 ### Environment variables
 
-- `OM_CORS_CREDENTIALS` (default: `false`) — when set to `true` the server will include `Access-Control-Allow-Credentials: true` on CORS-enabled responses. Use this only when you need credentialed cross-origin requests (cookies, Authorization headers) and ensure you do not use `*` for `Access-Control-Allow-Origin` in production.
+-   `OM_CORS_CREDENTIALS` (default: `false`) — when set to `true` the server will include `Access-Control-Allow-Credentials: true` on CORS-enabled responses. Use this only when you need credentialed cross-origin requests (cookies, Authorization headers) and ensure you do not use `*` for `Access-Control-Allow-Origin` in production.
 
 For streaming endpoints (SSE, file downloads, or other handlers that return a locked/streaming body), the CORS middleware may interfere with Bun's streaming optimizations if it attempts to clone or rewrap a locked body stream. To opt-out for a specific route handler, set `ctx.skipCors = true` in your handler before returning the streaming `Response`.
 
@@ -49,36 +49,43 @@ Example (SSE-like handler):
 ```ts
 // inside your route handler (req, ctx)
 ctx.skipCors = true; // ensure the CORS middleware leaves the streaming response untouched
-const stream = new ReadableStream({ /* ... */ });
-return new Response(stream, { headers: { 'Content-Type': 'text/event-stream' } });
+const stream = new ReadableStream({
+    /* ... */
+});
+return new Response(stream, {
+    headers: { "Content-Type": "text/event-stream" },
+});
 ```
 
 ## CI / deployment
 
-- Store the hashed `OM_API_KEY` in your deployment environment or GitHub repository secrets.
-- The repository includes a PR-time workflow that validates `OM_API_KEY` looks hashed; the workflow is intentionally skipped when the secret is not present (so forks and external PRs aren't blocked).
+-   Store the hashed `OM_API_KEY` in your deployment environment or GitHub repository secrets.
+-   The repository includes a PR-time workflow that validates `OM_API_KEY` looks hashed; the workflow is intentionally skipped when the secret is not present (so forks and external PRs aren't blocked).
 
 ### Test seams and runtime flags
 
-- `OM_TEST_MODE` — when set to `1` in tests we turn on test-mode behaviors used by unit tests to make SSE and streaming deterministic, to allow deterministic embed provider behavior (e.g. forcing synthetic embeddings) and to enable test-only seams. Do not set this in production.
+-   `OM_TEST_MODE` — when set to `1` in tests we turn on test-mode behaviors used by unit tests to make SSE and streaming deterministic, to allow deterministic embed provider behavior (e.g. forcing synthetic embeddings) and to enable test-only seams. Do not set this in production.
 
-- `OM_LOG_MIGRATE` — set to `true` to log detailed automatic migration steps during server startup. Default is `false` in CI to reduce noise. This gate also allows receiving structured `error_code` values from migration errors for easier machine-scanning.
+-   `OM_LOG_MIGRATE` — set to `true` to log detailed automatic migration steps during server startup. Default is `false` in CI to reduce noise. This gate also allows receiving structured `error_code` values from migration errors for easier machine-scanning.
 
-- `setAdminApiKeyForTests()` — a code-level test seam (exported from `backend/src/core/cfg.ts`) that tests call to set a hashed `OM_ADMIN_API_KEY` dynamically for the running test server. Use this instead of restarting the server to populate an admin key for telemetry or admin-only endpoints during test runs.
+-   `setAdminApiKeyForTests()` — a code-level test seam (exported from `backend/src/core/cfg.ts`) that tests call to set a hashed `OM_ADMIN_API_KEY` dynamically for the running test server. Use this instead of restarting the server to populate an admin key for telemetry or admin-only endpoints during test runs.
 
-- `__TEST_ollama` — an injectable seam on the embed provider used by unit tests to simulate an Ollama server's health, installed model tags, and management actions. This seam overrides the network path for `/embed/ollama/*` endpoints so tests don't rely on an external Ollama instance. To use it, import or reference the embed module in your test and set `embedMod.__TEST_ollama = { health: {...}, tags: [...] }`.
+-   `__TEST_ollama` — an injectable seam on the embed provider used by unit tests to simulate an Ollama server's health, installed model tags, and management actions. This seam overrides the network path for `/embed/ollama/*` endpoints so tests don't rely on an external Ollama instance. To use it, import or reference the embed module in your test and set `embedMod.__TEST_ollama = { health: {...}, tags: [...] }`.
 
 Example usage in tests (jest/bun-style):
 
 ```ts
-import * as embedMod from '../../backend/src/memory/embed';
+import * as embedMod from "../../backend/src/memory/embed";
 
-embedMod.__TEST_ollama = { health: { available: true, version: 'v-test' }, tags: ['embed-small', 'embed-large'] };
-process.env.OM_TEST_MODE = '1';
+embedMod.__TEST_ollama = {
+    health: { available: true, version: "v-test" },
+    tags: ["embed-small", "embed-large"],
+};
+process.env.OM_TEST_MODE = "1";
 
 // Optionally set hashed admin key via runtime seam
-import { setAdminApiKeyForTests } from '../../backend/src/core/cfg';
-await setAdminApiKeyForTests(await hashFn('my-admin-secret'));
+import { setAdminApiKeyForTests } from "../../backend/src/core/cfg";
+await setAdminApiKeyForTests(await hashFn("my-admin-secret"));
 ```
 
 ## Migration steps
@@ -93,10 +100,10 @@ If a temporary grace period is required to accept plaintext keys during migratio
 
 To smooth the migration from legacy Express-style handlers (signature: (req, res)) to the modern (req, ctx) handlers, the server defaults to legacy-compatible behavior for one release cycle. Use the following checklist to migrate handlers and opt into the stricter mode:
 
-- Audit your route handlers and middleware. If a handler calls res.json/res.send or expects an Express-style `res` object, mark it explicitly as legacy by setting `handler.__legacy = true`.
-- Run your test suite and enable `OM_LEGACY_HANDLER_MODE=false` in a staging environment to find handlers that need updating.
-- Update handlers to return a Response or a serializable value from the modern `(req, ctx)` signature. Remove reliance on `res` where possible.
-- Once all handlers are migrated, set `OM_LEGACY_HANDLER_MODE=false` in production to opt into the modern behavior. This opt-out flag ensures a safe migration window.
+-   Audit your route handlers and middleware. If a handler calls res.json/res.send or expects an Express-style `res` object, mark it explicitly as legacy by setting `handler.__legacy = true`.
+-   Run your test suite and enable `OM_LEGACY_HANDLER_MODE=false` in a staging environment to find handlers that need updating.
+-   Update handlers to return a Response or a serializable value from the modern `(req, ctx)` signature. Remove reliance on `res` where possible.
+-   Once all handlers are migrated, set `OM_LEGACY_HANDLER_MODE=false` in production to opt into the modern behavior. This opt-out flag ensures a safe migration window.
 
 ### Legacy-default behavior (migration window)
 
@@ -112,9 +119,9 @@ If you need help, open an issue describing any handlers that cannot be migrated 
 
 ## Files of interest
 
-- `src/` — server source
-- `scripts/hash-api-key.ts` — helper to generate hashed API keys
-- `src/types/bun-sqlite.d.ts` — TypeScript declaration for Bun's sqlite surface (expanded for clarity)
+-   `src/` — server source
+-   `scripts/hash-api-key.ts` — helper to generate hashed API keys
+-   `src/types/bun-sqlite.d.ts` — TypeScript declaration for Bun's sqlite surface (expanded for clarity)
 
 For development and test commands, see the repo root README.md for exact commands. Typical backend dev workflow:
 
@@ -132,8 +139,8 @@ This directory contains the OpenMemory backend service (TypeScript + Bun).
 
 ### Bun configuration and developer notes
 
-- Bun project file: `backend/bunfig.toml` — canonical Bun settings for install, test, run, and build.
-- Run tests and development commands from the `backend/` directory so Bun picks up `backend/bunfig.toml`.
+-   Bun project file: `backend/bunfig.toml` — canonical Bun settings for install, test, run, and build.
+-   Run tests and development commands from the `backend/` directory so Bun picks up `backend/bunfig.toml`.
 
 ### Quick commands
 
@@ -148,6 +155,6 @@ bun run build          # build compiled artifacts to dist/
 
 ### Notes
 
-- The `bunfig.toml` file configures test preload scripts, timeout, and coverage reporting.
-- CI pipelines should `cd backend` before invoking Bun commands to ensure the correct bunfig is used.
-- See `CONTRIBUTING.md` for more development setup and guidelines.
+-   The `bunfig.toml` file configures test preload scripts, timeout, and coverage reporting.
+-   CI pipelines should `cd backend` before invoking Bun commands to ensure the correct bunfig is used.
+-   See `CONTRIBUTING.md` for more development setup and guidelines.

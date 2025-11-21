@@ -16,7 +16,7 @@ const mockFetch = mock((...args) => {
   fetchCalls.push(args);
   return {
     ok: true,
-    json: () => Promise.resolve({ embedding: new Array(768).fill(0.1) })
+    json: () => Promise.resolve({ embedding: new Array(768).fill(0.1) }),
   };
 });
 
@@ -30,7 +30,7 @@ const mockPerformanceNow = mock(() => {
 
 describe('Router CPU Provider', () => {
   if (process.env.OM_TEST_SKIP_PERF === 'true') {
-    it.skip('Performance tests skipped (OM_TEST_SKIP_PERF=true)', () => { });
+    it.skip('Performance tests skipped (OM_TEST_SKIP_PERF=true)', () => {});
   }
   beforeEach(async () => {
     fetchCalls = []; // Reset captured calls
@@ -51,7 +51,8 @@ describe('Router CPU Provider', () => {
     emb_router_cpu = m.emb_router_cpu;
     gen_syn_emb = m.gen_syn_emb;
     // Clear any cached router decisions between tests
-    if (m.__TEST && typeof m.__TEST.resetRouterCaches === 'function') m.__TEST.resetRouterCaches();
+    if (m.__TEST && typeof m.__TEST.resetRouterCaches === 'function')
+      m.__TEST.resetRouterCaches();
   });
 
   afterEach(() => {
@@ -95,7 +96,9 @@ describe('Router CPU Provider', () => {
       gen_syn_emb(`baseline ${i}`, 'semantic');
       synLatencies.push(performance.now() - start);
     }
-    const synP95 = synLatencies.sort((a, b) => a - b)[Math.floor(0.95 * synLatencies.length)];
+    const synP95 = synLatencies.sort((a, b) => a - b)[
+      Math.floor(0.95 * synLatencies.length)
+    ];
 
     process.env.OM_EMBED_KIND = 'router_cpu'; // Switch to router for test
 
@@ -118,13 +121,17 @@ describe('Router CPU Provider', () => {
     const avg = latencies.reduce((s, l) => s + l, 0) / latencies.length;
     expect(avg).toBeLessThan(100);
 
-    console.log(`Router P95: ${p95.toFixed(2)}ms, Synthetic P95: ${synP95.toFixed(2)}ms`);
+    console.log(
+      `Router P95: ${p95.toFixed(2)}ms, Synthetic P95: ${synP95.toFixed(2)}ms`,
+    );
   });
 
   it('verifies router P95 under concurrent load <300ms total', async () => {
     process.env.OM_EMBED_KIND = 'router_cpu';
 
-    const promises = Array.from({ length: 50 }, (_, i) => emb_router_cpu(`load test ${i}`, 'semantic'));
+    const promises = Array.from({ length: 50 }, (_, i) =>
+      emb_router_cpu(`load test ${i}`, 'semantic'),
+    );
     const start = performance.now();
     await Promise.all(promises);
     const totalTime = performance.now() - start;
@@ -142,7 +149,9 @@ describe('Router CPU Provider', () => {
 
     // Temporarily change mock to simulate failure
     const originalMockFetch = mockFetch;
-    const failingMock = mock(() => Promise.reject(new Error('Ollama service unavailable')));
+    const failingMock = mock(() =>
+      Promise.reject(new Error('Ollama service unavailable')),
+    );
     globalThis.fetch = failingMock as any;
 
     const result = await emb_router_cpu('Test text', 'semantic');
@@ -164,16 +173,29 @@ describe('Router CPU Provider', () => {
     const loggerMod: any = await import('../../backend/src/core/logger');
     const { spyLoggerMethod } = await import('../utils/spyLoggerSafely');
     const calls: any[] = [];
-    const handle = spyLoggerMethod(loggerMod.default, 'info', (meta: any, msg?: any) => { calls.push({ meta, msg }); });
+    const handle = spyLoggerMethod(
+      loggerMod.default,
+      'info',
+      (meta: any, msg?: any) => {
+        calls.push({ meta, msg });
+      },
+    );
     // Also capture embed logs via __TEST hook so we don't rely only on pino
     // internals. This prevents CI flakiness getting pino spy not to attach
     // to bound functions created at import time.
     const embedHookCleanup: any = (async () => {
       try {
         const embedMod: any = await import('../../backend/src/memory/embed');
-        if (embedMod && embedMod.__TEST) embedMod.__TEST.logHook = (lvl: any, meta: any, msg: any) => { calls.push({ meta, msg, lvl }); };
-        return () => { if (embedMod && embedMod.__TEST) embedMod.__TEST.logHook = null; };
-      } catch (e) { return () => { }; }
+        if (embedMod && embedMod.__TEST)
+          embedMod.__TEST.logHook = (lvl: any, meta: any, msg: any) => {
+            calls.push({ meta, msg, lvl });
+          };
+        return () => {
+          if (embedMod && embedMod.__TEST) embedMod.__TEST.logHook = null;
+        };
+      } catch (e) {
+        return () => {};
+      }
     })();
 
     // Import embed module after spy is installed so logs are captured.
@@ -182,12 +204,25 @@ describe('Router CPU Provider', () => {
 
     // Verify that an EMBED info log was emitted with the expected metadata.
     expect(calls.length).toBeGreaterThan(0);
-    const first = calls.find((c: any) => c.meta && c.meta.component === 'EMBED');
+    const first = calls.find(
+      (c: any) => c.meta && c.meta.component === 'EMBED',
+    );
     expect(first).toBeTruthy();
-    if (first) expect(first.meta).toMatchObject({ component: 'EMBED', sector: 'semantic', model: 'nomic-embed-text' });
-    try { handle.restore(); } catch (e) { }
-    try { const cleanup = await embedHookCleanup; cleanup(); } catch (e) { }
-    if (prev === undefined) delete process.env.OM_LOG_EMBED_LEVEL; else process.env.OM_LOG_EMBED_LEVEL = prev;
+    if (first)
+      expect(first.meta).toMatchObject({
+        component: 'EMBED',
+        sector: 'semantic',
+        model: 'nomic-embed-text',
+      });
+    try {
+      handle.restore();
+    } catch (e) {}
+    try {
+      const cleanup = await embedHookCleanup;
+      cleanup();
+    } catch (e) {}
+    if (prev === undefined) delete process.env.OM_LOG_EMBED_LEVEL;
+    else process.env.OM_LOG_EMBED_LEVEL = prev;
   });
 
   it('handles router cache decisions with 30s TTL', async () => {
@@ -218,7 +253,9 @@ describe('Router CPU Provider', () => {
 
     // Temporarily change mock to simulate failure
     const originalMockFetch = mockFetch;
-    const failingMock = mock(() => { throw new Error('Ollama service unavailable') });
+    const failingMock = mock(() => {
+      throw new Error('Ollama service unavailable');
+    });
     globalThis.fetch = failingMock as any;
 
     await expect(emb_router_cpu('test text', 'semantic')).rejects.toThrow();
@@ -231,15 +268,22 @@ describe('Router CPU Provider', () => {
     process.env.OM_EMBED_KIND = 'router_cpu';
     process.env.OM_ROUTER_SIMD_ENABLED = 'true';
 
-    const result = await emb_router_cpu('test text for semantic fusion', 'semantic');
+    const result = await emb_router_cpu(
+      'test text for semantic fusion',
+      'semantic',
+    );
 
     expect(result).toBeDefined();
     expect(Array.isArray(result)).toBe(true);
     expect(result.length).toBeGreaterThan(0);
-    expect(result.every((v: number) => typeof v === 'number' && isFinite(v))).toBe(true);
+    expect(
+      result.every((v: number) => typeof v === 'number' && isFinite(v)),
+    ).toBe(true);
 
     // Check if normalized (only if production enforces it)
-    const magnitude = Math.sqrt(result.reduce((sum: number, v: number) => sum + v * v, 0));
+    const magnitude = Math.sqrt(
+      result.reduce((sum: number, v: number) => sum + v * v, 0),
+    );
     // Allow some flexibility in normalization depending on tier settings
     expect(magnitude).toBeGreaterThan(0.9); // At least mostly normalized
   });
@@ -248,7 +292,10 @@ describe('Router CPU Provider', () => {
     process.env.OM_EMBED_KIND = 'router_cpu';
 
     const semanticResult = await emb_router_cpu('semantic content', 'semantic');
-    const proceduralResult = await emb_router_cpu('procedural content', 'procedural');
+    const proceduralResult = await emb_router_cpu(
+      'procedural content',
+      'procedural',
+    );
 
     // Results should be different due to sector-specific routing and weighting
     expect(semanticResult).not.toEqual(proceduralResult);
@@ -271,15 +318,24 @@ describe('Router CPU Provider', () => {
     process.env.OM_ROUTER_SIMD_ENABLED = 'true';
 
     // Test semantic sector weighting (0.6 semantic, 0.4 synthetic)
-    const semanticResult = await emb_router_cpu('semantic understanding test', 'semantic');
+    const semanticResult = await emb_router_cpu(
+      'semantic understanding test',
+      'semantic',
+    );
     expect(semanticResult).toBeDefined();
 
     // Test episodic sector weighting (0.65 semantic, 0.35 synthetic)
-    const episodicResult = await emb_router_cpu('memory recollection test', 'episodic');
+    const episodicResult = await emb_router_cpu(
+      'memory recollection test',
+      'episodic',
+    );
     expect(episodicResult).toBeDefined();
 
     // Test procedural sector weighting (0.55 semantic, 0.45 synthetic)
-    const proceduralResult = await emb_router_cpu('step by step process', 'procedural');
+    const proceduralResult = await emb_router_cpu(
+      'step by step process',
+      'procedural',
+    );
     expect(proceduralResult).toBeDefined();
 
     // Results should be similar but not identical due to different weightings
@@ -291,11 +347,15 @@ describe('Router CPU Provider', () => {
     process.env.OM_EMBED_KIND = 'router_cpu';
     process.env.OM_ROUTER_SECTOR_MODELS = JSON.stringify({
       semantic: 'bge-small-en-v1.5', // Override to use BGE instead of nomic-embed-text
-      procedural: 'nomic-embed-text'  // Override to use nomic instead of bge-small-en-v1.5
+      procedural: 'nomic-embed-text', // Override to use nomic instead of bge-small-en-v1.5
     });
 
     const embedMod = await import('../../backend/src/memory/embed');
-    if (embedMod.__TEST && typeof embedMod.__TEST.resetRouterCaches === 'function') embedMod.__TEST.resetRouterCaches();
+    if (
+      embedMod.__TEST &&
+      typeof embedMod.__TEST.resetRouterCaches === 'function'
+    )
+      embedMod.__TEST.resetRouterCaches();
 
     await emb_router_cpu('semantic test', 'semantic');
 
@@ -364,14 +424,21 @@ describe('Router CPU Provider', () => {
     const { embedForSector } = embedMod;
 
     // Test SMART tier fusion - should not throw dimension mismatch error
-    const result = await embedForSector('test text for smart fusion', 'semantic');
+    const result = await embedForSector(
+      'test text for smart fusion',
+      'semantic',
+    );
     expect(result).toBeDefined();
     expect(Array.isArray(result)).toBe(true);
     expect(result.length).toBeGreaterThan(0);
-    expect(result.every((v: number) => typeof v === 'number' && isFinite(v))).toBe(true);
+    expect(
+      result.every((v: number) => typeof v === 'number' && isFinite(v)),
+    ).toBe(true);
 
     // Check if normalized
-    const magnitude = Math.sqrt(result.reduce((sum: number, v: number) => sum + v * v, 0));
+    const magnitude = Math.sqrt(
+      result.reduce((sum: number, v: number) => sum + v * v, 0),
+    );
     expect(magnitude).toBeGreaterThan(0.9); // At least mostly normalized
   });
 
@@ -383,13 +450,21 @@ describe('Router CPU Provider', () => {
     const { embedForSector } = embedMod;
 
     // Test all sectors in SMART tier with router_cpu
-    const sectors = ['semantic', 'episodic', 'procedural', 'emotional', 'reflective'];
+    const sectors = [
+      'semantic',
+      'episodic',
+      'procedural',
+      'emotional',
+      'reflective',
+    ];
     for (const sector of sectors) {
       const result = await embedForSector(`test text for ${sector}`, sector);
       expect(result).toBeDefined();
       expect(Array.isArray(result)).toBe(true);
       expect(result.length).toBe(768); // Should match configured dimension
-      expect(result.every((v: number) => typeof v === 'number' && !isNaN(v))).toBe(true);
+      expect(
+        result.every((v: number) => typeof v === 'number' && !isNaN(v)),
+      ).toBe(true);
     }
   });
 });

@@ -7,11 +7,25 @@ import * as decay from '../../backend/src/memory/decay';
 
 beforeEach(() => {
   // Reset any prior test hooks
-  try { if (decay && (decay as any).__TEST && typeof (decay as any).__TEST.reset === 'function') (decay as any).__TEST.reset(); } catch (e) { }
+  try {
+    if (
+      decay &&
+      (decay as any).__TEST &&
+      typeof (decay as any).__TEST.reset === 'function'
+    )
+      (decay as any).__TEST.reset();
+  } catch (e) {}
 });
 
 afterEach(() => {
-  try { if (decay && (decay as any).__TEST && typeof (decay as any).__TEST.reset === 'function') (decay as any).__TEST.reset(); } catch (e) { }
+  try {
+    if (
+      decay &&
+      (decay as any).__TEST &&
+      typeof (decay as any).__TEST.reset === 'function'
+    )
+      (decay as any).__TEST.reset();
+  } catch (e) {}
 });
 
 test('apply_decay logs skipped when active queue > 0 (deterministic capture)', async () => {
@@ -26,6 +40,8 @@ test('apply_decay logs skipped when active queue > 0 (deterministic capture)', a
   decay.dec_q();
 
   // Ensure we captured at least one DECAY log entry
-  const embedCalls = calls.filter((c) => c.meta && c.meta.component === 'DECAY');
+  const embedCalls = calls.filter(
+    (c) => c.meta && c.meta.component === 'DECAY',
+  );
   expect(embedCalls.length).toBeGreaterThanOrEqual(1);
 });

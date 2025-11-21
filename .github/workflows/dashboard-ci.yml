@@ -4,12 +4,12 @@ on:
   push:
     branches: [main, next, next-clean]
     paths:
-      - "dashboard/**"
-      - ".github/workflows/dashboard-ci.yml"
+      - 'dashboard/**'
+      - '.github/workflows/dashboard-ci.yml'
   pull_request:
     branches: [main, next]
     paths:
-      - "dashboard/**"
+      - 'dashboard/**'
 
 jobs:
   test-dashboard:
@@ -108,8 +108,8 @@ jobs:
     needs: [test-dashboard, verify-ai-sdk]
     env:
       NEXT_PUBLIC_API_URL: http://localhost:8080
-      OM_RUN_PERF_TESTS: "true"
-      OM_TEST_MODE: "1"
+      OM_RUN_PERF_TESTS: 'true'
+      OM_TEST_MODE: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
@@ -174,8 +174,8 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [e2e-dashboard]
     env:
-      OM_RUN_PERF_TESTS: "true"
-      OM_TEST_MODE: "1"
+      OM_RUN_PERF_TESTS: 'true'
+      OM_TEST_MODE: '1'
       NEXT_PUBLIC_API_URL: http://localhost:8080
     steps:
       - name: Checkout

@@ -38,19 +38,19 @@ interface SQLiteStatement {
  * Runtime capability detection
  */
 export function detectSQLiteCapabilities(): {
-    runtime: 'bun' | 'node' | 'unknown';
+    runtime: "bun" | "node" | "unknown";
     hasBunSQLite: boolean;
     hasNodeSQLite: boolean;
-    recommended: 'bun' | 'node' | null;
+    recommended: "bun" | "node" | null;
 } {
-    const isBun = typeof Bun !== 'undefined';
+    const isBun = typeof Bun !== "undefined";
 
     if (isBun) {
         return {
-            runtime: 'bun' as const,
+            runtime: "bun" as const,
             hasBunSQLite: true,
             hasNodeSQLite: false, // Bun doesn't have node:sqlite
-            recommended: 'bun' as const,
+            recommended: "bun" as const,
         };
     }
 
@@ -58,24 +58,24 @@ export function detectSQLiteCapabilities(): {
     try {
         // Use dynamic import to avoid static analysis issues with Bun
         // Only check if we're actually running in Node.js
-        if (typeof global !== 'undefined' && !global.Bun) {
-            require('node:sqlite');
+        if (typeof global !== "undefined" && !global.Bun) {
+            require("node:sqlite");
             return {
-                runtime: 'node' as const,
+                runtime: "node" as const,
                 hasBunSQLite: false,
                 hasNodeSQLite: true,
-                recommended: 'node' as const,
+                recommended: "node" as const,
             };
         }
         return {
-            runtime: 'node' as const,
+            runtime: "node" as const,
             hasBunSQLite: false,
             hasNodeSQLite: false,
             recommended: null,
         };
     } catch {
         return {
-            runtime: 'node' as const,
+            runtime: "node" as const,
             hasBunSQLite: false,
             hasNodeSQLite: false,
             recommended: null,
@@ -86,25 +86,27 @@ export function detectSQLiteCapabilities(): {
 /**
  * Create a SQLite database instance using the best available runtime implementation
  */
-export async function createSQLiteDatabase(path: string): Promise<SQLiteDatabase> {
+export async function createSQLiteDatabase(
+    path: string,
+): Promise<SQLiteDatabase> {
     const capabilities = detectSQLiteCapabilities();
 
-    if (capabilities.recommended === 'bun') {
+    if (capabilities.recommended === "bun") {
         // Use Bun's native SQLite with wrapper to add convenience methods
-        const { Database } = await import('bun:sqlite');
+        const { Database } = await import("bun:sqlite");
         return new BunSQLiteWrapper(new Database(path, { strict: true }));
     }
 
-    if (capabilities.recommended === 'node') {
+    if (capabilities.recommended === "node") {
         // Use Node.js built-in SQLite
-        const { DatabaseSync } = await import('node:sqlite');
+        const { DatabaseSync } = await import("node:sqlite");
         return new NodeSQLiteWrapper(DatabaseSync, path);
     }
 
     throw new Error(
         `No SQLite implementation available. ` +
-        `Runtime: ${capabilities.runtime}. ` +
-        `Please use Bun (>=1.3.2) or Node.js (>=22.12.0).`
+            `Runtime: ${capabilities.runtime}. ` +
+            `Please use Bun (>=1.3.2) or Node.js (>=22.12.0).`,
     );
 }
 

@@ -13,7 +13,13 @@ export function ide(app: any) {
             const metadata = req.body.metadata || {};
 
             if (!event_type)
-                return new Response(JSON.stringify({ err: "event_type_required" }), { status: 400, headers: { "Content-Type": "application/json" } });
+                return new Response(
+                    JSON.stringify({ err: "event_type_required" }),
+                    {
+                        status: 400,
+                        headers: { "Content-Type": "application/json" },
+                    },
+                );
 
             const memory_content =
                 `[${event_type}] ${file_path}\n${content}`.trim();
@@ -35,15 +41,28 @@ export function ide(app: any) {
                 provided_user,
             );
 
-            return new Response(JSON.stringify({
-                success: true,
-                memory_id: result.id,
-                primary_sector: result.primary_sector,
-                sectors: result.sectors,
-            }), { status: 200, headers: { "Content-Type": "application/json" } });
+            return new Response(
+                JSON.stringify({
+                    success: true,
+                    memory_id: result.id,
+                    primary_sector: result.primary_sector,
+                    sectors: result.sectors,
+                }),
+                {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                },
+            );
         } catch (err) {
-            logger.error({ component: "IDE" }, "[IDE] Error storing IDE event: %o", err);
-            return new Response(JSON.stringify({ err: "internal" }), { status: 500, headers: { "Content-Type": "application/json" } });
+            logger.error(
+                { component: "IDE" },
+                "[IDE] Error storing IDE event: %o",
+                err,
+            );
+            return new Response(JSON.stringify({ err: "internal" }), {
+                status: 500,
+                headers: { "Content-Type": "application/json" },
+            });
         }
     });
 
@@ -54,7 +73,11 @@ export function ide(app: any) {
             const session_id = req.body.session_id;
             const file_path = req.body.file_path;
 
-            if (!query) return new Response(JSON.stringify({ err: "query_required" }), { status: 400, headers: { "Content-Type": "application/json" } });
+            if (!query)
+                return new Response(JSON.stringify({ err: "query_required" }), {
+                    status: 400,
+                    headers: { "Content-Type": "application/json" },
+                });
 
             const results = await hsg_query(query, k);
 
@@ -90,15 +113,28 @@ export function ide(app: any) {
                 path: r.path,
             }));
 
-            return new Response(JSON.stringify({
-                success: true,
-                memories: formatted,
-                total: formatted.length,
-                query: query,
-            }), { status: 200, headers: { "Content-Type": "application/json" } });
+            return new Response(
+                JSON.stringify({
+                    success: true,
+                    memories: formatted,
+                    total: formatted.length,
+                    query: query,
+                }),
+                {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                },
+            );
         } catch (err) {
-            logger.error({ component: "IDE" }, "[IDE] Error retrieving IDE context: %o", err);
-            return new Response(JSON.stringify({ err: "internal" }), { status: 500, headers: { "Content-Type": "application/json" } });
+            logger.error(
+                { component: "IDE" },
+                "[IDE] Error retrieving IDE context: %o",
+                err,
+            );
+            return new Response(JSON.stringify({ err: "internal" }), {
+                status: 500,
+                headers: { "Content-Type": "application/json" },
+            });
         }
     });
 
@@ -123,20 +159,38 @@ export function ide(app: any) {
                 ide_mode: true,
             };
 
-            const result = await add_hsg_memory(content, undefined, metadata, user_id);
+            const result = await add_hsg_memory(
+                content,
+                undefined,
+                metadata,
+                user_id,
+            );
 
-            return new Response(JSON.stringify({
-                success: true,
-                session_id: session_id,
-                memory_id: result.id,
-                started_at: now_ts,
-                user_id: user_id,
-                project_name: project_name,
-                ide_name: ide_name,
-            }), { status: 200, headers: { "Content-Type": "application/json" } });
+            return new Response(
+                JSON.stringify({
+                    success: true,
+                    session_id: session_id,
+                    memory_id: result.id,
+                    started_at: now_ts,
+                    user_id: user_id,
+                    project_name: project_name,
+                    ide_name: ide_name,
+                }),
+                {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                },
+            );
         } catch (err) {
-            logger.error({ component: "IDE" }, "[IDE] Error starting IDE session: %o", err);
-            return new Response(JSON.stringify({ err: "internal" }), { status: 500, headers: { "Content-Type": "application/json" } });
+            logger.error(
+                { component: "IDE" },
+                "[IDE] Error starting IDE session: %o",
+                err,
+            );
+            return new Response(JSON.stringify({ err: "internal" }), {
+                status: 500,
+                headers: { "Content-Type": "application/json" },
+            });
         }
     });
 
@@ -145,7 +199,13 @@ export function ide(app: any) {
             const session_id = req.body.session_id;
 
             if (!session_id)
-                return new Response(JSON.stringify({ err: "session_id_required" }), { status: 400, headers: { "Content-Type": "application/json" } });
+                return new Response(
+                    JSON.stringify({ err: "session_id_required" }),
+                    {
+                        status: 400,
+                        headers: { "Content-Type": "application/json" },
+                    },
+                );
 
             const now_ts = Date.now();
 
@@ -162,11 +222,15 @@ export function ide(app: any) {
                 for (const m of maybe) {
                     try {
                         const meta = p(m.meta);
-                        if (meta && meta.ide_session_id === session_id && meta.ide_user_id) {
+                        if (
+                            meta &&
+                            meta.ide_session_id === session_id &&
+                            meta.ide_user_id
+                        ) {
                             user_id = meta.ide_user_id;
                             break;
                         }
-                    } catch { }
+                    } catch {}
                 }
             }
 
@@ -214,23 +278,41 @@ export function ide(app: any) {
                 ide_mode: true,
             };
 
-            const result = await add_hsg_memory(summary, undefined, metadata, user_id);
+            const result = await add_hsg_memory(
+                summary,
+                undefined,
+                metadata,
+                user_id,
+            );
 
-            return new Response(JSON.stringify({
-                success: true,
-                session_id: session_id,
-                ended_at: now_ts,
-                summary_memory_id: result.id,
-                statistics: {
-                    total_events: total_events,
-                    sectors: sectors,
-                    unique_files: files.size,
-                    files: Array.from(files),
+            return new Response(
+                JSON.stringify({
+                    success: true,
+                    session_id: session_id,
+                    ended_at: now_ts,
+                    summary_memory_id: result.id,
+                    statistics: {
+                        total_events: total_events,
+                        sectors: sectors,
+                        unique_files: files.size,
+                        files: Array.from(files),
+                    },
+                }),
+                {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
                 },
-            }), { status: 200, headers: { "Content-Type": "application/json" } });
+            );
         } catch (err) {
-            logger.error({ component: "IDE" }, "[IDE] Error ending IDE session: %o", err);
-            return new Response(JSON.stringify({ err: "internal" }), { status: 500, headers: { "Content-Type": "application/json" } });
+            logger.error(
+                { component: "IDE" },
+                "[IDE] Error ending IDE session: %o",
+                err,
+            );
+            return new Response(JSON.stringify({ err: "internal" }), {
+                status: 500,
+                headers: { "Content-Type": "application/json" },
+            });
         }
     });
 
@@ -239,7 +321,13 @@ export function ide(app: any) {
             const session_id = req.params.session_id;
 
             if (!session_id)
-                return new Response(JSON.stringify({ err: "session_id_required" }), { status: 400, headers: { "Content-Type": "application/json" } });
+                return new Response(
+                    JSON.stringify({ err: "session_id_required" }),
+                    {
+                        status: 400,
+                        headers: { "Content-Type": "application/json" },
+                    },
+                );
 
             const provided_user_id = req.query?.user_id || req.body?.user_id;
             let user_id = provided_user_id;
@@ -248,11 +336,15 @@ export function ide(app: any) {
                 for (const m of maybe) {
                     try {
                         const meta = p(m.meta);
-                        if (meta && meta.ide_session_id === session_id && meta.ide_user_id) {
+                        if (
+                            meta &&
+                            meta.ide_session_id === session_id &&
+                            meta.ide_user_id
+                        ) {
                             user_id = meta.ide_user_id;
                             break;
                         }
-                    } catch { }
+                    } catch {}
                 }
             }
 
@@ -278,15 +370,28 @@ export function ide(app: any) {
                 last_reinforced: m.last_seen_at,
             }));
 
-            return new Response(JSON.stringify({
-                success: true,
-                session_id: session_id,
-                pattern_count: patterns.length,
-                patterns: patterns,
-            }), { status: 200, headers: { "Content-Type": "application/json" } });
+            return new Response(
+                JSON.stringify({
+                    success: true,
+                    session_id: session_id,
+                    pattern_count: patterns.length,
+                    patterns: patterns,
+                }),
+                {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                },
+            );
         } catch (err) {
-            logger.error({ component: "IDE" }, "[IDE] Error detecting patterns: %o", err);
-            return new Response(JSON.stringify({ err: "internal" }), { status: 500, headers: { "Content-Type": "application/json" } });
+            logger.error(
+                { component: "IDE" },
+                "[IDE] Error detecting patterns: %o",
+                err,
+            );
+            return new Response(JSON.stringify({ err: "internal" }), {
+                status: 500,
+                headers: { "Content-Type": "application/json" },
+            });
         }
     });
 }

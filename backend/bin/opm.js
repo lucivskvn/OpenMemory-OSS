@@ -1,27 +1,27 @@
 #!/usr/bin/env bun
 
-const fs = require('fs');
-const path = require('path');
+const fs = require("fs");
+const path = require("path");
 
 // load .env from root
 const loadenv = () => {
-  const envp = path.join(__dirname, '..', '..', '.env');
-  if (!fs.existsSync(envp)) return;
-  const lns = fs.readFileSync(envp, 'utf8').split('\n');
-  for (const ln of lns) {
-    const trim = ln.trim();
-    if (!trim || trim.startsWith('#')) continue;
-    const m = trim.match(/^([A-Z_]+)=(.*)$/);
-    if (m && !process.env[m[1]]) {
-      process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+    const envp = path.join(__dirname, "..", "..", ".env");
+    if (!fs.existsSync(envp)) return;
+    const lns = fs.readFileSync(envp, "utf8").split("\n");
+    for (const ln of lns) {
+        const trim = ln.trim();
+        if (!trim || trim.startsWith("#")) continue;
+        const m = trim.match(/^([A-Z_]+)=(.*)$/);
+        if (m && !process.env[m[1]]) {
+            process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
+        }
     }
-  }
 };
 loadenv();
 
-const port = process.env.OM_PORT || '8080';
+const port = process.env.OM_PORT || "8080";
 const url = process.env.OPENMEMORY_URL || `http://localhost:${port}`;
-const key = process.env.OPENMEMORY_API_KEY || process.env.OM_API_KEY || '';
+const key = process.env.OPENMEMORY_API_KEY || process.env.OM_API_KEY || "";
 
 const helptext = `
 openmemory cli (opm)
@@ -58,189 +58,193 @@ examples:
 `;
 
 const hdrs = {
-  'content-type': 'application/json',
-  ...(key && { authorization: `bearer ${key}` }),
+    "content-type": "application/json",
+    ...(key && { authorization: `bearer ${key}` }),
 };
 
 const req = async (pth, opts = {}) => {
-  const target = `${url}${pth}`;
-  try {
-    const res = await fetch(target, {
-      ...opts,
-      headers: { ...hdrs, ...opts.headers },
-    });
-    if (!res.ok) {
-      const txt = await res.text().catch(() => 'no response');
-      throw new Error(`http ${res.status}: ${txt}`);
+    const target = `${url}${pth}`;
+    try {
+        const res = await fetch(target, {
+            ...opts,
+            headers: { ...hdrs, ...opts.headers },
+        });
+        if (!res.ok) {
+            const txt = await res.text().catch(() => "no response");
+            throw new Error(`http ${res.status}: ${txt}`);
+        }
+        return await res.json();
+    } catch (e) {
+        console.error(`[error] ${e.message}`);
+        process.exit(1);
     }
-    return await res.json();
-  } catch (e) {
-    console.error(`[error] ${e.message}`);
-    process.exit(1);
-  }
 };
 
 const addmem = async (txt, opts) => {
-  const body = { content: txt };
-  if (opts.usr) body.user_id = opts.usr;
-  if (opts.tags) body.tags = opts.tags.split(',');
-  const r = await req('/memory/add', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
-  console.log('[ok] memory added');
-  console.log(`id: ${r.id}`);
-  console.log(`sector: ${r.primary_sector}`);
-  console.log(`salience: ${r.salience.toFixed(3)}`);
+    const body = { content: txt };
+    if (opts.usr) body.user_id = opts.usr;
+    if (opts.tags) body.tags = opts.tags.split(",");
+    const r = await req("/memory/add", {
+        method: "POST",
+        body: JSON.stringify(body),
+    });
+    console.log("[ok] memory added");
+    console.log(`id: ${r.id}`);
+    console.log(`sector: ${r.primary_sector}`);
+    console.log(`salience: ${r.salience.toFixed(3)}`);
 };
 
 const querymem = async (txt, opts) => {
-  const body = { query: txt, k: opts.lim || 10 };
-  if (opts.usr) body.filters = { user_id: opts.usr };
-  const r = await req('/memory/query', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
-  const matches = r.matches || r.memories || [];
-  console.log(`[results] ${matches.length} found\n`);
-  matches.forEach((m, i) => {
-    console.log(`${i + 1}. [${m.primary_sector}] ${m.content}`);
-    console.log(`   id: ${m.id}`);
-    console.log(
-      `   score: ${m.score?.toFixed(3) || 'n/a'} | sal: ${m.salience.toFixed(
-        3,
-      )}`,
-    );
-    if (m.tags) console.log(`   tags: ${m.tags}`);
-    console.log();
-  });
+    const body = { query: txt, k: opts.lim || 10 };
+    if (opts.usr) body.filters = { user_id: opts.usr };
+    const r = await req("/memory/query", {
+        method: "POST",
+        body: JSON.stringify(body),
+    });
+    const matches = r.matches || r.memories || [];
+    console.log(`[results] ${matches.length} found\n`);
+    matches.forEach((m, i) => {
+        console.log(`${i + 1}. [${m.primary_sector}] ${m.content}`);
+        console.log(`   id: ${m.id}`);
+        console.log(
+            `   score: ${m.score?.toFixed(3) || "n/a"} | sal: ${m.salience.toFixed(
+                3,
+            )}`,
+        );
+        if (m.tags) console.log(`   tags: ${m.tags}`);
+        console.log();
+    });
 };
 
 const listmem = async (opts) => {
-  const lim = opts.lim || 10;
-  const off = 0;
-  let r;
-  if (opts.usr) {
-    r = await req(`/memory/user/${opts.usr}?limit=${lim}&offset=${off}`);
-  } else {
-    r = await req(`/memory/all?limit=${lim}&offset=${off}`);
-  }
-  const items = r.items || r.memories || [];
-  console.log(`[memories] showing ${items.length}\n`);
-  items.forEach((m, i) => {
-    console.log(`${i + 1}. [${m.primary_sector}] ${m.content}`);
-    console.log(`   id: ${m.id} | user: ${m.user_id || 'system'}`);
-    console.log(`   sal: ${m.salience.toFixed(3)}`);
-    if (m.tags) console.log(`   tags: ${m.tags}`);
-    console.log();
-  });
+    const lim = opts.lim || 10;
+    const off = 0;
+    let r;
+    if (opts.usr) {
+        r = await req(`/memory/user/${opts.usr}?limit=${lim}&offset=${off}`);
+    } else {
+        r = await req(`/memory/all?limit=${lim}&offset=${off}`);
+    }
+    const items = r.items || r.memories || [];
+    console.log(`[memories] showing ${items.length}\n`);
+    items.forEach((m, i) => {
+        console.log(`${i + 1}. [${m.primary_sector}] ${m.content}`);
+        console.log(`   id: ${m.id} | user: ${m.user_id || "system"}`);
+        console.log(`   sal: ${m.salience.toFixed(3)}`);
+        if (m.tags) console.log(`   tags: ${m.tags}`);
+        console.log();
+    });
 };
 
 const delmem = async (id) => {
-  await req(`/memory/${id}`, { method: 'DELETE' });
-  console.log(`[ok] memory ${id} deleted`);
+    await req(`/memory/${id}`, { method: "DELETE" });
+    console.log(`[ok] memory ${id} deleted`);
 };
 
 const getstats = async () => {
-  const r = await req('/stats');
-  console.log('[stats]\n');
-  console.log(`total memories: ${r.total_memories}`);
-  console.log(`total users: ${r.total_users}`);
-  console.log(`avg salience: ${r.avg_salience?.toFixed(3) || 'n/a'}`);
-  console.log(`\nmemories by sector:`);
-  Object.entries(r.memories_by_sector || {}).forEach(([sec, cnt]) => {
-    console.log(`  ${sec}: ${cnt}`);
-  });
+    const r = await req("/stats");
+    console.log("[stats]\n");
+    console.log(`total memories: ${r.total_memories}`);
+    console.log(`total users: ${r.total_users}`);
+    console.log(`avg salience: ${r.avg_salience?.toFixed(3) || "n/a"}`);
+    console.log(`\nmemories by sector:`);
+    Object.entries(r.memories_by_sector || {}).forEach(([sec, cnt]) => {
+        console.log(`  ${sec}: ${cnt}`);
+    });
 };
 
 const listusers = async () => {
-  const r = await req('/users');
-  console.log(`[users] ${r.users.length} found\n`);
-  r.users.forEach((u, i) => {
-    console.log(`${i + 1}. ${u.user_id}`);
-    console.log(`   memories: ${u.memory_count || 0}`);
-    console.log(`   reflections: ${u.reflection_count || 0}`);
-    if (u.summary) console.log(`   summary: ${u.summary.substring(0, 100)}...`);
-    console.log();
-  });
+    const r = await req("/users");
+    console.log(`[users] ${r.users.length} found\n`);
+    r.users.forEach((u, i) => {
+        console.log(`${i + 1}. ${u.user_id}`);
+        console.log(`   memories: ${u.memory_count || 0}`);
+        console.log(`   reflections: ${u.reflection_count || 0}`);
+        if (u.summary)
+            console.log(`   summary: ${u.summary.substring(0, 100)}...`);
+        console.log();
+    });
 };
 
 const getuser = async (uid) => {
-  const r = await req(`/users/${uid}/summary`);
-  console.log(`[user] ${uid}\n`);
-  console.log(`summary:\n${r.summary || 'no summary'}\n`);
-  console.log(`memories: ${r.memory_count || 0}`);
-  console.log(`reflections: ${r.reflection_count || 0}`);
+    const r = await req(`/users/${uid}/summary`);
+    console.log(`[user] ${uid}\n`);
+    console.log(`summary:\n${r.summary || "no summary"}\n`);
+    console.log(`memories: ${r.memory_count || 0}`);
+    console.log(`reflections: ${r.reflection_count || 0}`);
 };
 
 const health = async () => {
-  const r = await req('/health');
-  console.log(`[health] ${r.status}`);
-  if (r.version) console.log(`version: ${r.version}`);
-  if (r.uptime) console.log(`uptime: ${Math.floor(r.uptime / 1000)}s`);
+    const r = await req("/health");
+    console.log(`[health] ${r.status}`);
+    if (r.version) console.log(`version: ${r.version}`);
+    if (r.uptime) console.log(`uptime: ${Math.floor(r.uptime / 1000)}s`);
 };
 
 // parse args
 const argv = process.argv.slice(2);
 const cmd = argv[0];
 
-if (!cmd || cmd === '--help' || cmd === '-h') {
-  console.log(helptext);
-  process.exit(0);
+if (!cmd || cmd === "--help" || cmd === "-h") {
+    console.log(helptext);
+    process.exit(0);
 }
 
 const opts = {};
 for (let i = 1; i < argv.length; i++) {
-  if (argv[i] === '--user') opts.usr = argv[++i];
-  else if (argv[i] === '--tags') opts.tags = argv[++i];
-  else if (argv[i] === '--limit') opts.lim = parseInt(argv[++i]);
+    if (argv[i] === "--user") opts.usr = argv[++i];
+    else if (argv[i] === "--tags") opts.tags = argv[++i];
+    else if (argv[i] === "--limit") opts.lim = parseInt(argv[++i]);
 }
 
 // run command
 (async () => {
-  try {
-    switch (cmd) {
-      case 'add':
-        if (!argv[1]) throw new Error('content required: opm add "text"');
-        await addmem(
-          argv.slice(1, argv.indexOf('--')).join(' ') || argv[1],
-          opts,
-        );
-        break;
-      case 'query':
-        if (!argv[1]) throw new Error('query text required: opm query "text"');
-        await querymem(
-          argv.slice(1, argv.indexOf('--')).join(' ') || argv[1],
-          opts,
-        );
-        break;
-      case 'list':
-        await listmem(opts);
-        break;
-      case 'delete':
-        if (!argv[1]) throw new Error('id required: opm delete <id>');
-        await delmem(argv[1]);
-        break;
-      case 'stats':
-        await getstats();
-        break;
-      case 'users':
-        await listusers();
-        break;
-      case 'user':
-        if (!argv[1]) throw new Error('user id required: opm user <id>');
-        await getuser(argv[1]);
-        break;
-      case 'health':
-        await health();
-        break;
-      default:
-        console.error(`[error] unknown command: ${cmd}`);
-        console.log(helptext);
+    try {
+        switch (cmd) {
+            case "add":
+                if (!argv[1])
+                    throw new Error('content required: opm add "text"');
+                await addmem(
+                    argv.slice(1, argv.indexOf("--")).join(" ") || argv[1],
+                    opts,
+                );
+                break;
+            case "query":
+                if (!argv[1])
+                    throw new Error('query text required: opm query "text"');
+                await querymem(
+                    argv.slice(1, argv.indexOf("--")).join(" ") || argv[1],
+                    opts,
+                );
+                break;
+            case "list":
+                await listmem(opts);
+                break;
+            case "delete":
+                if (!argv[1]) throw new Error("id required: opm delete <id>");
+                await delmem(argv[1]);
+                break;
+            case "stats":
+                await getstats();
+                break;
+            case "users":
+                await listusers();
+                break;
+            case "user":
+                if (!argv[1])
+                    throw new Error("user id required: opm user <id>");
+                await getuser(argv[1]);
+                break;
+            case "health":
+                await health();
+                break;
+            default:
+                console.error(`[error] unknown command: ${cmd}`);
+                console.log(helptext);
+                process.exit(1);
+        }
+    } catch (e) {
+        console.error(`[error] ${e.message}`);
         process.exit(1);
     }
-  } catch (e) {
-    console.error(`[error] ${e.message}`);
-    process.exit(1);
-  }
 })();

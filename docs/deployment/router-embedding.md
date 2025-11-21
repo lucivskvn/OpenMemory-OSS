@@ -58,6 +58,7 @@ ollama pull snowflake-arctic-embed # 1024d, enterprise-grade
 ### Example Deployment Configurations
 
 #### DigitalOcean VPS (Basic)
+
 ```bash
 # Start Ollama service
 docker run -d --name ollama \
@@ -76,6 +77,7 @@ bun start
 ```
 
 #### AWS EC2 (m6i.large)
+
 ```bash
 # Instance: m6i.large (2 vCPU, 8GB RAM)
 # Storage: 30GB GP3 SSD
@@ -151,10 +153,12 @@ time curl -X POST http://localhost:8080/memory/query \
 ### Common Issues
 
 **Vector dimension mismatches**
+
 - Ensure all Ollama models output the same dimensionality (768d recommended)
 - Check `OM_VEC_DIM` matches model outputs
 
 **Ollama connectivity failures**
+
 ```bash
 # Check Ollama status
 curl http://localhost:11434/api/health
@@ -167,6 +171,7 @@ docker restart ollama
 ```
 
 **High memory usage**
+
 ```bash
 # Limit concurrent Ollama workers
 export OLLAMA_NUM_THREAD=2
@@ -180,6 +185,7 @@ curl -X POST http://localhost:8080/embed/ollama/delete \
 ### Monitoring
 
 Router-specific logs include:
+
 - `[EMBED] Router decision: semantic → nomic-embed-text`
 - `[EMBED] Router fusion: 0.6:0.4 ratio for semantic`
 - `[EMBED] Router CPU: processing sector semantic with model nomic-embed-text`

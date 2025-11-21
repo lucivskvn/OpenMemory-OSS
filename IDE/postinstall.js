@@ -20,37 +20,49 @@ try {
 try {
   writeMCPConfig = require('./out/mcp/generator').writeMCPConfig;
 } catch (e) {
-  writeMCPConfig = async () => { throw new Error('mcp generator not built'); };
+  writeMCPConfig = async () => {
+    throw new Error('mcp generator not built');
+  };
 }
 
 try {
   writeCursorConfig = require('./out/writers/cursor').writeCursorConfig;
 } catch (e) {
-  writeCursorConfig = async () => { throw new Error('cursor writer not built'); };
+  writeCursorConfig = async () => {
+    throw new Error('cursor writer not built');
+  };
 }
 
 try {
   writeClaudeConfig = require('./out/writers/claude').writeClaudeConfig;
 } catch (e) {
-  writeClaudeConfig = async () => { throw new Error('claude writer not built'); };
+  writeClaudeConfig = async () => {
+    throw new Error('claude writer not built');
+  };
 }
 
 try {
   writeWindsurfConfig = require('./out/writers/windsurf').writeWindsurfConfig;
 } catch (e) {
-  writeWindsurfConfig = async () => { throw new Error('windsurf writer not built'); };
+  writeWindsurfConfig = async () => {
+    throw new Error('windsurf writer not built');
+  };
 }
 
 try {
   writeCopilotConfig = require('./out/writers/copilot').writeCopilotConfig;
 } catch (e) {
-  writeCopilotConfig = async () => { throw new Error('copilot writer not built'); };
+  writeCopilotConfig = async () => {
+    throw new Error('copilot writer not built');
+  };
 }
 
 try {
   writeCodexConfig = require('./out/writers/codex').writeCodexConfig;
 } catch (e) {
-  writeCodexConfig = async () => { throw new Error('codex writer not built'); };
+  writeCodexConfig = async () => {
+    throw new Error('codex writer not built');
+  };
 }
 
 const DEFAULT_URL = 'http://localhost:8080';
@@ -108,7 +120,9 @@ async function postInstall() {
     );
   }
 
-  console.log('\n📖 For more info: https://github.com/lucivskvn/openmemory-OSS');
+  console.log(
+    '\n📖 For more info: https://github.com/lucivskvn/openmemory-OSS',
+  );
 }
 
 postInstall().catch(console.error);

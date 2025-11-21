@@ -10,6 +10,7 @@ rule_id: codeguard-0-file-handling-and-uploads
 This rule advises on secure file upload practices to prevent malicious file attacks and protect system integrity:
 
 - Extension Validation
+
   - List allowed extensions only for business-critical functionality.
   - Ensure input validation is applied before validating extensions.
   - Avoid double extensions (e.g., `.jpg.php`) and null byte injection (e.g., `.php%00.jpg`).
@@ -17,12 +18,14 @@ This rule advises on secure file upload practices to prevent malicious file atta
   - Validate extensions after decoding filename to prevent bypass attempts.
 
 - Content Type and File Signature Validation
+
   - Never trust client-supplied Content-Type headers as they can be spoofed.
   - Validate file signatures (magic numbers) in conjunction with Content-Type checking.
   - Implement allowlist approach for MIME types as a quick protection layer.
   - Use file signature validation but not as a standalone security measure.
 
 - Filename Security
+
   - Generate random filenames (UUID/GUID) instead of using user-supplied names.
   - If user filenames required, implement maximum length limits.
   - Restrict characters to alphanumeric, hyphens, spaces, and periods only.
@@ -30,6 +33,7 @@ This rule advises on secure file upload practices to prevent malicious file atta
   - Avoid leading hyphens or spaces for safer shell script processing.
 
 - File Content Validation
+
   - For images, apply image rewriting techniques to destroy malicious content.
   - For Microsoft documents, use Apache POI for validation.
   - Avoid ZIP files due to numerous attack vectors.
@@ -37,6 +41,7 @@ This rule advises on secure file upload practices to prevent malicious file atta
   - Integrate antivirus scanning and Content Disarm & Reconstruct (CDR) for applicable file types.
 
 - Storage Security
+
   - Store files on different servers for complete segregation when possible.
   - Store files outside webroot with administrative access only.
   - If storing in webroot, set write-only permissions with proper access controls.
@@ -44,12 +49,14 @@ This rule advises on secure file upload practices to prevent malicious file atta
   - Consider database storage for specific use cases with DBA expertise.
 
 - Access Control and Authentication
+
   - Require user authentication before allowing file uploads.
   - Implement proper authorization levels for file access and modification.
   - Set filesystem permissions on principle of least privilege.
   - Scan files before execution if execution permission is required.
 
 - Upload and Download Limits
+
   - Set proper file size limits for upload protection.
   - Consider post-decompression size limits for compressed files.
   - Implement request limits for download services to prevent DoS attacks.

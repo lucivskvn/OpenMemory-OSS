@@ -25,54 +25,64 @@ This guide standardizes in-repo documentation, code comments, and JSDoc/TSDoc us
 
 - Always name each `@param` with the exact parameter name and include short type or shape explanation only when types are ambiguous.
 - For `@returns`, always document the value, not the type (types come from the signature). If the function can return `null`/`undefined`, mention it.
-    - Example:
 
-       ```ts
+  - Example:
 
-   ```ts
-     /**
-      * Create a new memory for a given user.
-      * @param userId - The user's UUID (v4).
-      * @param data - Optional object with metadata to store in the memory.
-      * @returns {Promise<Memory>} The created Memory object.
-      * @throws {ValidationError} If validation fails for input data.
-      * @example
-      * ```ts
-      * const memory = await createMemory(userId, { text: 'Met at airport' });
-      * ```
-      */
-       export async function createMemory(userId: string, data?: any): Promise<Memory> {}
-       ```
+    ```ts
+
+    ```
+
+  ````ts
+    /**
+     * Create a new memory for a given user.
+     * @param userId - The user's UUID (v4).
+     * @param data - Optional object with metadata to store in the memory.
+     * @returns {Promise<Memory>} The created Memory object.
+     * @throws {ValidationError} If validation fails for input data.
+     * @example
+     * ```ts
+     * const memory = await createMemory(userId, { text: 'Met at airport' });
+     * ```
+     */
+      export async function createMemory(userId: string, data?: any): Promise<Memory> {}
+      ```
+  ````
 
 ### 4. Examples
-   - Provide at least one `@example` for non-trivial exported functions and for SDK examples.
-   - Keep examples short and realistic.
+
+- Provide at least one `@example` for non-trivial exported functions and for SDK examples.
+- Keep examples short and realistic.
 
 ### 5. Deprecation & migration paths
-   - Add `@deprecated` tag if the API will be removed or behavior will change; include migration steps.
+
+- Add `@deprecated` tag if the API will be removed or behavior will change; include migration steps.
 
 ### 6. Tools & enforcement (optional)
-   - Consider adding `eslint-plugin-jsdoc` or `@microsoft/tsdoc` rules to the project linting.
-   - Use `jsdoc-to-markdown` to centralize and render documentation from JSDoc/TSDoc comments.
+
+- Consider adding `eslint-plugin-jsdoc` or `@microsoft/tsdoc` rules to the project linting.
+- Use `jsdoc-to-markdown` to centralize and render documentation from JSDoc/TSDoc comments.
 
 ### 7. Docs consolidation
-   - Use the `docs/` tree for guidelines and larger how-tos. Keep top-level `README.md` focused on setup and quickstarts.
-   - Add the JSDoc/TSDoc link to `CONTRIBUTING.md`.
+
+- Use the `docs/` tree for guidelines and larger how-tos. Keep top-level `README.md` focused on setup and quickstarts.
+- Add the JSDoc/TSDoc link to `CONTRIBUTING.md`.
 
 ### 8. Scripts & helper modules
-   - For scripts under `scripts/` and `backend/scripts`, document top-level `main()` or CLI flags using `@module` and `@example`.
-   - Provide consistent usage outputs (which many scripts already include). Always exit with `process.exit(1)` for invalid args.
+
+- For scripts under `scripts/` and `backend/scripts`, document top-level `main()` or CLI flags using `@module` and `@example`.
+- Provide consistent usage outputs (which many scripts already include). Always exit with `process.exit(1)` for invalid args.
 
 ### 9. Examples of tags to use
-   - `@param` - parameter explanation.
-   - `@returns` - what is returned (mention nullable/Promise).
-   - `@throws` - list errors that may be thrown.
-   - `@example` - usage.
-   - `@internal` or `@private` - hide from public docs.
+
+- `@param` - parameter explanation.
+- `@returns` - what is returned (mention nullable/Promise).
+- `@throws` - list errors that may be thrown.
+- `@example` - usage.
+- `@internal` or `@private` - hide from public docs.
 
 ### 10. Minimal JSDoc for tests
 
-   - Tests may have light docblocks to describe the scenario; prefer test names that explain behavior.
+- Tests may have light docblocks to describe the scenario; prefer test names that explain behavior.
 
 ---
 

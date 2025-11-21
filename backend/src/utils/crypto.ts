@@ -15,20 +15,29 @@ export async function hashPassword(password: string): Promise<string> {
     });
 }
 
-export async function verifyPassword(password: string, hash: string): Promise<boolean> {
+export async function verifyPassword(
+    password: string,
+    hash: string,
+): Promise<boolean> {
     return await Bun.password.verify(password, hash);
 }
 
-export function hashString(input: string, algorithm: 'sha256' | 'sha512' = 'sha256'): string {
+export function hashString(
+    input: string,
+    algorithm: "sha256" | "sha512" = "sha256",
+): string {
     const h = new CryptoHasher(algorithm);
     h.update(input);
-    return h.digest('hex');
+    return h.digest("hex");
 }
 
-export function hashBuffer(input: Uint8Array, algorithm: 'sha256' | 'sha512' = 'sha256'): string {
+export function hashBuffer(
+    input: Uint8Array,
+    algorithm: "sha256" | "sha512" = "sha256",
+): string {
     const h = new CryptoHasher(algorithm);
     h.update(input);
-    return h.digest('hex');
+    return h.digest("hex");
 }
 
 export function generateId(): string {
@@ -37,11 +46,13 @@ export function generateId(): string {
 
 export function generateToken(bytes: number = 32): string {
     const arr = crypto.getRandomValues(new Uint8Array(bytes));
-    return Array.from(arr).map((b) => b.toString(16).padStart(2, '0')).join('');
+    return Array.from(arr)
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
 }
 
 export function isHashedKey(key: string): boolean {
-    if (!key || typeof key !== 'string') return false;
+    if (!key || typeof key !== "string") return false;
     // Match Argon2 variants explicitly: $argon2id$, $argon2i$, $argon2d$
     const argon2Re = /^\$argon2(?:id|i|d)\$/i;
     const bcryptRe = /^\$2(?:a|b|y)\$/i;
@@ -69,6 +80,7 @@ export function verifyCSRFToken(token: string, expected: string): boolean {
     // timing-safe comparison
     if (token.length !== expected.length) return false;
     let res = 0;
-    for (let i = 0; i < token.length; i++) res |= token.charCodeAt(i) ^ expected.charCodeAt(i);
+    for (let i = 0; i < token.length; i++)
+        res |= token.charCodeAt(i) ^ expected.charCodeAt(i);
     return res === 0;
 }

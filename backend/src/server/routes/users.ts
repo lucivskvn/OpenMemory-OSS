@@ -10,57 +10,116 @@ export const usr = (app: any) => {
         try {
             const { user_id } = ctx.params || {};
             if (!user_id)
-                return new Response(JSON.stringify({ error: "user_id required" }), { status: 400, headers: { "Content-Type": "application/json" } });
+                return new Response(
+                    JSON.stringify({ error: "user_id required" }),
+                    {
+                        status: 400,
+                        headers: { "Content-Type": "application/json" },
+                    },
+                );
 
             const user = await q.get_user.get(user_id);
-            if (!user) return new Response(JSON.stringify({ error: "user not found" }), { status: 404, headers: { "Content-Type": "application/json" } });
+            if (!user)
+                return new Response(
+                    JSON.stringify({ error: "user not found" }),
+                    {
+                        status: 404,
+                        headers: { "Content-Type": "application/json" },
+                    },
+                );
 
-            return new Response(JSON.stringify({
-                user_id: user.user_id,
-                summary: user.summary,
-                reflection_count: user.reflection_count,
-                updated_at: user.updated_at,
-            }), { status: 200, headers: { "Content-Type": "application/json" } });
+            return new Response(
+                JSON.stringify({
+                    user_id: user.user_id,
+                    summary: user.summary,
+                    reflection_count: user.reflection_count,
+                    updated_at: user.updated_at,
+                }),
+                {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                },
+            );
         } catch (err: any) {
-            return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+            return new Response(JSON.stringify({ error: err.message }), {
+                status: 500,
+                headers: { "Content-Type": "application/json" },
+            });
         }
     });
 
-    app.post("/users/:user_id/summary/regenerate", async (req: any, ctx: any) => {
-        try {
-            const { user_id } = ctx.params || {};
-            if (!user_id) return new Response(JSON.stringify({ err: "user_id required" }), { status: 400, headers: { "Content-Type": "application/json" } });
+    app.post(
+        "/users/:user_id/summary/regenerate",
+        async (req: any, ctx: any) => {
+            try {
+                const { user_id } = ctx.params || {};
+                if (!user_id)
+                    return new Response(
+                        JSON.stringify({ err: "user_id required" }),
+                        {
+                            status: 400,
+                            headers: { "Content-Type": "application/json" },
+                        },
+                    );
 
-            await update_user_summary(user_id);
-            const user = await q.get_user.get(user_id);
+                await update_user_summary(user_id);
+                const user = await q.get_user.get(user_id);
 
-            return new Response(JSON.stringify({
-                ok: true,
-                user_id,
-                summary: user?.summary,
-                reflection_count: user?.reflection_count,
-            }), { status: 200, headers: { "Content-Type": "application/json" } });
-        } catch (err: any) {
-            return new Response(JSON.stringify({ err: err.message }), { status: 500, headers: { "Content-Type": "application/json" } });
-        }
-    });
+                return new Response(
+                    JSON.stringify({
+                        ok: true,
+                        user_id,
+                        summary: user?.summary,
+                        reflection_count: user?.reflection_count,
+                    }),
+                    {
+                        status: 200,
+                        headers: { "Content-Type": "application/json" },
+                    },
+                );
+            } catch (err: any) {
+                return new Response(JSON.stringify({ err: err.message }), {
+                    status: 500,
+                    headers: { "Content-Type": "application/json" },
+                });
+            }
+        },
+    );
 
     app.post("/users/summaries/regenerate-all", async (req: any, ctx: any) => {
         try {
             const result = await auto_update_user_summaries();
-            return new Response(JSON.stringify({ ok: true, updated: result.updated }), { status: 200, headers: { "Content-Type": "application/json" } });
+            return new Response(
+                JSON.stringify({ ok: true, updated: result.updated }),
+                {
+                    status: 200,
+                    headers: { "Content-Type": "application/json" },
+                },
+            );
         } catch (err: any) {
-            return new Response(JSON.stringify({ err: err.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+            return new Response(JSON.stringify({ err: err.message }), {
+                status: 500,
+                headers: { "Content-Type": "application/json" },
+            });
         }
     });
 
     app.get("/users/:user_id/memories", async (req: any, ctx: any) => {
         try {
             const { user_id } = ctx.params || {};
-            if (!user_id) return new Response(JSON.stringify({ err: "user_id required" }), { status: 400, headers: { "Content-Type": "application/json" } });
+            if (!user_id)
+                return new Response(
+                    JSON.stringify({ err: "user_id required" }),
+                    {
+                        status: 400,
+                        headers: { "Content-Type": "application/json" },
+                    },
+                );
 
-            const l = ctx.query?.get ? parseInt(ctx.query.get('l') || '100') : 100;
-            const u = ctx.query?.get ? parseInt(ctx.query.get('u') || '0') : 0;
+            const l = ctx.query?.get
+                ? parseInt(ctx.query.get("l") || "100")
+                : 100;
+            const u = ctx.query?.get ? parseInt(ctx.query.get("u") || "0") : 0;
 
             const r = await q.all_mem_by_user.all(user_id, l, u);
             const i = r.map((x: any) => ({
@@ -76,16 +135,29 @@ export const usr = (app: any) => {
                 primary_sector: x.primary_sector,
                 version: x.version,
             }));
-            return new Response(JSON.stringify({ user_id, items: i }), { status: 200, headers: { "Content-Type": "application/json" } });
+            return new Response(JSON.stringify({ user_id, items: i }), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            });
         } catch (err: any) {
-            return new Response(JSON.stringify({ err: err.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+            return new Response(JSON.stringify({ err: err.message }), {
+                status: 500,
+                headers: { "Content-Type": "application/json" },
+            });
         }
     });
 
     app.delete("/users/:user_id/memories", async (req: any, ctx: any) => {
         try {
             const { user_id } = ctx.params || {};
-            if (!user_id) return new Response(JSON.stringify({ err: "user_id required" }), { status: 400, headers: { "Content-Type": "application/json" } });
+            if (!user_id)
+                return new Response(
+                    JSON.stringify({ err: "user_id required" }),
+                    {
+                        status: 400,
+                        headers: { "Content-Type": "application/json" },
+                    },
+                );
 
             const mems = await q.all_mem_by_user.all(user_id, 10000, 0);
             let deleted = 0;
@@ -98,9 +170,15 @@ export const usr = (app: any) => {
                 deleted++;
             }
 
-            return new Response(JSON.stringify({ ok: true, deleted }), { status: 200, headers: { "Content-Type": "application/json" } });
+            return new Response(JSON.stringify({ ok: true, deleted }), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            });
         } catch (err: any) {
-            return new Response(JSON.stringify({ err: err.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+            return new Response(JSON.stringify({ err: err.message }), {
+                status: 500,
+                headers: { "Content-Type": "application/json" },
+            });
         }
     });
 };

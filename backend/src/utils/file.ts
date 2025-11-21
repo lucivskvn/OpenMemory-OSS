@@ -18,6 +18,21 @@ export async function getNormalizedFileSize(f: any): Promise<number | null> {
     }
 }
 
-export function logFileProcessing(component: string, filePath: string, fileSize: number | null, mimeType?: string, method = "bun-file") {
-    logger.info({ component, file: filePath, file_size_bytes: fileSize, mime: mimeType, method }, "Processing file");
+export function logFileProcessing(
+    component: string,
+    filePath: string,
+    fileSize: number | null,
+    mimeType?: string,
+    method = "bun-file",
+) {
+    logger.info(
+        {
+            component,
+            file: filePath,
+            file_size_bytes: fileSize,
+            mime: mimeType,
+            method,
+        },
+        "Processing file",
+    );
 }

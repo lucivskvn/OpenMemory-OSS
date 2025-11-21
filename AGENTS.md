@@ -83,9 +83,9 @@ Optional fields:
   - `findings`: array of { `id`: string, `description`: string, `severity`: "low|medium|high|critical", `file?`: string }
   - `recommendations`: array of short remediation strings
 - `performance_impact`: object with estimated runtime and resource impact. Example schema:
-  - `cpu_ms?`: number  # estimated CPU time in milliseconds
-  - `mem_mb?`: number  # estimated memory impact in megabytes
-  - `notes?`: string   # human-readable notes about perf tradeoffs
+  - `cpu_ms?`: number # estimated CPU time in milliseconds
+  - `mem_mb?`: number # estimated memory impact in megabytes
+  - `notes?`: string # human-readable notes about perf tradeoffs
 
 ## Agent action contract (concise)
 

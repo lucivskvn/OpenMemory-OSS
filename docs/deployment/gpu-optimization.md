@@ -34,8 +34,8 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["all"]
-              capabilities: ["gpu"]
+              device_ids: ['all']
+              capabilities: ['gpu']
 ```
 
 Podman (rootless) usage with CDI
@@ -52,8 +52,8 @@ services:
     environment:
       - OLLAMA_VULKAN=1
     devices:
-      - "/dev/dri:/dev/dri"
-      - "/dev/kfd:/dev/kfd"
+      - '/dev/dri:/dev/dri'
+      - '/dev/kfd:/dev/kfd'
     volumes:
       - /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro
 ```
@@ -63,12 +63,14 @@ services:
 ### Recommended GPU drivers (Linux Mint 22/Ubuntu 24.04)
 
 **NVIDIA GPUs:**
+
 - **Recommended driver**: NVIDIA 580.95.05 (CUDA 12.4+ support)
 - Installation: `sudo apt install nvidia-driver-580 nvidia-utils-580 nvidia-ctk`
 - Secure Boot: If using Secure Boot, complete MOK enrollment after installation
 - Verification: `nvidia-smi` should show GPU information
 
 **AMD GPUs:**
+
 - **Recommended driver**: Mesa 24.x (open-source Vulkan with RADV implementation)
 - Installation: `sudo apt install mesa-vulkan-drivers vulkan-tools`
 - User groups: Add user to `render` and `video` groups: `sudo usermod -a -G render,video $USER`
@@ -88,11 +90,13 @@ Performance will vary by model and GPU. Use `perf` tools and Ollama logs to tune
 ## Troubleshooting
 
 ### NVIDIA issues
+
 - `nvidia-smi` not found: ensure NVIDIA 580.95.05 drivers and nvidia-container-toolkit are installed
 - Container GPU access: CDP and CDI configurations required for Podman/Docker
 - Secure Boot blocking: Complete MOK enrollment process after driver installation
 
 ### AMD issues
+
 - `vulkaninfo` errors: ensure Mesa 24.x Vulkan drivers are installed and ICD files available
 - Permission errors: add user to `render` and `video` groups and ensure subuid/subgid configured
 - Vulkan ICD: verify `/usr/share/vulkan/icd.d/radeon_icd.x86_64.json` exists

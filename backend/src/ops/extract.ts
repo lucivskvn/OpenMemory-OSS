@@ -34,7 +34,13 @@ export function setPdfParseForTests(mockImpl: any) {
 }
 
 // Testing seam for extractText
-export function setExtractTextForTests(mock: (ct: string, data: any, isBase64?: boolean) => Promise<ExtractionResult>) {
+export function setExtractTextForTests(
+    mock: (
+        ct: string,
+        data: any,
+        isBase64?: boolean,
+    ) => Promise<ExtractionResult>,
+) {
     (extractText as any)._mock = mock;
 }
 
@@ -53,29 +59,29 @@ export async function extractPDF(buffer: Buffer): Promise<ExtractionResult> {
     const impl = await loadPdfParseImpl();
     // If a parser isn't available, fall back to a UTF-8 passthrough to keep tests deterministic
     if (!impl) {
-        const text = buffer.toString('utf8');
+        const text = buffer.toString("utf8");
         return {
             text,
             metadata: {
-                content_type: 'pdf',
+                content_type: "pdf",
                 char_count: text.length,
                 estimated_tokens: estimateTokens(text),
-                extraction_method: 'passthrough',
+                extraction_method: "passthrough",
             },
         };
     }
 
     // If impl is a function that accepts a buffer and returns { text }
-    if (typeof impl === 'function') {
+    if (typeof impl === "function") {
         const result = await impl(buffer);
-        const text = result?.text ?? '';
+        const text = result?.text ?? "";
         return {
             text,
             metadata: {
-                content_type: 'pdf',
+                content_type: "pdf",
                 char_count: text.length,
                 estimated_tokens: estimateTokens(text),
-                extraction_method: 'pdf-parse',
+                extraction_method: "pdf-parse",
             },
         };
     }
@@ -83,14 +89,14 @@ export async function extractPDF(buffer: Buffer): Promise<ExtractionResult> {
     // Unknown shape: fallback
     // Decode once and derive both char_count and estimated_tokens from the
     // decoded UTF-8 string to avoid mixing byte length with character count.
-    const text = buffer.toString('utf8');
+    const text = buffer.toString("utf8");
     return {
         text,
         metadata: {
-            content_type: 'pdf',
+            content_type: "pdf",
             char_count: text.length,
             estimated_tokens: estimateTokens(text),
-            extraction_method: 'unknown',
+            extraction_method: "unknown",
         },
     };
 }
@@ -99,56 +105,62 @@ export async function extractPDF(buffer: Buffer): Promise<ExtractionResult> {
 export class UnsupportedContentTypeError extends Error {
     constructor(message?: string) {
         super(message);
-        this.name = 'UnsupportedContentTypeError';
+        this.name = "UnsupportedContentTypeError";
     }
 }
 
 export async function extractDOCX(buffer: Buffer): Promise<ExtractionResult> {
     // Use mammoth (or test-provided mock) to extract raw text; fall back to passthrough
     try {
-        if (_mammoth && typeof _mammoth.extractRawText === 'function') {
+        if (_mammoth && typeof _mammoth.extractRawText === "function") {
             const result = await _mammoth.extractRawText({ buffer });
-            const text = result?.value ?? '';
+            const text = result?.value ?? "";
             return {
                 text,
                 metadata: {
-                    content_type: 'docx',
+                    content_type: "docx",
                     char_count: text.length,
                     estimated_tokens: estimateTokens(text),
-                    extraction_method: 'mammoth',
+                    extraction_method: "mammoth",
                 },
             };
         }
     } catch (e) {
         // fall through to passthrough
     }
-    const text = buffer.toString('utf8');
+    const text = buffer.toString("utf8");
     return {
         text,
         metadata: {
-            content_type: 'docx',
+            content_type: "docx",
             char_count: text.length,
             estimated_tokens: estimateTokens(text),
-            extraction_method: 'passthrough',
+            extraction_method: "passthrough",
         },
     };
 }
 
 export async function extractHTML(html: string): Promise<ExtractionResult> {
-    const turndown = new (TurndownService as any)({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
+    const turndown = new (TurndownService as any)({
+        headingStyle: "atx",
+        codeBlockStyle: "fenced",
+    });
     const markdown = turndown.turndown(html);
     return {
         text: markdown,
         metadata: {
-            content_type: 'html',
+            content_type: "html",
             char_count: markdown.length,
             estimated_tokens: estimateTokens(markdown),
-            extraction_method: 'turndown',
+            extraction_method: "turndown",
         },
     };
 }
 
-export async function extractURL(url: string, userId?: string): Promise<ExtractionResult> {
+export async function extractURL(
+    url: string,
+    userId?: string,
+): Promise<ExtractionResult> {
     // Minimal fetch+turndown implementation with basic SSRF checks already handled elsewhere.
     const start = Date.now();
     // Enforce a bounded fetch to avoid hanging requests. Use AbortSignal.timeout
@@ -156,27 +168,35 @@ export async function extractURL(url: string, userId?: string): Promise<Extracti
     const timeout = 30000; // 30 seconds
     let response: Response;
     try {
-        response = await fetch(url, { signal: (AbortSignal as any).timeout ? (AbortSignal as any).timeout(timeout) : undefined } as any);
+        response = await fetch(url, {
+            signal: (AbortSignal as any).timeout
+                ? (AbortSignal as any).timeout(timeout)
+                : undefined,
+        } as any);
     } catch (e: any) {
         // Distinguish aborts so callers can log/handle timeouts distinctly
-        if (e && e.name === 'AbortError') {
-            throw new Error('Fetch aborted: timeout');
+        if (e && e.name === "AbortError") {
+            throw new Error("Fetch aborted: timeout");
         }
         throw e;
     }
-    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    if (!response.ok)
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     const html = await response.text();
 
-    const turndown = new (TurndownService as any)({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
+    const turndown = new (TurndownService as any)({
+        headingStyle: "atx",
+        codeBlockStyle: "fenced",
+    });
     const markdown = turndown.turndown(html);
 
     return {
         text: markdown,
         metadata: {
-            content_type: 'url',
+            content_type: "url",
             char_count: markdown.length,
             estimated_tokens: estimateTokens(markdown),
-            extraction_method: 'fetch+turndown',
+            extraction_method: "fetch+turndown",
             source_url: url,
             user_id: userId || null,
             fetched_at: new Date().toISOString(),
@@ -186,22 +206,28 @@ export async function extractURL(url: string, userId?: string): Promise<Extracti
     };
 }
 
-export async function extractText(contentType: string, data: string | Buffer | ArrayBuffer | Uint8Array, isBase64?: boolean): Promise<ExtractionResult> {
+export async function extractText(
+    contentType: string,
+    data: string | Buffer | ArrayBuffer | Uint8Array,
+    isBase64?: boolean,
+): Promise<ExtractionResult> {
     // Testing seam
-    if ((extractText as any)._mock) return await (extractText as any)._mock(contentType, data, isBase64);
+    if ((extractText as any)._mock)
+        return await (extractText as any)._mock(contentType, data, isBase64);
 
-    let ct = (contentType || '').toLowerCase().trim();
-    if (ct.includes(';')) ct = ct.split(';')[0].trim();
+    let ct = (contentType || "").toLowerCase().trim();
+    if (ct.includes(";")) ct = ct.split(";")[0].trim();
     const mimeMap: Record<string, string> = {
-        'application/pdf': 'pdf',
-        'application/msword': 'doc',
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
-        'text/html': 'html',
-        'application/xhtml+xml': 'html',
-        'text/plain': 'text',
-        'text/markdown': 'markdown',
-        'text/x-markdown': 'markdown',
-        'application/rtf': 'text',
+        "application/pdf": "pdf",
+        "application/msword": "doc",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+            "docx",
+        "text/html": "html",
+        "application/xhtml+xml": "html",
+        "text/plain": "text",
+        "text/markdown": "markdown",
+        "text/x-markdown": "markdown",
+        "application/rtf": "text",
         // Do NOT default generic octet-stream to PDF. We'll perform a
         // lightweight magic-bytes check below: only treat octet-stream as
         // PDF if the buffer begins with the PDF signature. Otherwise throw
@@ -210,19 +236,23 @@ export async function extractText(contentType: string, data: string | Buffer | A
     };
     if (mimeMap[ct]) ct = mimeMap[ct];
 
-    const textTypes = new Set(['html', 'htm', 'markdown', 'md', 'txt', 'text']);
-    const binaryTypes = new Set(['pdf', 'doc', 'docx']);
+    const textTypes = new Set(["html", "htm", "markdown", "md", "txt", "text"]);
+    const binaryTypes = new Set(["pdf", "doc", "docx"]);
 
     let buffer: Buffer;
-    if (typeof data === 'string') {
+    if (typeof data === "string") {
         if (isBase64 === true || binaryTypes.has(ct)) {
-            buffer = Buffer.from(data, 'base64');
+            buffer = Buffer.from(data, "base64");
         } else {
-            buffer = Buffer.from(data, 'utf8');
+            buffer = Buffer.from(data, "utf8");
         }
     } else if (ArrayBuffer.isView(data)) {
         const view: any = data as ArrayBufferView;
-        buffer = Buffer.from(view.buffer, view.byteOffset || 0, view.byteLength || undefined);
+        buffer = Buffer.from(
+            view.buffer,
+            view.byteOffset || 0,
+            view.byteLength || undefined,
+        );
     } else if ((data as any) instanceof ArrayBuffer) {
         buffer = Buffer.from(data as ArrayBuffer);
     } else {
@@ -234,11 +264,21 @@ export async function extractText(contentType: string, data: string | Buffer | A
     // a small preview (full decode is cheap compared to parsing) to compute
     // the character count used by downstream metadata.
     try {
-        const preview = buffer.toString('utf8');
-        logger.debug({ component: 'EXTRACT', bytes: buffer.length, chars: preview.length }, 'Buffer vs char count');
+        const preview = buffer.toString("utf8");
+        logger.debug(
+            {
+                component: "EXTRACT",
+                bytes: buffer.length,
+                chars: preview.length,
+            },
+            "Buffer vs char count",
+        );
     } catch (e) {
         // Non-fatal: logging failure shouldn't block extraction
-        logger.debug({ component: 'EXTRACT', bytes: buffer.length, err: String(e) }, 'Buffer decode failed for char count');
+        logger.debug(
+            { component: "EXTRACT", bytes: buffer.length, err: String(e) },
+            "Buffer decode failed for char count",
+        );
     }
 
     // If the caller provided a generic application/octet-stream, try a
@@ -248,50 +288,73 @@ export async function extractText(contentType: string, data: string | Buffer | A
     // (`OM_ACCEPT_OCTET_LEGACY=true`) that will attempt to decode the
     // octet-stream as UTF-8 text for backward compatibility with some
     // clients — this is opt-in because it can misclassify binary files.
-    if (ct === 'application/octet-stream') {
+    if (ct === "application/octet-stream") {
         // Check PDF signature: %PDF- at the start
         const sig4 = buffer.slice(0, 4);
-        const isPdf = sig4.length >= 4 && sig4.toString('utf8', 0, 4) === '%PDF';
+        const isPdf =
+            sig4.length >= 4 && sig4.toString("utf8", 0, 4) === "%PDF";
         // Check ZIP-based DOCX signature: PK\x03\x04
-        const isZip = sig4.length >= 4 && sig4[0] === 0x50 && sig4[1] === 0x4b && sig4[2] === 0x03 && sig4[3] === 0x04;
+        const isZip =
+            sig4.length >= 4 &&
+            sig4[0] === 0x50 &&
+            sig4[1] === 0x4b &&
+            sig4[2] === 0x03 &&
+            sig4[3] === 0x04;
         if (isPdf) {
-            ct = 'pdf';
+            ct = "pdf";
         } else if (isZip) {
             // ZIP container is commonly used for DOCX files; prefer docx
-            ct = 'docx';
-        } else if (process.env.OM_ACCEPT_OCTET_LEGACY === 'true') {
+            ct = "docx";
+        } else if (process.env.OM_ACCEPT_OCTET_LEGACY === "true") {
             // Legacy permissive mode: attempt to treat octet-stream as UTF-8 text
             try {
-                const maybe = buffer.toString('utf8');
+                const maybe = buffer.toString("utf8");
                 // cheap sanity check: if the decoded string has reasonable printable content,
                 // treat it as text. This is intentionally permissive for backward compatibility.
-                const printableRatio = (maybe.replace(/\s/g, '').replace(/[^\x20-\x7E]/g, '').length) / Math.max(1, maybe.length);
-                if (printableRatio > 0.2) ct = 'text';
-                else throw new Error('Octet legacy decode produced non-text-like payload');
+                const printableRatio =
+                    maybe.replace(/\s/g, "").replace(/[^\x20-\x7E]/g, "")
+                        .length / Math.max(1, maybe.length);
+                if (printableRatio > 0.2) ct = "text";
+                else
+                    throw new Error(
+                        "Octet legacy decode produced non-text-like payload",
+                    );
             } catch (e) {
-                throw new UnsupportedContentTypeError(`Unsupported content type: ${contentType}`);
+                throw new UnsupportedContentTypeError(
+                    `Unsupported content type: ${contentType}`,
+                );
             }
         } else {
             // Log guidance for operators: suggest opt-in legacy flag when clients send
             // generic `application/octet-stream` without recognizable magic bytes.
-            logger.warn({ component: 'EXTRACT', content_type: contentType }, "Unsupported octet-stream detected; set OM_ACCEPT_OCTET_LEGACY=true to permissively accept octet-stream as text (opt-in, may misclassify binaries)");
-            throw new UnsupportedContentTypeError(`Unsupported content type: ${contentType}`);
+            logger.warn(
+                { component: "EXTRACT", content_type: contentType },
+                "Unsupported octet-stream detected; set OM_ACCEPT_OCTET_LEGACY=true to permissively accept octet-stream as text (opt-in, may misclassify binaries)",
+            );
+            throw new UnsupportedContentTypeError(
+                `Unsupported content type: ${contentType}`,
+            );
         }
     }
 
     switch (ct) {
-        case 'pdf':
+        case "pdf":
             return extractPDF(buffer);
-        case 'docx':
+        case "docx":
             return extractDOCX(buffer);
-        case 'doc':
+        case "doc":
             // `application/msword` historically refers to legacy binary DOC files.
             // Mammoth only supports DOCX (ZIP-based) files. To avoid attempting
             // to parse legacy .doc with mammoth, check for the ZIP signature
             // (PK\x03\x04) and treat only ZIP-backed payloads as DOCX.
             try {
                 const sig4 = buffer.slice(0, 4);
-                const isZip = sig4.length >= 4 && sig4[0] === 0x50 && sig4[1] === 0x4b && sig4[2] === 0x03 && sig4[3] === 0x04;
+                const isZip =
+                    sig4.length >= 4 &&
+                    sig4[0] === 0x50 &&
+                    sig4[1] === 0x4b &&
+                    sig4[2] === 0x03 &&
+                    sig4[3] === 0x04;
                 if (isZip) {
                     // Treat as DOCX container
                     return extractDOCX(buffer);
@@ -303,64 +366,66 @@ export async function extractText(contentType: string, data: string | Buffer | A
             // mis-parsing or throwing during extraction. If callers prefer to
             // reject legacy .doc explicitly, change this to throw.
             {
-                const str = buffer.toString('utf8');
+                const str = buffer.toString("utf8");
                 return {
                     text: str,
                     metadata: {
-                        content_type: 'doc',
+                        content_type: "doc",
                         char_count: str.length,
                         estimated_tokens: estimateTokens(str),
-                        extraction_method: 'passthrough',
+                        extraction_method: "passthrough",
                     },
                 };
             }
-        case 'html':
-        case 'htm':
-            return extractHTML(buffer.toString('utf8'));
-        case 'md':
-        case 'markdown':
-            {
-                const str = buffer.toString('utf8');
-                return {
-                    text: str,
-                    metadata: {
-                        content_type: 'markdown',
-                        char_count: str.length,
-                        estimated_tokens: estimateTokens(str),
-                        extraction_method: 'passthrough',
-                    },
-                };
-            }
-        case 'txt':
-        case 'text':
-            {
-                const str = buffer.toString('utf8');
-                return {
-                    text: str,
-                    metadata: {
-                        content_type: 'text',
-                        char_count: str.length,
-                        estimated_tokens: estimateTokens(str),
-                        extraction_method: 'passthrough',
-                    },
-                };
-            }
+        case "html":
+        case "htm":
+            return extractHTML(buffer.toString("utf8"));
+        case "md":
+        case "markdown": {
+            const str = buffer.toString("utf8");
+            return {
+                text: str,
+                metadata: {
+                    content_type: "markdown",
+                    char_count: str.length,
+                    estimated_tokens: estimateTokens(str),
+                    extraction_method: "passthrough",
+                },
+            };
+        }
+        case "txt":
+        case "text": {
+            const str = buffer.toString("utf8");
+            return {
+                text: str,
+                metadata: {
+                    content_type: "text",
+                    char_count: str.length,
+                    estimated_tokens: estimateTokens(str),
+                    extraction_method: "passthrough",
+                },
+            };
+        }
         default:
-            throw new UnsupportedContentTypeError(`Unsupported content type: ${contentType}`);
+            throw new UnsupportedContentTypeError(
+                `Unsupported content type: ${contentType}`,
+            );
     }
 }
 
 // File helpers
-export async function extractPDFFromFile(filePath: string): Promise<ExtractionResult> {
+export async function extractPDFFromFile(
+    filePath: string,
+): Promise<ExtractionResult> {
     const start = Date.now();
     try {
         const f = Bun.file(filePath);
         const exists = await f.exists();
-        if (!exists) throw new Error('File not found');
+        if (!exists) throw new Error("File not found");
         // Normalize Bun.file size and log common file metadata
         const fileSize = await getNormalizedFileSize(f);
         const mimeType = (f as any).type;
-        logFileProcessing('EXTRACT', filePath, fileSize, mimeType, 'bun-file');
+        logFileProcessing("EXTRACT", filePath, fileSize, mimeType, "bun-file");
 
         const arr = await f.arrayBuffer();
         const buffer = Buffer.from(arr);
@@ -372,27 +437,42 @@ export async function extractPDFFromFile(filePath: string): Promise<ExtractionRe
             ...result.metadata,
             extraction_duration_ms: duration,
             file_size_bytes: fileSize,
-            extraction_method: result.metadata.extraction_method || 'pdf-parse',
+            extraction_method: result.metadata.extraction_method || "pdf-parse",
         };
-        logger.info({ component: 'EXTRACT', file: filePath, duration_ms: duration, file_size_bytes: fileSize, method: 'bun-file' }, 'Completed');
+        logger.info(
+            {
+                component: "EXTRACT",
+                file: filePath,
+                duration_ms: duration,
+                file_size_bytes: fileSize,
+                method: "bun-file",
+            },
+            "Completed",
+        );
         return result;
     } catch (e: any) {
         const duration = Date.now() - start;
-        logger.error('[EXTRACT] Failed to process file', { filePath, error: e?.message ?? String(e), duration_ms: duration });
+        logger.error("[EXTRACT] Failed to process file", {
+            filePath,
+            error: e?.message ?? String(e),
+            duration_ms: duration,
+        });
         throw e;
     }
 }
 
-export async function extractDOCXFromFile(filePath: string): Promise<ExtractionResult> {
+export async function extractDOCXFromFile(
+    filePath: string,
+): Promise<ExtractionResult> {
     const start = Date.now();
     try {
         const f = Bun.file(filePath);
         const exists = await f.exists();
-        if (!exists) throw new Error('File not found');
+        if (!exists) throw new Error("File not found");
         // Normalize Bun.file size and log common file metadata
         const fileSize = await getNormalizedFileSize(f);
         const mimeType = (f as any).type;
-        logFileProcessing('EXTRACT', filePath, fileSize, mimeType, 'bun-file');
+        logFileProcessing("EXTRACT", filePath, fileSize, mimeType, "bun-file");
 
         const arr = await f.arrayBuffer();
         const buffer = Buffer.from(arr);
@@ -403,14 +483,26 @@ export async function extractDOCXFromFile(filePath: string): Promise<ExtractionR
             ...result.metadata,
             extraction_duration_ms: duration,
             file_size_bytes: fileSize,
-            extraction_method: result.metadata.extraction_method || 'mammoth',
+            extraction_method: result.metadata.extraction_method || "mammoth",
         };
-        logger.info({ component: 'EXTRACT', file: filePath, duration_ms: duration, file_size_bytes: fileSize, method: 'bun-file' }, 'Completed');
+        logger.info(
+            {
+                component: "EXTRACT",
+                file: filePath,
+                duration_ms: duration,
+                file_size_bytes: fileSize,
+                method: "bun-file",
+            },
+            "Completed",
+        );
         return result;
     } catch (e: any) {
         const duration = Date.now() - start;
-        logger.error('[EXTRACT] Failed to process file', { filePath, error: e?.message ?? String(e), duration_ms: duration });
+        logger.error("[EXTRACT] Failed to process file", {
+            filePath,
+            error: e?.message ?? String(e),
+            duration_ms: duration,
+        });
         throw e;
     }
 }
-

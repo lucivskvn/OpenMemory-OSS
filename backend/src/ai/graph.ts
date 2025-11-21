@@ -58,7 +58,7 @@ const resolve_sector = (node: string): sector_type =>
 const resolve_ns = (ns?: string): string => {
     // Always return a string (may be empty) so downstream callers don't need
     // to handle `undefined` namespaces.
-    return ns ?? (env.lg_namespace ?? "");
+    return ns ?? env.lg_namespace ?? "";
 };
 
 /**
@@ -248,12 +248,16 @@ export async function retrieve_node_mems(p: lgm_retrieve_req) {
             user_id: user_for_query,
         });
         for (const match of matches) {
-            const row = (await q.get_mem.get(match.id, user_for_query ?? null)) as mem_row | undefined;
+            const row = (await q.get_mem.get(
+                match.id,
+                user_for_query ?? null,
+            )) as mem_row | undefined;
             if (!row) continue;
             // If query was tenant-scoped, enforce that the retrieved memory
             // also belongs to that tenant. This avoids returning rows from
             // other users if DB helpers don't accept user_id for this call.
-            if (user_for_query && row.user_id && row.user_id !== user_for_query) continue;
+            if (user_for_query && row.user_id && row.user_id !== user_for_query)
+                continue;
             const meta = safe_parse<Record<string, unknown>>(row.meta, {});
             if (!matches_ns(meta, ns, gid)) continue;
             const hyd = await hydrate_mem_row(
@@ -271,11 +275,11 @@ export async function retrieve_node_mems(p: lgm_retrieve_req) {
         const user_for_list = extract_user_from_ns(ns);
         const raw_rows = user_for_list
             ? ((await q.all_mem_by_user_and_sector.all(
-                user_for_list,
-                sec,
-                lim * 4,
-                0,
-            )) as mem_row[])
+                  user_for_list,
+                  sec,
+                  lim * 4,
+                  0,
+              )) as mem_row[])
             : ((await q.all_mem_by_sector.all(sec, lim * 4, 0)) as mem_row[]);
         for (const row of raw_rows) {
             const meta = safe_parse<Record<string, unknown>>(row.meta, {});

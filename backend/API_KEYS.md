@@ -1,12 +1,11 @@
-API Key hashing and migration
-=================================
+# API Key hashing and migration
 
 This project requires the server API key (`OM_API_KEY`) to be stored as a hashed value (argon2-compatible). Plaintext API keys are rejected at runtime.
 
 Why hashed keys?
 
-- Prevents accidental leakage of plaintext keys in logs, environment dumps, and CI.
-- Enables secure verification using constant-time, battle-tested password APIs.
+-   Prevents accidental leakage of plaintext keys in logs, environment dumps, and CI.
+-   Enables secure verification using constant-time, battle-tested password APIs.
 
 How to generate a hashed API key
 
@@ -25,8 +24,8 @@ The script will print a hashed string suitable for setting as the `OM_API_KEY` r
 
 CI / deployment
 
-- Store the hashed string in your deployment environment or GitHub repository secret as `OM_API_KEY`.
-- The CI workflow includes a validation step (on pull requests) that fails the build if the `OM_API_KEY` secret appears to be plaintext.
+-   Store the hashed string in your deployment environment or GitHub repository secret as `OM_API_KEY`.
+-   The CI workflow includes a validation step (on pull requests) that fails the build if the `OM_API_KEY` secret appears to be plaintext.
 
 Migration path
 

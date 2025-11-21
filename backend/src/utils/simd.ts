@@ -7,14 +7,21 @@
  * Graceful fallback to JavaScript implementations when SIMD/WASM unavailable
  */
 
-import { getConfig } from '../core/cfg';
+import { getConfig } from "../core/cfg";
 
 // WebAssembly-powered SIMD implementations
 interface WasmModule {
     memory: WebAssembly.Memory;
     dot_product: (ptrA: number, ptrB: number, len: number) => number;
     normalize: (ptr: number, len: number) => void;
-    fuse_vectors: (synPtr: number, semPtr: number, resultPtr: number, len: number, synWeight: number, semWeight: number) => void;
+    fuse_vectors: (
+        synPtr: number,
+        semPtr: number,
+        resultPtr: number,
+        len: number,
+        synWeight: number,
+        semWeight: number,
+    ) => void;
     malloc: (size: number) => number;
     free: (ptr: number) => void;
 }
@@ -45,14 +52,17 @@ async function loadWasmSimd(): Promise<boolean> {
         // Load WASM from known path relative to module directory
         // Note: ../wasm/simd.wasm would be the correct path if WASM files are stored there
         // For now, since OM_SIMD_WASM_ENABLED defaults to false, this path won't be reached in normal deployments
-        wasmPath = __dirname + '/../wasm/simd.wasm';
+        wasmPath = __dirname + "/../wasm/simd.wasm";
         const wasmFile = Bun.file(wasmPath);
         if (await wasmFile.exists()) {
             const wasmBytes = await wasmFile.arrayBuffer();
             const instance = await WebAssembly.instantiate(wasmBytes, {
                 env: {
-                    memory: new WebAssembly.Memory({ initial: 256, maximum: 512 }),
-                }
+                    memory: new WebAssembly.Memory({
+                        initial: 256,
+                        maximum: 512,
+                    }),
+                },
             });
             wasmModule = instance.instance.exports as unknown as WasmModule;
             wasmLoaded = true;
@@ -61,11 +71,16 @@ async function loadWasmSimd(): Promise<boolean> {
     } catch (error) {
         // WASM loading failed, fall back to JS - but log warning if explicitly enabled
         if (config.simd_wasm_enabled) {
-            console.warn('[SIMD] WASM module loading failed despite OM_SIMD_WASM_ENABLED=true, falling back to JS implementation:', {
-                wasmPath,
-                error: error instanceof Error ? error.message : String(error),
-                recommendedAction: 'Ensure WASM file exists or disable OM_SIMD_WASM_ENABLED for better startup performance'
-            });
+            console.warn(
+                "[SIMD] WASM module loading failed despite OM_SIMD_WASM_ENABLED=true, falling back to JS implementation:",
+                {
+                    wasmPath,
+                    error:
+                        error instanceof Error ? error.message : String(error),
+                    recommendedAction:
+                        "Ensure WASM file exists or disable OM_SIMD_WASM_ENABLED for better startup performance",
+                },
+            );
         }
     }
 
@@ -78,7 +93,7 @@ async function loadWasmSimd(): Promise<boolean> {
  */
 function wasmDotProduct(a: Float32Array, b: Float32Array): number {
     if (a.length !== b.length || !wasmModule) {
-        throw new Error('WASM dot product unavailable');
+        throw new Error("WASM dot product unavailable");
     }
 
     const len = a.length * 4; // bytes
@@ -106,7 +121,7 @@ function wasmDotProduct(a: Float32Array, b: Float32Array): number {
  */
 function wasmNormalize(v: Float32Array): void {
     if (!wasmModule) {
-        throw new Error('WASM normalize unavailable');
+        throw new Error("WASM normalize unavailable");
     }
 
     const len = v.length * 4;
@@ -129,9 +144,13 @@ function wasmNormalize(v: Float32Array): void {
 /**
  * WebAssembly-backed vector fusion
  */
-function wasmFuseVectors(syn: Float32Array, sem: Float32Array, weights: [number, number]): Float32Array {
+function wasmFuseVectors(
+    syn: Float32Array,
+    sem: Float32Array,
+    weights: [number, number],
+): Float32Array {
     if (syn.length !== sem.length || !wasmModule) {
-        throw new Error('WASM fuse vectors unavailable');
+        throw new Error("WASM fuse vectors unavailable");
     }
 
     const [synWeight, semWeight] = weights;
@@ -148,10 +167,19 @@ function wasmFuseVectors(syn: Float32Array, sem: Float32Array, weights: [number,
         new Float32Array(wasmModule.memory.buffer, semPtr, sem.length).set(sem);
 
         // Call WASM function
-        wasmModule.fuse_vectors(synPtr, semPtr, resultPtr, syn.length, synWeight, semWeight);
+        wasmModule.fuse_vectors(
+            synPtr,
+            semPtr,
+            resultPtr,
+            syn.length,
+            synWeight,
+            semWeight,
+        );
 
         // Copy result back
-        result.set(new Float32Array(wasmModule.memory.buffer, resultPtr, syn.length));
+        result.set(
+            new Float32Array(wasmModule.memory.buffer, resultPtr, syn.length),
+        );
 
         return result;
     } finally {
@@ -177,7 +205,8 @@ export function simdDotProduct(a: Float32Array, b: Float32Array): number {
 
     // Main loop with 8-element unrolling
     for (let i = 0; i < unclen; i += 8) {
-        dot += a[i] * b[i] +
+        dot +=
+            a[i] * b[i] +
             a[i + 1] * b[i + 1] +
             a[i + 2] * b[i + 2] +
             a[i + 3] * b[i + 3] +
@@ -207,8 +236,15 @@ export function simdNormalize(v: Float32Array): void {
     const unclen = len - (len % 8);
 
     for (let i = 0; i < unclen; i += 8) {
-        n += v[i] * v[i] + v[i + 1] * v[i + 1] + v[i + 2] * v[i + 2] + v[i + 3] * v[i + 3] +
-            v[i + 4] * v[i + 4] + v[i + 5] * v[i + 5] + v[i + 6] * v[i + 6] + v[i + 7] * v[i + 7];
+        n +=
+            v[i] * v[i] +
+            v[i + 1] * v[i + 1] +
+            v[i + 2] * v[i + 2] +
+            v[i + 3] * v[i + 3] +
+            v[i + 4] * v[i + 4] +
+            v[i + 5] * v[i + 5] +
+            v[i + 6] * v[i + 6] +
+            v[i + 7] * v[i + 7];
     }
 
     for (let i = unclen; i < len; i++) {
@@ -241,9 +277,15 @@ export function simdNormalize(v: Float32Array): void {
  * Combines two vectors (synthetic + semantic) using weighted fusion.
  * The returned vector is already normalized to unit length - callers should not re-normalize.
  */
-export function simdFuseVectors(syn: Float32Array, sem: Float32Array, weights: [number, number]): Float32Array {
+export function simdFuseVectors(
+    syn: Float32Array,
+    sem: Float32Array,
+    weights: [number, number],
+): Float32Array {
     if (syn.length !== sem.length) {
-        throw new Error(`Vector length mismatch: ${syn.length} vs ${sem.length}`);
+        throw new Error(
+            `Vector length mismatch: ${syn.length} vs ${sem.length}`,
+        );
     }
 
     const [synWeight, semWeight] = weights;
@@ -309,7 +351,11 @@ export const jsNormalize = (v: Float32Array): void => {
     }
 };
 
-export const jsFuseVectors = (syn: Float32Array, sem: Float32Array, weights: [number, number]): Float32Array => {
+export const jsFuseVectors = (
+    syn: Float32Array,
+    sem: Float32Array,
+    weights: [number, number],
+): Float32Array => {
     const [synWeight, semWeight] = weights;
     const result = new Float32Array(syn.length);
     for (let i = 0; i < syn.length; i++) {
@@ -364,7 +410,7 @@ let _normalizeImpl = SIMD_SUPPORTED ? simdNormalize : jsNormalize;
 let _fuseVectorsImpl = SIMD_SUPPORTED ? simdFuseVectors : jsFuseVectors;
 
 // Prefer WASM implementations when available
-WASM_SUPPORTED.then(wasmOk => {
+WASM_SUPPORTED.then((wasmOk) => {
     if (wasmOk && wasmModule) {
         try {
             // Test WASM functions before using them
@@ -387,24 +433,36 @@ WASM_SUPPORTED.then(wasmOk => {
     // Ignore WASM loading failures
 });
 
-export const dotProduct = (a: Float32Array, b: Float32Array) => _dotProductImpl(a, b);
+export const dotProduct = (a: Float32Array, b: Float32Array) =>
+    _dotProductImpl(a, b);
 export const normalize = (v: Float32Array) => _normalizeImpl(v);
-export const fuseVectors = (syn: Float32Array, sem: Float32Array, weights: [number, number]) => _fuseVectorsImpl(syn, sem, weights);
+export const fuseVectors = (
+    syn: Float32Array,
+    sem: Float32Array,
+    weights: [number, number],
+) => _fuseVectorsImpl(syn, sem, weights);
 
 /**
  * Benchmarking utility for measuring SIMD performance gains
  */
-export async function benchmarkSimd(dimensions: number = 768, iterations: number = 1000): Promise<{
+export async function benchmarkSimd(
+    dimensions: number = 768,
+    iterations: number = 1000,
+): Promise<{
     jsTime: number;
     simdTime: number;
     ratio: number;
     supported: boolean;
 }> {
     if (dimensions <= 0) {
-        throw new RangeError(`benchmarkSimd: dimensions must be positive, got ${dimensions}`);
+        throw new RangeError(
+            `benchmarkSimd: dimensions must be positive, got ${dimensions}`,
+        );
     }
     if (iterations <= 0) {
-        throw new RangeError(`benchmarkSimd: iterations must be positive, got ${iterations}`);
+        throw new RangeError(
+            `benchmarkSimd: iterations must be positive, got ${iterations}`,
+        );
     }
 
     const a = Float32Array.from({ length: dimensions }, () => Math.random());
@@ -434,6 +492,6 @@ export async function benchmarkSimd(dimensions: number = 768, iterations: number
         jsTime,
         simdTime,
         ratio: jsTime / simdTime,
-        supported: SIMD_SUPPORTED
+        supported: SIMD_SUPPORTED,
     };
 }

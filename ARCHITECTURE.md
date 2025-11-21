@@ -8,7 +8,7 @@ OpenMemory is a self-hosted AI memory engine implementing **Hierarchical Memory 
 
 ## High-Level Architecture
 
-```text
+````text
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         CLIENT LAYER                                 │
 ├─────────────────────────────────────────────────────────────────────┤
@@ -130,7 +130,7 @@ SECTORS = {
     patterns: [/think|realize|insight/i, ...]
   }
 }
-```
+````
 
 ### 2.2 Memory Operations
 

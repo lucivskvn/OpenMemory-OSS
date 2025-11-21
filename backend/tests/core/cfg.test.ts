@@ -16,7 +16,7 @@ describe("Core Configuration (cfg.ts)", () => {
         // Ensure cfg module is reloaded for each test to pick up env changes
         try {
             delete require.cache[require.resolve("../../src/core/cfg")];
-        } catch { }
+        } catch {}
     });
 
     afterEach(() => {
@@ -308,7 +308,7 @@ describe("Core Configuration (cfg.ts)", () => {
             process.env.OM_BUCKET_SECRET_KEY = "test-secret";
             process.env.OM_BUCKET_ENDPOINT = "https://s3.amazonaws.com";
             process.env.OM_BUCKET_REGION = "us-east-1";
-            process.env.OM_TEST_MODE = '1'; // Prevent test exits
+            process.env.OM_TEST_MODE = "1"; // Prevent test exits
 
             // Save original functions
             originalWarn = console.warn;
@@ -331,7 +331,7 @@ describe("Core Configuration (cfg.ts)", () => {
             process.exit = ((code?: number) => {
                 exitCalls.push(code || 0);
                 if (code !== 0) {
-                    throw new Error('exit');
+                    throw new Error("exit");
                 }
             }) as typeof process.exit;
         });
@@ -357,7 +357,9 @@ describe("Core Configuration (cfg.ts)", () => {
                 getConfig();
 
                 expect(warnCalls.length).toBe(1);
-                expect(warnCalls[0][0]).toContain("OM_AUTH_PROVIDER=jwt is configured but OM_JWT_SECRET is missing");
+                expect(warnCalls[0][0]).toContain(
+                    "OM_AUTH_PROVIDER=jwt is configured but OM_JWT_SECRET is missing",
+                );
                 expect(exitCalls.length).toBe(0);
                 expect(cfg.jwt_enabled).toBe(false);
             });
@@ -371,10 +373,12 @@ describe("Core Configuration (cfg.ts)", () => {
                 expect(() => {
                     delete require.cache[require.resolve("../../src/core/cfg")];
                     require("../../src/core/cfg");
-                }).toThrow('exit');
+                }).toThrow("exit");
 
                 expect(errorCalls.length).toBe(1);
-                expect(errorCalls[0][0]).toContain("OM_AUTH_PROVIDER=jwt requires OM_JWT_SECRET; exiting for safety in production mode");
+                expect(errorCalls[0][0]).toContain(
+                    "OM_AUTH_PROVIDER=jwt requires OM_JWT_SECRET; exiting for safety in production mode",
+                );
                 expect(exitCalls.length).toBe(1);
                 expect(exitCalls[0]).toBe(1);
             });
@@ -408,7 +412,9 @@ describe("Core Configuration (cfg.ts)", () => {
                 const cfg = require("../../src/core/cfg");
 
                 expect(warnCalls.length).toBe(1);
-                expect(warnCalls[0][0]).toContain("OM_BUCKET_PROVIDER=s3 requires OM_BUCKET_ACCESS_KEY and OM_BUCKET_SECRET_KEY");
+                expect(warnCalls[0][0]).toContain(
+                    "OM_BUCKET_PROVIDER=s3 requires OM_BUCKET_ACCESS_KEY and OM_BUCKET_SECRET_KEY",
+                );
                 expect(exitCalls.length).toBe(0);
                 expect(cfg.bucket_s3_configured).toBe(false);
             });
@@ -424,7 +430,9 @@ describe("Core Configuration (cfg.ts)", () => {
                 const cfg = require("../../src/core/cfg");
 
                 expect(warnCalls.length).toBe(1);
-                expect(warnCalls[0][0]).toContain("OM_BUCKET_PROVIDER=s3 requires OM_BUCKET_ACCESS_KEY and OM_BUCKET_SECRET_KEY");
+                expect(warnCalls[0][0]).toContain(
+                    "OM_BUCKET_PROVIDER=s3 requires OM_BUCKET_ACCESS_KEY and OM_BUCKET_SECRET_KEY",
+                );
                 expect(cfg.bucket_s3_configured).toBe(false);
             });
 
@@ -452,7 +460,9 @@ describe("Core Configuration (cfg.ts)", () => {
                 const cfg = require("../../src/core/cfg");
 
                 expect(warnCalls.length).toBe(1);
-                expect(warnCalls[0][0]).toContain("OM_BUCKET_PROVIDER=minio requires OM_BUCKET_ENDPOINT, OM_BUCKET_ACCESS_KEY and OM_BUCKET_SECRET_KEY");
+                expect(warnCalls[0][0]).toContain(
+                    "OM_BUCKET_PROVIDER=minio requires OM_BUCKET_ENDPOINT, OM_BUCKET_ACCESS_KEY and OM_BUCKET_SECRET_KEY",
+                );
                 expect(cfg.bucket_s3_configured).toBe(false);
             });
 
@@ -467,7 +477,9 @@ describe("Core Configuration (cfg.ts)", () => {
                 const cfg = require("../../src/core/cfg");
 
                 expect(warnCalls.length).toBe(1);
-                expect(warnCalls[0][0]).toContain("OM_BUCKET_PROVIDER=supabase requires OM_BUCKET_ENDPOINT, OM_BUCKET_ACCESS_KEY and OM_BUCKET_SECRET_KEY");
+                expect(warnCalls[0][0]).toContain(
+                    "OM_BUCKET_PROVIDER=supabase requires OM_BUCKET_ENDPOINT, OM_BUCKET_ACCESS_KEY and OM_BUCKET_SECRET_KEY",
+                );
                 expect(cfg.bucket_s3_configured).toBe(false);
             });
         });
@@ -540,11 +552,11 @@ describe("Core Configuration (cfg.ts)", () => {
                 const { getConfig } = require("../../src/core/cfg");
                 expect(getConfig().router_sector_models).toBeNull();
                 // Should not crash, just warn and default
-
             });
 
             test("valid OM_ROUTER_SECTOR_MODELS JSON parses correctly", () => {
-                process.env.OM_ROUTER_SECTOR_MODELS = '{"semantic": "nomic-embed-text"}';
+                process.env.OM_ROUTER_SECTOR_MODELS =
+                    '{"semantic": "nomic-embed-text"}';
                 process.env.OM_AUTH_PROVIDER = "supabase"; // Prevent JWT warnings
                 process.env.OM_BUCKET_PROVIDER = "s3"; // Prevent bucket warnings
 
@@ -553,7 +565,7 @@ describe("Core Configuration (cfg.ts)", () => {
 
                 expect(warnCalls.length).toBe(0);
                 expect(cfg.env.router_sector_models).toEqual({
-                    semantic: "nomic-embed-text"
+                    semantic: "nomic-embed-text",
                 });
             });
 
@@ -568,7 +580,9 @@ describe("Core Configuration (cfg.ts)", () => {
                 }).toThrow();
 
                 expect(errorCalls.length).toBe(1);
-                expect(errorCalls[0][0]).toContain("Invalid environment variables");
+                expect(errorCalls[0][0]).toContain(
+                    "Invalid environment variables",
+                );
                 expect(exitCalls.length).toBe(1);
                 expect(exitCalls[0]).toBe(1);
             });
@@ -603,7 +617,8 @@ describe("Core Configuration (cfg.ts)", () => {
         });
 
         test("exposes PostgreSQL connection string", async () => {
-            const pgConnStr = "postgresql://user:pass@localhost:5432/testdb?sslmode=require";
+            const pgConnStr =
+                "postgresql://user:pass@localhost:5432/testdb?sslmode=require";
             process.env.OM_PG_CONNECTION_STRING = pgConnStr;
 
             delete require.cache[require.resolve("../../src/core/cfg")];
@@ -621,7 +636,8 @@ describe("Core Configuration (cfg.ts)", () => {
             process.env.OM_BUCKET_ENDPOINT = "http://minio:9000";
             process.env.OM_BUCKET_ACCESS_KEY = "minioadmin";
             process.env.OM_BUCKET_SECRET_KEY = "minioadmin";
-            const pgConnStr = "postgresql://user:pass@localhost:5432/testdb?sslmode=require";
+            const pgConnStr =
+                "postgresql://user:pass@localhost:5432/testdb?sslmode=require";
             process.env.OM_PG_CONNECTION_STRING = pgConnStr;
 
             delete require.cache[require.resolve("../../src/core/cfg")];

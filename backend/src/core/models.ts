@@ -10,7 +10,8 @@ let cfg: model_cfg | null = null;
 export const load_models = (): model_cfg => {
     if (cfg) return cfg;
     // Allow tests or deployments to override the models.yml path via env
-    const p = process.env.OM_MODELS_PATH || join(__dirname, "../../../models.yml");
+    const p =
+        process.env.OM_MODELS_PATH || join(__dirname, "../../../models.yml");
     if (!existsSync(p)) {
         console.warn("[MODELS] models.yml not found, using defaults");
         return get_defaults();
@@ -19,12 +20,14 @@ export const load_models = (): model_cfg => {
         const yml = readFileSync(p, "utf-8");
         const parsed = parse_yaml(yml);
         if (!parsed || Object.keys(parsed).length === 0) {
-            console.warn("[MODELS] Parsed models.yml is empty or invalid, using defaults");
+            console.warn(
+                "[MODELS] Parsed models.yml is empty or invalid, using defaults",
+            );
             cfg = get_defaults();
             return cfg;
         }
         cfg = parsed;
-        logger.info({ sectors: Object.keys(cfg).length }, 'Loaded models.yml');
+        logger.info({ sectors: Object.keys(cfg).length }, "Loaded models.yml");
         return cfg;
     } catch (e) {
         console.error("[MODELS] Failed to parse models.yml:", e);
@@ -46,7 +49,7 @@ const parse_yaml = (yml: string): model_cfg => {
         const rawVal = val_parts.join(":").trim();
         // If value is empty, this is a section header
         if (indent === 0 && rawVal) {
-        // This looks like a root-level key with a value; treat as malformed and skip
+            // This looks like a root-level key with a value; treat as malformed and skip
             continue;
         } else if (indent === 0) {
             cur_sec = key;

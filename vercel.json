@@ -1,19 +1,19 @@
 {
-    "version": 2,
-    "builds": [
-        {
-            "src": "backend/dist/index.js",
-            "use": "@vercel/node"
-        }
-    ],
-    "routes": [
-        {
-            "src": "/(.*)",
-            "dest": "backend/dist/index.js"
-        }
-    ],
-    "buildCommand": "cd backend && bun install && bun run build",
-    "env": {
-        "NODE_ENV": "production"
+  "version": 2,
+  "builds": [
+    {
+      "src": "backend/dist/index.js",
+      "use": "@vercel/node"
     }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "backend/dist/index.js"
+    }
+  ],
+  "buildCommand": "cd backend && bun install && bun run build",
+  "env": {
+    "NODE_ENV": "production"
+  }
 }

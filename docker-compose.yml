@@ -1,4 +1,4 @@
-version: "3.8"
+version: '3.8'
 
 # Podman compatibility notes:
 # - Podman supports docker-compose via podman-compose or `podman play kube` after conversion.
@@ -11,7 +11,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     ports:
-      - "8080:8080"
+      - '8080:8080'
     environment:
       # Core Configuration
       - OM_PORT=${OM_PORT:-8080}
@@ -137,9 +137,9 @@ services:
     healthcheck:
       test:
         [
-          "CMD",
-          "bun",
-          "-e",
+          'CMD',
+          'bun',
+          '-e',
           'fetch("http://localhost:8080/health").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))',
         ]
       interval: 30s
@@ -151,18 +151,18 @@ services:
 
   # Ollama - embedding and multimodal inference sidecar
   ollama:
-    profiles: ["ollama"]
+    profiles: ['ollama']
     image: ollama/ollama:0.3.0
     restart: unless-stopped
     ports:
-      - "11434:11434"
+      - '11434:11434'
     volumes:
       - ollama_models:/root/.ollama:Z
     userns_mode: keep-id
     init: true
     stop_grace_period: 10s
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/health"]
+      test: ['CMD', 'curl', '-f', 'http://localhost:11434/api/health']
       interval: 30s
       timeout: 10s
       retries: 3
@@ -171,7 +171,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "1.0"
+          cpus: '1.0'
           memory: 1G
     # GPU passthrough examples (uncomment if you run with GPUs)
     # NVIDIA (requires NVIDIA Container Toolkit / CDI)
@@ -208,12 +208,12 @@ services:
   # Use: `docker-compose --profile test up tests` to run the test harness against
   # a local containerized environment. Disabled by default (profile required).
   tests:
-    profiles: ["test"]
+    profiles: ['test']
     image: oven/bun:1.3.2-alpine
     working_dir: /work/backend
     volumes:
       - ./:/work:Z
-    command: ["bun", "test", "../tests/backend/"]
+    command: ['bun', 'test', '../tests/backend/']
     environment:
       - OM_METADATA_BACKEND=${OM_METADATA_BACKEND:-sqlite}
       - OM_STRICT_TENANT=${OM_STRICT_TENANT:-true}
@@ -234,8 +234,8 @@ services:
     volumes:
       - openmemory_pg_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
-    profiles: ["pg"]
+      - '5432:5432'
+    profiles: ['pg']
     networks:
       - openmemory_net
 

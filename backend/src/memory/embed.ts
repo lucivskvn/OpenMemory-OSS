@@ -4,16 +4,34 @@ import { sector_configs } from "./hsg";
 import { CryptoHasher } from "bun";
 import { q } from "../core/db";
 import { canonical_tokens_from_text, add_synonym_tokens } from "../utils/text";
-import { fuseVectors, benchmarkSimd, dotProduct, normalize, SIMD_SUPPORTED } from "../utils/simd";
+import {
+    fuseVectors,
+    benchmarkSimd,
+    dotProduct,
+    normalize,
+    SIMD_SUPPORTED,
+} from "../utils/simd";
 import logger, { getEnvLogLevel } from "../core/logger";
 if (process.env.RUN_TRANSFORMERS_RESOLVE_TEST === "1") {
     import("@xenova/transformers")
         .then((T) => {
-            const v = (T && ((T as any).default?.version || (T as any).version)) || "unknown";
-            embedLog('info', { component: "EMBED", transformers_version: v }, "[EMBED] Transformers resolved: %s", v);
+            const v =
+                (T && ((T as any).default?.version || (T as any).version)) ||
+                "unknown";
+            embedLog(
+                "info",
+                { component: "EMBED", transformers_version: v },
+                "[EMBED] Transformers resolved: %s",
+                v,
+            );
         })
         .catch((e) => {
-            embedLog('warn', { component: "EMBED", err: e }, "[EMBED] Transformers resolution failed: %s", e instanceof Error ? e.message : String(e));
+            embedLog(
+                "warn",
+                { component: "EMBED", err: e },
+                "[EMBED] Transformers resolution failed: %s",
+                e instanceof Error ? e.message : String(e),
+            );
         });
 }
 
@@ -38,10 +56,14 @@ function currentEnv() {
     const e = process.env;
     const base = {
         vec_dim: parseInt(e.OM_VEC_DIM || "256", 10) || 256,
-        hybrid_fusion: (e.OM_HYBRID_FUSION === "true") || true,
+        hybrid_fusion: e.OM_HYBRID_FUSION === "true" || true,
         embed_kind: e.OM_EMBED_KIND || e.OM_EMBEDDINGS || "synthetic",
-        openai_key: e.OM_OPENAI_KEY || e.OPENAI_API_KEY || e.OM_OPENAI_API_KEY || null,
-        openai_base_url: e.OM_OPENAI_BASE_URL || e.OPENAI_BASE_URL || "https://api.openai.com/v1",
+        openai_key:
+            e.OM_OPENAI_KEY || e.OPENAI_API_KEY || e.OM_OPENAI_API_KEY || null,
+        openai_base_url:
+            e.OM_OPENAI_BASE_URL ||
+            e.OPENAI_BASE_URL ||
+            "https://api.openai.com/v1",
         openai_model: e.OM_OPENAI_MODEL || null,
         gemini_key: e.OM_GEMINI_KEY || e.GEMINI_API_KEY || null,
         ollama_url: e.OM_OLLAMA_URL || "http://localhost:11434",
@@ -54,12 +76,16 @@ function currentEnv() {
         adv_embed_parallel: e.OM_ADV_EMBED_PARALLEL === "true" || false,
         embed_delay_ms: parseInt(e.OM_EMBED_DELAY_MS || "0", 10) || 0,
         openai_base: e.OPENAI_API_BASE || e.OPENAI_BASE_URL || null,
-        router_cache_ttl_ms: parseInt(e.OM_ROUTER_CACHE_TTL_MS || "30000", 10) || 30000,
+        router_cache_ttl_ms:
+            parseInt(e.OM_ROUTER_CACHE_TTL_MS || "30000", 10) || 30000,
         router_cache_enabled: e.OM_ROUTER_CACHE_ENABLED !== "false",
         router_fallback_enabled: e.OM_ROUTER_FALLBACK_ENABLED !== "false",
         router_simd_enabled: e.OM_ROUTER_SIMD_ENABLED !== "false",
-        router_sector_models: e.OM_ROUTER_SECTOR_MODELS ? JSON.parse(e.OM_ROUTER_SECTOR_MODELS) : null,
-        router_dim_tolerance: parseFloat(e.OM_ROUTER_DIM_TOLERANCE || '0.1') || 0.1,
+        router_sector_models: e.OM_ROUTER_SECTOR_MODELS
+            ? JSON.parse(e.OM_ROUTER_SECTOR_MODELS)
+            : null,
+        router_dim_tolerance:
+            parseFloat(e.OM_ROUTER_DIM_TOLERANCE || "0.1") || 0.1,
         router_validate_on_start: e.OM_ROUTER_VALIDATE_ON_START !== "false",
         router_validate_strict: e.OM_ROUTER_VALIDATE_STRICT === "true",
         global_simd_enabled: e.OM_SIMD_ENABLED !== "false",
@@ -70,12 +96,21 @@ function currentEnv() {
         ...base,
         embed_kind: runtimeConfig.embed_kind ?? base.embed_kind,
         embed_mode: runtimeConfig.embed_mode ?? base.embed_mode,
-        router_simd_enabled: runtimeConfig.router_simd_enabled ?? base.router_simd_enabled,
-        router_fallback_enabled: runtimeConfig.router_fallback_enabled ?? base.router_fallback_enabled,
-        global_simd_enabled: runtimeConfig.global_simd_enabled ?? runtimeConfig.simd_enabled ?? base.global_simd_enabled,
+        router_simd_enabled:
+            runtimeConfig.router_simd_enabled ?? base.router_simd_enabled,
+        router_fallback_enabled:
+            runtimeConfig.router_fallback_enabled ??
+            base.router_fallback_enabled,
+        global_simd_enabled:
+            runtimeConfig.global_simd_enabled ??
+            runtimeConfig.simd_enabled ??
+            base.global_simd_enabled,
 
         // Effective router SIMD uses documented precedence: router_simd_enabled when set, else global_simd_enabled
-        router_cpu_effective_simd: base.router_simd_enabled !== undefined ? base.router_simd_enabled : base.global_simd_enabled,
+        router_cpu_effective_simd:
+            base.router_simd_enabled !== undefined
+                ? base.router_simd_enabled
+                : base.global_simd_enabled,
     } as const;
 }
 
@@ -86,16 +121,22 @@ function currentEnv() {
  */
 export function updateRuntimeConfig(updates: Partial<typeof runtimeConfig>) {
     Object.assign(runtimeConfig, updates);
-    embedLog('info', { component: 'EMBED', updates }, '[EMBED] Runtime config updated');
+    embedLog(
+        "info",
+        { component: "EMBED", updates },
+        "[EMBED] Runtime config updated",
+    );
 }
 
 // Reset runtime overrides applied via updateRuntimeConfig. Used by tests and
 // by server start to ensure runtime overrides do not persist across restarts.
 export function resetRuntimeConfig() {
     for (const k of Object.keys(runtimeConfig)) {
-        try { delete (runtimeConfig as any)[k]; } catch (_) { }
+        try {
+            delete (runtimeConfig as any)[k];
+        } catch (_) {}
     }
-    embedLog('info', { component: 'EMBED' }, '[EMBED] Runtime config reset');
+    embedLog("info", { component: "EMBED" }, "[EMBED] Runtime config reset");
 }
 
 // Embed-specific logging helpers. Operators can set `OM_LOG_EMBED_LEVEL`
@@ -103,13 +144,23 @@ export function resetRuntimeConfig() {
 // will be suppressed for embed-related operations. If unset, behavior
 // falls back to 'info'. This lets operators reduce noise for high-volume
 // embedding paths like `embedMultiSector`.
-const _embedLevelPriority: Record<string, number> = { debug: 0, info: 1, warn: 2, error: 3 };
+const _embedLevelPriority: Record<string, number> = {
+    debug: 0,
+    info: 1,
+    warn: 2,
+    error: 3,
+};
 function getEmbedLevelThreshold(): number {
     // Resolve embed-specific level, falling back to OM_LOG_LEVEL or global LOG_LEVEL
-    const lvl = (getEnvLogLevel('OM_LOG_EMBED_LEVEL') || 'info').toLowerCase();
+    const lvl = (getEnvLogLevel("OM_LOG_EMBED_LEVEL") || "info").toLowerCase();
     return _embedLevelPriority[lvl] ?? _embedLevelPriority.info;
 }
-function embedLog(level: 'debug' | 'info' | 'warn' | 'error', meta: any, msg: string, ...args: any[]) {
+function embedLog(
+    level: "debug" | "info" | "warn" | "error",
+    meta: any,
+    msg: string,
+    ...args: any[]
+) {
     try {
         const want = _embedLevelPriority[level];
         if (want < getEmbedLevelThreshold()) return;
@@ -118,10 +169,16 @@ function embedLog(level: 'debug' | 'info' | 'warn' | 'error', meta: any, msg: st
         // logs reliably without depending on pino internals or binding.
         try {
             const th = (__TEST as any)?.logHook;
-            if (typeof th === 'function') {
-                try { th(level, meta, msg, ...args); } catch (_) { /* ignore */ }
+            if (typeof th === "function") {
+                try {
+                    th(level, meta, msg, ...args);
+                } catch (_) {
+                    /* ignore */
+                }
             }
-        } catch (_) { /* ignore */ }
+        } catch (_) {
+            /* ignore */
+        }
         const fn = (logger as any)[level] || logger.info;
         fn.call(logger, meta, msg, ...args);
     } catch (e) {
@@ -131,7 +188,7 @@ function embedLog(level: 'debug' | 'info' | 'warn' | 'error', meta: any, msg: st
         // to ensure failures in logging don't crash tests.
         try {
             // Provide structured output similar to logger for debugging.
-            console.error('[EMBED] embedLog helper failure', {
+            console.error("[EMBED] embedLog helper failure", {
                 err: e instanceof Error ? e.message : String(e),
                 meta,
                 msg,
@@ -217,7 +274,11 @@ export async function embedForSector(t: string, s: string): Promise<number[]> {
             // fusion can proceed with vectors of equal length. This resolves
             // vector length mismatch errors during tests and hybrid fusion.
             const synComp = compress_vec(syn, comp.length);
-            embedLog('info', { component: "EMBED", sector: s }, `[EMBED] Fusing hybrid vectors for sector: ${s}, syn_dim=${syn.length}, comp_dim=${comp.length}`);
+            embedLog(
+                "info",
+                { component: "EMBED", sector: s },
+                `[EMBED] Fusing hybrid vectors for sector: ${s}, syn_dim=${syn.length}, comp_dim=${comp.length}`,
+            );
 
             // Use sector-aware weights for consistency
             const secWeights: Record<string, [number, number]> = {
@@ -228,7 +289,13 @@ export async function embedForSector(t: string, s: string): Promise<number[]> {
                 reflective: [0.62, 0.38],
             };
             const weights = secWeights[s] || [0.6, 0.4];
-            const fused = fuseEmbeddingVectors(synComp, comp, weights, e.global_simd_enabled, s);
+            const fused = fuseEmbeddingVectors(
+                synComp,
+                comp,
+                weights,
+                e.global_simd_enabled,
+                s,
+            );
             // Ensure embedding returns canonical vector size (e.vec_dim) so
             // callers don't need to perform additional resizing. This makes the
             // embedForSector function behave consistently across tiers and
@@ -256,7 +323,13 @@ export async function embedForSector(t: string, s: string): Promise<number[]> {
             reflective: [0.62, 0.38],
         };
         const weights = secWeights[s] || [0.6, 0.4];
-        const fused = fuseEmbeddingVectors(synComp, comp, weights, e.global_simd_enabled, s);
+        const fused = fuseEmbeddingVectors(
+            synComp,
+            comp,
+            weights,
+            e.global_simd_enabled,
+            s,
+        );
         return resize_vec(fused, e.vec_dim);
     }
     if (localTier === "fast") return gen_syn_emb(t, s);
@@ -302,12 +375,20 @@ async function emb_openai(t: string, s: string): Promise<number[]> {
             }),
         });
         if (!r.ok) {
-            embedLog('warn', { component: "EMBED", status: r.status }, `[EMBED] OpenAI responded with status ${r.status}, falling back to synthetic`);
+            embedLog(
+                "warn",
+                { component: "EMBED", status: r.status },
+                `[EMBED] OpenAI responded with status ${r.status}, falling back to synthetic`,
+            );
             return gen_syn_emb(t, s);
         }
         return ((await r.json()) as any).data[0].embedding;
     } catch (err) {
-        embedLog('warn', { component: "EMBED", err }, "[EMBED] OpenAI fetch failed, falling back to synthetic");
+        embedLog(
+            "warn",
+            { component: "EMBED", err },
+            "[EMBED] OpenAI fetch failed, falling back to synthetic",
+        );
         return gen_syn_emb(t, s);
     }
 }
@@ -318,7 +399,8 @@ async function emb_batch_openai(
     if (__TEST.batchProvider) return await __TEST.batchProvider(txts);
     const e = currentEnv();
     if (!e.openai_key) throw new Error("OpenAI key missing");
-    const secs = Object.keys(txts), m = get_model("semantic", "openai");
+    const secs = Object.keys(txts),
+        m = get_model("semantic", "openai");
     const base = (e.openai_base_url || e.openai_base || "").replace(/\/$/, "");
     const r = await fetch(`${base}/embeddings`, {
         method: "POST",
@@ -334,16 +416,25 @@ async function emb_batch_openai(
     });
     try {
         if (!r.ok) {
-            embedLog('warn', { component: "EMBED", status: r.status }, `[EMBED] OpenAI batch responded with status ${r.status}, falling back to synthetic`);
+            embedLog(
+                "warn",
+                { component: "EMBED", status: r.status },
+                `[EMBED] OpenAI batch responded with status ${r.status}, falling back to synthetic`,
+            );
             const fb: Record<string, number[]> = {};
             for (const s of secs) fb[s] = gen_syn_emb(txts[s], s);
             return fb;
         }
-        const d = (await r.json()) as any, out: Record<string, number[]> = {};
+        const d = (await r.json()) as any,
+            out: Record<string, number[]> = {};
         secs.forEach((s, i) => (out[s] = d.data[i].embedding));
         return out;
     } catch (err) {
-        embedLog('warn', { component: "EMBED", err }, "[EMBED] OpenAI batch fetch failed, falling back to synthetic");
+        embedLog(
+            "warn",
+            { component: "EMBED", err },
+            "[EMBED] OpenAI batch fetch failed, falling back to synthetic",
+        );
         const fb: Record<string, number[]> = {};
         for (const s of secs) fb[s] = gen_syn_emb(txts[s], s);
         return fb;
@@ -366,7 +457,11 @@ async function emb_gemini(
     // embeddings instead of throwing. Tests expect provider fallbacks to
     // synth when no provider credentials are present.
     if (!e.gemini_key) {
-        embedLog('warn', { component: "EMBED" }, "[EMBED] Gemini key missing, falling back to synthetic");
+        embedLog(
+            "warn",
+            { component: "EMBED" },
+            "[EMBED] Gemini key missing, falling back to synthetic",
+        );
         const fb: Record<string, number[]> = {};
         for (const s of Object.keys(txts)) fb[s] = gen_syn_emb(txts[s], s);
         return fb;
@@ -388,10 +483,15 @@ async function emb_gemini(
                 if (!r.ok) {
                     if (r.status === 429) {
                         const d = Math.min(
-                            parseInt(r.headers.get("retry-after") || "2") * 1000,
+                            parseInt(r.headers.get("retry-after") || "2") *
+                                1000,
                             1000 * Math.pow(2, a),
                         );
-                        embedLog('warn', { component: "EMBED", attempt: a + 1, wait_ms: d }, `[EMBED] Gemini rate limit (${a + 1}/3), waiting ${d}ms`);
+                        embedLog(
+                            "warn",
+                            { component: "EMBED", attempt: a + 1, wait_ms: d },
+                            `[EMBED] Gemini rate limit (${a + 1}/3), waiting ${d}ms`,
+                        );
                         await new Promise((x) => setTimeout(x, d));
                         continue;
                     }
@@ -406,12 +506,22 @@ async function emb_gemini(
                 return out;
             } catch (e) {
                 if (a === 2) {
-                    embedLog('error', { component: "EMBED", attempt: a + 1, err: e }, `[EMBED] Gemini failed after 3 attempts, using synthetic`);
+                    embedLog(
+                        "error",
+                        { component: "EMBED", attempt: a + 1, err: e },
+                        `[EMBED] Gemini failed after 3 attempts, using synthetic`,
+                    );
                     const fb: Record<string, number[]> = {};
-                    for (const s of Object.keys(txts)) fb[s] = gen_syn_emb(txts[s], s);
+                    for (const s of Object.keys(txts))
+                        fb[s] = gen_syn_emb(txts[s], s);
                     return fb;
                 }
-                embedLog('warn', { component: "EMBED", attempt: a + 1, err: e }, `[EMBED] Gemini error (${a + 1}/3): %s`, e instanceof Error ? e.message : String(e));
+                embedLog(
+                    "warn",
+                    { component: "EMBED", attempt: a + 1, err: e },
+                    `[EMBED] Gemini error (${a + 1}/3): %s`,
+                    e instanceof Error ? e.message : String(e),
+                );
                 await new Promise((x) => setTimeout(x, 1000 * Math.pow(2, a)));
             }
         }
@@ -419,7 +529,7 @@ async function emb_gemini(
         for (const s of Object.keys(txts)) fb[s] = gen_syn_emb(txts[s], s);
         return fb;
     });
-    gem_q = prom.catch(() => { });
+    gem_q = prom.catch(() => {});
     return prom;
 }
 
@@ -436,7 +546,10 @@ async function emb_ollama(t: string, s: string): Promise<number[]> {
 }
 
 // Router decision cache for sector-to-model mappings
-const routerDecisionCache = new Map<string, { model: string; expires: number }>();
+const routerDecisionCache = new Map<
+    string,
+    { model: string; expires: number }
+>();
 // Cache embeddings with text-specific keys to reduce repeat Ollama requests during
 // short TTL windows. Keyed by sector + text hash for accuracy.
 /**
@@ -448,8 +561,14 @@ const routerEmbCache = new Map<string, { vector: number[]; expires: number }>();
 
 // Router startup validation cache
 let routerValidationCache: {
-    status: 'not_run' | 'running' | 'passed' | 'warnings' | 'failed' | 'error';
-    errors: Array<{ sector: string, model: string, expected: number, detected: number, ratio: number }>;
+    status: "not_run" | "running" | "passed" | "warnings" | "failed" | "error";
+    errors: Array<{
+        sector: string;
+        model: string;
+        expected: number;
+        detected: number;
+        ratio: number;
+    }>;
     timestamp: number;
 } | null = null;
 
@@ -459,38 +578,74 @@ let routerValidationCache: {
  * @returns Promise resolving to validation result object
  */
 async function validateRouterOnStartup(): Promise<{
-    status: 'passed' | 'warnings' | 'failed' | 'error';
-    errors: Array<{ sector: string, model: string, expected: number, detected: number, ratio: number }>;
+    status: "passed" | "warnings" | "failed" | "error";
+    errors: Array<{
+        sector: string;
+        model: string;
+        expected: number;
+        detected: number;
+        ratio: number;
+    }>;
 }> {
     const e = currentEnv();
     if (!e.router_validate_on_start) {
-        return { status: 'passed', errors: [] };
+        return { status: "passed", errors: [] };
     }
 
     // Return cached result unless expired (5 minutes TTL)
-    if (routerValidationCache && (Date.now() - routerValidationCache.timestamp) < 5 * 60 * 1000) {
-        return { status: routerValidationCache.status as any, errors: routerValidationCache.errors };
+    if (
+        routerValidationCache &&
+        Date.now() - routerValidationCache.timestamp < 5 * 60 * 1000
+    ) {
+        return {
+            status: routerValidationCache.status as any,
+            errors: routerValidationCache.errors,
+        };
     }
 
     // Mark as running
-    routerValidationCache = { status: 'running', errors: [], timestamp: Date.now() };
+    routerValidationCache = {
+        status: "running",
+        errors: [],
+        timestamp: Date.now(),
+    };
 
-    const sectors = ['episodic', 'semantic', 'procedural', 'emotional', 'reflective'];
-    const validationErrors: Array<{ sector: string, model: string, expected: number, detected: number, ratio: number }> = [];
+    const sectors = [
+        "episodic",
+        "semantic",
+        "procedural",
+        "emotional",
+        "reflective",
+    ];
+    const validationErrors: Array<{
+        sector: string;
+        model: string;
+        expected: number;
+        detected: number;
+        ratio: number;
+    }> = [];
 
-    embedLog('info', { component: 'EMBED' }, '[EMBED] Router startup validation starting...');
+    embedLog(
+        "info",
+        { component: "EMBED" },
+        "[EMBED] Router startup validation starting...",
+    );
 
     for (const sector of sectors) {
         const model = getRouterModel(sector);
         try {
             const r = await fetch(`${e.ollama_url}/api/embeddings`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model, prompt: 'validate dimensions', options: { num_ctx: 1 } })
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    model,
+                    prompt: "validate dimensions",
+                    options: { num_ctx: 1 },
+                }),
             });
 
             if (r.ok) {
-                const res = await r.json() as any;
+                const res = (await r.json()) as any;
                 const detectedDim = res.embedding?.length || 0;
                 const ratio = Math.abs(detectedDim - e.vec_dim) / e.vec_dim;
 
@@ -500,31 +655,60 @@ async function validateRouterOnStartup(): Promise<{
                         model,
                         expected: e.vec_dim,
                         detected: detectedDim,
-                        ratio
+                        ratio,
                     });
-                    embedLog('warn', { component: 'EMBED', sector, model, ratio: ratio.toFixed(3) },
-                        `[EMBED] Router startup validation failed for ${sector}: ratio ${ratio.toFixed(3)}`);
+                    embedLog(
+                        "warn",
+                        {
+                            component: "EMBED",
+                            sector,
+                            model,
+                            ratio: ratio.toFixed(3),
+                        },
+                        `[EMBED] Router startup validation failed for ${sector}: ratio ${ratio.toFixed(3)}`,
+                    );
                 }
             } else {
-                embedLog('info', { component: 'EMBED', sector, model, status: r.status },
-                    `[EMBED] Router validation: ${sector} model ${model} not responding at startup`);
+                embedLog(
+                    "info",
+                    { component: "EMBED", sector, model, status: r.status },
+                    `[EMBED] Router validation: ${sector} model ${model} not responding at startup`,
+                );
             }
         } catch (error) {
-            embedLog('info', { component: 'EMBED', sector, model, error: String(error) },
-                `[EMBED] Router validation: could not reach ${sector} model at startup`);
+            embedLog(
+                "info",
+                { component: "EMBED", sector, model, error: String(error) },
+                `[EMBED] Router validation: could not reach ${sector} model at startup`,
+            );
         }
     }
 
-    const status = validationErrors.length === 0 ? 'passed' : 'warnings';
-    routerValidationCache = { status, errors: validationErrors, timestamp: Date.now() };
+    const status = validationErrors.length === 0 ? "passed" : "warnings";
+    routerValidationCache = {
+        status,
+        errors: validationErrors,
+        timestamp: Date.now(),
+    };
 
-    embedLog('info', { component: 'EMBED', validation_status: status, errors_count: validationErrors.length },
-        '[EMBED] Router startup validation complete');
+    embedLog(
+        "info",
+        {
+            component: "EMBED",
+            validation_status: status,
+            errors_count: validationErrors.length,
+        },
+        "[EMBED] Router startup validation complete",
+    );
 
-    if (status === 'warnings' && e.router_validate_strict) {
-        routerValidationCache.status = 'failed';
-        throw new Error(`Router validation failed: ${validationErrors.map(e =>
-            `${e.sector}: ${e.ratio.toFixed(2)}x mismatch/${e.model}`)}`);
+    if (status === "warnings" && e.router_validate_strict) {
+        routerValidationCache.status = "failed";
+        throw new Error(
+            `Router validation failed: ${validationErrors.map(
+                (e) =>
+                    `${e.sector}: ${e.ratio.toFixed(2)}x mismatch/${e.model}`,
+            )}`,
+        );
     }
 
     return { status, errors: validationErrors };
@@ -560,12 +744,22 @@ function getRouterModel(sector: string): string {
     };
 
     // Use configured mappings or defaults
-    const model = e.router_sector_models?.[sector] || defaultMappings[sector] || "nomic-embed-text";
+    const model =
+        e.router_sector_models?.[sector] ||
+        defaultMappings[sector] ||
+        "nomic-embed-text";
 
-    embedLog('debug', { component: "EMBED", sector, model }, `[EMBED] Router decision: ${sector} → ${model}`);
+    embedLog(
+        "debug",
+        { component: "EMBED", sector, model },
+        `[EMBED] Router decision: ${sector} → ${model}`,
+    );
 
     // Cache decision
-    routerDecisionCache.set(cacheKey, { model, expires: Date.now() + e.router_cache_ttl_ms });
+    routerDecisionCache.set(cacheKey, {
+        model,
+        expires: Date.now() + e.router_cache_ttl_ms,
+    });
 
     return model;
 }
@@ -577,15 +771,19 @@ export async function emb_router_cpu(t: string, s: string): Promise<number[]> {
     // SIMD usage follows precedence: router_simd_enabled ?? global_simd_enabled
     const effectiveSimdFusion = e.router_simd_enabled ?? e.global_simd_enabled;
 
-    embedLog('info', {
-        component: "EMBED",
-        sector: s,
-        model: modelName,
-        text_length: t.length,
-        router_simd_enabled: e.router_simd_enabled,
-        global_simd_enabled: e.global_simd_enabled,
-        effective_simd: effectiveSimdFusion
-    }, `[EMBED] Router CPU: processing sector ${s} with model ${modelName}`);
+    embedLog(
+        "info",
+        {
+            component: "EMBED",
+            sector: s,
+            model: modelName,
+            text_length: t.length,
+            router_simd_enabled: e.router_simd_enabled,
+            global_simd_enabled: e.global_simd_enabled,
+            effective_simd: effectiveSimdFusion,
+        },
+        `[EMBED] Router CPU: processing sector ${s} with model ${modelName}`,
+    );
 
     try {
         // Router-level text-specific embedding cache: avoid duplicate network requests
@@ -595,13 +793,23 @@ export async function emb_router_cpu(t: string, s: string): Promise<number[]> {
         // deterministic and avoid micro-differences in the text content used by
         // assertions. In production/test-mode false, use a text-hash-derived
         // cache key to avoid returning stale embeddings for different inputs.
-        const textHash = new Bun.CryptoHasher('sha256').update(t.substring(0, 100)).digest('hex').slice(0, 8);
-        const cacheKey = process.env.OM_TEST_MODE === '1' ? `router_${s}` : `router_${s}_${textHash}`;
+        const textHash = new Bun.CryptoHasher("sha256")
+            .update(t.substring(0, 100))
+            .digest("hex")
+            .slice(0, 8);
+        const cacheKey =
+            process.env.OM_TEST_MODE === "1"
+                ? `router_${s}`
+                : `router_${s}_${textHash}`;
         let embCache: { vector: number[]; expires: number } | undefined;
-        if (e.router_cache_enabled && (__TEST.routerCacheEnabled !== false)) {
+        if (e.router_cache_enabled && __TEST.routerCacheEnabled !== false) {
             embCache = routerEmbCache.get(cacheKey);
             if (embCache && Date.now() < embCache.expires) {
-                embedLog('info', { component: 'EMBED', sector: s, cached: true }, `[EMBED] Router embedding cache hit for sector ${s}`);
+                embedLog(
+                    "info",
+                    { component: "EMBED", sector: s, cached: true },
+                    `[EMBED] Router embedding cache hit for sector ${s}`,
+                );
                 return embCache.vector;
             }
         }
@@ -614,19 +822,40 @@ export async function emb_router_cpu(t: string, s: string): Promise<number[]> {
 
         if (!r.ok) {
             const errorText = await r.text();
-            embedLog('warn', { component: "EMBED", sector: s, model: modelName, status: r.status }, `[EMBED] Router model ${modelName} failed: ${r.status}, ${errorText}`);
+            embedLog(
+                "warn",
+                {
+                    component: "EMBED",
+                    sector: s,
+                    model: modelName,
+                    status: r.status,
+                },
+                `[EMBED] Router model ${modelName} failed: ${r.status}, ${errorText}`,
+            );
 
             // Fallback logic: Ollama failed → synthetic
             if (e.router_fallback_enabled) {
-                embedLog('warn', { component: "EMBED", sector: s }, `[EMBED] Router fallback: using synthetic for sector ${s}`);
+                embedLog(
+                    "warn",
+                    { component: "EMBED", sector: s },
+                    `[EMBED] Router fallback: using synthetic for sector ${s}`,
+                );
                 return gen_syn_emb(t, s);
             }
-            throw new Error(`Router model ${modelName} unavailable: ${r.status}`);
+            throw new Error(
+                `Router model ${modelName} unavailable: ${r.status}`,
+            );
         }
 
         const result = (await r.json()) as any;
-        if (!result.embedding || !Array.isArray(result.embedding) || result.embedding.length === 0) {
-            throw new Error(`Invalid embedding response from Ollama model ${modelName}: no valid embedding array`);
+        if (
+            !result.embedding ||
+            !Array.isArray(result.embedding) ||
+            result.embedding.length === 0
+        ) {
+            throw new Error(
+                `Invalid embedding response from Ollama model ${modelName}: no valid embedding array`,
+            );
         }
 
         const rawEmbedding = result.embedding;
@@ -634,25 +863,51 @@ export async function emb_router_cpu(t: string, s: string): Promise<number[]> {
         const mismatchRatio = Math.abs(rawDim - e.vec_dim) / e.vec_dim;
 
         if (mismatchRatio > e.router_dim_tolerance) {
-            embedLog('warn', { component: "EMBED", sector: s, model: modelName, rawDim, targetDim: e.vec_dim, mismatchRatio: mismatchRatio.toFixed(3) },
-                `[EMBED] Dimension mismatch: sector=${s}, model=${modelName}, raw=${rawDim}, target=${e.vec_dim}, ratio=${mismatchRatio.toFixed(3)}`);
+            embedLog(
+                "warn",
+                {
+                    component: "EMBED",
+                    sector: s,
+                    model: modelName,
+                    rawDim,
+                    targetDim: e.vec_dim,
+                    mismatchRatio: mismatchRatio.toFixed(3),
+                },
+                `[EMBED] Dimension mismatch: sector=${s}, model=${modelName}, raw=${rawDim}, target=${e.vec_dim}, ratio=${mismatchRatio.toFixed(3)}`,
+            );
 
             // Hard failure for 50%+ mismatch if fallback enabled, otherwise throw
             if (mismatchRatio > 0.5 && !e.router_fallback_enabled) {
-                throw new Error(`Model dimension incompatible with OM_VEC_DIM (ratio >0.5): ${modelName} produced ${rawDim}d, target ${e.vec_dim}d`);
+                throw new Error(
+                    `Model dimension incompatible with OM_VEC_DIM (ratio >0.5): ${modelName} produced ${rawDim}d, target ${e.vec_dim}d`,
+                );
             }
 
             // Use fallback synthetic if ratio too high
             if (mismatchRatio > 0.5 && e.router_fallback_enabled) {
-                embedLog('warn', { component: "EMBED", sector: s }, `[EMBED] Router fallback: dimension ratio ${mismatchRatio.toFixed(3)} >0.5, using synthetic for sector ${s}`);
+                embedLog(
+                    "warn",
+                    { component: "EMBED", sector: s },
+                    `[EMBED] Router fallback: dimension ratio ${mismatchRatio.toFixed(3)} >0.5, using synthetic for sector ${s}`,
+                );
                 return gen_syn_emb(t, s);
             }
         }
 
         let vector = resize_vec(rawEmbedding, e.vec_dim);
 
-        embedLog('info', { component: "EMBED", sector: s, model: modelName, rawDim, resized_to: e.vec_dim, mismatch_ratio: mismatchRatio.toFixed(3) },
-            `[EMBED] Router CPU: accepted embedding, dimension mismatch ratio ${mismatchRatio.toFixed(3)}`);
+        embedLog(
+            "info",
+            {
+                component: "EMBED",
+                sector: s,
+                model: modelName,
+                rawDim,
+                resized_to: e.vec_dim,
+                mismatch_ratio: mismatchRatio.toFixed(3),
+            },
+            `[EMBED] Router CPU: accepted embedding, dimension mismatch ratio ${mismatchRatio.toFixed(3)}`,
+        );
 
         // Apply SIMD optimization if enabled following precedence rules
         if (effectiveSimdFusion) {
@@ -662,32 +917,68 @@ export async function emb_router_cpu(t: string, s: string): Promise<number[]> {
 
             // Use sector-aware weightings optimized for router CPU performance
             const secWeights: Record<string, [number, number]> = {
-                episodic: [0.65, 0.35],    // More semantic for episodic
-                semantic: [0.6, 0.4],     // Balanced for semantic
-                procedural: [0.55, 0.45],  // More synthetic for procedural (faster models)
-                emotional: [0.58, 0.42],   // Slightly more semantic for emotional
-                reflective: [0.62, 0.38],  // More semantic for reflective
+                episodic: [0.65, 0.35], // More semantic for episodic
+                semantic: [0.6, 0.4], // Balanced for semantic
+                procedural: [0.55, 0.45], // More synthetic for procedural (faster models)
+                emotional: [0.58, 0.42], // Slightly more semantic for emotional
+                reflective: [0.62, 0.38], // More semantic for reflective
             };
 
             const weights = secWeights[s] || [0.6, 0.4];
-            vector = fuseEmbeddingVectors(synVec, semVec, weights, effectiveSimdFusion, s);
+            vector = fuseEmbeddingVectors(
+                synVec,
+                semVec,
+                weights,
+                effectiveSimdFusion,
+                s,
+            );
 
-            embedLog('debug', { component: "EMBED", sector: s, model: modelName, weights }, `[EMBED] Router fusion: ${weights[0]}:${weights[1]} ratio for ${s}`);
+            embedLog(
+                "debug",
+                { component: "EMBED", sector: s, model: modelName, weights },
+                `[EMBED] Router fusion: ${weights[0]}:${weights[1]} ratio for ${s}`,
+            );
         }
 
-        embedLog('info', { component: "EMBED", sector: s, model: modelName, dimensions: vector.length }, `[EMBED] Router CPU: successful embedding for ${s}`);
+        embedLog(
+            "info",
+            {
+                component: "EMBED",
+                sector: s,
+                model: modelName,
+                dimensions: vector.length,
+            },
+            `[EMBED] Router CPU: successful embedding for ${s}`,
+        );
         // Cache this embedding result with text-specific TTL (or per-sector in
         // test mode — this avoids flakiness in test suites that send similar
         // but not identical inputs and expect TTL-based cache hits).
-        try { routerEmbCache.set(cacheKey, { vector, expires: Date.now() + e.router_cache_ttl_ms }); } catch (_) { }
+        try {
+            routerEmbCache.set(cacheKey, {
+                vector,
+                expires: Date.now() + e.router_cache_ttl_ms,
+            });
+        } catch (_) {}
         return vector;
-
     } catch (error) {
-        embedLog('warn', { component: "EMBED", sector: s, model: modelName, error: String(error) }, `[EMBED] Router model ${modelName} failed with exception`);
+        embedLog(
+            "warn",
+            {
+                component: "EMBED",
+                sector: s,
+                model: modelName,
+                error: String(error),
+            },
+            `[EMBED] Router model ${modelName} failed with exception`,
+        );
 
         // Final fallback: synthetic embeddings
         if (e.router_fallback_enabled) {
-            embedLog('info', { component: "EMBED", sector: s }, `[EMBED] Router final fallback: using synthetic for sector ${s}`);
+            embedLog(
+                "info",
+                { component: "EMBED", sector: s },
+                `[EMBED] Router final fallback: using synthetic for sector ${s}`,
+            );
             return gen_syn_emb(t, s);
         }
 
@@ -698,13 +989,15 @@ export async function emb_router_cpu(t: string, s: string): Promise<number[]> {
 async function emb_local(t: string, s: string): Promise<number[]> {
     const e = currentEnv();
     if (!e.local_model_path) {
-        embedLog('warn', { component: "EMBED", sector: s }, "[EMBED] Local model missing, using synthetic");
+        embedLog(
+            "warn",
+            { component: "EMBED", sector: s },
+            "[EMBED] Local model missing, using synthetic",
+        );
         return gen_syn_emb(t, s);
     }
     try {
-        const h = new CryptoHasher("sha256")
-            .update(t + s)
-            .digest(),
+        const h = new CryptoHasher("sha256").update(t + s).digest(),
             out: number[] = [];
         for (let i = 0; i < e.vec_dim; i++) {
             const b1 = h[i % h.length],
@@ -714,7 +1007,11 @@ async function emb_local(t: string, s: string): Promise<number[]> {
         const n = Math.sqrt(out.reduce((sum, v) => sum + v * v, 0));
         return out.map((v) => v / n);
     } catch (err) {
-        embedLog('warn', { component: "EMBED", sector: s, err }, "[EMBED] Local embedding failed, using synthetic");
+        embedLog(
+            "warn",
+            { component: "EMBED", sector: s, err },
+            "[EMBED] Local embedding failed, using synthetic",
+        );
         return gen_syn_emb(t, s);
     }
 }
@@ -846,7 +1143,11 @@ export async function embedMultiSector(
     const r: EmbeddingResult[] = [];
     // Record pending status and include user_id in logs for observability.
     await q.ins_log.run(id, "multi-sector", "pending", Date.now(), null);
-    embedLog('info', { component: "EMBED", id, user_id, sectors: secs.length }, "[EMBED] multi-sector pending");
+    embedLog(
+        "info",
+        { component: "EMBED", id, user_id, sectors: secs.length },
+        "[EMBED] multi-sector pending",
+    );
     // If tests injected a provider, prefer that and run the same retry semantics
     if (__TEST.provider) {
         for (let a = 0; a < 3; a++) {
@@ -856,12 +1157,29 @@ export async function embedMultiSector(
                     r.push({ sector: s, vector: v, dim: v.length });
                 }
                 await q.upd_log.run("completed", null, id);
-                embedLog('info', { component: "EMBED", id, user_id }, "[EMBED] multi-sector completed (test provider)");
+                embedLog(
+                    "info",
+                    { component: "EMBED", id, user_id },
+                    "[EMBED] multi-sector completed (test provider)",
+                );
                 return r;
             } catch (e) {
                 if (a === 2) {
-                    await q.upd_log.run("failed", e instanceof Error ? e.message : String(e), id);
-                    embedLog('error', { component: "EMBED", id, user_id, err: e instanceof Error ? e.message : String(e) }, "[EMBED] multi-sector failed (test provider)");
+                    await q.upd_log.run(
+                        "failed",
+                        e instanceof Error ? e.message : String(e),
+                        id,
+                    );
+                    embedLog(
+                        "error",
+                        {
+                            component: "EMBED",
+                            id,
+                            user_id,
+                            err: e instanceof Error ? e.message : String(e),
+                        },
+                        "[EMBED] multi-sector failed (test provider)",
+                    );
                     throw e;
                 }
                 await new Promise((x) => setTimeout(x, 1000 * Math.pow(2, a)));
@@ -876,17 +1194,32 @@ export async function embedMultiSector(
                 simp &&
                 (e.embed_kind === "gemini" || e.embed_kind === "openai")
             ) {
-                embedLog('info', { component: "EMBED", id, user_id, sectors: secs.length }, `[EMBED] Simple mode (1 batch for ${secs.length} sectors)`);
+                embedLog(
+                    "info",
+                    { component: "EMBED", id, user_id, sectors: secs.length },
+                    `[EMBED] Simple mode (1 batch for ${secs.length} sectors)`,
+                );
                 const tb: Record<string, string> = {};
                 secs.forEach((s) => (tb[s] = txt));
-                const b = e.embed_kind === "gemini" ? await emb_gemini(tb) : await emb_batch_openai(tb);
+                const b =
+                    e.embed_kind === "gemini"
+                        ? await emb_gemini(tb)
+                        : await emb_batch_openai(tb);
                 for (const [s, v] of Object.entries(b)) {
                     const cfg = await import("../core/cfg");
                     const targetDimB = cfg.env.vec_dim;
-                    r.push({ sector: s, vector: resize_vec(v, targetDimB), dim: targetDimB });
+                    r.push({
+                        sector: s,
+                        vector: resize_vec(v, targetDimB),
+                        dim: targetDimB,
+                    });
                 }
             } else {
-                embedLog('info', { component: "EMBED", id, user_id, sectors: secs.length }, `[EMBED] Advanced mode (${secs.length} calls)`);
+                embedLog(
+                    "info",
+                    { component: "EMBED", id, user_id, sectors: secs.length },
+                    `[EMBED] Advanced mode (${secs.length} calls)`,
+                );
                 const par = e.adv_embed_parallel && e.embed_kind !== "gemini";
                 if (par) {
                     const p = secs.map(async (s) => {
@@ -922,12 +1255,18 @@ export async function embedMultiSector(
                             r.push({ sector: s, vector: norm, dim: targetDim });
                         }
                         if (e.embed_delay_ms > 0 && i < secs.length - 1)
-                            await new Promise((x) => setTimeout(x, e.embed_delay_ms));
+                            await new Promise((x) =>
+                                setTimeout(x, e.embed_delay_ms),
+                            );
                     }
                 }
             }
             await q.upd_log.run("completed", null, id);
-            embedLog('info', { component: "EMBED", id, user_id }, "[EMBED] multi-sector completed");
+            embedLog(
+                "info",
+                { component: "EMBED", id, user_id },
+                "[EMBED] multi-sector completed",
+            );
             return r;
         } catch (e) {
             if (a === 2) {
@@ -936,7 +1275,16 @@ export async function embedMultiSector(
                     e instanceof Error ? e.message : String(e),
                     id,
                 );
-                embedLog('error', { component: "EMBED", id, user_id, err: e instanceof Error ? e.message : String(e) }, "[EMBED] multi-sector failed");
+                embedLog(
+                    "error",
+                    {
+                        component: "EMBED",
+                        id,
+                        user_id,
+                        err: e instanceof Error ? e.message : String(e),
+                    },
+                    "[EMBED] multi-sector failed",
+                );
                 throw e;
             }
             await new Promise((x) => setTimeout(x, 1000 * Math.pow(2, a)));
@@ -950,7 +1298,7 @@ export async function embedMultiSector(
 // deterministic embedding provider without attempting to reassign ESM
 // namespace exports (which are readonly). This avoids brittle mocking of
 // `fetch` or module bindings in tests.
-const TEST_ENABLED = process.env.OM_TEST_MODE === '1';
+const TEST_ENABLED = process.env.OM_TEST_MODE === "1";
 
 // Export a test hook object for tests to inspect, but make it inert when
 // `OM_TEST_MODE` is not enabled. Tests should set `OM_TEST_MODE=1` at the
@@ -958,14 +1306,18 @@ const TEST_ENABLED = process.env.OM_TEST_MODE === '1';
 // `__setTestProvider` safely.
 export const __TEST: {
     provider: ((t: string, s: string) => Promise<number[]>) | null;
-    batchProvider: ((txts: Record<string, string>) => Promise<Record<string, number[]>>) | null;
+    batchProvider:
+        | ((txts: Record<string, string>) => Promise<Record<string, number[]>>)
+        | null;
     reset: () => void;
     waitForIdle?: () => Promise<void>;
     resetRouterCaches?: () => void;
     routerCacheEnabled?: boolean;
     setRouterCacheEnabled?: (enabled: boolean) => void;
     // Optional test hook to capture embed-level logs deterministically.
-    logHook?: ((level: string, meta: any, msg: string, ...args: any[]) => void) | null;
+    logHook?:
+        | ((level: string, meta: any, msg: string, ...args: any[]) => void)
+        | null;
 } = {
     provider: null,
     batchProvider: null,
@@ -977,15 +1329,21 @@ export const __TEST: {
         this.routerCacheEnabled = true;
     },
     resetRouterCaches() {
-        try { routerDecisionCache.clear(); } catch (_) { }
-        try { (routerValidationCache as any) = null; } catch (_) { }
-        try { routerEmbCache.clear(); } catch (_) { }
+        try {
+            routerDecisionCache.clear();
+        } catch (_) {}
+        try {
+            (routerValidationCache as any) = null;
+        } catch (_) {}
+        try {
+            routerEmbCache.clear();
+        } catch (_) {}
     },
     // Wait for internal embed queues (e.g., gem_q) and short async churn to settle.
     async waitForIdle() {
         try {
             // Await the gemini queue promise chain; ignore rejection so tests don't fail here
-            await gem_q.catch(() => { });
+            await gem_q.catch(() => {});
         } catch (_) {
             // ignore
         }
@@ -1000,14 +1358,18 @@ export const __TEST: {
     logHook: null,
 };
 
-export function __setTestProvider(fn: (t: string, s: string) => Promise<number[]>) {
+export function __setTestProvider(
+    fn: (t: string, s: string) => Promise<number[]>,
+) {
     // Allow test injection even if `OM_TEST_MODE` wasn't set at module-load time.
     // Some test files may set `OM_TEST_MODE` after importing modules; accepting
     // the provider makes tests more robust. If test mode wasn't enabled, we
     // still accept the provider silently.
     __TEST.provider = fn;
 }
-export function __setTestBatchProvider(fn: (txts: Record<string, string>) => Promise<Record<string, number[]>>) {
+export function __setTestBatchProvider(
+    fn: (txts: Record<string, string>) => Promise<Record<string, number[]>>,
+) {
     __TEST.batchProvider = fn;
 }
 
@@ -1092,7 +1454,12 @@ export const embed = (t: string) => embedForSector(t, "semantic");
 export const getEmbeddingProvider = () => currentEnv().embed_kind;
 
 // Re-export SIMD utilities for shared use across modules
-export { dotProduct, normalize, fuseVectors, benchmarkSimd } from "../utils/simd";
+export {
+    dotProduct,
+    normalize,
+    fuseVectors,
+    benchmarkSimd,
+} from "../utils/simd";
 
 /**
  * Shared vector fusion utility that handles SIMD selection and sector-aware weighting.
@@ -1109,12 +1476,14 @@ export function fuseEmbeddingVectors(
     sem: number[],
     weights: [number, number],
     useSimd: boolean = currentEnv().global_simd_enabled,
-    sector?: string
+    sector?: string,
 ): number[] {
     // Input validation
-    if (syn.length !== sem.length) throw new Error('Vector length mismatch');
-    if (weights.length !== 2 || Math.abs(weights[0] + weights[1] - 1) >= 1e-6) throw new Error('Invalid weights');
-    if (syn.some(isNaN) || sem.some(isNaN) || weights.some(isNaN)) throw new Error('NaN values in vectors or weights');
+    if (syn.length !== sem.length) throw new Error("Vector length mismatch");
+    if (weights.length !== 2 || Math.abs(weights[0] + weights[1] - 1) >= 1e-6)
+        throw new Error("Invalid weights");
+    if (syn.some(isNaN) || sem.some(isNaN) || weights.some(isNaN))
+        throw new Error("NaN values in vectors or weights");
 
     const synArr = new Float32Array(syn);
     const semArr = new Float32Array(sem);
@@ -1132,33 +1501,40 @@ export function fuseEmbeddingVectors(
     // Ensure proper normalization for all paths
     const norm = Math.sqrt(fused.reduce((s, v) => s + v * v, 0));
     if (norm > 0) {
-        fused = fused.map(x => x / norm);
+        fused = fused.map((x) => x / norm);
     }
 
     // Handle degenerate cases
-    if (syn.every(v => v === 0) && sem.every(v => v === 0)) {
+    if (syn.every((v) => v === 0) && sem.every((v) => v === 0)) {
         // Both zero vectors - return unit vector
         fused = new Array(syn.length).fill(1 / Math.sqrt(syn.length));
     }
 
     if (sector) {
-        embedLog('debug', { fusion_path: useSimd && SIMD_SUPPORTED ? 'SIMD' : 'legacy', sector, weights: weights.join(':') },
-            `[EMBED] Fusion path: ${useSimd && SIMD_SUPPORTED ? 'SIMD' : 'legacy'} for sector ${sector}`);
+        embedLog(
+            "debug",
+            {
+                fusion_path: useSimd && SIMD_SUPPORTED ? "SIMD" : "legacy",
+                sector,
+                weights: weights.join(":"),
+            },
+            `[EMBED] Fusion path: ${useSimd && SIMD_SUPPORTED ? "SIMD" : "legacy"} for sector ${sector}`,
+        );
     }
 
     return fused;
 }
 
-
-
 export function getEmbeddingInfo() {
     const e = currentEnv();
     const i: Record<string, any> = {
-        kind: e.embed_kind,  // Canonical mode string from OM_EMBED_KIND (e.g., 'openai', 'router_cpu')
-        provider: e.embed_kind,  // Provider implementation (currently an alias - must equal kind for backward compatibility)
+        kind: e.embed_kind, // Canonical mode string from OM_EMBED_KIND (e.g., 'openai', 'router_cpu')
+        provider: e.embed_kind, // Provider implementation (currently an alias - must equal kind for backward compatibility)
         dimensions: e.vec_dim,
-        mode: e.embed_mode,  // Processing mode: 'simple' or 'advanced'
-        batch_support: e.embed_mode === "simple" && (e.embed_kind === "gemini" || e.embed_kind === "openai"),
+        mode: e.embed_mode, // Processing mode: 'simple' or 'advanced'
+        batch_support:
+            e.embed_mode === "simple" &&
+            (e.embed_kind === "gemini" || e.embed_kind === "openai"),
         advanced_parallel: e.adv_embed_parallel,
         embed_delay_ms: e.embed_delay_ms,
         // Runtime-aware SIMD flags (reflects actual in-memory config including POST updates)
@@ -1222,7 +1598,7 @@ export function getEmbeddingInfo() {
         i.performance = {
             expected_p95_ms: 150,
             expected_simd_improvement: 30,
-            memory_usage_gb: 2.5
+            memory_usage_gb: 2.5,
         };
         i.ollama_required = true;
 
@@ -1231,8 +1607,9 @@ export function getEmbeddingInfo() {
         let routerEmbCacheMissCount = 0;
         try {
             // Calculate hits/misses based on current cache state
-            const cacheHits = Array.from(routerEmbCache.values()).filter(entry =>
-                entry.expires > Date.now()).length;
+            const cacheHits = Array.from(routerEmbCache.values()).filter(
+                (entry) => entry.expires > Date.now(),
+            ).length;
             const cacheSize = routerEmbCache.size;
             routerEmbCacheHitCount = cacheHits;
             routerEmbCacheMissCount = Math.max(0, cacheSize - cacheHits); // Approximate misses
@@ -1240,43 +1617,73 @@ export function getEmbeddingInfo() {
             // Ignore cache stats calculation failures
         }
         const totalRequests = routerEmbCacheHitCount + routerEmbCacheMissCount;
-        const hitRate = totalRequests > 0 ? routerEmbCacheHitCount / totalRequests : 0;
+        const hitRate =
+            totalRequests > 0 ? routerEmbCacheHitCount / totalRequests : 0;
 
         i.cache_stats = {
             hits: routerEmbCacheHitCount,
             misses: routerEmbCacheMissCount,
-            hit_rate: hitRate
+            hit_rate: hitRate,
         };
 
         // Use cached validation function for efficiency and consistency
         if (!e.router_validate_on_start) {
             i.validation_errors = [];
-            i.validation_status = 'skipped';
+            i.validation_status = "skipped";
         } else {
             // Invoke validation on first router use to populate cache and run checks
             // In test mode, skip the network-based router validation (tests
             // directly control provider behavior and may not have Ollama)
-            if (!TEST_ENABLED && (routerValidationCache === null || routerValidationCache.status === 'not_run')) {
+            if (
+                !TEST_ENABLED &&
+                (routerValidationCache === null ||
+                    routerValidationCache.status === "not_run")
+            ) {
                 try {
-                    validateRouterOnStartup().catch(error => {
-                        embedLog('warn', { component: 'EMBED', error: String(error) }, '[EMBED] Router startup validation failed silently');
+                    validateRouterOnStartup().catch((error) => {
+                        embedLog(
+                            "warn",
+                            { component: "EMBED", error: String(error) },
+                            "[EMBED] Router startup validation failed silently",
+                        );
                     });
                 } catch (error) {
-                    embedLog('warn', { component: 'EMBED', error: String(error) }, '[EMBED] Router startup validation failed');
+                    embedLog(
+                        "warn",
+                        { component: "EMBED", error: String(error) },
+                        "[EMBED] Router startup validation failed",
+                    );
                 }
             }
 
             // Return cached validation status immediately
             try {
-                const validationResult = routerValidationCache ?? { status: 'not_run', errors: [], timestamp: Date.now() };
+                const validationResult = routerValidationCache ?? {
+                    status: "not_run",
+                    errors: [],
+                    timestamp: Date.now(),
+                };
                 i.validation_status = validationResult.status as any;
                 i.validation_errors = validationResult.errors || [];
             } catch (error) {
                 // Convert strict mode failures to response fields instead of throwing for GET /embed/config
-                const msg = error instanceof Error ? error.message : String(error);
-                embedLog('warn', { component: 'EMBED', error: msg }, '[EMBED] Router validation failed for config endpoint');
-                i.validation_errors = [{ sector: 'error', model: 'error', expected: e.vec_dim, detected: 0, ratio: 0 }];
-                i.validation_status = 'failed';
+                const msg =
+                    error instanceof Error ? error.message : String(error);
+                embedLog(
+                    "warn",
+                    { component: "EMBED", error: msg },
+                    "[EMBED] Router validation failed for config endpoint",
+                );
+                i.validation_errors = [
+                    {
+                        sector: "error",
+                        model: "error",
+                        expected: e.vec_dim,
+                        detected: 0,
+                        ratio: 0,
+                    },
+                ];
+                i.validation_status = "failed";
             }
         }
     } else {
@@ -1284,7 +1691,7 @@ export function getEmbeddingInfo() {
         i.type = "synthetic";
     }
     return i;
-};
+}
 
 /**
  * Check Ollama service health and version
@@ -1310,7 +1717,7 @@ export async function getOllamaHealth(): Promise<{
     // Test seam: if tests provide a mocked health response, use that instead
     if ((__TEST_ollama as any).health !== undefined) {
         const h = (__TEST_ollama as any).health;
-        return typeof h === 'function' ? await h() : h;
+        return typeof h === "function" ? await h() : h;
     }
 
     const attempts = 3;
@@ -1329,25 +1736,44 @@ export async function getOllamaHealth(): Promise<{
             });
 
             if (healthResponse.ok) {
-                const healthData = await healthResponse.json().catch(() => ({}));
-                version = healthResponse.headers.get("ollama-version") ||
+                const healthData = await healthResponse
+                    .json()
+                    .catch(() => ({}));
+                version =
+                    healthResponse.headers.get("ollama-version") ||
                     healthData.version ||
                     "unknown";
                 basicHealth = true;
                 break; // Basic health check passed
             } else {
                 // Continue retrying even on /api/health failure
-                embedLog('warn', { component: 'EMBED', attempt: i + 1, status: healthResponse.status }, `[EMBED] /api/health check failed: ${healthResponse.status}`);
+                embedLog(
+                    "warn",
+                    {
+                        component: "EMBED",
+                        attempt: i + 1,
+                        status: healthResponse.status,
+                    },
+                    `[EMBED] /api/health check failed: ${healthResponse.status}`,
+                );
             }
         } catch (err) {
-            embedLog('warn', { component: 'EMBED', attempt: i + 1, error: err instanceof Error ? err.message : String(err) }, `[EMBED] /api/health fetch failed`);
+            embedLog(
+                "warn",
+                {
+                    component: "EMBED",
+                    attempt: i + 1,
+                    error: err instanceof Error ? err.message : String(err),
+                },
+                `[EMBED] /api/health fetch failed`,
+            );
             if (i === attempts - 1) {
                 // If /api/health completely fails, continue to /api/tags as fallback
                 basicHealth = false;
                 break;
             }
             const backoff = baseDelayMs * Math.pow(2, i);
-            await new Promise(resolve => setTimeout(resolve, backoff));
+            await new Promise((resolve) => setTimeout(resolve, backoff));
         }
     }
 
@@ -1361,16 +1787,29 @@ export async function getOllamaHealth(): Promise<{
             });
 
             if (tagsResponse.ok) {
-                const tagsData = (await tagsResponse.json()) as { models?: any[] };
+                const tagsData = (await tagsResponse.json()) as {
+                    models?: any[];
+                };
                 modelsLoaded = tagsData.models?.length || 0;
                 // Update version from /api/tags if not set by /api/health
                 version = tagsResponse.headers.get("ollama-version") || version;
             } else {
-                embedLog('warn', { component: 'EMBED', status: tagsResponse.status }, `[EMBED] /api/tags check failed after successful /api/health: ${tagsResponse.status}`);
+                embedLog(
+                    "warn",
+                    { component: "EMBED", status: tagsResponse.status },
+                    `[EMBED] /api/tags check failed after successful /api/health: ${tagsResponse.status}`,
+                );
                 // Continue with basic health - model count can be defaulted
             }
         } catch (err) {
-            embedLog('warn', { component: 'EMBED', error: err instanceof Error ? err.message : String(err) }, `[EMBED] /api/tags fetch failed after successful /api/health`);
+            embedLog(
+                "warn",
+                {
+                    component: "EMBED",
+                    error: err instanceof Error ? err.message : String(err),
+                },
+                `[EMBED] /api/tags fetch failed after successful /api/health`,
+            );
             // Continue with basic health - model count can be defaulted
         }
     }
@@ -1397,23 +1836,44 @@ export async function getOllamaHealth(): Promise<{
                 fallbackAvailable = true;
                 version = r.headers.get("ollama-version") || "unknown";
                 modelsLoaded = data.models?.length || 0;
-                embedLog('info', { component: 'EMBED', version, models_loaded: modelsLoaded }, `[EMBED] Ollama available via /api/tags (health endpoint unavailable)`);
+                embedLog(
+                    "info",
+                    {
+                        component: "EMBED",
+                        version,
+                        models_loaded: modelsLoaded,
+                    },
+                    `[EMBED] Ollama available via /api/tags (health endpoint unavailable)`,
+                );
                 break;
             } else if (r.status >= 500) {
                 // Server errors suggest complete unavailability
-                embedLog('warn', { component: 'EMBED', attempt: i + 1, status: r.status }, `[EMBED] /api/tags returned 5xx status`);
+                embedLog(
+                    "warn",
+                    { component: "EMBED", attempt: i + 1, status: r.status },
+                    `[EMBED] /api/tags returned 5xx status`,
+                );
             }
         } catch (err) {
             if (i === attempts - 1) {
                 const errorMsg = `Failed after ${attempts} retries: ${err instanceof Error ? err.message : String(err)}`;
-                embedLog('warn', { component: 'EMBED', attempts, error: err instanceof Error ? err.message : String(err) }, `[EMBED] Ollama health check failed after retries: %s`, errorMsg);
+                embedLog(
+                    "warn",
+                    {
+                        component: "EMBED",
+                        attempts,
+                        error: err instanceof Error ? err.message : String(err),
+                    },
+                    `[EMBED] Ollama health check failed after retries: %s`,
+                    errorMsg,
+                );
                 return {
                     available: false,
                     error: errorMsg,
                 };
             }
             const backoff = baseDelayMs * Math.pow(2, i);
-            await new Promise(resolve => setTimeout(resolve, backoff));
+            await new Promise((resolve) => setTimeout(resolve, backoff));
         }
     }
 
@@ -1425,7 +1885,8 @@ export async function getOllamaHealth(): Promise<{
         };
     }
 
-    const errorMsg = "Ollama service unavailable - both /api/health and /api/tags failed";
+    const errorMsg =
+        "Ollama service unavailable - both /api/health and /api/tags failed";
     return {
         available: false,
         error: errorMsg,
