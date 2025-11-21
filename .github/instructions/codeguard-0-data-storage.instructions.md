@@ -10,6 +10,7 @@ rule_id: codeguard-0-data-storage
 This rule advises on securely configuring SQL and NoSQL databases to protect against data breaches and unauthorized access:
 
 - Backend Database Protection
+
   - Isolate database servers from other systems and limit host connections.
   - Disable network (TCP) access when possible; use local socket files or named pipes.
   - Configure database to bind only on localhost when appropriate.
@@ -18,6 +19,7 @@ This rule advises on securely configuring SQL and NoSQL databases to protect aga
   - Never allow direct connections from thick clients to backend database.
 
 - Transport Layer Security
+
   - Configure database to only allow encrypted connections.
   - Install trusted digital certificates on database servers.
   - Use TLSv1.2+ with modern ciphers (AES-GCM, ChaCha20) for client connections.
@@ -25,6 +27,7 @@ This rule advises on securely configuring SQL and NoSQL databases to protect aga
   - Ensure all database traffic is encrypted, not just initial authentication.
 
 - Secure Authentication Configuration
+
   - Always require authentication, including from local server connections.
   - Protect accounts with strong, unique passwords.
   - Use dedicated accounts per application or service.
@@ -34,6 +37,7 @@ This rule advises on securely configuring SQL and NoSQL databases to protect aga
   - Change passwords when staff leave or compromise is suspected.
 
 - Database Credential Storage
+
   - Never store credentials in application source code.
   - Store credentials in configuration files outside web root.
   - Set appropriate file permissions for credential access.
@@ -42,6 +46,7 @@ This rule advises on securely configuring SQL and NoSQL databases to protect aga
   - Use environment variables or secrets management solutions.
 
 - Secure Permission Management
+
   - Apply principle of least privilege to all database accounts.
   - Do not use built-in root, sa, or SYS accounts.
   - Do not grant administrative rights to application accounts.
@@ -52,6 +57,7 @@ This rule advises on securely configuring SQL and NoSQL databases to protect aga
   - Implement table-level, column-level, and row-level permissions when needed.
 
 - Database Configuration and Hardening
+
   - Install required security updates and patches regularly.
   - Run database services under low-privileged user accounts.
   - Remove default accounts and sample databases.

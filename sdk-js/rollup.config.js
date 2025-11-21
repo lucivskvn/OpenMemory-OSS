@@ -1,4 +1,4 @@
-import typescript from '@rollup/plugin-typescript'
+import typescript from '@rollup/plugin-typescript';
 
 export default [
   // ES Module build
@@ -7,16 +7,16 @@ export default [
     output: {
       file: 'dist/index.esm.js',
       format: 'es',
-      sourcemap: true
+      sourcemap: true,
     },
     plugins: [
       typescript({
         tsconfig: './tsconfig.json',
         declaration: true,
-        outDir: 'dist'
-      })
+        outDir: 'dist',
+      }),
     ],
-    external: []
+    external: [],
   },
   // CommonJS build
   {
@@ -25,13 +25,13 @@ export default [
       file: 'dist/index.js',
       format: 'cjs',
       sourcemap: true,
-      exports: 'named'
+      exports: 'named',
     },
     plugins: [
       typescript({
-        tsconfig: './tsconfig.json'
-      })
+        tsconfig: './tsconfig.json',
+      }),
     ],
-    external: []
-  }
-]
+    external: [],
+  },
+];

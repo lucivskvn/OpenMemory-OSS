@@ -10,6 +10,7 @@ rule_id: codeguard-0-devops-ci-cd-containers
 Secure the build, packaging, and deployment supply chain: protect pipelines and artifacts, harden containers, and use virtual patching and toolchain flags when necessary.
 
 ### CI/CD Pipeline Security
+
 - Repos: protected branches; mandatory reviews; signed commits.
 - Secrets: never hardcode; fetch at runtime from vault/KMS; mask in logs.
 - Least privilege: ephemeral, isolated runners with minimal permissions.
@@ -18,6 +19,7 @@ Secure the build, packaging, and deployment supply chain: protect pipelines and 
 - Sign everything: commits and artifacts (containers/jars) and verify prior to deploy; adopt SLSA provenance.
 
 ### Docker and Container Hardening
+
 - User: run as non‑root; set `USER` in Dockerfile
 - Use `--security-opt=no-new-privileges` to prevent privilege escalation.
 - Capabilities: `--cap-drop all` and add only what you need; never `--privileged`.
@@ -31,6 +33,7 @@ Secure the build, packaging, and deployment supply chain: protect pipelines and 
 - Scanning: scan images on build and admission; block high‑severity vulns.
 
 ### JavaScript runtimes in Containers (Bun / Node)
+
 - Deterministic builds: prefer Bun in CI and containers where possible — e.g. `bun install --frozen-lockfile` (reproducible lockfile install). If you must use Node in CI, use `npm ci --omit=dev` and pin the lockfile.
 - Production env: set runtime environment variables (for Node/Bun this commonly includes `NODE_ENV=production`).
 - Non‑root: copy with correct ownership and drop to a non‑root user.
@@ -38,11 +41,13 @@ Secure the build, packaging, and deployment supply chain: protect pipelines and 
 - Multi‑stage builds: separate build and runtime; mount secrets via BuildKit; use `.dockerignore` to avoid leaking source or credentials.
 
 ### Virtual Patching (Temporary Mitigation)
+
 - Use WAF/IPS/ModSecurity for immediate protection when code fixes are not yet possible.
 - Prefer positive security rules (allow‑list) for accuracy; avoid exploit‑specific signatures.
 - Process: prepare tooling in advance; analyze CVEs; implement patches in log‑only first, then enforce; track and retire after code fix.
 
 ### C/C++ Toolchain Hardening (when applicable)
+
 - Compiler: `-Wall -Wextra -Wconversion`, `-fstack-protector-all`, PIE (`-fPIE`/`-pie`), `_FORTIFY_SOURCE=2`, CFI (`-fsanitize=cfi` with LTO).
 - Linker: RELRO/now, noexecstack, NX/DEP and ASLR.
 - Debug vs Release: enable sanitizers in debug; enable hardening flags in release; assert in debug only.

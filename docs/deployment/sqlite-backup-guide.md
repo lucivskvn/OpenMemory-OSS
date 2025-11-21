@@ -14,7 +14,7 @@ The following environment variables control backup behavior:
 - `OM_BACKUP_RETENTION_DAYS`: Number of days to retain backups (default: 7)
 - `OM_BACKUP_CLOUD_ENABLED`: Enable cloud backup to Supabase Storage (default: false)
 - `OM_BACKUP_AUTO_SCHEDULE`: Enable automatic scheduled backups (default: false)
-- `OM_BACKUP_SCHEDULE_CRON`: Cron expression for backup scheduling (default: "0 2 ** *")
+- `OM_BACKUP_SCHEDULE_CRON`: Cron expression for backup scheduling (default: "0 2 \*\* \*")
 
 ## Backup Functions
 
@@ -30,7 +30,7 @@ await backupDatabase({
   destPath: './data/backups/backup-2024-01-01.db',
   progressCallback: (progress) => {
     console.log(`Progress: ${progress.percentage}%`);
-  }
+  },
 });
 ```
 
@@ -49,7 +49,7 @@ import { exportDatabaseDump } from '../utils/backup.js';
 
 await exportDatabaseDump(
   './data/openmemory.db',
-  './data/backups/dump-2024-01-01.sql'
+  './data/backups/dump-2024-01-01.sql',
 );
 ```
 
@@ -64,7 +64,7 @@ import { vacuumIntoBackup } from '../utils/backup.js';
 
 await vacuumIntoBackup(
   './data/openmemory.db',
-  './data/backups/vacuum-backup-2024-01-01.db'
+  './data/backups/vacuum-backup-2024-01-01.db',
 );
 ```
 
@@ -82,7 +82,7 @@ import { restoreFromBackup } from '../utils/backup.js';
 await restoreFromBackup({
   backupPath: './data/backups/backup-2024-01-01.db',
   targetPath: './data/openmemory.db',
-  verify: true
+  verify: true,
 });
 ```
 
@@ -101,7 +101,7 @@ import { importDatabaseDump } from '../utils/backup.js';
 
 await importDatabaseDump(
   './data/backups/dump-2024-01-01.sql',
-  './data/openmemory.db'
+  './data/openmemory.db',
 );
 ```
 
@@ -117,7 +117,7 @@ import { uploadToSupabaseStorage } from '../utils/backup.js';
 await uploadToSupabaseStorage(
   './data/backups/backup-2024-01-01.db',
   'backup-2024-01-01.db',
-  s3Client
+  s3Client,
 );
 ```
 
@@ -131,7 +131,7 @@ import { downloadFromSupabaseStorage } from '../utils/backup.js';
 await downloadFromSupabaseStorage(
   'backup-2024-01-01.db',
   './temp/backup-2024-01-01.db',
-  s3Client
+  s3Client,
 );
 ```
 

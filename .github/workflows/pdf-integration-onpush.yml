@@ -3,7 +3,7 @@ name: PDF Integration on Push
 # Non-blocking run of the PDF integration test on pushes to main
 on:
   push:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   run-pdf-integration-on-push:

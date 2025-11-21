@@ -1,26 +1,26 @@
 {
-    "name": "openmemory",
-    "version": "1.3.0",
-    "private": true,
-    "scripts": {
-        "install": "cd backend && bun install",
-        "clean:artifacts": "bun ./scripts/cleanup-artifacts.mjs",
-        "build": "cd backend && bun run build",
-        "start": "cd backend && bun run start",
-        "dev": "cd backend && bun run dev",
-        "test": "cd backend && bun run test",
-        "lint": "cd dashboard && bun run lint",
-        "check:logger-spy": "bash ./scripts/check-logger-spy.sh",
-        "check:logger-spy-repo": "bash ./scripts/check-logger-spy-repo.sh",
-        "install-hooks": "git config core.hooksPath .githooks && chmod +x .githooks/pre-commit",
-        "test:pg": "./scripts/run_pg_tests.sh"
-    },
-    "devDependencies": {
-        "@ai-sdk/react": "^2.0.93",
-        "@aws-sdk/client-s3": "^3.934.0",
-        "@types/bun": "1.3.2",
-        "@types/node": "^22",
-        "ai": "^5.0.93",
-        "playwright": "^1.56.1"
-    }
+  "name": "openmemory",
+  "version": "1.3.0",
+  "private": true,
+  "scripts": {
+    "install": "cd backend && bun install",
+    "clean:artifacts": "bun ./scripts/cleanup-artifacts.mjs",
+    "build": "cd backend && bun run build",
+    "start": "cd backend && bun run start",
+    "dev": "cd backend && bun run dev",
+    "test": "cd backend && bun run test",
+    "lint": "cd dashboard && bun run lint",
+    "check:logger-spy": "bash ./scripts/check-logger-spy.sh",
+    "check:logger-spy-repo": "bash ./scripts/check-logger-spy-repo.sh",
+    "install-hooks": "git config core.hooksPath .githooks && chmod +x .githooks/pre-commit",
+    "test:pg": "./scripts/run_pg_tests.sh"
+  },
+  "devDependencies": {
+    "@ai-sdk/react": "^2.0.93",
+    "@aws-sdk/client-s3": "^3.934.0",
+    "@types/bun": "1.3.2",
+    "@types/node": "^22",
+    "ai": "^5.0.93",
+    "playwright": "^1.56.1"
+  }
 }

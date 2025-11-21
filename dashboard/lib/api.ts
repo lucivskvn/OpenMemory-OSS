@@ -1,22 +1,25 @@
-export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
+export const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
 
 export const getHeaders = () => {
-    const apiKey = process.env.NEXT_PUBLIC_API_KEY
-    return {
-        'Content-Type': 'application/json',
-        ...(apiKey && { 'x-api-key': apiKey }),
-    }
-}
-
-// Server-only headers helper that can include the admin key (kept out of client bundle)
-export const getServerHeaders = () => {
-  const apiKey = process.env.NEXT_PUBLIC_API_KEY
+  const apiKey = process.env.NEXT_PUBLIC_API_KEY;
   return {
     'Content-Type': 'application/json',
     ...(apiKey && { 'x-api-key': apiKey }),
-    ...(process.env.OM_ADMIN_API_KEY_PLAIN && { 'x-admin-key': process.env.OM_ADMIN_API_KEY_PLAIN }),
-  }
-}
+  };
+};
+
+// Server-only headers helper that can include the admin key (kept out of client bundle)
+export const getServerHeaders = () => {
+  const apiKey = process.env.NEXT_PUBLIC_API_KEY;
+  return {
+    'Content-Type': 'application/json',
+    ...(apiKey && { 'x-api-key': apiKey }),
+    ...(process.env.OM_ADMIN_API_KEY_PLAIN && {
+      'x-admin-key': process.env.OM_ADMIN_API_KEY_PLAIN,
+    }),
+  };
+};
 
 /**
  * EmbeddingProvider: Selects the backend for generating embeddings.
@@ -37,8 +40,7 @@ export type EmbeddingProvider =
  * /embed/config will reject them until a future phase implements full MoE support
  * including transformers.js 3.x and IBM/Liquid MoE integration.
  */
-export type FutureEmbeddingProvider =
-  | 'moe-cpu'; // FUTURE: Requires transformers.js 3.x + IBM/Liquid MoE integration
+export type FutureEmbeddingProvider = 'moe-cpu'; // FUTURE: Requires transformers.js 3.x + IBM/Liquid MoE integration
 
 /**
  * EmbeddingBatchMode: Controls how multiple embedding requests are batched.
@@ -106,20 +108,26 @@ const CONFIG_CACHE_TTL = 10000; // 10 seconds, matches server /embed/config cach
  * Helper function to validate provider values without casting
  * Only narrow to EmbeddingProvider when value is actually valid
  */
-function isValidProvider(value: string | undefined): value is EmbeddingProvider {
-  return value === 'synthetic' ||
-         value === 'openai' ||
-         value === 'gemini' ||
-         value === 'ollama' ||
-         value === 'local' ||
-         value === 'router_cpu';
+function isValidProvider(
+  value: string | undefined,
+): value is EmbeddingProvider {
+  return (
+    value === 'synthetic' ||
+    value === 'openai' ||
+    value === 'gemini' ||
+    value === 'ollama' ||
+    value === 'local' ||
+    value === 'router_cpu'
+  );
 }
 
 /**
  * Helper function to validate batch mode values against EmbeddingBatchMode union
  * If not valid, returns default 'simple'
  */
-function validateBatchMode(value: string | undefined): EmbeddingBatchMode | undefined {
+function validateBatchMode(
+  value: string | undefined,
+): EmbeddingBatchMode | undefined {
   if (value === 'simple' || value === 'advanced') {
     return value;
   }
@@ -129,13 +137,17 @@ function validateBatchMode(value: string | undefined): EmbeddingBatchMode | unde
 /**
  * Get embedding configuration with client-side caching
  */
-export async function getEmbeddingConfig(detailed = false): Promise<EmbeddingConfig> {
+export async function getEmbeddingConfig(
+  detailed = false,
+): Promise<EmbeddingConfig> {
   const now = Date.now();
-  if (configCache && (now - configCacheTime) < CONFIG_CACHE_TTL) {
+  if (configCache && now - configCacheTime < CONFIG_CACHE_TTL) {
     return configCache;
   }
 
-  const url = detailed ? `${API_BASE_URL}/embed/config?detailed=true` : `${API_BASE_URL}/embed/config`;
+  const url = detailed
+    ? `${API_BASE_URL}/embed/config?detailed=true`
+    : `${API_BASE_URL}/embed/config`;
   try {
     const response = await fetch(url, { headers: getHeaders() });
 
@@ -144,7 +156,7 @@ export async function getEmbeddingConfig(detailed = false): Promise<EmbeddingCon
     }
 
     // Type the parsed JSON as Partial<EmbeddingConfig> to handle potentially missing fields
-    const parsedConfig = await response.json() as Partial<EmbeddingConfig>;
+    const parsedConfig = (await response.json()) as Partial<EmbeddingConfig>;
 
     // Construct strongly typed object with safe defaults
     const unifiedConfig: EmbeddingConfig = {
@@ -152,12 +164,21 @@ export async function getEmbeddingConfig(detailed = false): Promise<EmbeddingCon
       kind: parsedConfig.kind || 'synthetic',
       // Prefer parsedConfig.provider first and only fall back to parsedConfig.kind when provider is undefined
       // Ensure proper type safety - narrow only when value is a known provider
-      provider: isValidProvider(parsedConfig.provider) ? parsedConfig.provider :
-                (parsedConfig.provider ? 'synthetic' : (isValidProvider(parsedConfig.kind) ? parsedConfig.kind : 'synthetic')),
+      provider: isValidProvider(parsedConfig.provider)
+        ? parsedConfig.provider
+        : parsedConfig.provider
+          ? 'synthetic'
+          : isValidProvider(parsedConfig.kind)
+            ? parsedConfig.kind
+            : 'synthetic',
       dimensions: parsedConfig.dimensions || 256,
       mode: parsedConfig.mode || 'simple',
       // Validate batchMode computation against EmbeddingBatchMode union
-      batchMode: validateBatchMode(parsedConfig.batch_mode) || validateBatchMode(parsedConfig.batchMode) || validateBatchMode(parsedConfig.mode) || 'simple',
+      batchMode:
+        validateBatchMode(parsedConfig.batch_mode) ||
+        validateBatchMode(parsedConfig.batchMode) ||
+        validateBatchMode(parsedConfig.mode) ||
+        'simple',
       batch_support: parsedConfig.batch_support || false,
       advanced_parallel: parsedConfig.advanced_parallel || false,
       embed_delay_ms: parsedConfig.embed_delay_ms || 0,
@@ -186,15 +207,22 @@ export async function getEmbeddingConfig(detailed = false): Promise<EmbeddingCon
     // Assert that canonical SIMD fields are present to surface misconfigurations immediately
     if (process.env.NODE_ENV === 'development') {
       if (unifiedConfig.simd_global_enabled === undefined) {
-        console.warn('[DEV] Warning: /embed/config is missing required field "simd_global_enabled". Backend should always include this field.');
+        console.warn(
+          '[DEV] Warning: /embed/config is missing required field "simd_global_enabled". Backend should always include this field.',
+        );
       }
       if (unifiedConfig.simd_router_enabled === undefined) {
-        console.warn('[DEV] Warning: /embed/config is missing required field "simd_router_enabled". Backend should always include this field.');
+        console.warn(
+          '[DEV] Warning: /embed/config is missing required field "simd_router_enabled". Backend should always include this field.',
+        );
       }
     }
 
     // Add logging for SIMD config loaded for debugging
-    console.log('SIMD config loaded:', { global: unifiedConfig.simd_global_enabled, router: unifiedConfig.simd_router_enabled });
+    console.log('SIMD config loaded:', {
+      global: unifiedConfig.simd_global_enabled,
+      router: unifiedConfig.simd_router_enabled,
+    });
 
     return unifiedConfig;
   } catch (error) {
@@ -223,10 +251,10 @@ export async function getEmbeddingConfig(detailed = false): Promise<EmbeddingCon
       performance: {
         expected_p95_ms: 100,
         expected_simd_improvement: 0,
-        memory_usage_gb: 2.0
+        memory_usage_gb: 2.0,
       },
       ollama_required: false,
-      cached: false
+      cached: false,
     };
     configCache = fallbackConfig;
     configCacheTime = now;
@@ -239,8 +267,18 @@ export async function getEmbeddingConfig(detailed = false): Promise<EmbeddingCon
  */
 export async function updateEmbeddingProvider(
   provider: string,
-  options?: { global_simd_enabled?: boolean; router_simd_enabled?: boolean; router_fallback_enabled?: boolean }
-): Promise<{ success: boolean; message: string; restart_required: boolean; prev_provider: string; new_provider: string }> {
+  options?: {
+    global_simd_enabled?: boolean;
+    router_simd_enabled?: boolean;
+    router_fallback_enabled?: boolean;
+  },
+): Promise<{
+  success: boolean;
+  message: string;
+  restart_required: boolean;
+  prev_provider: string;
+  new_provider: string;
+}> {
   const body: any = { provider };
   if (options?.global_simd_enabled !== undefined) {
     body.global_simd_enabled = options.global_simd_enabled;
@@ -259,8 +297,13 @@ export async function updateEmbeddingProvider(
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: 'Unknown error' }));
-    throw new Error(error.message || `Failed to update embedding provider: ${response.status}`);
+    const error = await response
+      .json()
+      .catch(() => ({ message: 'Unknown error' }));
+    throw new Error(
+      error.message ||
+        `Failed to update embedding provider: ${response.status}`,
+    );
   }
 
   const result = await response.json();
@@ -285,7 +328,7 @@ export async function updateEmbeddingProvider(
  * Update embedding batching mode ('simple' or 'advanced'). Does not change provider.
  */
 export async function updateEmbeddingBatchMode(
-  embed_mode: 'simple' | 'advanced'
+  embed_mode: 'simple' | 'advanced',
 ): Promise<{ success: boolean; message: string; restart_required: boolean }> {
   const body = { provider: undefined, embed_mode };
 
@@ -296,8 +339,13 @@ export async function updateEmbeddingBatchMode(
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: 'Unknown error' }));
-    throw new Error(error.message || `Failed to update embedding batch mode: ${response.status}`);
+    const error = await response
+      .json()
+      .catch(() => ({ message: 'Unknown error' }));
+    throw new Error(
+      error.message ||
+        `Failed to update embedding batch mode: ${response.status}`,
+    );
   }
 
   const result = await response.json();
@@ -316,12 +364,18 @@ export async function updateEmbeddingBatchMode(
 /**
  * Type guard to check if configuration is for router_cpu provider
  */
-export function isRouterConfig(config: EmbeddingConfig): config is EmbeddingConfig & {
+export function isRouterConfig(
+  config: EmbeddingConfig,
+): config is EmbeddingConfig & {
   provider: 'router_cpu';
   router_enabled: true;
   sector_models: Record<string, string>;
   cache_ttl_ms: number;
-  performance: { expected_p95_ms: number; expected_simd_improvement: number; memory_usage_gb: number };
+  performance: {
+    expected_p95_ms: number;
+    expected_simd_improvement: number;
+    memory_usage_gb: number;
+  };
   ollama_required: true;
 } {
   return config.provider === 'router_cpu' && config.router_enabled === true;
@@ -358,7 +412,7 @@ export const PROVIDER_OPTIONS: Array<{
   {
     value: 'gemini',
     label: 'Gemini',
-    description: 'Google\'s embedding API with competitive performance',
+    description: "Google's embedding API with competitive performance",
     icon: '🤖',
     color: 'green',
     requires: ['gemini_key'],
@@ -381,7 +435,8 @@ export const PROVIDER_OPTIONS: Array<{
   {
     value: 'router_cpu',
     label: 'Router CPU',
-    description: 'Single-expert-per-sector CPU router over Ollama embeddings, not full MoE (multi-expert deferred to later phase)',
+    description:
+      'Single-expert-per-sector CPU router over Ollama embeddings, not full MoE (multi-expert deferred to later phase)',
     icon: '🚀',
     color: 'red',
     requires: ['ollama'],
@@ -404,7 +459,8 @@ export const BATCH_MODE_OPTIONS: Array<{
   {
     value: 'advanced',
     label: 'Advanced Parallel',
-    description: 'Per-sector parallel embeddings (more accurate, higher latency)',
+    description:
+      'Per-sector parallel embeddings (more accurate, higher latency)',
   },
 ];
 
@@ -431,7 +487,9 @@ export interface EmbeddingTelemetryMeta {
  * Helper function to construct telemetry metadata from EmbeddingConfig.
  * Versioned to allow future schema changes with backwards compatibility.
  */
-export function buildEmbeddingTelemetry(config: EmbeddingConfig): EmbeddingTelemetryMeta {
+export function buildEmbeddingTelemetry(
+  config: EmbeddingConfig,
+): EmbeddingTelemetryMeta {
   return {
     meta_version: 1,
     provider: config.provider,

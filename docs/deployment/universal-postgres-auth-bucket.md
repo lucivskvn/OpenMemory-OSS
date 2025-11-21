@@ -54,7 +54,7 @@ This assumes the IdP issues `sub` claim containing the `user_id`. Use `jwt.claim
 
 ## Auth: Self-hosted vs Supabase GoTrue
 
-- `OM_AUTH_PROVIDER=jwt`: Use (must be explicitly set) when you manage your own OIDC provider. Set OM_JWT_{SECRET,ISSUER,AUDIENCE}. When `OM_AUTH_PROVIDER=jwt` is set without `OM_JWT_SECRET`, development mode logs a warning and falls back to API-key-only auth (in development mode) or exits with code 1 (in production-like modes), unless `OM_TEST_MODE=1` is set, which suppresses the hard process exit during automated tests. Unset OM_AUTH_PROVIDER defaults to API-key-only authentication.
+- `OM_AUTH_PROVIDER=jwt`: Use (must be explicitly set) when you manage your own OIDC provider. Set OM*JWT*{SECRET,ISSUER,AUDIENCE}. When `OM_AUTH_PROVIDER=jwt` is set without `OM_JWT_SECRET`, development mode logs a warning and falls back to API-key-only auth (in development mode) or exits with code 1 (in production-like modes), unless `OM_TEST_MODE=1` is set, which suppresses the hard process exit during automated tests. Unset OM_AUTH_PROVIDER defaults to API-key-only authentication.
 - `OM_AUTH_PROVIDER=supabase`: Use Supabase GoTrue for auth. Set `OM_PG_CONNECTION_STRING` to Supabase DB and hook into Supabase Auth config. Ensure RLS is configured for row-level user isolation.
 
 Best practices:
@@ -90,8 +90,16 @@ OM_BUCKET_NAME=uploads
 S3 SDK example (AWS SDK v3):
 
 ```js
-import { S3Client } from "@aws-sdk/client-s3";
-const client = new S3Client({ region: process.env.OM_BUCKET_REGION, endpoint: process.env.OM_BUCKET_ENDPOINT, forcePathStyle: process.env.OM_BUCKET_FORCE_PATH_STYLE === 'true', credentials: { accessKeyId: process.env.OM_BUCKET_ACCESS_KEY, secretAccessKey: process.env.OM_BUCKET_SECRET_KEY } });
+import { S3Client } from '@aws-sdk/client-s3';
+const client = new S3Client({
+  region: process.env.OM_BUCKET_REGION,
+  endpoint: process.env.OM_BUCKET_ENDPOINT,
+  forcePathStyle: process.env.OM_BUCKET_FORCE_PATH_STYLE === 'true',
+  credentials: {
+    accessKeyId: process.env.OM_BUCKET_ACCESS_KEY,
+    secretAccessKey: process.env.OM_BUCKET_SECRET_KEY,
+  },
+});
 ```
 
 Security and lifecycle:

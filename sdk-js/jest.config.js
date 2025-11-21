@@ -6,10 +6,6 @@ module.exports = {
   transform: {
     '^.+\\.ts$': 'ts-jest',
   },
-  collectCoverageFrom: [
-    'src/**/*.ts',
-    '!src/**/*.test.ts',
-    '!src/**/*.d.ts',
-  ],
-  setupFilesAfterEnv: ['<rootDir>/src/test-setup.ts']
-}
+  collectCoverageFrom: ['src/**/*.ts', '!src/**/*.test.ts', '!src/**/*.d.ts'],
+  setupFilesAfterEnv: ['<rootDir>/src/test-setup.ts'],
+};

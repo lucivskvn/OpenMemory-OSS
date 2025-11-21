@@ -57,6 +57,7 @@ Expect all checks to pass (green ✅). If a check fails, the script prints detai
   ```
 
 - Streaming verification (manual)
+
   1. Start backend: `cd backend && bun run dev` (port 8080)
   2. Start dashboard: `cd dashboard && bun run dev` (port 3000)
   3. Open `http://localhost:3000/chat`
@@ -93,11 +94,13 @@ OM_ENABLE_LLM_TESTS=1 bun test tests/dashboard/ai-sdk-streaming.test.ts
 ```
 
 Synthetic tests validate:
+
 - SSE format compatibility
 - Telemetry and memory marker parsing
 - API endpoint response structure
 
 Real LLM tests validate:
+
 - End-to-end OpenAI API connectivity
 - `toUIMessageStreamResponse` streaming format
 - Performance metrics (TTFT, throughput)
@@ -108,6 +111,7 @@ Use real tests sparingly to avoid API costs; they are recommended for pull reque
 ## Common Issues & Fixes
 
 - `Cannot find module 'ai/react'`
+
   - Run `bun install --frozen-lockfile` inside `dashboard`
   - Remove node_modules and lockfile then reinstall:
 

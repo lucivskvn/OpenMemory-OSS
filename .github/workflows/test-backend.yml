@@ -19,7 +19,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.3.2"
+          bun-version: '1.3.2'
 
       - name: Log Bun and bunfig
         run: |
@@ -72,13 +72,13 @@ jobs:
     runs-on: ubuntu-latest
     needs: test-backend
     env:
-      OM_METADATA_BACKEND: "postgres"
-      OM_PG_HOST: "127.0.0.1"
-      OM_PG_PORT: "5432"
-      OM_PG_DB: "openmemory"
-      OM_PG_USER: "om"
-      OM_PG_PASSWORD: "om_pass"
-      OM_PG_SCHEMA: "public"
+      OM_METADATA_BACKEND: 'postgres'
+      OM_PG_HOST: '127.0.0.1'
+      OM_PG_PORT: '5432'
+      OM_PG_DB: 'openmemory'
+      OM_PG_USER: 'om'
+      OM_PG_PASSWORD: 'om_pass'
+      OM_PG_SCHEMA: 'public'
     services:
       postgres:
         image: postgres:15
@@ -100,7 +100,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.3.2"
+          bun-version: '1.3.2'
 
       - name: Log Bun and bunfig
         run: |
@@ -207,4 +207,4 @@ jobs:
       - name: Skip Postgres tests message
         if: steps.check_pg.outputs.has_pg == 'false'
         run: |
-          echo "Skipping Postgres-backed tests because Bun Postgres client not available in this runner. To force, use a Bun runtime with Postgres support or set up a runner that includes Bun Postgres." 
+          echo "Skipping Postgres-backed tests because Bun Postgres client not available in this runner. To force, use a Bun runtime with Postgres support or set up a runner that includes Bun Postgres."

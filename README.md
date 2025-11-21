@@ -33,6 +33,7 @@ Unlike traditional vector databases, OpenMemory uses a cognitive architecture. I
 - **Framework agnostic** - Works with any LLM or agent system
 
 ### Uses
+
 **We are featuring projects that use OpenMemory here. To get your project displayed, please email nullureq@gmail.com**
 
 ### VS Code Extension
@@ -76,7 +77,7 @@ This approach improves recall accuracy while reducing costs.
 | **Throughput (QPS)**                     | **338 QPS avg (8 workers, P95 103 ms)** ✓                   | ~180 QPS (reported)                | ~220 QPS (on-prem)              | ~150 QPS                      | ~180 QPS                   | ~140 QPS                    | ~250 QPS typical                              |
 | **Recall @5 (Accuracy)**                 | **95 % recall (synthetic + hybrid)** ✓                      | 91 %                               | 93 %                            | 88–90 %                       | 90 %                       | Session-only                | 85–90 %                                       |
 | **Decay Stability (5 min cycle)**        | Δ = **+30 % → +56 %** ✓ (convergent decay)                  | TTL expiry only                    | Manual pruning only             | Manual TTL                    | ❌ None                    | ❌ None                     | ❌ None                                       |
-| **Cross-sector Recall Test**             | ✅ Passed ✓ (emotional ↔ semantic 5/5 matches)              | ❌ N/A                             | ⚠️ Keyword-only                 | ❌ N/A                        | ❌ N/A                     | ❌ N/A                      | ❌ N/A                                        |
+| **Cross-sector Recall Test**             | ✅ Passed ✓ (emotional ↔ semantic 5/5 matches)             | ❌ N/A                             | ⚠️ Keyword-only                 | ❌ N/A                        | ❌ N/A                     | ❌ N/A                      | ❌ N/A                                        |
 | **Scalability (ms / item)**              | **7.9 ms/item @10k+ entries** ✓                             | 32 ms/item                         | 25 ms/item                      | 28 ms/item                    | 40 ms (est.)               | 20 ms (local)               | 18 ms (optimized)                             |
 | **Consistency (2863 samples)**           | ✅ Stable ✓ (0 variance >95%)                               | ⚠️ Medium variance                 | ⚠️ Moderate variance            | ⚠️ Inconsistent               | ❌ Volatile                | ⚠️ Session-scoped           | ⚠️ Backend dependent                          |
 | **Decay Δ Trend**                        | **Stable decay → equilibrium after 2 cycles** ✓             | TTL drop only                      | Manual decay                    | TTL only                      | ❌ N/A                     | ❌ N/A                      | ❌ N/A                                        |
@@ -92,18 +93,18 @@ This approach improves recall accuracy while reducing costs.
 
 ### ✅ **OpenMemory Test Highlights (Nov 2025, LongMemEval)**
 
-| **Test Type**              | **Result Summary**                         |
-| -------------------------- | ------------------------------------------ |
-| Recall@5                   | 100.0% (avg 6.7ms)                         |
-| Throughput (8 workers)     | 338.4 QPS (avg 22ms, P95 203ms)            |
-| Decay Stability (5 min)    | Δ +30% → +56% (convergent)                 |
+| **Test Type**              | **Result Summary**                          |
+| -------------------------- | ------------------------------------------- |
+| Recall@5                   | 100.0% (avg 6.7ms)                          |
+| Throughput (8 workers)     | 338.4 QPS (avg 22ms, P95 203ms)             |
+| Decay Stability (5 min)    | Δ +30% → +56% (convergent)                  |
 | Cross-sector Recall        | Passed (semantic ↔ emotional, 5/5 matches) |
-| Scalability Test           | 7.9 ms/item (stable beyond 10k entries)    |
-| Consistency (2863 samples) | Stable (no variance drift)                 |
-| Decay Model                | Adaptive exponential decay per sector      |
-| Memory Reinforcement       | Coactivation-weighted salience updates     |
-| Embedding Mode             | Synthetic + Gemini hybrid                  |
-| User Link                  | ✅ `user_id` association confirmed         |
+| Scalability Test           | 7.9 ms/item (stable beyond 10k entries)     |
+| Consistency (2863 samples) | Stable (no variance drift)                  |
+| Decay Model                | Adaptive exponential decay per sector       |
+| Memory Reinforcement       | Coactivation-weighted salience updates      |
+| Embedding Mode             | Synthetic + Gemini hybrid                   |
+| User Link                  | ✅ `user_id` association confirmed          |
 
 ### Summary
 
@@ -172,8 +173,7 @@ If Bun is not available, you can fall back to `npx`/`npm`/`node` locally, though
 
 - Note for Mint 22 / Ubuntu 24.04: Native modules (e.g., crypto/OpenSSL-linked) require `build-essential` and `libssl-dev` via apt; install if `bun install` fails with header errors. Integrates with AGENTS.md Bun patterns (@types/bun, tsconfig.json) and Podman rootless setup.
 
-> [!NOTE]
-> **New in v1.3.1:** Bun.file() migration for extract/ingest yields ~2–3× faster document processing. CI has been hardened with SHA-pinned actions, Trivy scanning, and SLSA attestations. See [CHANGELOG.md](CHANGELOG.md) for details.
+> [!NOTE] > **New in v1.3.1:** Bun.file() migration for extract/ingest yields ~2–3× faster document processing. CI has been hardened with SHA-pinned actions, Trivy scanning, and SLSA attestations. See [CHANGELOG.md](CHANGELOG.md) for details.
 
 For additional CI hardening and GitHub Actions best practices, see `docs/security/github-actions-hardening.md` which outlines SHA pins, provenance, and SLSA attestation recommendations.
 
@@ -228,8 +228,7 @@ docker compose up --build -d
 
 This starts OpenMemory on port 8080. Data persists in `/data/openmemory.sqlite`.
 
-> [!NOTE]
-> **Linux Mint 22 Users**: Linux Mint 22 (Ubuntu 24.04 base) is a supported deployment path with optimized setup. Prefer Podman for rootless container management. See `docs/deployment/linux-mint-22-setup.md` for Podman setup, GPU passthrough, and Bun v1.3.2 pinning.
+> [!NOTE] > **Linux Mint 22 Users**: Linux Mint 22 (Ubuntu 24.04 base) is a supported deployment path with optimized setup. Prefer Podman for rootless container management. See `docs/deployment/linux-mint-22-setup.md` for Podman setup, GPU passthrough, and Bun v1.3.2 pinning.
 
 ### Ollama Sidecar (Local Models)
 
@@ -352,7 +351,7 @@ OpenMemory uses Hierarchical Memory Decomposition (HMD):
 - Backend: TypeScript on Bun v1.3.2 (Bun.serve, Bun.file(), Bun.password)
 - Storage: SQLite or PostgreSQL
 - Security: GitHub Actions with SHA-pinned actions, OIDC-ready workflows, Trivy + SLSA attestations (see `docs/security/github-actions-hardening.md`)
-- Note: The backend supports PostgreSQL when requested. It prefers Bun's native Postgres client when available; if Bun Postgres isn't present in the runtime, the backend will fall back to the Node `pg` package at runtime (the repository already includes `pg` as a fallback dependency in `backend/package.json`). To enable Postgres-backed storage set `OM_METADATA_BACKEND=postgres` and consult `backend/README.md` for operational details and CI configuration. Only simple single-host TCP connection strings are supported via OM_PG_CONNECTION_STRING; multi-host or socket-style URIs are not supported and fall back to discrete OM_PG_* environment variables.
+- Note: The backend supports PostgreSQL when requested. It prefers Bun's native Postgres client when available; if Bun Postgres isn't present in the runtime, the backend will fall back to the Node `pg` package at runtime (the repository already includes `pg` as a fallback dependency in `backend/package.json`). To enable Postgres-backed storage set `OM_METADATA_BACKEND=postgres` and consult `backend/README.md` for operational details and CI configuration. Only simple single-host TCP connection strings are supported via OM*PG_CONNECTION_STRING; multi-host or socket-style URIs are not supported and fall back to discrete OM_PG*\* environment variables.
 - Embeddings: E5/BGE/OpenAI/Gemini/Ollama/router_cpu (single-expert-per-sector router over Ollama models, not an SB-MoE or Granit/Liquid MoE implementation)
 - Scheduler: Bun timers (setInterval) for decay and maintenance
 
@@ -454,12 +453,12 @@ OpenMemory provides comprehensive SQLite backup functionality with zero-downtime
 
 ### API Endpoints
 
-| Method | Endpoint | Description |
-| ------ | -------- | ----------- |
-| `POST` | `/admin/backup` | Trigger immediate backup (optional cloud upload) |
-| `GET` | `/admin/backup/list` | List available backups (local + cloud) |
-| `POST` | `/admin/backup/restore` | Restore from backup with integrity verification |
-| `GET` | `/admin/backup/status` | Check backup health (last backup, disk space, WAL size) |
+| Method | Endpoint                | Description                                             |
+| ------ | ----------------------- | ------------------------------------------------------- |
+| `POST` | `/admin/backup`         | Trigger immediate backup (optional cloud upload)        |
+| `GET`  | `/admin/backup/list`    | List available backups (local + cloud)                  |
+| `POST` | `/admin/backup/restore` | Restore from backup with integrity verification         |
+| `GET`  | `/admin/backup/status`  | Check backup health (last backup, disk space, WAL size) |
 
 ### Dashboard Integration
 
@@ -520,6 +519,7 @@ curl http://localhost:8080/admin/backup/status \
 ```
 
 Response:
+
 ```json
 {
   "lastBackup": "2025-01-01T02:00:00.000Z",
@@ -537,13 +537,13 @@ Response:
 
 ### Performance Characteristics
 
-| Operation | Typical Time | Storage Impact |
-| ---------- | ------------ | -------------- |
-| Full backup | <2s (10k records) | Database size + WAL |
-| SQL export | <5s | 30-50% of DB size |
-| VACUUM INTO | <10s | Defragmented size |
-| Restore | <3s | Atomic replacement |
-| Integrity check | <1s | No additional storage |
+| Operation       | Typical Time      | Storage Impact        |
+| --------------- | ----------------- | --------------------- |
+| Full backup     | <2s (10k records) | Database size + WAL   |
+| SQL export      | <5s               | 30-50% of DB size     |
+| VACUUM INTO     | <10s              | Defragmented size     |
+| Restore         | <3s               | Atomic replacement    |
+| Integrity check | <1s               | No additional storage |
 
 ### Disaster Recovery
 
@@ -605,6 +605,7 @@ bun index.js --from mem0 --api-key YOUR_KEY --verify
 - ✅ Built-in verification mode
 - ✅ Progress tracking and resume support
 - ✅ JSONL export format for portability
+
 ### Documentation
 
 - For code-level docs and JSDoc/TSDoc guidelines see `docs/development/jsdoc-guidelines.md`.
@@ -628,7 +629,6 @@ bun index.js --from supermemory --api-key SM_KEY --rate-limit 25
 ```
 
 ---
-
 
 OpenMemory includes a command-line tool for quick memory operations.
 

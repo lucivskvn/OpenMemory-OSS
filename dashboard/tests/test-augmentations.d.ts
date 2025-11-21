@@ -4,14 +4,14 @@
 import '@testing-library/jest-dom';
 
 declare global {
-    namespace jest {
-        interface Matchers<R> {
-            toBeInTheDocument(): R;
-            toBeDisabled(): R;
-            toHaveValue(expected?: any): R;
-            toHaveTextContent(expected: string | RegExp): R;
-        }
+  namespace jest {
+    interface Matchers<R> {
+      toBeInTheDocument(): R;
+      toBeDisabled(): R;
+      toHaveValue(expected?: any): R;
+      toHaveTextContent(expected: string | RegExp): R;
     }
+  }
 }
 
-export { };
+export {};

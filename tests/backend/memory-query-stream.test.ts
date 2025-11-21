@@ -10,7 +10,7 @@ describe('Memory query SSE', () => {
     // where global `fetch` is overridden by the harness. Use `OM_NO_AUTO_START`
     // to opt out of automatic start and control lifecycle programmatically.
     process.env.OM_NO_AUTO_START = 'true';
-    const mod = await import('../../backend/src/server/index.ts')
+    const mod = await import('../../backend/src/server/index.ts');
     let srv: any = null;
     if (typeof mod.startServer === 'function') {
       // Ensure auth is disabled for this lightweight SSE test to avoid POST
@@ -19,7 +19,9 @@ describe('Memory query SSE', () => {
       // No need to persist the live server config — use the auth seam to
       // disable enforcement at runtime for this unit test.
       process.env.OM_API_KEYS_ENABLED = 'false';
-      const { setAuthApiKeyForTests } = await import('../../backend/src/server/middleware/auth');
+      const { setAuthApiKeyForTests } = await import(
+        '../../backend/src/server/middleware/auth'
+      );
       setAuthApiKeyForTests(undefined);
 
       // Avoid waiting for /health here to prevent failures when the test
@@ -27,13 +29,16 @@ describe('Memory query SSE', () => {
       // by `app.listen` and returns the bound port in `srv.port`.
       srv = await mod.startServer({ port: 0, waitUntilReady: false });
     }
-    const port = srv?.port || process.env.OM_PORT || process.env.PORT || '8080'
+    const port = srv?.port || process.env.OM_PORT || process.env.PORT || '8080';
     const res = await fetch(`http://127.0.0.1:${port}/memory/query`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+      },
       body: JSON.stringify({ query: 'test sse streaming', k: 3 }),
-    })
-    expect(res.status).toBe(200)
+    });
+    expect(res.status).toBe(200);
     // Give the test more time in CI for streaming responses
     // The streaming / SSE behavior is validated within the same async test
     // body below so we remain inside the `async` function scope.
@@ -57,11 +62,15 @@ describe('Memory query SSE', () => {
     } else {
       // Fallback: some environments may return JSON instead of SSE; verify shape
       let d: any = {};
-      try { const text = await res.text(); d = JSON.parse(text); } catch (e) { d = {}; }
+      try {
+        const text = await res.text();
+        d = JSON.parse(text);
+      } catch (e) {
+        d = {};
+      }
       expect(Array.isArray(d.matches)).toBeTruthy();
     }
     // Teardown server after test to avoid port exhaustion in CI.
     if (srv && typeof srv.close === 'function') await srv.close();
   }, 20000);
-
 });

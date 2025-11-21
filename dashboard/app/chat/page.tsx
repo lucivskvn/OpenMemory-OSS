@@ -1,11 +1,11 @@
-"use client"
+'use client';
 
-export const dynamic = 'force-dynamic'
+export const dynamic = 'force-dynamic';
 
-import nextDynamic from 'next/dynamic'
+import nextDynamic from 'next/dynamic';
 
-const ChatInner = nextDynamic(() => import('./ChatInner'), { ssr: false })
+const ChatInner = nextDynamic(() => import('./ChatInner'), { ssr: false });
 
 export default function Page() {
-    return <ChatInner />
+  return <ChatInner />;
 }

@@ -53,6 +53,7 @@ bun run verify:bun
 ```
 
 Expected output:
+
 ```
 1.3.2
 Next.js 16.0.1
@@ -88,6 +89,7 @@ sudo apt install -y build-essential libssl-dev pkg-config
 **Browser Compatibility:**
 
 Tested browsers on Linux Mint 22:
+
 - Firefox 115+ (default Mint browser)
 - Chrome/Chromium 120+
 - Edge 120+
@@ -108,6 +110,7 @@ bun run start
 ```
 
 **Build Output:**
+
 - Static assets: `dashboard/.next/static/`
 - Server bundle: `dashboard/.next/server/`
 - Standalone mode: Not enabled (uses standard Next.js output)
@@ -147,14 +150,17 @@ bun --version  # Should be >= 1.3.2
 **Hardware:** Ryzen 5 5600H, 16GB RAM
 
 **Development Server Startup:**
+
 - Node.js: ~4.2 seconds
 - Bun: ~1.8 seconds (~57% faster)
 
 **Production Build:**
+
 - Node.js: ~52 seconds
 - Bun: ~24 seconds (~54% faster)
 
 **Memory Usage (Dev Server):**
+
 - Node.js: ~420 MB
 - Bun: ~280 MB (~33% less)
 

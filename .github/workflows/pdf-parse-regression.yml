@@ -3,34 +3,37 @@ name: PDF-Parse Regression
 on:
   schedule:
     # Run daily to catch upstream pdf-parse regressions
-    - cron: "0 3 * * *"
+    - cron: '0 3 * * *'
   workflow_dispatch: {}
 
 jobs:
   pdf-parse-regression:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        run: |
+          curl -fsSL https://bun.sh/install | bash -s -- --yes
+          echo "$HOME/.bun/bin" >> $GITHUB_PATH
+
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          bun install --non-interactive
+
       - name: Run pdf-parse regression test (integration fixtures)
         env:
           RUN_PDF_INTEGRATION: '1'
         run: |
-          export PATH="$HOME/.bun/bin:$PATH"
           cd backend
           # Run the established integration test that uses committed fixtures
           bun test ../tests/backend/extract-pdf-integration.test.ts
-        run: |
-          curl -fsSL https://bun.sh/install | bash -s -- --yes
-          echo "::add-path::$HOME/.bun/bin"
-          export PATH="$HOME/.bun/bin:$PATH"
-
-      - name: Install backend dependencies
-        run: |
-          export PATH="$HOME/.bun/bin:$PATH"
-          cd backend
-          bun install --non-interactive
 
       - name: Run pdf-parse regression test
         env:
-          RUN_PDF_INTEGRATION: "1"
+          RUN_PDF_INTEGRATION: '1'
         run: |
-          export PATH="$HOME/.bun/bin:$PATH"
           cd backend
           bun test ../tests/backend/extract-pdf-regression.test.ts

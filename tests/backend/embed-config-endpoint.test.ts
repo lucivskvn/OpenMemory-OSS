@@ -1,4 +1,12 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test';
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  afterEach,
+} from 'bun:test';
 
 // Ensure ephemeral ports and test-mode behavior are allowed before importing server
 process.env.OM_TEST_MODE = process.env.OM_TEST_MODE ?? '1';
@@ -91,7 +99,9 @@ describe('Embed Config Endpoint', () => {
     expect(basicData).not.toHaveProperty('system_info'); // Basic should not have detailed fields
 
     // Immediate call with detailed should not be cached (different cache key) and include detailed fields
-    const detailedResponse = await fetch(`${baseUrl}/embed/config?detailed=true`);
+    const detailedResponse = await fetch(
+      `${baseUrl}/embed/config?detailed=true`,
+    );
     expect(detailedResponse.ok).toBe(true);
     const detailedData = await detailedResponse.json();
     expect(detailedData).toHaveProperty('kind');
@@ -108,9 +118,9 @@ describe('Embed Config Endpoint', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': 'test-api-key-123'  // Authorized header for main tests
+        'x-api-key': 'test-api-key-123', // Authorized header for main tests
       },
-      body: JSON.stringify({ mode: 'invalid_mode' })
+      body: JSON.stringify({ mode: 'invalid_mode' }),
     });
 
     expect(response.ok).toBe(false);
@@ -126,13 +136,13 @@ describe('Embed Config Endpoint', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': 'test-api-key-123'  // Authorized header for main tests
+        'x-api-key': 'test-api-key-123', // Authorized header for main tests
       },
       body: JSON.stringify({
         provider: 'synthetic',
         router_simd_enabled: false,
-        router_fallback_enabled: false
-      })
+        router_fallback_enabled: false,
+      }),
     });
 
     expect(response.ok).toBe(true);
@@ -153,11 +163,11 @@ describe('Embed Config Endpoint', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': 'test-api-key-123'
+        'x-api-key': 'test-api-key-123',
       },
       body: JSON.stringify({
-        embed_mode: 'simple'
-      })
+        embed_mode: 'simple',
+      }),
     });
 
     expect(response.ok).toBe(true);
@@ -180,11 +190,11 @@ describe('Embed Config Endpoint', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': 'test-api-key-123'
+        'x-api-key': 'test-api-key-123',
       },
       body: JSON.stringify({
-        embed_mode: 'invalid'
-      })
+        embed_mode: 'invalid',
+      }),
     });
 
     expect(response.status).toBe(400);
@@ -202,11 +212,11 @@ describe('Embed Config Endpoint', () => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': 'test-api-key-123'
+        'x-api-key': 'test-api-key-123',
       },
       body: JSON.stringify({
-        provider: 'moe-cpu'
-      })
+        provider: 'moe-cpu',
+      }),
     });
 
     expect(response.status).toBe(400);
@@ -225,17 +235,17 @@ describe('Embed Config Endpoint', () => {
     const responses = await Promise.all([
       fetch(`${baseUrl}/embed/config`),
       fetch(`${baseUrl}/embed/config`),
-      fetch(`${baseUrl}/embed/config`)
+      fetch(`${baseUrl}/embed/config`),
     ]);
 
     // All should be successful
-    responses.forEach(response => {
+    responses.forEach((response) => {
       expect(response.ok).toBe(true);
     });
 
     // All responses should have similar data structure (excluding cached flags which may differ)
-    const data = await Promise.all(responses.map(r => r.json()));
-    data.forEach(responseData => {
+    const data = await Promise.all(responses.map((r) => r.json()));
+    data.forEach((responseData) => {
       expect(responseData).toHaveProperty('kind');
       expect(responseData).toHaveProperty('dimensions');
       expect(responseData.kind).toBe('synthetic');
@@ -284,43 +294,45 @@ describe('Embed Config Endpoint', () => {
       // If router is active, router-specific fields should be present
       if (data.kind === 'router_cpu') {
         expect(data).toHaveProperty('router_enabled');
-      expect(typeof data.router_enabled).toBe('boolean');
-      expect(data.router_enabled).toBe(true);
+        expect(typeof data.router_enabled).toBe('boolean');
+        expect(data.router_enabled).toBe(true);
 
-      expect(data).toHaveProperty('simd_enabled');
-      expect(typeof data.simd_enabled).toBe('boolean');
-      expect(data.simd_enabled).toBe(true);
+        expect(data).toHaveProperty('simd_enabled');
+        expect(typeof data.simd_enabled).toBe('boolean');
+        expect(data.simd_enabled).toBe(true);
 
-      expect(data).toHaveProperty('fallback_enabled');
-      expect(typeof data.fallback_enabled).toBe('boolean');
-      expect(data.fallback_enabled).toBe(true);
+        expect(data).toHaveProperty('fallback_enabled');
+        expect(typeof data.fallback_enabled).toBe('boolean');
+        expect(data.fallback_enabled).toBe(true);
 
-      expect(data).toHaveProperty('cache_ttl_ms');
-      expect(typeof data.cache_ttl_ms).toBe('number');
-      expect(data.cache_ttl_ms).toBeGreaterThan(0);
+        expect(data).toHaveProperty('cache_ttl_ms');
+        expect(typeof data.cache_ttl_ms).toBe('number');
+        expect(data.cache_ttl_ms).toBeGreaterThan(0);
 
-      expect(data).toHaveProperty('sector_models');
-      expect(typeof data.sector_models).toBe('object');
-      expect(data.sector_models).not.toBeNull();
+        expect(data).toHaveProperty('sector_models');
+        expect(typeof data.sector_models).toBe('object');
+        expect(data.sector_models).not.toBeNull();
 
-      // Sector models object should contain expected fields
-      expect(data.sector_models.episodic).toBeDefined();
-      expect(data.sector_models.semantic).toBeDefined();
-      expect(data.sector_models.procedural).toBeDefined();
-      expect(data.sector_models.emotional).toBeDefined();
-      expect(data.sector_models.reflective).toBeDefined();
+        // Sector models object should contain expected fields
+        expect(data.sector_models.episodic).toBeDefined();
+        expect(data.sector_models.semantic).toBeDefined();
+        expect(data.sector_models.procedural).toBeDefined();
+        expect(data.sector_models.emotional).toBeDefined();
+        expect(data.sector_models.reflective).toBeDefined();
 
-      // Performance field should be present for router_cpu
+        // Performance field should be present for router_cpu
         expect(data).toHaveProperty('performance');
-      expect(typeof data.performance).toBe('object');
-      expect(data.performance).toHaveProperty('expected_p95_ms');
-      expect(typeof data.performance.expected_p95_ms).toBe('number');
-      expect(data.performance).toHaveProperty('expected_simd_improvement');
-      expect(typeof data.performance.expected_simd_improvement).toBe('number');
-      expect(data.performance).toHaveProperty('memory_usage_gb');
-      expect(typeof data.performance.memory_usage_gb).toBe('number');
+        expect(typeof data.performance).toBe('object');
+        expect(data.performance).toHaveProperty('expected_p95_ms');
+        expect(typeof data.performance.expected_p95_ms).toBe('number');
+        expect(data.performance).toHaveProperty('expected_simd_improvement');
+        expect(typeof data.performance.expected_simd_improvement).toBe(
+          'number',
+        );
+        expect(data.performance).toHaveProperty('memory_usage_gb');
+        expect(typeof data.performance.memory_usage_gb).toBe('number');
 
-      // Ollama required field for router_cpu
+        // Ollama required field for router_cpu
         expect(data).toHaveProperty('ollama_required');
         expect(typeof data.ollama_required).toBe('boolean');
         expect(data.ollama_required).toBe(true);
@@ -328,7 +340,6 @@ describe('Embed Config Endpoint', () => {
         // When the provider is synthetic (fallback), router-specific fields will be absent
         expect(data).not.toHaveProperty('router_enabled');
       }
-
     } finally {
       // Restore original environment
       process.env.OM_EMBED_KIND = originalEmbedKind;
@@ -370,7 +381,9 @@ describe('Embed Config Endpoint', () => {
         process.env.OM_API_KEY = await crypto.hashPassword(TEST_API_KEY);
         // Also set test seam on the auth middleware so the emitter reads
         // the hashed API key from tests without restarting the process.
-        const { setAuthApiKeyForTests } = await import('../../backend/src/server/middleware/auth');
+        const { setAuthApiKeyForTests } = await import(
+          '../../backend/src/server/middleware/auth'
+        );
         // Ensure the middleware reads the current hashed API key from tests.
         // When disabling auth, explicitly clear the runtime seam so previous
         // hashed keys don't remain in auth_config between restarts.
@@ -378,7 +391,9 @@ describe('Embed Config Endpoint', () => {
       } else {
         process.env.OM_API_KEY = undefined;
         // Explicitly clear the runtime test seam when disabling auth.
-        const { setAuthApiKeyForTests } = await import('../../backend/src/server/middleware/auth');
+        const { setAuthApiKeyForTests } = await import(
+          '../../backend/src/server/middleware/auth'
+        );
         setAuthApiKeyForTests(undefined);
       }
       authEnabled = enableAuth;
@@ -417,7 +432,7 @@ describe('Embed Config Endpoint', () => {
         const response = await fetch(`${baseUrl}/embed/config`, {
           method: 'POST',
           headers: this.getHeaders(),
-          body: JSON.stringify(payload)
+          body: JSON.stringify(payload),
         });
 
         if (!response.ok) {
@@ -426,7 +441,7 @@ describe('Embed Config Endpoint', () => {
         }
 
         return response.json();
-      }
+      },
     };
 
     beforeAll(() => {
@@ -483,7 +498,7 @@ describe('Embed Config Endpoint', () => {
         const response = await fetch(`${baseUrl}/embed/config`, {
           method: 'POST',
           headers: headers,
-          body: JSON.stringify({ provider: 'synthetic' }) // Use provider field
+          body: JSON.stringify({ provider: 'synthetic' }), // Use provider field
         });
 
         expect(response.ok).toBe(true);
@@ -494,13 +509,22 @@ describe('Embed Config Endpoint', () => {
 
       it('concurrent authenticated requests handle race conditions properly', async () => {
         const concurrentOperations = 10;
-        const testProviders = ['synthetic', 'openai', 'gemini', 'ollama', 'router_cpu'];
+        const testProviders = [
+          'synthetic',
+          'openai',
+          'gemini',
+          'ollama',
+          'router_cpu',
+        ];
 
         // Launch concurrent authenticated requests
-        const promises = Array.from({ length: concurrentOperations }, async (_, i) => {
-          const provider = testProviders[i % testProviders.length];
-          return mockDashboardApiClient.updateEmbeddingMode(provider);
-        });
+        const promises = Array.from(
+          { length: concurrentOperations },
+          async (_, i) => {
+            const provider = testProviders[i % testProviders.length];
+            return mockDashboardApiClient.updateEmbeddingMode(provider);
+          },
+        );
 
         // All concurrent requests should succeed without race condition errors
         const results = await Promise.all(promises);
@@ -512,9 +536,13 @@ describe('Embed Config Endpoint', () => {
         });
 
         // Verify no authentication failures in concurrent scenario
-        expect(results.every(r => r.status === 'configuration_updated')).toBe(true);
+        expect(results.every((r) => r.status === 'configuration_updated')).toBe(
+          true,
+        );
 
-        console.log(`Concurrent auth requests: ${results.length} successful, 0 failures`);
+        console.log(
+          `Concurrent auth requests: ${results.length} successful, 0 failures`,
+        );
       });
     });
 
@@ -531,7 +559,7 @@ describe('Embed Config Endpoint', () => {
         const response = await fetch(`${baseUrl}/embed/config`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ provider: 'synthetic' })
+          body: JSON.stringify({ provider: 'synthetic' }),
         });
 
         expect(response.status).toBe(401);
@@ -547,17 +575,20 @@ describe('Embed Config Endpoint', () => {
           INVALID_API_KEY,
           'completely-wrong-key',
           'partial-' + TEST_API_KEY.substring(5),
-          'expired-api-key-999'
+          'expired-api-key-999',
         ];
 
         for (const invalidKey of invalidKeyTests) {
           const response = await fetch(`${baseUrl}/embed/config`, {
             method: 'POST',
             headers: mockDashboardApiClient.getHeadersWithKey(invalidKey),
-            body: JSON.stringify({ provider: 'openai' })
+            body: JSON.stringify({ provider: 'openai' }),
           });
 
-          expect(response.status, `Invalid key "${invalidKey}" should be rejected`).toBe(403);
+          expect(
+            response.status,
+            `Invalid key "${invalidKey}" should be rejected`,
+          ).toBe(403);
 
           const error = await response.json();
           // Invalid API key -> invalid_api_key
@@ -568,26 +599,24 @@ describe('Embed Config Endpoint', () => {
       });
 
       it('401 unauthorized for empty/null/undefined API key tokens', async () => {
-        const emptyTokenTests = [
-          EMPTY_API_KEY,
-          undefined,
-          null,
-          ''
-        ];
+        const emptyTokenTests = [EMPTY_API_KEY, undefined, null, ''];
 
         for (const [i, emptyToken] of emptyTokenTests.entries()) {
           const headers = {
             'Content-Type': 'application/json',
-            ...(emptyToken && { 'x-api-key': emptyToken })
+            ...(emptyToken && { 'x-api-key': emptyToken }),
           };
 
           const response = await fetch(`${baseUrl}/embed/config`, {
             method: 'POST',
             headers,
-            body: JSON.stringify({ provider: 'gemini' })
+            body: JSON.stringify({ provider: 'gemini' }),
           });
 
-          expect(response.status, `Empty token test ${i + 1} should be rejected`).toBe(401);
+          expect(
+            response.status,
+            `Empty token test ${i + 1} should be rejected`,
+          ).toBe(401);
 
           const error = await response.json();
           expect(error.error_code).toBe('authentication_required');
@@ -601,8 +630,9 @@ describe('Embed Config Endpoint', () => {
         const caseVariations = [
           TEST_API_KEY.toUpperCase(),
           TEST_API_KEY.toLowerCase(),
-          TEST_API_KEY.charAt(0).toUpperCase() + TEST_API_KEY.slice(1).toLowerCase(),
-          TEST_API_KEY + '-UPPER'  // Correct prefix but extra characters
+          TEST_API_KEY.charAt(0).toUpperCase() +
+            TEST_API_KEY.slice(1).toLowerCase(),
+          TEST_API_KEY + '-UPPER', // Correct prefix but extra characters
         ];
 
         // All case variations should fail (assuming case sensitivity)
@@ -612,10 +642,13 @@ describe('Embed Config Endpoint', () => {
           const response = await fetch(`${baseUrl}/embed/config`, {
             method: 'POST',
             headers: mockDashboardApiClient.getHeadersWithKey(caseVariant),
-            body: JSON.stringify({ provider: 'ollama' })
+            body: JSON.stringify({ provider: 'ollama' }),
           });
 
-          expect(response.status, `Case variant "${caseVariant}" should be rejected`).toBe(403);
+          expect(
+            response.status,
+            `Case variant "${caseVariant}" should be rejected`,
+          ).toBe(403);
         }
 
         console.log('Case-sensitive API key validation working correctly');
@@ -652,7 +685,7 @@ describe('Embed Config Endpoint', () => {
         const response = await fetch(`${baseUrl}/embed/config`, {
           method: 'POST',
           headers: mockDashboardApiClient.getHeaders(),
-          body: JSON.stringify({ provider: 'synthetic' })
+          body: JSON.stringify({ provider: 'synthetic' }),
         });
 
         expect(response.ok).toBe(true);
@@ -667,7 +700,7 @@ describe('Embed Config Endpoint', () => {
         const openResponse = await fetch(`${baseUrl}/embed/config`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ provider: 'router_cpu' })
+          body: JSON.stringify({ provider: 'router_cpu' }),
         });
 
         expect(openResponse.ok).toBe(true);
@@ -691,7 +724,6 @@ describe('Embed Config Endpoint', () => {
           expect(process.env.OM_API_KEYS_ENABLED).toBe('true');
           const crypto = await import('../../backend/src/utils/crypto');
           expect(crypto.isHashedKey(process.env.OM_API_KEY || '')).toBe(true);
-
         } finally {
           // Verify afterAll restores original environment
           process.env.OM_API_KEYS_ENABLED = originalEnabled;
@@ -708,13 +740,13 @@ describe('Embed Config Endpoint', () => {
         // Verify GET requests work without auth headers
         const getEndpoints = [
           `${baseUrl}/embed/config`,
-          `${baseUrl}/embed/config?detailed=true`
+          `${baseUrl}/embed/config?detailed=true`,
         ];
 
         for (const endpoint of getEndpoints) {
           const response = await fetch(endpoint, {
             method: 'GET',
-            headers: { 'Content-Type': 'application/json' } // No x-api-key
+            headers: { 'Content-Type': 'application/json' }, // No x-api-key
           });
           // GET endpoints should be accessible without authentication by design.
           // GET endpoints are allowed without auth; however, in some server
@@ -732,12 +764,19 @@ describe('Embed Config Endpoint', () => {
             // field; accept either a standard OpenMemory structured error or any
             // JSON payload containing at least one of: error, error_code, message
             // to indicate the response is JSON and not an HTML/empty page.
-            const okShape = err && (typeof err.error_code === 'string' || typeof err.error === 'string' || typeof err.message === 'string');
+            const okShape =
+              err &&
+              (typeof err.error_code === 'string' ||
+                typeof err.error === 'string' ||
+                typeof err.message === 'string');
             expect(okShape).toBeTruthy();
             // Treat the error body as the response payload for further shape checks
             var data = err;
           } else {
-            expect(response.ok, `${endpoint} should be accessible without auth`).toBe(true);
+            expect(
+              response.ok,
+              `${endpoint} should be accessible without auth`,
+            ).toBe(true);
             var data = await response.json();
           }
           if (response.ok) {
@@ -748,7 +787,9 @@ describe('Embed Config Endpoint', () => {
           }
         }
 
-        console.log('GET endpoints properly accessible without authentication headers');
+        console.log(
+          'GET endpoints properly accessible without authentication headers',
+        );
       });
 
       it('mixed auth scenarios maintain correct behavior', async () => {
@@ -759,7 +800,7 @@ describe('Embed Config Endpoint', () => {
         let response = await fetch(`${baseUrl}/embed/config`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ provider: 'synthetic' })
+          body: JSON.stringify({ provider: 'synthetic' }),
         });
         expect(response.ok).toBe(true);
 
@@ -770,7 +811,7 @@ describe('Embed Config Endpoint', () => {
         response = await fetch(`${baseUrl}/embed/config`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ provider: 'openai' })
+          body: JSON.stringify({ provider: 'openai' }),
         });
         expect(response.status).toBe(401);
 
@@ -778,11 +819,13 @@ describe('Embed Config Endpoint', () => {
         response = await fetch(`${baseUrl}/embed/config`, {
           method: 'POST',
           headers: mockDashboardApiClient.getHeaders(),
-          body: JSON.stringify({ provider: 'router_cpu' })
+          body: JSON.stringify({ provider: 'router_cpu' }),
         });
         expect(response.ok).toBe(true);
 
-        console.log('Mixed auth scenarios handled correctly with server state changes');
+        console.log(
+          'Mixed auth scenarios handled correctly with server state changes',
+        );
       });
     });
   });

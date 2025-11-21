@@ -1,37 +1,46 @@
 <!-- copilot-instructions: concise, actionable guidance for AI coding agents -->
+
 # OpenMemory — Copilot / AI Agent Instructions
 
 Purpose
+
 - Help an AI agent become productive quickly: architecture overview, key workflows, conventions, and integration points.
 
 Quick architecture (big picture)
+
 - Backend: TypeScript service (Bun runtime) in `backend/` (entry: `backend/src/server/index.ts`). Handles HTTP API, WebSocket, decay/reflection background jobs and MCP integration.
 - Dashboard: Next.js app in `dashboard/` serving the UI (`dashboard/app/` and `dashboard/page.tsx`).
 - Persistence: metadata and vectors live in SQLite by default (`data/openmemory.sqlite`) or Postgres (configured via env). Migrations live in `backend/src/migrate.ts`.
 - SDKs: `sdk-js/` and `sdk-py/` provide client libraries and examples in `examples/`.
 
 Essential workflows & commands (run these exactly)
+
 - Backend development:
- - Backend development:
-  - Install & run: `cd backend && bun install && bun run dev`.
-  - Build: `cd backend && bun run build`.
-  - Start (production): `cd backend && bun run start` -> runs `bun dist/server/index.js`.
-  - Run DB migrations: `cd backend && bun run migrate` (executes `backend/src/migrate.ts`).
- - Dashboard (frontend): `cd dashboard && bun install && bun run dev` / `bun run build` / `bun run start`.
- - Repo-level shortcuts: root `package.json` forwards to the backend: `bun run build` and `bun run start` from repo root run backend equivalents.
+- Backend development:
+- Install & run: `cd backend && bun install && bun run dev`.
+- Build: `cd backend && bun run build`.
+- Start (production): `cd backend && bun run start` -> runs `bun dist/server/index.js`.
+- Run DB migrations: `cd backend && bun run migrate` (executes `backend/src/migrate.ts`).
+- Dashboard (frontend): `cd dashboard && bun install && bun run dev` / `bun run build` / `bun run start`.
+- Repo-level shortcuts: root `package.json` forwards to the backend: `bun run build` and `bun run start` from repo root run backend equivalents.
 - Docker: `docker-compose up --build` (see `docker-compose.yml` for many env variables, e.g. `OM_DB_PATH`).
 
 Tests (exact commands)
+
 - Backend integration tests are run as plain Bun scripts (they expect a running server):
+
   1. Start the backend (dev or production build):
-    ```bash
+
+  ```bash
   cd backend
   bun run dev    # development (hot)
   # or for a built server:
   bun run build
   bun run start
-    ```
+  ```
+
   # In another shell, run the test runner(s):
+
   ```bash
   # run the full backend test suite
   bun test ../tests/backend/
@@ -43,6 +52,7 @@ Tests (exact commands)
 Note: `backend/package.json` currently does not define a `test` script. Agents should run test files directly with Bun (e.g., `bun test <file>`) or add a `test` script if they introduce a test runner.
 
 Project-specific conventions & patterns
+
 - TypeScript-first: prefer TS in backend; dev server uses `tsx` and build uses `tsc`.
 - HSG concepts (Hybrid Sector Graph) are core domain terms — look for `memory/hsg`, `memory/reflect`, and `memory/user_summary` for logic affecting decay/waypoints.
 - Background tasks are started from the server entry (`start_reflection`, `start_user_summary_reflection`, decay/prune setIntervals).
@@ -50,17 +60,20 @@ Project-specific conventions & patterns
 - Embeddings/providers: configuration through environment variables (OpenAI, Gemini, Ollama, local model). See `docker-compose.yml` for names (e.g. `OPENAI_API_KEY`, `OM_GEMINI_API_KEY`).
 
 Integration points and things to watch
+
 - Environment-driven behavior: many features toggle via env vars (e.g., `OM_METADATA_BACKEND`, `OM_VECTOR_BACKEND`, `OM_AUTO_REFLECT`, `OM_MODE`). Prefer reading `docker-compose.yml` and `backend/src/core/cfg` for defaults.
 - DB backends: default is SQLite (fast local dev). Postgres is supported; migrations still use SQL in `migrate.ts` — verify compatibility when switching backends.
 - CLI helper: `backend/bin/opm.js` exposes repository CLI commands — useful for running packaged utilities.
 - Tests & fixtures: tests live in `tests/` (JS & Python). Some test fixtures include SQLite files (e.g., `tests/verify_tenant_*.sqlite`) — don't modify committed fixtures; ignore runtime WAL/SHM files.
 
 How to make safe changes
+
 - When changing DB schema: update `backend/src/migrate.ts` and add tests that run migrations against a temp DB. Avoid manual edits to `data/openmemory.sqlite` in repo.
 - When adding endpoints: update `backend/src/server/routes` and `routes/dashboard` middleware; add SDK tests in `sdk-js` or `sdk-py` where appropriate.
 - When adding a feature that affects embeddings or models: add config flags (env) and document them in `docker-compose.yml` and README.
 
 Files & locations to reference quickly
+
 - Server entry: `backend/src/server/index.ts`
 - Migrations: `backend/src/migrate.ts`
 - CLI: `backend/bin/opm.js`
@@ -70,6 +83,7 @@ Files & locations to reference quickly
 - SDKs: `sdk-js/`, `sdk-py/`, `examples/`
 
 If something is unclear
+
 - Ask for the specific goal (feature/bug/area). Point to a target file or the failing test when possible; e.g., "Change HSG waypoint decay in `backend/src/memory/hsg.ts`".
 
 Done — ask me to iterate on any missing/unclear parts or to merge content from another agent doc you have.

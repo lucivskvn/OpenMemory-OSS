@@ -1,4 +1,5 @@
 <!-- markdownlint-disable MD040 MD003 -->
+
 # Multi-User Tenant Migration (v1.2)
 
 ⚠️ **Required for users upgrading from v1.1 or earlier**
@@ -251,7 +252,7 @@ OpenMemory now supports running on the Bun runtime (recommended: Bun v1.3.2+).
 
 Overview:
 
-  hybrid backend. This section describes steps to migrate from Node to Bun.
+hybrid backend. This section describes steps to migrate from Node to Bun.
 
 Steps:
 
@@ -280,7 +281,7 @@ curl http://localhost:8080/health
 
 Rollback:
 
-  use your previous release tag, then `bun install` and run the old server.
+use your previous release tag, then `bun install` and run the old server.
 
 Testing:
 
@@ -291,16 +292,16 @@ bun test ../tests/backend/
 
 Notes:
 
-  retains the `pg` implementation as a compatibility fallback. See
-  `backend/src/core/db.ts` for migration guidance.
+retains the `pg` implementation as a compatibility fallback. See
+`backend/src/core/db.ts` for migration guidance.
 
 Note about WebSocket dependency:
 
-  The legacy Node-based HTTP/WebSocket server (`backend/src/server/server.js`)
-  has been removed in favor of the Bun-native server (`backend/src/server/server.ts`).
-  The repository no longer ships the Node `ws` runtime dependency for the
-  `next` branch. If your deployment still expects a Node `ws` server, update
-  your runtime to Bun or pin an earlier branch that retained Node artifacts.
+The legacy Node-based HTTP/WebSocket server (`backend/src/server/server.js`)
+has been removed in favor of the Bun-native server (`backend/src/server/server.ts`).
+The repository no longer ships the Node `ws` runtime dependency for the
+`next` branch. If your deployment still expects a Node `ws` server, update
+your runtime to Bun or pin an earlier branch that retained Node artifacts.
 
 Postgres / runtime compatibility
 
