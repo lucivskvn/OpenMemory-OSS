@@ -47,9 +47,16 @@ import { Context } from "../server";
 import { verifyPassword, isHashedKey } from "../../utils/crypto";
 
 export function req_tracker_mw() {
-    return async (req: Request, ctx: Context, next: () => Promise<Response>) => {
+    return async (
+        req: Request,
+        ctx: Context,
+        next: () => Promise<Response>,
+    ) => {
         const url = new URL(req.url);
-        if (url.pathname.startsWith("/dashboard") || url.pathname.startsWith("/health")) {
+        if (
+            url.pathname.startsWith("/dashboard") ||
+            url.pathname.startsWith("/health")
+        ) {
             return next();
         }
 
@@ -79,7 +86,10 @@ const get_db_sz = async (): Promise<number> => {
             return 0;
         }
     } catch (e) {
-        logger.error({ component: "DB_SIZE", err: e }, "Failed to get database size");
+        logger.error(
+            { component: "DB_SIZE", err: e },
+            "Failed to get database size",
+        );
         return 0;
     }
 };
@@ -197,10 +207,21 @@ export function dash(app: any) {
                     embedProvider: env.embed_kind,
                 },
             };
-            return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
+            return new Response(JSON.stringify(data), {
+                headers: { "Content-Type": "application/json" },
+            });
         } catch (e: any) {
-            logger.error({ component: "DASHBOARD", err: e }, "Failed to get stats");
-            return new Response(JSON.stringify({ err: "internal", message: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+            logger.error(
+                { component: "DASHBOARD", err: e },
+                "Failed to get stats",
+            );
+            return new Response(
+                JSON.stringify({ err: "internal", message: e.message }),
+                {
+                    status: 500,
+                    headers: { "Content-Type": "application/json" },
+                },
+            );
         }
     });
 
@@ -226,9 +247,17 @@ export function dash(app: any) {
                     platform: process.platform,
                 },
             };
-            return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
+            return new Response(JSON.stringify(data), {
+                headers: { "Content-Type": "application/json" },
+            });
         } catch (e: any) {
-            return new Response(JSON.stringify({ err: "internal", message: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+            return new Response(
+                JSON.stringify({ err: "internal", message: e.message }),
+                {
+                    status: 500,
+                    headers: { "Content-Type": "application/json" },
+                },
+            );
         }
     });
 
@@ -252,28 +281,47 @@ export function dash(app: any) {
                     timestamp: m.updated_at || m.created_at,
                 })),
             };
-            return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
+            return new Response(JSON.stringify(data), {
+                headers: { "Content-Type": "application/json" },
+            });
         } catch (e: any) {
-            return new Response(JSON.stringify({ err: "internal", message: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+            return new Response(
+                JSON.stringify({ err: "internal", message: e.message }),
+                {
+                    status: 500,
+                    headers: { "Content-Type": "application/json" },
+                },
+            );
         }
     });
 
-    app.get("/dashboard/sectors/timeline", async (req: Request, ctx: Context) => {
-        try {
-            const hrs = parseInt(ctx.query.get("hours") || "24");
-            const strt = Date.now() - hrs * 60 * 60 * 1000;
-            const tl = await all_async(
-                `
+    app.get(
+        "/dashboard/sectors/timeline",
+        async (req: Request, ctx: Context) => {
+            try {
+                const hrs = parseInt(ctx.query.get("hours") || "24");
+                const strt = Date.now() - hrs * 60 * 60 * 1000;
+                const tl = await all_async(
+                    `
                 SELECT primary_sector, strftime('%H:00', datetime(created_at/1000, 'unixepoch')) as hour, COUNT(*) as count
                 FROM memories WHERE created_at > ? GROUP BY primary_sector, hour ORDER BY hour
             `,
-                [strt],
-            );
-            return new Response(JSON.stringify({ timeline: tl }), { headers: { "Content-Type": "application/json" } });
-        } catch (e: any) {
-            return new Response(JSON.stringify({ err: "internal", message: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
-        }
-    });
+                    [strt],
+                );
+                return new Response(JSON.stringify({ timeline: tl }), {
+                    headers: { "Content-Type": "application/json" },
+                });
+            } catch (e: any) {
+                return new Response(
+                    JSON.stringify({ err: "internal", message: e.message }),
+                    {
+                        status: 500,
+                        headers: { "Content-Type": "application/json" },
+                    },
+                );
+            }
+        },
+    );
 
     app.get("/dashboard/top-memories", async (req: Request, ctx: Context) => {
         try {
@@ -294,9 +342,17 @@ export function dash(app: any) {
                     lastSeen: m.last_seen_at,
                 })),
             };
-            return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
+            return new Response(JSON.stringify(data), {
+                headers: { "Content-Type": "application/json" },
+            });
         } catch (e: any) {
-            return new Response(JSON.stringify({ err: "internal", message: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+            return new Response(
+                JSON.stringify({ err: "internal", message: e.message }),
+                {
+                    status: 500,
+                    headers: { "Content-Type": "application/json" },
+                },
+            );
         }
     });
 
@@ -363,40 +419,81 @@ export function dash(app: any) {
                     efficiency,
                 },
             };
-            return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
+            return new Response(JSON.stringify(data), {
+                headers: { "Content-Type": "application/json" },
+            });
         } catch (e: any) {
-            return new Response(JSON.stringify({ err: "internal", message: e.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+            return new Response(
+                JSON.stringify({ err: "internal", message: e.message }),
+                {
+                    status: 500,
+                    headers: { "Content-Type": "application/json" },
+                },
+            );
         }
     });
 
     async function telemetryStreamHandler(req: Request, ctx: Context) {
         try {
             const b = ctx.body as any;
-            if (!b) return new Response(JSON.stringify({ err: "missing_body" }), { status: 400 });
+            if (!b)
+                return new Response(JSON.stringify({ err: "missing_body" }), {
+                    status: 400,
+                });
             const id = b.id || null;
             const user_id = b.user_id || null;
             const embedding_mode = b.embedding_mode || null;
-            const duration_ms = typeof b.stream_duration_ms === 'number' ? b.stream_duration_ms : null;
-            const memory_ids = Array.isArray(b.memory_ids) ? JSON.stringify(b.memory_ids) : '[]';
-            const query = typeof b.query === 'string' ? b.query : null;
+            const duration_ms =
+                typeof b.stream_duration_ms === "number"
+                    ? b.stream_duration_ms
+                    : null;
+            const memory_ids = Array.isArray(b.memory_ids)
+                ? JSON.stringify(b.memory_ids)
+                : "[]";
+            const query = typeof b.query === "string" ? b.query : null;
 
             if (!id || duration_ms === null) {
-                return new Response(JSON.stringify({ err: 'invalid_payload' }), { status: 400 });
+                return new Response(
+                    JSON.stringify({ err: "invalid_payload" }),
+                    { status: 400 },
+                );
             }
 
             // If an admin API key is configured, require the admin key for telemetry
             if (env.admin_api_key) {
-                const provided = req.headers.get("x-admin-key") || req.headers.get("x-api-key") || ((req.headers.get("authorization") || "").startsWith("Bearer ") ? req.headers.get("authorization")!.slice(7) : null);
+                const provided =
+                    req.headers.get("x-admin-key") ||
+                    req.headers.get("x-api-key") ||
+                    ((req.headers.get("authorization") || "").startsWith(
+                        "Bearer ",
+                    )
+                        ? req.headers.get("authorization")!.slice(7)
+                        : null);
                 if (!provided) {
-                    return new Response(JSON.stringify({ err: "admin_key_required" }), { status: 403 });
+                    return new Response(
+                        JSON.stringify({ err: "admin_key_required" }),
+                        { status: 403 },
+                    );
                 }
                 if (!isHashedKey(env.admin_api_key)) {
-                    logger.error({ component: 'DASHBOARD', err: 'Plaintext admin key configured' }, 'OM_ADMIN_API_KEY must be configured as a hashed value');
-                    return new Response(JSON.stringify({ err: 'server_config' }), { status: 500 });
+                    logger.error(
+                        {
+                            component: "DASHBOARD",
+                            err: "Plaintext admin key configured",
+                        },
+                        "OM_ADMIN_API_KEY must be configured as a hashed value",
+                    );
+                    return new Response(
+                        JSON.stringify({ err: "server_config" }),
+                        { status: 500 },
+                    );
                 }
                 const ok = await verifyPassword(provided, env.admin_api_key);
                 if (!ok) {
-                    return new Response(JSON.stringify({ err: 'invalid_admin_key' }), { status: 403 });
+                    return new Response(
+                        JSON.stringify({ err: "invalid_admin_key" }),
+                        { status: 403 },
+                    );
                 }
                 // Mark as admin for subsequent tenant checks
                 (req as any).isAdmin = true;
@@ -407,17 +504,37 @@ export function dash(app: any) {
 
             // Tenant enforcement: when OM_STRICT_TENANT=true, require user_id
             // to be present (unless caller is admin) to avoid writing global telemetry.
-            const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+            const strict =
+                (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
             if (strict && !user_id && !isAdmin) {
-                return new Response(JSON.stringify({ err: 'user_id_required', message: 'user_id required when OM_STRICT_TENANT=true' }), { status: 400 });
+                return new Response(
+                    JSON.stringify({
+                        err: "user_id_required",
+                        message: "user_id required when OM_STRICT_TENANT=true",
+                    }),
+                    { status: 400 },
+                );
             }
 
-            await q.ins_stream_telemetry.run(id, user_id, embedding_mode, duration_ms, memory_ids, query, Date.now());
+            await q.ins_stream_telemetry.run(
+                id,
+                user_id,
+                embedding_mode,
+                duration_ms,
+                memory_ids,
+                query,
+                Date.now(),
+            );
 
             return new Response(JSON.stringify({ ok: true }));
         } catch (e: any) {
-            logger.error({ component: 'DASHBOARD', err: e }, 'Failed to persist stream telemetry');
-            return new Response(JSON.stringify({ err: 'internal' }), { status: 500 });
+            logger.error(
+                { component: "DASHBOARD", err: e },
+                "Failed to persist stream telemetry",
+            );
+            return new Response(JSON.stringify({ err: "internal" }), {
+                status: 500,
+            });
         }
     }
 
@@ -442,36 +559,80 @@ export function dash(app: any) {
             // If an admin API key is configured, require admin header, otherwise allow (legacy)
             let isAdmin = false;
             if (env.admin_api_key) {
-                const provided = req.headers.get("x-admin-key") || req.headers.get("x-api-key") || ((req.headers.get("authorization") || "").startsWith("Bearer ") ? req.headers.get("authorization")!.slice(7) : null);
+                const provided =
+                    req.headers.get("x-admin-key") ||
+                    req.headers.get("x-api-key") ||
+                    ((req.headers.get("authorization") || "").startsWith(
+                        "Bearer ",
+                    )
+                        ? req.headers.get("authorization")!.slice(7)
+                        : null);
                 if (!provided) {
-                    return new Response(JSON.stringify({ err: "admin_key_required" }), { status: 403 });
+                    return new Response(
+                        JSON.stringify({ err: "admin_key_required" }),
+                        { status: 403 },
+                    );
                 }
                 if (!isHashedKey(env.admin_api_key)) {
-                    logger.error({ component: 'DASHBOARD', err: 'Plaintext admin key configured' }, 'OM_ADMIN_API_KEY must be configured as a hashed value');
-                    return new Response(JSON.stringify({ err: 'server_config' }), { status: 500 });
+                    logger.error(
+                        {
+                            component: "DASHBOARD",
+                            err: "Plaintext admin key configured",
+                        },
+                        "OM_ADMIN_API_KEY must be configured as a hashed value",
+                    );
+                    return new Response(
+                        JSON.stringify({ err: "server_config" }),
+                        { status: 500 },
+                    );
                 }
                 isAdmin = await verifyPassword(provided, env.admin_api_key);
                 if (!isAdmin) {
-                    return new Response(JSON.stringify({ err: 'invalid_admin_key' }), { status: 403 });
+                    return new Response(
+                        JSON.stringify({ err: "invalid_admin_key" }),
+                        { status: 403 },
+                    );
                 }
             }
 
             // Server-side filtering using SQL to support large telemetry volumes.
-            const table = is_pg ? `"${process.env.OM_PG_SCHEMA || 'public'}"."openmemory_stream_telemetry"` : 'stream_telemetry';
+            const table = is_pg
+                ? `"${process.env.OM_PG_SCHEMA || "public"}"."openmemory_stream_telemetry"`
+                : "stream_telemetry";
             let sql: string;
             let params: any[];
             if (is_pg) {
                 sql = `select id,user_id,embedding_mode,duration_ms,memory_ids,query,ts from ${table} where ($1 is null or user_id=$1) and ($2 is null or embedding_mode=$2) order by ts desc limit $3 offset $4`;
-                params = [user_id || null, embedding_mode || null, limit, offset];
+                params = [
+                    user_id || null,
+                    embedding_mode || null,
+                    limit,
+                    offset,
+                ];
             } else {
                 // SQLite: repeat the parameter for the equality comparison due to positional binding
                 sql = `select id,user_id,embedding_mode,duration_ms,memory_ids,query,ts from ${table} where (? is null or user_id=?) and (? is null or embedding_mode=?) order by ts desc limit ? offset ?`;
-                params = [user_id || null, user_id || null, embedding_mode || null, embedding_mode || null, limit, offset];
+                params = [
+                    user_id || null,
+                    user_id || null,
+                    embedding_mode || null,
+                    embedding_mode || null,
+                    limit,
+                    offset,
+                ];
             }
             // Enforce tenant scoping when OM_STRICT_TENANT=true unless admin
-            const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
+            const strict =
+                (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
             if (strict && !user_id && !isAdmin) {
-                return new Response(JSON.stringify({ error: "user_id_required", message: "user_id parameter is required when OM_STRICT_TENANT=true" }), { status: 400 });
+                return new Response(
+                    JSON.stringify({
+                        error: "user_id_required",
+                        message:
+                            "user_id parameter is required when OM_STRICT_TENANT=true",
+                    }),
+                    { status: 400 },
+                );
             }
 
             let rows = await all_async(sql, params);
@@ -482,15 +643,31 @@ export function dash(app: any) {
                 user_id: r.user_id,
                 embedding_mode: r.embedding_mode,
                 duration_ms: r.duration_ms,
-                memory_ids: typeof r.memory_ids === 'string' ? (() => { try { return JSON.parse(r.memory_ids); } catch (e) { return []; } })() : r.memory_ids,
+                memory_ids:
+                    typeof r.memory_ids === "string"
+                        ? (() => {
+                              try {
+                                  return JSON.parse(r.memory_ids);
+                              } catch (e) {
+                                  return [];
+                              }
+                          })()
+                        : r.memory_ids,
                 query: r.query,
                 ts: r.ts,
             }));
 
-            return new Response(JSON.stringify({ telemetry: out }), { headers: { "Content-Type": "application/json" } });
+            return new Response(JSON.stringify({ telemetry: out }), {
+                headers: { "Content-Type": "application/json" },
+            });
         } catch (e: any) {
-            logger.error({ component: "DASHBOARD", err: e }, "Failed to fetch telemetry");
-            return new Response(JSON.stringify({ err: 'internal' }), { status: 500 });
+            logger.error(
+                { component: "DASHBOARD", err: e },
+                "Failed to fetch telemetry",
+            );
+            return new Response(JSON.stringify({ err: "internal" }), {
+                status: 500,
+            });
         }
     });
 }

@@ -31,7 +31,7 @@ test("embed/ollama/status returns consistent shape when Ollama unreachable", asy
 
     // Import and start server programmatically
     const mod = await import("../../backend/src/server/index.ts");
-    const start = mod.startServer as (opts?: { port?: number; dbPath?: string }) => Promise<{ stop: () => Promise<void> }>;
+    const start = mod.startServer as (opts?: { port?: number; dbPath?: string; waitUntilReady?: boolean }) => Promise<{ stop: () => Promise<void>; port: number }>;
     const server = await start({ port, waitUntilReady: true });
 
     // Wait for server health

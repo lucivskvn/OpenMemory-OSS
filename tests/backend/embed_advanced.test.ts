@@ -46,13 +46,13 @@ beforeEach(async () => {
     origSetTimeout = globalThis.setTimeout;
 
     // override setTimeout to avoid long sleeps in retry/backoff
-    globalThis.setTimeout = (fn: any, _ms?: number, ..._args: any[]) => {
+    globalThis.setTimeout = ((fn: any, _ms?: number, ..._args: any[]) => {
         try {
             return fn();
         } catch (e) {
             return undefined as any;
         }
-    };
+    }) as any;
 
     // import fresh logger (embed module will be imported per-test so spies can be installed)
     logger = await import(LOGGER_PATH);
@@ -121,7 +121,7 @@ test("gemini retries on 429 and succeeds, logging rate-limit warning", async () 
 
     // simulate fetch: first respond with 429 and Retry-After header, second respond with success
     let calls = 0;
-    globalThis.fetch = async (url: any, opts: any) => {
+    globalThis.fetch = (async (url: any, opts: any) => {
         calls++;
         if (calls === 1) {
             return {
@@ -130,14 +130,14 @@ test("gemini retries on 429 and succeeds, logging rate-limit warning", async () 
                 headers: {
                     get: (h: string) => (h.toLowerCase() === "retry-after" ? "1" : null),
                 },
-            };
+            } as any;
         }
         // success shape expected by emb_gemini
         return {
             ok: true,
             json: async () => ({ embeddings: [{ values: Array.from({ length: Number(process.env.OM_VEC_DIM) }, () => 0.1) }] }),
-        };
-    };
+        } as any;
+    }) as any;
 
     // spy on logger.warn and import embed module afterwards
     const spyWarnHandle = spyLoggerMethod(logger, 'warn');
@@ -167,7 +167,7 @@ test("gemini fails after retries and falls back to synthetic, logging error", as
 
     // simulate fetch always throwing and count attempts
     let calls = 0;
-    globalThis.fetch = async (url: any, opts: any) => { calls++; throw new Error("network fail"); };
+    globalThis.fetch = (async (url: any, opts: any) => { calls++; throw new Error("network fail"); }) as any;
 
     // spy on logger.error and import embed module afterwards
     const spyErrHandle = spyLoggerMethod(logger, 'error');
@@ -203,13 +203,13 @@ test("openai batch simple mode uses batch endpoint and returns vectors", async (
     process.env.OM_OPENAI_KEY = "fake";
     process.env.OM_OPENAI_BASE_URL = "https://api.openai.test";
 
-    globalThis.fetch = async (url: any, opts: any) => {
+    globalThis.fetch = (async (url: any, opts: any) => {
         // emulate batch response shape
         return {
             ok: true,
             json: async () => ({ data: [{ embedding: Array.from({ length: Number(process.env.OM_VEC_DIM) }, () => 0.07) }] }),
-        };
-    };
+        } as any;
+    }) as any;
     const cfg3 = await import("../../backend/src/core/cfg");
     cfg3.env.embed_kind = "openai";
     cfg3.env.openai_key = process.env.OM_OPENAI_KEY || "fake";

@@ -74,7 +74,7 @@ test("postgres q advanced: json/array params, prepared reuse, error paths", asyn
     let sawError = false;
     try {
         await run(`select * from definitely_not_a_table`);
-    } catch (e) {
+    } catch (e: any) {
         sawError = true;
         // should be a DB error object with message
         expect(e).toBeDefined();

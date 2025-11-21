@@ -27,8 +27,9 @@ test("DB console prefix appears when OM_DB_CONSOLE and user-scope warn enabled",
     process.env.OM_DB_PATH = ":memory:";
     process.env.OM_METADATA_BACKEND = "sqlite";
 
+    let mod: any;
     try {
-        const mod: any = await import("../../backend/src/core/db.test-entry");
+        mod = await import("../../backend/src/core/db.test-entry");
         // Call initDb before reading live bindings from the module namespace.
         await mod.initDb();
         const q = mod.q;

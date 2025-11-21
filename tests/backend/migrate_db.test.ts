@@ -15,7 +15,7 @@ test("startServer({dbPath}) applies migrations to the provided sqlite DB", async
     const port = 18000 + (process.pid % 1000) + 1;
 
     const mod = await import("../../backend/src/server/index.ts");
-    const start = mod.startServer as (opts?: { port?: number; dbPath?: string }) => Promise<{ stop: () => Promise<void> }>;
+    const start = mod.startServer as (opts?: { port?: number; dbPath?: string; waitUntilReady?: boolean }) => Promise<{ stop: () => Promise<void> }>;
 
     const server = await start({ port, dbPath, waitUntilReady: true });
 

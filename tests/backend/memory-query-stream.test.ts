@@ -1,3 +1,5 @@
+import { describe, it, expect } from 'bun:test';
+
 process.env.OM_TEST_MODE = '1';
 describe('Memory query SSE', () => {
   // Tests are executed in CI where Accept header behavior may vary; enabling

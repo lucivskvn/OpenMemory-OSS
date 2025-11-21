@@ -10,37 +10,43 @@ import pino from "pino";
 // are included under the `time` field. Logs are JSON by default for easy parsing in CI/containers.
 
 // Prefer OM_LOG_LEVEL for repo-specific log tuning, fall back to LOG_LEVEL
-const DEFAULT_LEVEL = process.env.OM_LOG_LEVEL || process.env.LOG_LEVEL || "info";
-const VERBOSE = (process.env.LOG_VERBOSE || "").toLowerCase() === "1" || (process.env.LOG_VERBOSE || "").toLowerCase() === "true";
+const DEFAULT_LEVEL =
+    process.env.OM_LOG_LEVEL || process.env.LOG_LEVEL || "info";
+const VERBOSE =
+    (process.env.LOG_VERBOSE || "").toLowerCase() === "1" ||
+    (process.env.LOG_VERBOSE || "").toLowerCase() === "true";
 
 import os from "os";
 // Invert default: pretty logs are enabled by default for local dev. Set
 // LOG_PRETTY=0 or LOG_PRETTY=false to force machine-friendly JSON output.
-const PRETTY = !((process.env.LOG_PRETTY || "").toLowerCase() === "0" || (process.env.LOG_PRETTY || "").toLowerCase() === "false");
+const PRETTY = !(
+    (process.env.LOG_PRETTY || "").toLowerCase() === "0" ||
+    (process.env.LOG_PRETTY || "").toLowerCase() === "false"
+);
 
 function pad(n: number) {
-  return String(n).padStart(2, "0");
+    return String(n).padStart(2, "0");
 }
 
 function timestampWithOffset(): string {
-  // Return a compact local timestamp with numeric offset, e.g. ,"time":"2025-11-11 14:03:12 +02:00"
-  try {
-    const d = new Date();
-    const y = d.getFullYear();
-    const m = pad(d.getMonth() + 1);
-    const day = pad(d.getDate());
-    const hh = pad(d.getHours());
-    const mm = pad(d.getMinutes());
-    const ss = pad(d.getSeconds());
-    const offsetMin = -d.getTimezoneOffset(); // minutes east of UTC
-    const sign = offsetMin >= 0 ? "+" : "-";
-    const abs = Math.abs(offsetMin);
-    const offH = pad(Math.floor(abs / 60));
-    const offM = pad(abs % 60);
-    return `,\"time\":\"${y}-${m}-${day} ${hh}:${mm}:${ss} ${sign}${offH}:${offM}\"`;
-  } catch (err) {
-    return `,\"time\":\"${new Date().toISOString()}Z\"`;
-  }
+    // Return a compact local timestamp with numeric offset, e.g. ,"time":"2025-11-11 14:03:12 +02:00"
+    try {
+        const d = new Date();
+        const y = d.getFullYear();
+        const m = pad(d.getMonth() + 1);
+        const day = pad(d.getDate());
+        const hh = pad(d.getHours());
+        const mm = pad(d.getMinutes());
+        const ss = pad(d.getSeconds());
+        const offsetMin = -d.getTimezoneOffset(); // minutes east of UTC
+        const sign = offsetMin >= 0 ? "+" : "-";
+        const abs = Math.abs(offsetMin);
+        const offH = pad(Math.floor(abs / 60));
+        const offM = pad(abs % 60);
+        return `,\"time\":\"${y}-${m}-${day} ${hh}:${mm}:${ss} ${sign}${offH}:${offM}\"`;
+    } catch (err) {
+        return `,\"time\":\"${new Date().toISOString()}Z\"`;
+    }
 }
 
 // Build logger instance: when PRETTY is enabled, create a pino transport to
@@ -49,47 +55,51 @@ function timestampWithOffset(): string {
 let logger: any;
 
 if (PRETTY) {
-  // Use pino transport -> pino-pretty for rich colored output and translateTime
-  // Keep JSON fields minimal by ignoring pid/hostname which are noisy for local dev.
-  // Note: pino.transport is synchronous in Node; Bun supports pino and transports.
-  try {
-    const transport = pino.transport({
-      target: 'pino-pretty',
-      options: {
-        colorize: true,
-        translateTime: 'SYS:standard',
-        ignore: 'pid,hostname',
-        singleLine: true,
-      },
-    });
-    logger = pino({
-      level: VERBOSE ? 'debug' : DEFAULT_LEVEL,
-      formatters: { level: (label: string) => ({ level: label }) },
-      timestamp: timestampWithOffset,
-    }, transport);
-  } catch (e) {
-    // If transports are not available in the runtime, fall back to a very small
-    // human fallback so the server remains usable.
-    const fallback = (msg: string, meta?: any) => console.log(`${new Date().toISOString()} INFO ${msg}`, meta || '');
-    logger = {
-      level: VERBOSE ? 'debug' : DEFAULT_LEVEL,
-      debug: (m: any, meta?: any) => fallback(m, meta),
-      info: (m: any, meta?: any) => fallback(m, meta),
-      warn: (m: any, meta?: any) => console.warn(m, meta),
-      error: (m: any, meta?: any) => console.error(m, meta),
-      fatal: (m: any, meta?: any) => console.error(m, meta),
-      child: (_: any) => logger,
-    } as any;
-  }
+    // Use pino transport -> pino-pretty for rich colored output and translateTime
+    // Keep JSON fields minimal by ignoring pid/hostname which are noisy for local dev.
+    // Note: pino.transport is synchronous in Node; Bun supports pino and transports.
+    try {
+        const transport = pino.transport({
+            target: "pino-pretty",
+            options: {
+                colorize: true,
+                translateTime: "SYS:standard",
+                ignore: "pid,hostname",
+                singleLine: true,
+            },
+        });
+        logger = pino(
+            {
+                level: VERBOSE ? "debug" : DEFAULT_LEVEL,
+                formatters: { level: (label: string) => ({ level: label }) },
+                timestamp: timestampWithOffset,
+            },
+            transport,
+        );
+    } catch (e) {
+        // If transports are not available in the runtime, fall back to a very small
+        // human fallback so the server remains usable.
+        const fallback = (msg: string, meta?: any) =>
+            console.log(`${new Date().toISOString()} INFO ${msg}`, meta || "");
+        logger = {
+            level: VERBOSE ? "debug" : DEFAULT_LEVEL,
+            debug: (m: any, meta?: any) => fallback(m, meta),
+            info: (m: any, meta?: any) => fallback(m, meta),
+            warn: (m: any, meta?: any) => console.warn(m, meta),
+            error: (m: any, meta?: any) => console.error(m, meta),
+            fatal: (m: any, meta?: any) => console.error(m, meta),
+            child: (_: any) => logger,
+        } as any;
+    }
 } else {
-  logger = pino({
-    level: VERBOSE ? "debug" : DEFAULT_LEVEL,
-    formatters: {
-      level: (label) => ({ level: label }),
-    },
-    // pino expects the timestamp function to return a string starting with a comma.
-    timestamp: timestampWithOffset,
-  });
+    logger = pino({
+        level: VERBOSE ? "debug" : DEFAULT_LEVEL,
+        formatters: {
+            level: (label) => ({ level: label }),
+        },
+        // pino expects the timestamp function to return a string starting with a comma.
+        timestamp: timestampWithOffset,
+    });
 }
 
 export default logger;
@@ -99,8 +109,9 @@ export default logger;
 // `OM_LOG_LEVEL`/`LOG_LEVEL` defaults. This function returns the resolved
 // string level (e.g., 'debug'|'info'|'warn'|'error').
 export function getEnvLogLevel(componentEnvVar?: string): string {
-  if (componentEnvVar && process.env[componentEnvVar]) return process.env[componentEnvVar] as string;
-  if (process.env.OM_LOG_LEVEL) return process.env.OM_LOG_LEVEL;
-  if (process.env.LOG_LEVEL) return process.env.LOG_LEVEL;
-  return VERBOSE ? 'debug' : DEFAULT_LEVEL;
+    if (componentEnvVar && process.env[componentEnvVar])
+        return process.env[componentEnvVar] as string;
+    if (process.env.OM_LOG_LEVEL) return process.env.OM_LOG_LEVEL;
+    if (process.env.LOG_LEVEL) return process.env.LOG_LEVEL;
+    return VERBOSE ? "debug" : DEFAULT_LEVEL;
 }

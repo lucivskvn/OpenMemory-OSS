@@ -14,18 +14,8 @@
         "downlevelIteration": true,
         "strict": true,
         "skipLibCheck": true,
-        "types": [
-            "@types/node",
-            "@types/bun"
-        ],
-        "lib": [
-            "ES2022",
-            "DOM"
-        ]
+        "types": ["@types/node", "@types/bun"],
+        "lib": ["ES2022", "DOM"]
     },
-    "include": [
-        "src",
-        "src/types",
-        "../tests"
-    ]
+    "include": ["src", "src/types", "../tests/backend", "../tests/setup.ts"]
 }

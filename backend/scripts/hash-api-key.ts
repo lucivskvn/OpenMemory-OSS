@@ -14,10 +14,16 @@
  *   bun run backend/scripts/hash-api-key.ts
  */
 
-const key = process.argv[2] || process.env.OM_PLAIN_API_KEY || process.env.OPENMEMORY_API_KEY || process.env.OM_API_KEY;
+const key =
+    process.argv[2] ||
+    process.env.OM_PLAIN_API_KEY ||
+    process.env.OPENMEMORY_API_KEY ||
+    process.env.OM_API_KEY;
 
 if (!key) {
-    console.error('Usage: bun run backend/scripts/hash-api-key.ts <plaintext-key>\nOr set OM_PLAIN_API_KEY env var.');
+    console.error(
+        "Usage: bun run backend/scripts/hash-api-key.ts <plaintext-key>\nOr set OM_PLAIN_API_KEY env var.",
+    );
     process.exit(1);
 }
 
@@ -27,6 +33,9 @@ try {
     const hashed = await Bun.password.hash(key);
     console.log(hashed);
 } catch (err) {
-    console.error('Failed to hash API key:', err instanceof Error ? err.message : String(err));
+    console.error(
+        "Failed to hash API key:",
+        err instanceof Error ? err.message : String(err),
+    );
     process.exit(2);
 }

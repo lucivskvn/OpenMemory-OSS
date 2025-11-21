@@ -1,6 +1,17 @@
-import { existsSync, unlinkSync, readdirSync, statSync, mkdirSync, createWriteStream } from "fs";
+import {
+    existsSync,
+    unlinkSync,
+    readdirSync,
+    statSync,
+    mkdirSync,
+    createWriteStream,
+} from "fs";
 import { join, dirname } from "path";
-import { PutObjectCommand, GetObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
+import {
+    PutObjectCommand,
+    GetObjectCommand,
+    ListObjectsV2Command,
+} from "@aws-sdk/client-s3";
 import { env } from "../core/cfg.js";
 import logger from "../core/logger.js";
 import { createSQLiteDatabase } from "../core/sqlite-runtime.js";
@@ -9,7 +20,11 @@ import { pipeline } from "stream/promises";
 export interface BackupOptions {
     sourcePath: string;
     destPath: string;
-    progressCallback?: (progress: { percentage: number; remainingPages: number; totalPages: number }) => void;
+    progressCallback?: (progress: {
+        percentage: number;
+        remainingPages: number;
+        totalPages: number;
+    }) => void;
 }
 
 export interface RestoreOptions {
@@ -20,7 +35,7 @@ export interface RestoreOptions {
 
 // Helper: Check if a file is a SQL dump (by extension or content)
 function isSqlDump(filePath: string): boolean {
-    if (filePath.endsWith('.sql')) {
+    if (filePath.endsWith(".sql")) {
         return true;
     }
     // Could add more sophisticated detection here
@@ -44,7 +59,7 @@ export async function backupDatabase(options: BackupOptions): Promise<void> {
     let useNodeBackup = false;
     let DatabaseSync: any = null;
     try {
-        const nodeSqlite = await import('node:sqlite');
+        const nodeSqlite = await import("node:sqlite");
         DatabaseSync = nodeSqlite.DatabaseSync;
         useNodeBackup = !!DatabaseSync;
     } catch {
@@ -65,8 +80,13 @@ export async function backupDatabase(options: BackupOptions): Promise<void> {
                     if (progressCallback) {
                         const totalPages = backup.pageCount;
                         const remainingPages = backup.remaining;
-                        const percentage = ((totalPages - remainingPages) / totalPages) * 100;
-                        progressCallback({ percentage, remainingPages, totalPages });
+                        const percentage =
+                            ((totalPages - remainingPages) / totalPages) * 100;
+                        progressCallback({
+                            percentage,
+                            remainingPages,
+                            totalPages,
+                        });
                     }
                 }
             } finally {
@@ -82,7 +102,11 @@ export async function backupDatabase(options: BackupOptions): Promise<void> {
             const escapedPath = destPath.replace(/'/g, "''");
             await sourceDb.run(`VACUUM INTO '${escapedPath}'`);
             if (progressCallback) {
-                progressCallback({ percentage: 100, remainingPages: 0, totalPages: 1 });
+                progressCallback({
+                    percentage: 100,
+                    remainingPages: 0,
+                    totalPages: 1,
+                });
             }
         } finally {
             sourceDb.close();
@@ -90,14 +114,17 @@ export async function backupDatabase(options: BackupOptions): Promise<void> {
     }
 }
 
-export async function exportDatabaseDump(sourceDbPath: string, dumpPath: string): Promise<void> {
+export async function exportDatabaseDump(
+    sourceDbPath: string,
+    dumpPath: string,
+): Promise<void> {
     ensureDirectoryExists(dumpPath);
 
     const db = await createSQLiteDatabase(sourceDbPath);
 
     try {
         // Get all tables, indexes, views, etc.
-        const schemaRows = await db.all(`
+        const schemaRows = (await db.all(`
             SELECT sql FROM sqlite_master
             WHERE sql IS NOT NULL AND type IN ('table', 'index', 'view', 'trigger')
             ORDER BY CASE
@@ -107,51 +134,54 @@ export async function exportDatabaseDump(sourceDbPath: string, dumpPath: string)
                 WHEN type = 'trigger' THEN 4
                 ELSE 5
             END
-        `) as { sql: string }[];
+        `)) as { sql: string }[];
 
-        let dump = 'PRAGMA foreign_keys=OFF;\n';
-        dump += 'BEGIN TRANSACTION;\n\n';
+        let dump = "PRAGMA foreign_keys=OFF;\n";
+        dump += "BEGIN TRANSACTION;\n\n";
 
         // Add schema
         for (const row of schemaRows) {
-            dump += row.sql + ';\n\n';
+            dump += row.sql + ";\n\n";
         }
 
         // Add data for each table
-        const tables = await db.all(`
+        const tables = (await db.all(`
             SELECT name FROM sqlite_master
             WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
-        `) as { name: string }[];
+        `)) as { name: string }[];
 
         for (const table of tables) {
             const rows = await db.all(`SELECT * FROM ${table.name}`);
             if (rows.length > 0) {
                 const columns = Object.keys(rows[0]);
-                const placeholders = columns.map(() => '?').join(', ');
+                const placeholders = columns.map(() => "?").join(", ");
 
                 for (const row of rows) {
-                    const values = columns.map(col => {
+                    const values = columns.map((col) => {
                         const val = row[col];
-                        if (val === null) return 'NULL';
-                        if (typeof val === 'string') return `'${val.replace(/'/g, "''")}'`;
+                        if (val === null) return "NULL";
+                        if (typeof val === "string")
+                            return `'${val.replace(/'/g, "''")}'`;
                         return val;
                     });
-                    dump += `INSERT INTO ${table.name} (${columns.join(', ')}) VALUES (${values.join(', ')});\n`;
+                    dump += `INSERT INTO ${table.name} (${columns.join(", ")}) VALUES (${values.join(", ")});\n`;
                 }
             }
-            dump += '\n';
+            dump += "\n";
         }
 
-        dump += 'COMMIT;\n';
+        dump += "COMMIT;\n";
 
         await Bun.file(dumpPath).write(dump);
-
     } finally {
         db.close();
     }
 }
 
-export async function importDatabaseDump(dumpPath: string, targetDbPath: string): Promise<void> {
+export async function importDatabaseDump(
+    dumpPath: string,
+    targetDbPath: string,
+): Promise<void> {
     // For clean restore: ensure we start with a fresh database file
     if (existsSync(targetDbPath)) {
         unlinkSync(targetDbPath);
@@ -186,17 +216,20 @@ export async function importDatabaseDump(dumpPath: string, targetDbPath: string)
         await db.run(dump);
 
         // Verify integrity
-        const integrity = await db.get("PRAGMA integrity_check") as { integrity_check: string };
-        if (integrity.integrity_check !== 'ok') {
-            throw new Error('Database integrity check failed after import');
+        const integrity = (await db.get("PRAGMA integrity_check")) as {
+            integrity_check: string;
+        };
+        if (integrity.integrity_check !== "ok") {
+            throw new Error("Database integrity check failed after import");
         }
-
     } finally {
         db.close();
     }
 }
 
-export async function restoreFromBackup(options: RestoreOptions): Promise<void> {
+export async function restoreFromBackup(
+    options: RestoreOptions,
+): Promise<void> {
     const { backupPath, targetPath, verify = false } = options;
 
     if (!existsSync(backupPath)) {
@@ -210,9 +243,13 @@ export async function restoreFromBackup(options: RestoreOptions): Promise<void> 
         if (verify) {
             const db = await createSQLiteDatabase(targetPath);
             try {
-                const integrity = await db.get("PRAGMA integrity_check") as { integrity_check: string };
-                if (integrity.integrity_check !== 'ok') {
-                    throw new Error('Database integrity check failed after restore');
+                const integrity = (await db.get("PRAGMA integrity_check")) as {
+                    integrity_check: string;
+                };
+                if (integrity.integrity_check !== "ok") {
+                    throw new Error(
+                        "Database integrity check failed after restore",
+                    );
                 }
             } finally {
                 db.close();
@@ -222,15 +259,19 @@ export async function restoreFromBackup(options: RestoreOptions): Promise<void> 
         // For binary backups: copy and verify
         await backupDatabase({
             sourcePath: backupPath,
-            destPath: targetPath
+            destPath: targetPath,
         });
 
         if (verify) {
             const db = await createSQLiteDatabase(targetPath);
             try {
-                const integrity = await db.get("PRAGMA integrity_check") as { integrity_check: string };
-                if (integrity.integrity_check !== 'ok') {
-                    throw new Error('Database integrity check failed after restore');
+                const integrity = (await db.get("PRAGMA integrity_check")) as {
+                    integrity_check: string;
+                };
+                if (integrity.integrity_check !== "ok") {
+                    throw new Error(
+                        "Database integrity check failed after restore",
+                    );
                 }
             } finally {
                 db.close();
@@ -239,7 +280,11 @@ export async function restoreFromBackup(options: RestoreOptions): Promise<void> 
     }
 }
 
-export async function listBackups(backupDir: string, includeCloud: boolean = false, s3Client?: any): Promise<BackupMetadata[]> {
+export async function listBackups(
+    backupDir: string,
+    includeCloud: boolean = false,
+    s3Client?: any,
+): Promise<BackupMetadata[]> {
     const backups: BackupMetadata[] = [];
 
     // Local backups
@@ -247,7 +292,7 @@ export async function listBackups(backupDir: string, includeCloud: boolean = fal
         const files = readdirSync(backupDir);
 
         for (const file of files) {
-            if (file.endsWith('.db') || file.endsWith('.sql')) {
+            if (file.endsWith(".db") || file.endsWith(".sql")) {
                 const filePath = join(backupDir, file);
                 const stats = statSync(filePath);
 
@@ -255,7 +300,7 @@ export async function listBackups(backupDir: string, includeCloud: boolean = fal
                     filename: file,
                     size: stats.size,
                     createdAt: stats.birthtime.toISOString(),
-                    location: 'local' as const
+                    location: "local" as const,
                 });
             }
         }
@@ -266,35 +311,43 @@ export async function listBackups(backupDir: string, includeCloud: boolean = fal
         try {
             const command = new ListObjectsV2Command({
                 Bucket: env.bucket_name,
-                Prefix: 'backups/',
+                Prefix: "backups/",
             });
 
             const response = await s3Client.send(command);
             if (response.Contents) {
                 for (const obj of response.Contents) {
-                    if (obj.Key && obj.Key.endsWith('.db')) {
-                        const filename = obj.Key.replace('backups/', '');
+                    if (obj.Key && obj.Key.endsWith(".db")) {
+                        const filename = obj.Key.replace("backups/", "");
                         backups.push({
                             filename,
                             size: obj.Size || 0,
-                            createdAt: obj.LastModified?.toISOString() || new Date().toISOString(),
-                            location: 'cloud' as const
+                            createdAt:
+                                obj.LastModified?.toISOString() ||
+                                new Date().toISOString(),
+                            location: "cloud" as const,
                         });
                     }
                 }
             }
         } catch (error) {
-            logger.warn({ error }, 'Failed to list cloud backups');
+            logger.warn({ error }, "Failed to list cloud backups");
         }
     }
 
     // Sort by creation date, newest first
-    backups.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    backups.sort(
+        (a, b) =>
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    );
 
     return backups;
 }
 
-export async function vacuumIntoBackup(sourceDbPath: string, destPath: string): Promise<void> {
+export async function vacuumIntoBackup(
+    sourceDbPath: string,
+    destPath: string,
+): Promise<void> {
     ensureDirectoryExists(destPath);
 
     const db = await createSQLiteDatabase(sourceDbPath);
@@ -307,9 +360,13 @@ export async function vacuumIntoBackup(sourceDbPath: string, destPath: string): 
     }
 }
 
-export async function uploadToSupabaseStorage(localPath: string, objectKey: string, s3Client?: any): Promise<void> {
+export async function uploadToSupabaseStorage(
+    localPath: string,
+    objectKey: string,
+    s3Client?: any,
+): Promise<void> {
     if (!s3Client) {
-        throw new Error('s3Client is required for upload');
+        throw new Error("s3Client is required for upload");
     }
     const file = Bun.file(localPath);
     const command = new PutObjectCommand({
@@ -320,9 +377,13 @@ export async function uploadToSupabaseStorage(localPath: string, objectKey: stri
     await s3Client.send(command);
 }
 
-export async function downloadFromSupabaseStorage(objectKey: string, destPath: string, s3Client?: any): Promise<void> {
+export async function downloadFromSupabaseStorage(
+    objectKey: string,
+    destPath: string,
+    s3Client?: any,
+): Promise<void> {
     if (!s3Client) {
-        throw new Error('s3Client is required for download');
+        throw new Error("s3Client is required for download");
     }
     const command = new GetObjectCommand({
         Bucket: env.bucket_name,
@@ -330,7 +391,7 @@ export async function downloadFromSupabaseStorage(objectKey: string, destPath: s
     });
     const response = await s3Client.send(command);
     if (!response.Body) {
-        throw new Error('No body in S3 response');
+        throw new Error("No body in S3 response");
     }
     await pipeline(response.Body as any, createWriteStream(destPath));
 }
@@ -340,23 +401,37 @@ export interface BackupMetadata {
     filename: string;
     size: number;
     createdAt: string;
-    location: 'local' | 'cloud';
+    location: "local" | "cloud";
 }
 
-export async function enforceBackupRetention(backupDir: string): Promise<void> {
-    const retentionDays = env.backup_retention_days;
+export async function enforceBackupRetention(
+    backupDir: string,
+    retentionDaysOverride?: number,
+): Promise<number> {
+    const retentionDays = retentionDaysOverride ?? env.backup_retention_days;
     const now = Date.now();
     const cutoffMs = retentionDays * 24 * 60 * 60 * 1000; // days to milliseconds
 
     const backups = await listBackups(backupDir);
-    const toDelete = backups.filter(backup => now - new Date(backup.createdAt).getTime() > cutoffMs);
+    const toDelete = backups.filter(
+        (backup) => now - new Date(backup.createdAt).getTime() > cutoffMs,
+    );
 
+    let deletedCount = 0;
     for (const backup of toDelete) {
         try {
             unlinkSync(join(backupDir, backup.filename));
-            logger.info({ filename: backup.filename, age: retentionDays }, 'Deleted old backup due to age retention policy');
+            logger.info(
+                { filename: backup.filename, age: retentionDays },
+                "Deleted old backup due to age retention policy",
+            );
+            deletedCount++;
         } catch (e) {
-            logger.warn({ filename: backup.filename }, 'Failed to delete old backup');
+            logger.warn(
+                { filename: backup.filename },
+                "Failed to delete old backup",
+            );
         }
     }
+    return deletedCount;
 }

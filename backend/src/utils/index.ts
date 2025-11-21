@@ -1,4 +1,4 @@
-export * from './crypto';
+export * from "./crypto";
 
 export const now = (): number => Date.now();
 export const rid = (): string => crypto.randomUUID();
@@ -27,15 +27,26 @@ export const buf_to_vec = (buf: Buffer): Float32Array => {
 };
 
 // Bun-specific helpers (file I/O wrappers and runtime introspection)
-export const isBun = (): boolean => typeof Bun !== 'undefined';
-export const bunVersion = (): string => (isBun() ? (Bun as any).version || 'unknown' : 'N/A');
-export const bunRevision = (): string => (isBun() ? (Bun as any).revision || 'unknown' : 'N/A');
+export const isBun = (): boolean => typeof Bun !== "undefined";
+export const bunVersion = (): string =>
+    isBun() ? (Bun as any).version || "unknown" : "N/A";
+export const bunRevision = (): string =>
+    isBun() ? (Bun as any).revision || "unknown" : "N/A";
 
-export const readFile = async (path: string): Promise<ArrayBuffer> => await Bun.file(path).arrayBuffer();
-export const writeFile = async (path: string, data: string | ArrayBuffer | Uint8Array): Promise<void> => { await Bun.write(path, data as any); };
-export const fileExists = async (path: string): Promise<boolean> => await Bun.file(path).exists();
+export const readFile = async (path: string): Promise<ArrayBuffer> =>
+    await Bun.file(path).arrayBuffer();
+export const writeFile = async (
+    path: string,
+    data: string | ArrayBuffer | Uint8Array,
+): Promise<void> => {
+    await Bun.write(path, data as any);
+};
+export const fileExists = async (path: string): Promise<boolean> =>
+    await Bun.file(path).exists();
 
-export const measureTime = async <T>(fn: () => Promise<T>): Promise<{ result: T; duration: number }> => {
+export const measureTime = async <T>(
+    fn: () => Promise<T>,
+): Promise<{ result: T; duration: number }> => {
     const start = Date.now();
     const result = await fn();
     return { result, duration: Date.now() - start };

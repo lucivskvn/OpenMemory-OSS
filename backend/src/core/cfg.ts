@@ -5,7 +5,9 @@ const envSchema = z.object({
     // Server configuration
     OM_PORT: z.coerce.number().int().positive().default(8080),
     OM_API_KEY: z.string().min(1).optional(),
-    OM_MODE: z.enum(["development", "production", "standard", "langgraph"]).default("development"),
+    OM_MODE: z
+        .enum(["development", "production", "standard", "langgraph"])
+        .default("development"),
 
     // Database configuration
     OM_METADATA_BACKEND: z.enum(["sqlite", "postgres"]).default("sqlite"),
@@ -25,9 +27,27 @@ const envSchema = z.object({
     OM_PG_CONNECTION_STRING: z.string().optional(),
 
     // Embedding and Vector configuration
-    OM_EMBED_KIND: z.enum(["openai", "gemini", "ollama", "local", "router_cpu", "synthetic"]).default("synthetic"),
+    OM_EMBED_KIND: z
+        .enum([
+            "openai",
+            "gemini",
+            "ollama",
+            "local",
+            "router_cpu",
+            "synthetic",
+        ])
+        .default("synthetic"),
     // Backwards-compatible alias: some deploys use OM_EMBEDDINGS
-    OM_EMBEDDINGS: z.enum(["openai", "gemini", "ollama", "local", "router_cpu", "synthetic"]).optional(),
+    OM_EMBEDDINGS: z
+        .enum([
+            "openai",
+            "gemini",
+            "ollama",
+            "local",
+            "router_cpu",
+            "synthetic",
+        ])
+        .optional(),
     OM_VEC_DIM: z.coerce.number().int().positive().default(256),
     OM_EMBED_MODE: z.enum(["simple", "advanced"]).default("advanced"),
     OM_ADV_EMBED_PARALLEL: z.coerce.boolean().default(false),
@@ -95,7 +115,10 @@ const envSchema = z.object({
     OM_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
     OM_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().positive().default(100),
     OM_ADMIN_API_KEY: z.string().optional(),
-    OM_LOG_MIGRATE: z.enum(["true", "false"]).default("false").transform(v => v === "true"),
+    OM_LOG_MIGRATE: z
+        .enum(["true", "false"])
+        .default("false")
+        .transform((v) => v === "true"),
 
     // SQLite backup configuration
     OM_BACKUP_DIR: z.string().default("./data/backups"),
@@ -124,7 +147,10 @@ const envSchema = z.object({
 
     // Other settings
     OM_MAX_PAYLOAD_SIZE: z.coerce.number().int().positive().default(1000000), // 1MB
-    OM_LOG_AUTH: z.enum(["true", "false"]).default("false").transform(v => v === "true"),
+    OM_LOG_AUTH: z
+        .enum(["true", "false"])
+        .default("false")
+        .transform((v) => v === "true"),
 });
 
 function parseEnvironment() {
@@ -140,33 +166,50 @@ let parsedEnv = parseEnvironment();
 
 // Allow tests to re-parse environment after changing process.env
 export function __resetEnvForTests() {
-    if (process.env.OM_TEST_MODE !== '1') {
-        throw new Error('__resetEnvForTests can only be called in test mode');
+    if (process.env.OM_TEST_MODE !== "1") {
+        throw new Error("__resetEnvForTests can only be called in test mode");
     }
     parsedEnv = parseEnvironment();
 }
 
 // Validate provider-dependent required values with runtime enforcement
-if (parsedEnv.OM_AUTH_PROVIDER === 'jwt' && !parsedEnv.OM_JWT_SECRET) {
+if (parsedEnv.OM_AUTH_PROVIDER === "jwt" && !parsedEnv.OM_JWT_SECRET) {
     // In production-like modes we normally exit when JWT provider is selected
     // but no secret is configured. Tests set `OM_TEST_MODE` early and rely
     // on being able to toggle OM_MODE for validation — while running tests
     // in parallel this can cause flakiness where a non-mocked import triggers
     // a process exit. To keep tests deterministic we skip the hard exit when
     // OM_TEST_MODE is set.
-    const isTestMode = process.env.OM_TEST_MODE === '1';
-    if (parsedEnv.OM_MODE !== 'development' && !isTestMode) {
+    const isTestMode = process.env.OM_TEST_MODE === "1";
+    if (parsedEnv.OM_MODE !== "development" && !isTestMode) {
         // See docs/deployment/universal-postgres-auth-bucket.md and SECURITY.md for expected JWT validation behavior
-        console.error("[CFG] OM_AUTH_PROVIDER=jwt requires OM_JWT_SECRET; exiting for safety in production mode.");
+        console.error(
+            "[CFG] OM_AUTH_PROVIDER=jwt requires OM_JWT_SECRET; exiting for safety in production mode.",
+        );
         process.exit(1);
     } else {
-        console.warn("[CFG] OM_AUTH_PROVIDER=jwt is configured but OM_JWT_SECRET is missing; JWT validation will be unavailable (fallback to API-key auth only).");
+        console.warn(
+            "[CFG] OM_AUTH_PROVIDER=jwt is configured but OM_JWT_SECRET is missing; JWT validation will be unavailable (fallback to API-key auth only).",
+        );
     }
 }
-if (parsedEnv.OM_BUCKET_PROVIDER === 's3' && (!parsedEnv.OM_BUCKET_ACCESS_KEY || !parsedEnv.OM_BUCKET_SECRET_KEY)) {
-    console.warn("[CFG] OM_BUCKET_PROVIDER=s3 requires OM_BUCKET_ACCESS_KEY and OM_BUCKET_SECRET_KEY (endpoint/region optional for AWS defaults).");
-} else if (parsedEnv.OM_BUCKET_PROVIDER && parsedEnv.OM_BUCKET_PROVIDER !== 's3' && (!parsedEnv.OM_BUCKET_ENDPOINT || !parsedEnv.OM_BUCKET_ACCESS_KEY || !parsedEnv.OM_BUCKET_SECRET_KEY)) {
-    console.warn(`[CFG] OM_BUCKET_PROVIDER=${parsedEnv.OM_BUCKET_PROVIDER} requires OM_BUCKET_ENDPOINT, OM_BUCKET_ACCESS_KEY and OM_BUCKET_SECRET_KEY for correct operation.`);
+if (
+    parsedEnv.OM_BUCKET_PROVIDER === "s3" &&
+    (!parsedEnv.OM_BUCKET_ACCESS_KEY || !parsedEnv.OM_BUCKET_SECRET_KEY)
+) {
+    console.warn(
+        "[CFG] OM_BUCKET_PROVIDER=s3 requires OM_BUCKET_ACCESS_KEY and OM_BUCKET_SECRET_KEY (endpoint/region optional for AWS defaults).",
+    );
+} else if (
+    parsedEnv.OM_BUCKET_PROVIDER &&
+    parsedEnv.OM_BUCKET_PROVIDER !== "s3" &&
+    (!parsedEnv.OM_BUCKET_ENDPOINT ||
+        !parsedEnv.OM_BUCKET_ACCESS_KEY ||
+        !parsedEnv.OM_BUCKET_SECRET_KEY)
+) {
+    console.warn(
+        `[CFG] OM_BUCKET_PROVIDER=${parsedEnv.OM_BUCKET_PROVIDER} requires OM_BUCKET_ENDPOINT, OM_BUCKET_ACCESS_KEY and OM_BUCKET_SECRET_KEY for correct operation.`,
+    );
 }
 
 export const env = {
@@ -193,10 +236,18 @@ export const env = {
     get router_sector_models() {
         if (!parsedEnv.OM_ROUTER_SECTOR_MODELS) return null;
         try {
-            const parsed = JSON.parse(parsedEnv.OM_ROUTER_SECTOR_MODELS as string);
-            return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+            const parsed = JSON.parse(
+                parsedEnv.OM_ROUTER_SECTOR_MODELS as string,
+            );
+            return parsed &&
+                typeof parsed === "object" &&
+                !Array.isArray(parsed)
+                ? parsed
+                : null;
         } catch (error) {
-            console.warn(`OM_ROUTER_SECTOR_MODELS contained invalid JSON ("${parsedEnv.OM_ROUTER_SECTOR_MODELS}"), defaulting to null. Error: ${error instanceof Error ? error.message : String(error)}`);
+            console.warn(
+                `OM_ROUTER_SECTOR_MODELS contained invalid JSON ("${parsedEnv.OM_ROUTER_SECTOR_MODELS}"), defaulting to null. Error: ${error instanceof Error ? error.message : String(error)}`,
+            );
             return null;
         }
     },
@@ -220,12 +271,18 @@ export const env = {
     // fall back to OM_OPENAI_API_KEY or OPENAI_API_KEY if set in the
     // environment. This allows existing docker-compose files to continue
     // working without requiring changes during a short migration window.
-    openai_key: parsedEnv.OM_OPENAI_KEY ?? process.env.OM_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY,
+    openai_key:
+        parsedEnv.OM_OPENAI_KEY ??
+        process.env.OM_OPENAI_API_KEY ??
+        process.env.OPENAI_API_KEY,
     openai_base_url: parsedEnv.OM_OPENAI_BASE_URL,
     openai_model: parsedEnv.OM_OPENAI_MODEL,
 
     // Gemini key fallback chain as well
-    gemini_key: parsedEnv.OM_GEMINI_KEY ?? process.env.OM_GEMINI_API_KEY ?? process.env.GEMINI_API_KEY,
+    gemini_key:
+        parsedEnv.OM_GEMINI_KEY ??
+        process.env.OM_GEMINI_API_KEY ??
+        process.env.GEMINI_API_KEY,
 
     ollama_url: parsedEnv.OM_OLLAMA_URL,
     ollama_auto_pull: parsedEnv.OM_OLLAMA_AUTO_PULL,
@@ -287,8 +344,14 @@ export const env = {
 };
 
 // Computed flags for downstream consumers (e.g., auth.ts)
-export const jwt_enabled = !!(parsedEnv.OM_AUTH_PROVIDER === 'jwt' && parsedEnv.OM_JWT_SECRET);
-export const bucket_s3_configured = !!(parsedEnv.OM_BUCKET_PROVIDER === 's3' && parsedEnv.OM_BUCKET_ACCESS_KEY && parsedEnv.OM_BUCKET_SECRET_KEY);
+export const jwt_enabled = !!(
+    parsedEnv.OM_AUTH_PROVIDER === "jwt" && parsedEnv.OM_JWT_SECRET
+);
+export const bucket_s3_configured = !!(
+    parsedEnv.OM_BUCKET_PROVIDER === "s3" &&
+    parsedEnv.OM_BUCKET_ACCESS_KEY &&
+    parsedEnv.OM_BUCKET_SECRET_KEY
+);
 
 // Removed deprecated fusion_simd_enabled alias - use global_simd_enabled directly
 
@@ -323,15 +386,25 @@ export function getConfig() {
         router_cache_ttl_ms: p.OM_ROUTER_CACHE_TTL_MS,
         router_cache_enabled: p.OM_ROUTER_CACHE_ENABLED,
         router_fallback_enabled: p.OM_ROUTER_FALLBACK_ENABLED,
-        router_sector_models: p.OM_ROUTER_SECTOR_MODELS ? (() => {
-            try {
-                const parsed = JSON.parse(p.OM_ROUTER_SECTOR_MODELS as string);
-                return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
-            } catch (error) {
-                console.warn(`OM_ROUTER_SECTOR_MODELS contained invalid JSON ("${p.OM_ROUTER_SECTOR_MODELS}"), defaulting to null. Error: ${error instanceof Error ? error.message : String(error)}`);
-                return null;
-            }
-        })() : null,
+        router_sector_models: p.OM_ROUTER_SECTOR_MODELS
+            ? (() => {
+                  try {
+                      const parsed = JSON.parse(
+                          p.OM_ROUTER_SECTOR_MODELS as string,
+                      );
+                      return parsed &&
+                          typeof parsed === "object" &&
+                          !Array.isArray(parsed)
+                          ? parsed
+                          : null;
+                  } catch (error) {
+                      console.warn(
+                          `OM_ROUTER_SECTOR_MODELS contained invalid JSON ("${p.OM_ROUTER_SECTOR_MODELS}"), defaulting to null. Error: ${error instanceof Error ? error.message : String(error)}`,
+                      );
+                      return null;
+                  }
+              })()
+            : null,
         router_dim_tolerance: p.OM_ROUTER_DIM_TOLERANCE,
         router_validate_on_start: p.OM_ROUTER_VALIDATE_ON_START,
         router_validate_strict: p.OM_ROUTER_VALIDATE_STRICT,
@@ -346,11 +419,17 @@ export function getConfig() {
         cache_segments: p.OM_CACHE_SEGMENTS,
         max_active: p.OM_MAX_ACTIVE,
 
-        openai_key: p.OM_OPENAI_KEY ?? process.env.OM_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY,
+        openai_key:
+            p.OM_OPENAI_KEY ??
+            process.env.OM_OPENAI_API_KEY ??
+            process.env.OPENAI_API_KEY,
         openai_base_url: p.OM_OPENAI_BASE_URL,
         openai_model: p.OM_OPENAI_MODEL,
 
-        gemini_key: p.OM_GEMINI_KEY ?? process.env.OM_GEMINI_API_KEY ?? process.env.GEMINI_API_KEY,
+        gemini_key:
+            p.OM_GEMINI_KEY ??
+            process.env.OM_GEMINI_API_KEY ??
+            process.env.GEMINI_API_KEY,
 
         ollama_url: p.OM_OLLAMA_URL,
         ollama_auto_pull: p.OM_OLLAMA_AUTO_PULL,
@@ -410,13 +489,19 @@ export function getConfig() {
 
 // Factory function to create S3 client for Supabase Storage or S3-compatible services
 export function getS3Client() {
-    if (!env.bucket_endpoint || !env.bucket_access_key || !env.bucket_secret_key) {
-        throw new Error('Missing required bucket configuration: endpoint, access_key, and secret_key must be set');
+    if (
+        !env.bucket_endpoint ||
+        !env.bucket_access_key ||
+        !env.bucket_secret_key
+    ) {
+        throw new Error(
+            "Missing required bucket configuration: endpoint, access_key, and secret_key must be set",
+        );
     }
 
     return new S3Client({
         endpoint: env.bucket_endpoint,
-        region: env.bucket_region || 'auto', // Supabase doesn't require a specific region
+        region: env.bucket_region || "auto", // Supabase doesn't require a specific region
         credentials: {
             accessKeyId: env.bucket_access_key,
             secretAccessKey: env.bucket_secret_key,

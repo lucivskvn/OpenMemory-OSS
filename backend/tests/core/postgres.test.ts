@@ -12,7 +12,8 @@ import logger from "../../src/core/logger";
 describe("PostgreSQL Connection String Parsing", () => {
     describe("parsePgConnectionString", () => {
         test("parses URI with sslmode=require correctly", () => {
-            const connStr = "postgresql://user:pass@host:5432/db?sslmode=require";
+            const connStr =
+                "postgresql://user:pass@host:5432/db?sslmode=require";
             const mockLogger = { warn: () => {} };
             const opts = parsePgConnectionString(connStr, mockLogger);
 
@@ -27,7 +28,8 @@ describe("PostgreSQL Connection String Parsing", () => {
         });
 
         test("parses URI with sslmode=disable correctly", () => {
-            const connStr = "postgresql://user:pass@host:5432/db?sslmode=disable";
+            const connStr =
+                "postgresql://user:pass@host:5432/db?sslmode=disable";
             const mockLogger = { warn: () => {} };
             const opts = parsePgConnectionString(connStr, mockLogger);
 
@@ -42,7 +44,8 @@ describe("PostgreSQL Connection String Parsing", () => {
         });
 
         test("parses URI with sslmode=verify-full correctly", () => {
-            const connStr = "postgresql://user:pass@host:5432/db?sslmode=verify-full";
+            const connStr =
+                "postgresql://user:pass@host:5432/db?sslmode=verify-full";
             const mockLogger = { warn: spyOn(logger, "warn") };
             const opts = parsePgConnectionString(connStr, mockLogger);
 
@@ -80,7 +83,7 @@ describe("PostgreSQL Connection String Parsing", () => {
 
             expect(opts).toEqual({
                 host: "localhost",
-                port: undefined,  // default port
+                port: undefined, // default port
                 database: "testdb",
                 user: undefined,
                 password: undefined,
@@ -94,7 +97,7 @@ describe("PostgreSQL Connection String Parsing", () => {
             const mockLogger = { warn: spyOn(logger, "warn") };
             const opts = parsePgConnectionString(connStr, mockLogger);
 
-            expect(opts).toEqual({});  // empty object on error
+            expect(opts).toEqual({}); // empty object on error
             expect(mockLogger.warn).not.toHaveBeenCalled();
         });
 
@@ -112,7 +115,7 @@ describe("PostgreSQL Connection String Parsing", () => {
             const mockLogger = { warn: spyOn(logger, "warn") };
             const opts = parsePgConnectionString(connStr, mockLogger);
 
-            expect(opts).toEqual({});  // no try-catch if !connStr
+            expect(opts).toEqual({}); // no try-catch if !connStr
             expect(mockLogger.warn).not.toHaveBeenCalled();
         });
     });
