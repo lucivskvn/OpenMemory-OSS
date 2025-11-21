@@ -291,13 +291,13 @@ bun install --frozen-lockfile
 
 - Verify backend health: `curl http://localhost:8080/health`
 - Check `.env.local` URLs
-- Browser dev tools: Check network tab for SSE (text/event-stream)
+- Browser dev tools: Check network tab for AI SDK data-stream (text/plain; charset=utf-8)
 - Logs: Watch backend for chat endpoint calls
 
 #### AI SDK Issues on Mint 22
 
 - Ensure real LLM provider configured: `bun add @ai-sdk/openai` or `@ai-sdk/ollama`, set OPENAI_API_KEY or OLLAMA_URL=http://localhost:11434
-- Verify streaming format: `curl -v POST /api/chat` (expect text/event-stream with standard AI SDK message format)
+- Verify streaming format: `curl -v POST /api/chat` (expect text/plain; charset=utf-8 with AI SDK v5 data-stream format and `0:"..."` frames)
 - Common: Missing libssl-dev causes native builds to fail; restart after adding to render/video groups for GPU access
 
 See `CONTRIBUTING.md` for additional patterns and `AGENTS.md` for Bun-first guidelines.

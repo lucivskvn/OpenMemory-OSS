@@ -13,7 +13,8 @@
     "verify:ai-sdk": "bun scripts/verify-ai-sdk.ts",
     "test:bun": "bun test",
     "test:ai-sdk": "bun test ../tests/dashboard/ai-sdk-streaming.test.ts",
-    "test:ai-sdk:e2e": "bun test ../tests/e2e/ai-sdk-chat.e2e.test.ts"
+    "test:ai-sdk:e2e": "bun test ../tests/e2e/ai-sdk-chat.e2e.test.ts",
+    "test:e2e:real": "OM_ENABLE_LLM_TESTS=1 bun test ../tests/e2e/ai-sdk-chat.e2e.test.ts"
   },
   "engines": {
     "bun": ">=1.3.2",
