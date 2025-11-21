@@ -12,6 +12,10 @@ import {
     SIMD_SUPPORTED,
 } from "../utils/simd";
 import logger, { getEnvLogLevel } from "../core/logger";
+import {
+    BedrockRuntimeClient,
+    InvokeModelCommand,
+} from "@aws-sdk/client-bedrock-runtime";
 if (process.env.RUN_TRANSFORMERS_RESOLVE_TEST === "1") {
     import("@xenova/transformers")
         .then((T) => {
@@ -76,6 +80,9 @@ function currentEnv() {
         adv_embed_parallel: e.OM_ADV_EMBED_PARALLEL === "true" || false,
         embed_delay_ms: parseInt(e.OM_EMBED_DELAY_MS || "0", 10) || 0,
         openai_base: e.OPENAI_API_BASE || e.OPENAI_BASE_URL || null,
+        aws_region: e.AWS_REGION || e.OM_AWS_REGION || null,
+        aws_access_key_id: e.AWS_ACCESS_KEY_ID || e.OM_AWS_ACCESS_KEY_ID || null,
+        aws_secret_access_key: e.AWS_SECRET_ACCESS_KEY || e.OM_AWS_SECRET_ACCESS_KEY || null,
         router_cache_ttl_ms:
             parseInt(e.OM_ROUTER_CACHE_TTL_MS || "30000", 10) || 30000,
         router_cache_enabled: e.OM_ROUTER_CACHE_ENABLED !== "false",
@@ -347,6 +354,8 @@ async function get_sem_emb(t: string, s: string): Promise<number[]> {
             return (await emb_gemini({ [s]: t }))[s];
         case "ollama":
             return await emb_ollama(t, s);
+        case "aws":
+            return await emb_aws(t, s);
         case "local":
             return await emb_local(t, s);
         case "router_cpu":
@@ -983,6 +992,46 @@ export async function emb_router_cpu(t: string, s: string): Promise<number[]> {
         }
 
         throw error;
+    }
+}
+
+async function emb_aws(t: string, s: string): Promise<number[]> {
+    const e = currentEnv();
+    if (!e.aws_region) throw new Error("AWS_REGION missing");
+    if (!e.aws_access_key_id) throw new Error("AWS_ACCESS_KEY_ID missing");
+    if (!e.aws_secret_access_key)
+        throw new Error("AWS_SECRET_ACCESS_KEY missing");
+
+    const m = get_model(s, "aws");
+    const client = new BedrockRuntimeClient({
+        region: e.aws_region,
+        credentials: {
+            accessKeyId: e.aws_access_key_id,
+            secretAccessKey: e.aws_secret_access_key,
+        },
+    });
+
+    const dim = [256, 512, 1024].find((x) => x >= e.vec_dim) ?? 1024;
+    const params = {
+        modelId: m,
+        contentType: "application/json",
+        accept: "*/*",
+        body: JSON.stringify({
+            inputText: t,
+            dimensions: dim,
+        }),
+    };
+    const command = new InvokeModelCommand(params);
+
+    try {
+        const response = await client.send(command);
+        const jsonString = new TextDecoder().decode(response.body);
+        const parsedResponse = JSON.parse(jsonString);
+        return resize_vec(parsedResponse.embedding, e.vec_dim);
+    } catch (error) {
+        throw new Error(
+            `AWS Bedrock error: ${error instanceof Error ? error.message : String(error)}`,
+        );
     }
 }
 
