@@ -32,6 +32,7 @@ const envSchema = z.object({
             "openai",
             "gemini",
             "ollama",
+            "aws",
             "local",
             "router_cpu",
             "synthetic",
@@ -43,6 +44,7 @@ const envSchema = z.object({
             "openai",
             "gemini",
             "ollama",
+            "aws",
             "local",
             "router_cpu",
             "synthetic",
@@ -94,6 +96,14 @@ const envSchema = z.object({
     OM_OLLAMA_KEEP_ALIVE: z.string().default("5m"), // How long to keep models in memory
     OM_OLLAMA_NUM_PARALLEL: z.coerce.number().int().positive().default(1), // Parallel request limit
     OM_OLLAMA_NUM_GPU: z.coerce.number().int().default(0), // Number of GPUs (0=CPU, -1=all)
+
+    // AWS Bedrock specific
+    AWS_REGION: z.string().optional(),
+    AWS_ACCESS_KEY_ID: z.string().optional(),
+    AWS_SECRET_ACCESS_KEY: z.string().optional(),
+    OM_AWS_REGION: z.string().optional(),
+    OM_AWS_ACCESS_KEY_ID: z.string().optional(),
+    OM_AWS_SECRET_ACCESS_KEY: z.string().optional(),
 
     // Universal Auth and JWT/OIDC options
     OM_AUTH_PROVIDER: z.enum(["jwt", "supabase"]).optional(),
