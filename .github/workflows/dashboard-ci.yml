@@ -1,0 +1,228 @@
+name: Dashboard CI (Bun)
+
+on:
+  push:
+    branches: [main, next, next-clean]
+    paths:
+      - "dashboard/**"
+      - ".github/workflows/dashboard-ci.yml"
+  pull_request:
+    branches: [main, next]
+    paths:
+      - "dashboard/**"
+
+jobs:
+  test-dashboard:
+    name: Test Dashboard (Bun + Next.js 16)
+    runs-on: ubuntu-24.04 # Linux Mint 22 base
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          fetch-depth: 1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.1
+        with:
+          bun-version: 1.3.2
+
+      - name: Install dependencies
+        working-directory: ./dashboard
+        run: bun install --frozen-lockfile
+
+      - name: Verify Bun compatibility
+        working-directory: ./dashboard
+        run: |
+          bun --version
+          bunx --bun next --version
+          echo "Bun + Next.js compatibility verified"
+
+      - name: Lint dashboard
+        working-directory: ./dashboard
+        run: bun run lint
+
+      - name: Run dashboard unit tests (formatTime + numbers)
+        working-directory: ./dashboard
+        run: bun test tests/formatTime.test.ts tests/formatNumber.test.ts --reporter=dot
+
+      - name: Build dashboard
+        working-directory: ./dashboard
+        run: bun run build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8080
+
+      - name: Check build output
+        working-directory: ./dashboard
+        run: |
+          ls -lh .next/
+          du -sh .next/
+          echo "Build completed successfully"
+
+  verify-ai-sdk:
+    name: Verify AI SDK Compatibility & Run Streaming Tests
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.1
+        with:
+          bun-version: 1.3.2
+
+      - name: Install dependencies
+        working-directory: ./dashboard
+        run: bun install --frozen-lockfile
+
+      - name: Verify AI SDK version
+        working-directory: ./dashboard
+        run: |
+          AI_VERSION=$(bun pm ls ai | grep 'ai@' | head -1 | sed 's/.*ai@//;s/ .*//')
+          echo "AI SDK version: $AI_VERSION"
+          if [[ "$AI_VERSION" != "5.0.93" ]]; then
+            echo "Warning: Expected AI SDK v5.0.93, got $AI_VERSION"
+          fi
+
+      - name: Run AI SDK verification
+        working-directory: ./dashboard
+        run: |
+          bun run verify:ai-sdk
+
+      - name: Run AI SDK streaming integration tests
+        run: |
+          mkdir -p test-results
+          OM_TEST_MODE=1 bun test tests/dashboard/ai-sdk-streaming.test.ts --reporter=tap | tee test-results/ai-sdk-streaming-${{ github.run_id }}.tap
+
+      - name: Archive AI SDK streaming test results
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-sdk-streaming-test-results
+          path: test-results/ai-sdk-streaming-*.tap
+          retention-days: 30
+
+  e2e-dashboard:
+    name: E2E Dashboard (backend + dashboard)
+    runs-on: ubuntu-24.04
+    needs: [test-dashboard, verify-ai-sdk]
+    env:
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+      OM_RUN_PERF_TESTS: "true"
+      OM_TEST_MODE: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5
+        with:
+          bun-version: 1.3.2
+
+      - name: Install backend deps
+        working-directory: backend
+        run: bun install --frozen-lockfile --no-save
+
+      - name: Install dashboard deps
+        working-directory: dashboard
+        run: bun install --frozen-lockfile --no-save
+
+      - name: Start backend server
+        working-directory: backend
+        run: |
+          bun run start &
+          echo $! > /tmp/server_pid
+
+      - name: Wait for backend
+        run: |
+          for i in {1..40}; do
+            curl -sSf http://127.0.0.1:8080/health && break || sleep 0.25
+          done
+
+      - name: Build dashboard
+        working-directory: dashboard
+        run: |
+          bun run build &
+          sleep 2
+
+      - name: Start dashboard
+        working-directory: dashboard
+        run: |
+          bun run start &
+          sleep 1
+
+      - name: Run Enhanced E2E tests with Playwright
+        working-directory: backend
+        run: |
+          mkdir -p ../tests/e2e/results
+          bun test ../tests/e2e/ai-sdk-chat-playwright.e2e.test.ts --reporter=json | tee ../tests/e2e/results/ai-sdk-chat-${{ github.run_id }}.json
+          bun test ../tests/e2e/full-stack.test.ts --reporter=json | tee ../tests/e2e/results/e2e-dashboard-${{ github.run_id }}.json
+
+      - name: Upload E2E dashboard results
+        uses: actions/upload-artifact@3e0fae48b6f61b0010b496c9be0b22932de132a0
+        with:
+          name: e2e-dashboard-results
+          path: tests/e2e/results/e2e-dashboard-*.json
+          retention-days: 30
+
+      - name: Stop servers
+        run: |
+          kill `cat /tmp/server_pid` || true
+
+  benchmark-ai-sdk:
+    name: AI SDK Benchmarks (TTFT, TPS, streaming metrics)
+    runs-on: ubuntu-24.04
+    needs: [e2e-dashboard]
+    env:
+      OM_RUN_PERF_TESTS: "true"
+      OM_TEST_MODE: "1"
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5
+        with:
+          bun-version: 1.3.2
+
+      - name: Install deps
+        run: |
+          cd backend && bun install --frozen-lockfile --no-save
+          cd dashboard && bun install --frozen-lockfile --no-save
+
+      - name: Start backend
+        run: |
+          cd backend
+          bun run start &
+          echo $! > /tmp/server_pid
+          for i in {1..40}; do
+            curl -sSf http://127.0.0.1:8080/health && break || sleep 0.25
+          done
+
+      - name: Build and start dashboard
+        run: |
+          cd dashboard
+          bun run build
+          bun run start &
+          echo $! > /tmp/dash_pid
+          for i in {1..40}; do
+            curl -sSf http://127.0.0.1:3000 && break || sleep 0.25
+          done
+
+      - name: Run AI SDK benchmark suite
+        run: |
+          cd backend
+          bun test ../tests/benchmarks/ai-sdk-benchmark.test.ts --reporter=json || true
+
+      - name: Upload AI SDK benchmark results
+        uses: actions/upload-artifact@3e0fae48b6f61b0010b496c9be0b22932de132a0
+        with:
+          name: ai-sdk-benchmarks
+          path: tests/benchmarks/results/*.json
+          retention-days: 90
+
+      - name: Stop servers
+        run: |
+          kill `cat /tmp/dash_pid` || true
+          kill `cat /tmp/server_pid` || true

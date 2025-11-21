@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { hashPassword, verifyPassword, hashString, generateId, generateToken, isHashedKey } from '../../backend/src/utils/crypto';
+import { hashPassword, verifyPassword, hashString, generateId, generateToken, isHashedKey, generateCSRFToken, verifyCSRFToken } from '../../backend/src/utils/crypto';
 
 describe('crypto utils basic', () => {
     it('hash and verify password', async () => {
@@ -71,6 +71,82 @@ describe('hashed key helpers and auth middleware', () => {
             try { if (handle && typeof handle.restore === 'function') handle.restore(); } catch (e) { }
             try { if (originalError && logger.default) logger.default.error = originalError; } catch (_) { }
         }
+    });
+});
+
+describe('CSRF helpers', () => {
+    it('generateCSRFToken returns non-empty string with different values', () => {
+        const token1 = generateCSRFToken();
+        const token2 = generateCSRFToken();
+
+        expect(typeof token1).toBe('string');
+        expect(token1.length).toBeGreaterThan(0);
+        expect(typeof token2).toBe('string');
+        expect(token2.length).toBeGreaterThan(0);
+        expect(token1).not.toBe(token2); // successive calls should produce different values
+    });
+
+    it('verifyCSRFToken returns true for identical tokens and false for different tokens', () => {
+        const token = generateCSRFToken();
+
+        // Same token should verify as true
+        expect(verifyCSRFToken(token, token)).toBe(true);
+
+        // Different token should verify as false
+        const differentToken = generateCSRFToken();
+        expect(verifyCSRFToken(token, differentToken)).toBe(false);
+
+        // Wrong lengths should verify as false
+        const shortToken = token.slice(0, 10);
+        expect(verifyCSRFToken(token, shortToken)).toBe(false);
+
+        // First character different should verify as false
+        const firstCharModified = 'x' + token.slice(1);
+        expect(verifyCSRFToken(token, firstCharModified)).toBe(false);
+
+        // Last character different should verify as false
+        const lastCharModified = token.slice(0, -1) + 'x';
+        expect(verifyCSRFToken(token, lastCharModified)).toBe(false);
+    });
+
+    it('verifyCSRFToken does not short-circuit on first character mismatch (timing check)', async () => {
+        const token = generateCSRFToken();
+
+        // Create tokens of the same length with mismatches at different positions
+        // Only test tokens with the same length to focus on timing attacks within the comparison loop
+        const sameLengthTokens = [
+            token, // valid token
+            'x' + token.slice(1),  // mismatch at position 0
+            token.slice(0, 10) + 'x' + token.slice(11), // mismatch at position 10
+            token.slice(0, -1) + 'x', // mismatch at last position
+        ];
+
+        const iterations = 1000; // Increase iterations for more reliable timing measurement
+        const durations: number[] = [];
+
+        // Measure time for each type of token
+        for (const testToken of sameLengthTokens) {
+            const measurements: number[] = [];
+            for (let i = 0; i < 5; i++) { // Multiple measurements per token type
+                const start = performance.now();
+                for (let j = 0; j < iterations; j++) {
+                    verifyCSRFToken(token, testToken);
+                }
+                const end = performance.now();
+                measurements.push(end - start);
+            }
+            // Use average of measurements for this token type
+            durations.push(measurements.reduce((a, b) => a + b, 0) / measurements.length);
+        }
+
+        // Check that duration variations are within reasonable bounds within the comparison loop
+        const maxDuration = Math.max(...durations);
+        const minDuration = Math.min(...durations);
+
+        // The function should be timing-safe for equal-length tokens
+        // Allow up to 5x variation in timing (generous threshold to account for system variability)
+        const ratio = maxDuration / (minDuration || 1); // Avoid division by zero
+        expect(ratio, 'verifyCSRFToken should have consistent timing for equal-length tokens').toBeLessThan(5);
     });
 });
 

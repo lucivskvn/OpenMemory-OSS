@@ -1,0 +1,16 @@
+[install]
+# Use isolated installs to avoid accidental lockfile mutations
+isolated = true
+# Prefer hoisted node_modules for Next.js compatibility
+hoisted = true
+# Frozen lockfile in CI (enforced via --frozen-lockfile flag)
+frozen = false
+
+[test]
+# Use Bun's built-in test runner for future dashboard tests
+# preload = ["./tests/setup.ts"]  # TODO: Enable when setup file exists
+coverage = true
+
+[run]
+# Prefer Bun's native module resolution for faster startup
+prefer-offline = true

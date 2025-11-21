@@ -152,13 +152,38 @@ export function parsePgConnectionString(connStr: string | undefined, logger: any
                 return {};
             }
         } catch (e) {
-            // If the connection string is malformed, fail silently and fall back
+            // If the connection string is malformed, log a warning, fail silently and fall back
             // to discrete env vars. Avoid noisy logs in test environments to
             // keep behavior deterministic for unit tests that validate fallbacks.
+            logger.warn({ component: 'DB', connection_string: sanitizeConnectionString(connStr) }, '[DB] Failed to parse OM_PG_CONNECTION_STRING; falling back to OM_PG_* env vars');
             return {};
         }
     }
     return opts;
+}
+
+/**
+ * Helper: checkTenantScope
+ * Centralized helper for tenant scope validation in q helpers.
+ * For sensitive methods, warns or throws when user_id is missing in non-strict mode.
+ */
+function checkTenantScope(helperName: string, user_id: any, params: any = {}) {
+    const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
+    if (strict && (user_id === null || user_id === undefined || user_id === '')) {
+        const msg = `Tenant-scoped ${helperName.slice(helperName.lastIndexOf('_') + 1)} requires user_id when OM_STRICT_TENANT=true`;
+        logger.error({ component: 'DB', helper: helperName, ...params }, `[DB] ${msg}`);
+        throw new Error(msg);
+    }
+    if (!strict && (user_id === null || user_id === undefined || user_id === '')) {
+        const warnLegacy = process.env.OM_WARN_LEGACY_TENANT_CALLS === 'true';
+        const msg = `${helperName} called without user_id in non-strict tenant mode. This may return global data.`;
+        if (warnLegacy) {
+            logger.error({ component: 'DB', helper: helperName, ...params }, `[DB] SENSITIVE: ${msg} OM_WARN_LEGACY_TENANT_CALLS=true, throwing.`);
+            throw new Error(`Legacy call blocked: ${msg}`);
+        } else {
+            logger.warn({ component: 'DB', helper: helperName, ...params }, `[DB] SENSITIVE: ${msg} Consider enabling OM_STRICT_TENANT or OM_WARN_LEGACY_TENANT_CALLS.`);
+        }
+    }
 }
 
 /**
@@ -371,6 +396,7 @@ async function initDb() {
         const v = `"${sc}"."${process.env.OM_VECTOR_TABLE || "openmemory_vectors"}"`;
         const w = `"${sc}"."openmemory_waypoints"`;
         const l = `"${sc}"."openmemory_embed_logs"`;
+        const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
 
         // Timed exec wrapper for logging and optional user-scoped guard
         const timedExec = async (sql: string, p: any[] = []) => {
@@ -435,7 +461,7 @@ async function initDb() {
         // Ensure necessary tables exist (awaited)
         try {
             await bunClient.query(
-                `create table if not exists ${m}(id uuid primary key,user_id text,segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,meta text,created_at bigint,updated_at bigint,last_seen_at bigint,salience double precision,decay_lambda double precision,version integer default 1,mean_dim integer,mean_vec bytea,compressed_vec bytea,feedback_score double precision default 0)`
+                `create table if not exists ${m}(id uuid primary key,user_id text${strict ? ' not null' : ''},segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,meta text,created_at bigint,updated_at bigint,last_seen_at bigint,salience double precision,decay_lambda double precision,version integer default 1,mean_dim integer,mean_vec bytea,compressed_vec bytea,feedback_score double precision default 0)`
             );
             await bunClient.query(
                 `create table if not exists ${v}(id uuid,sector text,user_id text,v bytea,dim integer not null,primary key(id,sector,user_id))`
@@ -447,7 +473,7 @@ async function initDb() {
                 `create table if not exists ${l}(id text primary key,model text,status text,ts bigint,err text)`
             );
             await bunClient.query(
-                `create table if not exists "${sc}"."openmemory_stream_telemetry"(id text primary key,user_id text,embedding_mode text,duration_ms bigint,memory_ids jsonb,query text,ts bigint)`
+                `create table if not exists "${sc}"."openmemory_stream_telemetry"(id text primary key,user_id text${strict ? ' not null' : ''},embedding_mode text,duration_ms bigint,memory_ids jsonb,query text,ts bigint)`
             );
             await bunClient.query(
                 `create table if not exists "${sc}"."openmemory_users"(user_id text primary key,summary text,reflection_count integer default 0,created_at bigint,updated_at bigint)`
@@ -473,6 +499,27 @@ async function initDb() {
             await bunClient.query(`create index if not exists "idx_temporal_validity" on "${sc}"."openmemory_temporal_facts"(valid_from,valid_to)`);
             await bunClient.query(`create index if not exists "idx_edges_source" on "${sc}"."openmemory_temporal_edges"(source_id)`);
             await bunClient.query(`create index if not exists "idx_edges_target" on "${sc}"."openmemory_temporal_edges"(target_id)`);
+
+            // Strict tenant schema enforcement: add not null constraints and backfill checks
+            if (strict) {
+                // Check for existing null user_ids that would violate new constraints
+                const nullMemories = await bunClient.query(`select count(*) as cnt from ${m} where user_id is null`);
+                if ((nullMemories.rows[0] as any).cnt > 0) {
+                    throw new Error(`Strict tenant mode enabled but found ${(nullMemories.rows[0] as any).cnt} memories with null user_id. Backfill or disable OM_STRICT_TENANT.`);
+                }
+                const nullTelemetry = await bunClient.query(`select count(*) as cnt from "${sc}"."openmemory_stream_telemetry" where user_id is null`);
+                if ((nullTelemetry.rows[0] as any).cnt > 0) {
+                    throw new Error(`Strict tenant mode enabled but found ${(nullTelemetry.rows[0] as any).cnt} stream_telemetry with null user_id. Backfill or disable OM_STRICT_TENANT.`);
+                }
+
+                // Add combined indexes for query optimization
+                await bunClient.query(`create index if not exists "idx_memories_user_sector" on ${m}(user_id, primary_sector)`);
+                await bunClient.query(`create index if not exists "idx_memories_user_segment" on ${m}(user_id, segment)`);
+                await bunClient.query(`create index if not exists "idx_vectors_user_sector" on ${v}(user_id, sector)`);
+                await bunClient.query(`create index if not exists "idx_waypoints_user_dst" on ${w}(user_id, dst_id)`);
+                await bunClient.query(`create index if not exists "idx_stream_telemetry_user" on "${sc}"."openmemory_stream_telemetry"(user_id)`);
+                await bunClient.query(`create index if not exists "idx_stream_telemetry_user_ts" on "${sc}"."openmemory_stream_telemetry"(user_id, ts)`);
+            }
         } catch (e) {
             logger.error({ component: "DB", err: e }, "[DB] Failed to create tables with Bun Postgres client");
             throw e;
@@ -659,12 +706,7 @@ async function initDb() {
             },
             get_mem: {
                 get: (id, user_id = null) => {
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
-                        const msg = `Tenant-scoped read (get_mem) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: "DB", id }, `[DB] ${msg}`);
-                        throw new Error(msg);
-                    }
+                    checkTenantScope('get_mem', user_id, { id });
                     return get_async(
                         `select * from ${m} where id=$1 and ($2 is null or user_id=$2)`,
                         [id, user_id],
@@ -687,12 +729,7 @@ async function initDb() {
             },
             all_mem: {
                 all: (limit, offset, user_id = null) => {
-                    const strict = (process.env.OM_STRICT_TENANT || "").toLowerCase() === "true";
-                    if (strict && (user_id === null || user_id === undefined || user_id === "")) {
-                        const msg = `Tenant-scoped read (all_mem) requires user_id when OM_STRICT_TENANT=true`;
-                        logger.error({ component: "DB" }, `[DB] ${msg}`);
-                        throw new Error(msg);
-                    }
+                    checkTenantScope('all_mem', user_id);
                     if (user_id) {
                         return all_async(
                             `select * from ${m} where user_id=$3 order by created_at desc limit $1 offset $2`,
@@ -1071,11 +1108,17 @@ async function initDb() {
         // which can cause SQLITE_BUSY during parallel test runs or when a test helper
         // launches a server process that also opens the DB file.
         db.run("PRAGMA locking_mode=NORMAL");
+
+        // Determine strict tenant mode for conditional schema constraints
+        const strict = (process.env.OM_STRICT_TENANT || '').toLowerCase() === 'true';
+
+        // Create core tables first (memories, vectors, waypoints, etc.)
+        const user_id_constraint = strict ? ' not null' : '';
         db.run(
-            `create table if not exists memories(id text primary key,user_id text,segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,meta text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0)`
+            `create table if not exists memories(id text primary key,user_id text${user_id_constraint},segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,meta text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0)`
         );
         db.run(
-            `create table if not exists vectors(id text not null,sector text not null,user_id text,v blob not null,dim integer not null,primary key(id,sector,user_id))`
+            `create table if not exists vectors(id text,sector text,user_id text,v blob,dim integer not null,primary key(id,sector,user_id))`
         );
         db.run(
             `create table if not exists waypoints(src_id text,dst_id text not null,user_id text,weight real not null,created_at integer,updated_at integer,primary key(src_id,user_id))`
@@ -1084,16 +1127,36 @@ async function initDb() {
             `create table if not exists embed_logs(id text primary key,model text,status text,ts integer,err text)`
         );
         db.run(
+            `create table if not exists stream_telemetry(id text primary key,user_id text${user_id_constraint},embedding_mode text,duration_ms integer,memory_ids text,query text,ts integer)`
+        );
+        db.run(
             `create table if not exists users(user_id text primary key,summary text,reflection_count integer default 0,created_at integer,updated_at integer)`
         );
+
+        // Strict tenant schema enforcement and backfill checks for SQLite
+        if (strict) {
+            // Check for existing null user_ids that would violate new constraints (SQLite doesn't enforce NOT NULL until data insertion)
+            const nullMemories = db.prepare("select count(*) as cnt from memories where user_id is null").get();
+            if ((nullMemories as any).cnt > 0) {
+                throw new Error(`Strict tenant mode enabled but found ${(nullMemories as any).cnt} memories with null user_id. Backfill or disable OM_STRICT_TENANT.`);
+            }
+            const nullTelemetry = db.prepare("select count(*) as cnt from stream_telemetry where user_id is null").get();
+            if ((nullTelemetry as any).cnt > 0) {
+                throw new Error(`Strict tenant mode enabled but found ${(nullTelemetry as any).cnt} stream_telemetry with null user_id. Backfill or disable OM_STRICT_TENANT.`);
+            }
+
+            // Add combined indexes for query optimization
+            db.run("create index if not exists idx_memories_user_sector on memories(user_id, primary_sector)");
+            db.run("create index if not exists idx_memories_user_segment on memories(user_id, segment)");
+            db.run("create index if not exists idx_vectors_user_sector on vectors(user_id, sector)");
+            db.run("create index if not exists idx_waypoints_user_dst on waypoints(user_id, dst_id)");
+            db.run("create index if not exists idx_stream_telemetry_user on stream_telemetry(user_id)");
+            db.run("create index if not exists idx_stream_telemetry_user_ts on stream_telemetry(user_id, ts)");
+        }
+
+        // Create temporal and extra tables
         db.run(
             `create table if not exists stats(id integer primary key autoincrement,type text not null,count integer default 1,ts integer not null)`
-        );
-        db.run(
-            `create table if not exists stream_telemetry(id text primary key,user_id text,embedding_mode text,duration_ms integer,memory_ids text,query text,ts integer)`
-        );
-        db.run(
-            `create index if not exists idx_stream_telemetry_ts on stream_telemetry(ts)`
         );
         db.run(
             `create table if not exists temporal_facts(id text primary key,subject text not null,predicate text not null,object text not null,valid_from integer not null,valid_to integer,confidence real not null check(confidence >= 0 and confidence <= 1),last_updated integer not null,metadata text,unique(subject,predicate,object,valid_from))`
@@ -1101,9 +1164,7 @@ async function initDb() {
         db.run(
             `create table if not exists temporal_edges(id text primary key,source_id text not null,target_id text not null,relation_type text not null,valid_from integer not null,valid_to integer,weight real not null,metadata text,foreign key(source_id) references temporal_facts(id),foreign key(target_id) references temporal_facts(id))`
         );
-        db.run(
-            "create index if not exists idx_memories_sector on memories(primary_sector)"
-        );
+        db.run("create index if not exists idx_stats_ts on stats(ts)");
         db.run(
             "create index if not exists idx_memories_segment on memories(segment)"
         );

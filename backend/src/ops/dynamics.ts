@@ -1,5 +1,6 @@
 import { all_async, run_async, get_async, q } from "../core/db";
 import { now } from "../utils";
+import logger from "../core/logger";
 import { cosineSimilarity } from "../memory/embed";
 
 export const ALPHA_LEARNING_RATE_FOR_RECALL_REINFORCEMENT = 0.15;

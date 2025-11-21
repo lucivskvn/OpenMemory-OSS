@@ -162,6 +162,73 @@ describe('file I/O helpers', () => {
         }
         expect(threw).toBe(true);
     });
+
+    it('ingestDocumentFromFile streaming path enforces FileTooLargeError and skips arrayBuffer fallback', async () => {
+        const fixturesDir = path.resolve('./tests/fixtures');
+        const largeTxt = path.join(fixturesDir, 'tmp-test-ingest-streaming-large.txt');
+        const content = 'A'.repeat(250); // Large content to trigger streaming path detection of size limit
+        await fs.promises.writeFile(largeTxt, content);
+        const Ingest = await import('../../backend/src/ops/ingest');
+
+        // Create a mock Bun.file() that returns null for size to force streaming path
+        const originalBun = global.Bun;
+        const mockFile = {
+            exists: async () => true,
+            size: null, // Force streaming path since fileSize is null
+            type: 'text/plain',
+            stream: () => ({
+                getReader: () => ({
+                    read: async () => ({
+                        value: new Uint8Array([65, 66, 67]), // "ABC" chunk
+                        done: false
+                    }),
+                    cancel: async () => {},
+                }),
+            }),
+            arrayBuffer: async () => {
+                throw new Error('Should not call arrayBuffer fallback when FileTooLargeError is thrown from streaming');
+            },
+        };
+
+        // Mock the global Bun.file constructor to return our mock file
+        (global as any).Bun = {
+            ...originalBun,
+            file: (filePath: string) => mockFile,
+        };
+
+        try {
+            // reuse the same DB/transaction stubs as other test
+            const fakeQ = { ins_mem: { run: async (..._a: any[]) => ({}) }, ins_waypoint: { run: async (..._a: any[]) => ({}) } };
+            const fakeTxn = { begin: async () => { }, commit: async () => { }, rollback: async () => { } };
+            (Ingest.ingestDocument as any)._q = fakeQ;
+            (Ingest.ingestDocument as any)._transaction = fakeTxn;
+            if ((ExtractOps as any).setExtractTextForTests) {
+                (ExtractOps as any).setExtractTextForTests(async (_t: any, _data: any) => ({ text: 'large streamed file', metadata: { content_type: 'text', estimated_tokens: 1 } }));
+            }
+            (Ingest.ingestDocument as any)._add_hsg_memory = async (_txt: any, _tags: any, _meta: any, _user?: any) => ({ id: 'mock-id' });
+
+            // Set a very low size limit to trigger FileTooLargeError during streaming
+            let threwExpectedError = false;
+            let arrayBufferCalled = false;
+            try {
+                await Ingest.ingestDocumentFromFile(largeTxt, 'text', undefined, { max_size_mb: 0.0001 }); // ~100 bytes limit
+            } catch (e: any) {
+                if (e.message === 'File too large' && e.name === 'FileTooLargeError') {
+                    threwExpectedError = true;
+                } else if (e.message.includes('arrayBuffer fallback')) {
+                    arrayBufferCalled = true;
+                }
+            } finally {
+                try { await fs.promises.unlink(largeTxt); } catch (e) { }
+            }
+
+            expect(threwExpectedError, 'Should throw FileTooLargeError during streaming').toBe(true);
+            expect(arrayBufferCalled, 'Should not fall back to arrayBuffer when FileTooLargeError is thrown from streaming').toBe(false);
+        } finally {
+            // Restore original Bun
+            (global as any).Bun = originalBun;
+        }
+    });
 });
 
 // Coarse performance/regression checks for file I/O helpers.

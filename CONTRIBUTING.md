@@ -175,13 +175,14 @@ When contributing to the dashboard, follow these Bun-specific patterns:
 The dashboard uses Vercel AI SDK v5.0.93 for chat functionality. When working with AI features:
 
 - Import from `@ai-sdk/react` for React hooks (`useChat`, `useCompletion`)
+- Import from `ai` for server utilities (`streamText`, `toUIMessageStreamResponse`)
 - Use Server Actions or API routes for streaming responses
-- Follow the patterns in `dashboard/app/chat/page.tsx` for memory-augmented chat
+- Follow the patterns in `dashboard/app/chat/page.tsx` (useMemoryChat wrapper) and `dashboard/app/api/chat/route.ts` for memory-augmented chat
 - Test streaming with the backend running on port 8080
 
 Expanded AI SDK guidance:
 
-- `useChat` - Preferred client-side hook for streaming chat state and handling message history. Consider this for PHASE 6.5 integration.
+- `useChat` - Preferred client-side hook for streaming chat state and handling message history.
 - `useCompletion` - For serverless streaming completions and basic text generation when you don't need full chat semantics.
 - `streamText` - Use server-side when producing streaming LLM text; works with RSC and Bun web streams.
 - `createStreamableValue` - Useful in RSC server-side components for stepwise streaming of values.
@@ -189,8 +190,8 @@ Expanded AI SDK guidance:
 
 Server functions & patterns:
 
-- Use `streamText` server utilities for LLM streaming flows and integrate with OpenMemory memory augmentation.
-- Use custom SSE (`ReadableStream`) as a widening fallback for current implementation; `dashboard/app/api/chat/route.ts` demonstrates a memory-first SSE flow.
+- Use `streamText` (from `ai`) + `toUIMessageStreamResponse` for LLM streaming flows with OpenMemory memory augmentation.
+- The current implementation uses AI SDK native streaming; no custom SSE fallbacks.
 
 Verification and best practices:
 

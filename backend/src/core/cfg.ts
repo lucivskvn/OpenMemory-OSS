@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { S3Client } from "@aws-sdk/client-s3";
 
 const envSchema = z.object({
     // Server configuration
@@ -322,7 +323,6 @@ export function getConfig() {
         router_cache_ttl_ms: p.OM_ROUTER_CACHE_TTL_MS,
         router_cache_enabled: p.OM_ROUTER_CACHE_ENABLED,
         router_fallback_enabled: p.OM_ROUTER_FALLBACK_ENABLED,
-        router_fallback_enabled: p.OM_ROUTER_FALLBACK_ENABLED === "true",
         router_sector_models: p.OM_ROUTER_SECTOR_MODELS ? (() => {
             try {
                 const parsed = JSON.parse(p.OM_ROUTER_SECTOR_MODELS as string);
@@ -406,6 +406,23 @@ export function getConfig() {
         bucket_force_path_style: p.OM_BUCKET_FORCE_PATH_STYLE,
         bucket_name: p.OM_BUCKET_NAME,
     };
+}
+
+// Factory function to create S3 client for Supabase Storage or S3-compatible services
+export function getS3Client() {
+    if (!env.bucket_endpoint || !env.bucket_access_key || !env.bucket_secret_key) {
+        throw new Error('Missing required bucket configuration: endpoint, access_key, and secret_key must be set');
+    }
+
+    return new S3Client({
+        endpoint: env.bucket_endpoint,
+        region: env.bucket_region || 'auto', // Supabase doesn't require a specific region
+        credentials: {
+            accessKeyId: env.bucket_access_key,
+            secretAccessKey: env.bucket_secret_key,
+        },
+        forcePathStyle: env.bucket_force_path_style, // Essential for Supabase Storage
+    });
 }
 
 // Test seam: allow tests to override admin key at runtime without requiring

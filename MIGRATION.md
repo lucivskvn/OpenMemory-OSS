@@ -115,6 +115,45 @@ These focused verification commands are intended to be fast and deterministic; t
 
 The DB layer includes a developer-facing warning that attempts to detect queries referencing `user_id` but invoked without a `user_id` parameter. This is best-effort and may be noisy; to control it:
 
+- `OM_WARN_LEGACY_TENANT_CALLS=true`: When enabled, treats missing `user_id` in non-strict mode as fatal errors, enforcing tenant scoping even when `OM_STRICT_TENANT=false`. This is useful for gradual migration where operators want to enforce scoping before enabling strict mode.
+
+- For sensitive methods (`all_mem`, `get_mem`, `del_mem`, `get_vec`, `get_vecs_by_id`, `get_neighbors`), aggressive warnings are logged when `user_id` is missing, regardless of other flags. These methods are considered high-risk for accidental global access.
+
+### Schema-level constraints
+
+When `OM_STRICT_TENANT=true`, the database schema now includes `NOT NULL` constraints on `user_id` columns for `memories` and `stream_telemetry` tables (vectors and waypoints already have `user_id` in their primary keys). Additionally, combined indexes are created for optimal query performance:
+
+- `idx_memories_user_sector` on `(user_id, primary_sector)`
+- `idx_memories_user_segment` on `(user_id, segment)`
+- `idx_vectors_user_sector` on `(user_id, sector)`
+- `idx_waypoints_user_dst` on `(user_id, dst_id)`
+- `idx_stream_telemetry_user` on `(user_id)`
+- `idx_stream_telemetry_user_ts` on `(user_id, ts)`
+
+These indexes match the predominant query patterns used by the `q` helpers.
+
+If existing data contains null `user_id` values when strict tenant mode is enabled, initialization will fail with a clear error. Operators must backfill null values before enabling `OM_STRICT_TENANT=true`.
+
+### Backfilling null user_id values
+
+To backfill historical data with default user_id (for example, 'legacy'):
+
+For SQLite:
+
+```sql
+UPDATE memories SET user_id = 'legacy' WHERE user_id IS NULL;
+UPDATE stream_telemetry SET user_id = 'legacy' WHERE user_id IS NULL;
+```
+
+For PostgreSQL:
+
+```sql
+UPDATE your_schema.your_memories_table SET user_id = 'legacy' WHERE user_id IS NULL;
+UPDATE your_schema.openmemory_stream_telemetry SET user_id = 'legacy' WHERE user_id IS NULL;
+```
+
+Then run migrations or restart to apply the NOT NULL constraint.
+
 - `OM_DB_USER_SCOPE_WARN=true` enables the warning checks (tests run with this disabled by default).
 - `OM_DB_DEBUG_USER_SCOPE=true` enables a noisier fallback heuristic when the SQL parser cannot precisely determine parameter positions. Only enable this when actively debugging user-scope issues.
 

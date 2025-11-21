@@ -70,3 +70,58 @@ export interface ChatRequest extends QueryRequest {
   // Embedding telemetry metadata can help with routing decisions
   metadata?: EmbeddingTelemetryMetadata;
 }
+
+/**
+ * LangGraph Memory Types
+ */
+export type sector_type = "episodic" | "semantic" | "reflective" | "procedural" | "emotional";
+
+export interface lgm_store_req {
+  node: string;
+  content: string;
+  namespace?: string;
+  graph_id?: string;
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+  reflective?: boolean;
+}
+
+export interface lgm_retrieve_req {
+  node: string;
+  namespace?: string;
+  graph_id?: string;
+  limit?: number;
+  include_metadata?: boolean;
+  query?: string;
+}
+
+export interface lgm_context_req {
+  namespace?: string;
+  graph_id?: string;
+  limit?: number;
+}
+
+export interface lgm_reflection_req {
+  namespace?: string;
+  graph_id?: string;
+  context_ids?: string[];
+  node?: string;
+  content?: string;
+}
+
+export interface mem_row {
+  id: string;
+  primary_sector: sector_type;
+  salience: number;
+  last_seen_at: number;
+  user_id?: string | null;
+  content: string;
+  tags?: string | null;
+  meta?: string | null;
+  created_at: number;
+  updated_at: number;
+  decay_lambda: number;
+  version: number;
+}
+
+export type rpc_err_code = string;

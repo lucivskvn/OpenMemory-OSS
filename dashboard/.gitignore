@@ -1,0 +1,28 @@
+# Bun
+.bun
+node_modules.bun
+
+# Next.js
+.next/
+out/
+build/
+
+# Testing
+coverage/
+.nyc_output/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

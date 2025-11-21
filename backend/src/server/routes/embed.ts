@@ -136,21 +136,6 @@ export function embed(app: any): void {
             let startTs = Date.now();
 
             try {
-                // Test seam: if an Ollama tag list has been injected for tests,
-                // use that instead of calling the external service. This allows
-                // tests to run without a live Ollama instance.
-                if ((__TEST_ollama as any).tags !== undefined) {
-                    const tags = typeof (__TEST_ollama as any).tags === 'function' ? await (__TEST_ollama as any).tags() : (__TEST_ollama as any).tags;
-                    const models = tags.models || tags;
-                    const result = {
-                        models: models.map((m: any) => ({ name: m.name || m, size: m.size || 0, modified_at: m.modified_at || null })),
-                        count: models.length,
-                        ollama_url: baseUrl,
-                        context: { generated_at: new Date().toISOString(), ollama_url: baseUrl }
-                    };
-                    setCache('ollama_list', result, 30000);
-                    return new Response(JSON.stringify({ ...result, cached: false }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-                }
                 modelName = tag && tag !== 'latest' ? `${model}:${tag}` : model;
 
                 logger.info({ component: 'EMBED', modelName, mcp_task_id }, 'Pulling Ollama model...');

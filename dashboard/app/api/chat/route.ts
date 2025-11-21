@@ -1,21 +1,13 @@
 import { NextRequest } from 'next/server'
-import { API_BASE_URL, getHeaders, getServerHeaders } from '@/lib/api'
+import { API_BASE_URL, getServerHeaders } from '@/lib/api'
 import { streamText } from 'ai'
+import { openai } from '@ai-sdk/openai'
 
 interface MemoryReference {
     id: string
     sector: string
     content: string
     salience: number
-}
-
-interface StreamChunk {
-    type: 'memory' | 'thought' | 'response' | 'complete'
-    content: string
-    memories?: MemoryReference[]
-    confidence?: 'high' | 'moderate' | 'low'
-    memory_count?: number
-    sector_count?: number
 }
 
 function getSectorWeightings(sector: string): number {
@@ -29,171 +21,11 @@ function getSectorWeightings(sector: string): number {
     return weights[sector] || 1.0
 }
 
-async function* generateResponseStream(
-    query: string,
-    memories: MemoryReference[],
-    embeddingMode: string
-): AsyncGenerator<string> {
-    // Stream memory references first
-    if (memories.length > 0) {
-        const memoriesChunk: StreamChunk = {
-            type: 'memory',
-            content: `Processing ${memories.length} relevant memories...`,
-            memories: memories.map(m => ({
-                ...m,
-                salience: Math.min(1.0, m.salience * getSectorWeightings(m.sector))
-            }))
-        }
-        yield `data: ${JSON.stringify(memoriesChunk)}\n\n`
-        await new Promise(resolve => setTimeout(resolve, 100))
-    }
-
-    // Stream thought process
-    yield `data: ${JSON.stringify({
-        type: 'thought' as const,
-        content: `Analyzing your question about: "${query}"`
-    })}\n\n`
-    await new Promise(resolve => setTimeout(resolve, 200))
-
-    // Group memories by sector
-    const sectorGroups: Record<string, MemoryReference[]> = {}
-    memories.forEach(mem => {
-        if (!sectorGroups[mem.sector]) {
-            sectorGroups[mem.sector] = []
-        }
-        sectorGroups[mem.sector].push(mem)
-    })
-
-    const sectors = Object.keys(sectorGroups)
-    const hasSemantic = sectorGroups['semantic']?.length > 0
-    const hasEpisodic = sectorGroups['episodic']?.length > 0
-    const hasProcedural = sectorGroups['procedural']?.length > 0
-    const hasEmotional = sectorGroups['emotional']?.length > 0
-    const hasReflective = sectorGroups['reflective']?.length > 0
-
-    // Determine if it's a question
-    const queryLower = query.toLowerCase()
-    const isQuestion = queryLower.includes('?') ||
-        queryLower.startsWith('what') ||
-        queryLower.startsWith('how') ||
-        queryLower.startsWith('why') ||
-        queryLower.startsWith('when') ||
-        queryLower.startsWith('where') ||
-        queryLower.startsWith('who') ||
-        queryLower.startsWith('can') ||
-        queryLower.startsWith('is') ||
-        queryLower.startsWith('do') ||
-        queryLower.startsWith('does')
-
-    let response = ''
-
-    // Generate response based on available memories
-    if (isQuestion) {
-        if (hasSemantic) {
-            response += "Based on your stored knowledge:\n\n"
-            const topSemantic = sectorGroups['semantic'].slice(0, 3)
-            topSemantic.forEach((mem, idx) => {
-                response += `${mem.content}`
-                if (idx < topSemantic.length - 1) response += "\n\n"
-            })
-        } else if (hasEpisodic) {
-            response += "From your past experiences:\n\n"
-            const topEpisodic = sectorGroups['episodic'].slice(0, 2)
-            topEpisodic.forEach((mem, idx) => {
-                response += `${mem.content}`
-                if (idx < topEpisodic.length - 1) response += "\n\n"
-            })
-        } else if (hasProcedural) {
-            response += "Here's what I remember about the process:\n\n"
-            const topProcedural = sectorGroups['procedural'].slice(0, 2)
-            topProcedural.forEach((mem, idx) => {
-                response += `${mem.content}`
-                if (idx < topProcedural.length - 1) response += "\n\n"
-            })
-        }
-
-        // Additional context from other memory types
-        if (hasEpisodic && hasSemantic) {
-            response += "\n\n**Related experience:**\n"
-            response += sectorGroups['episodic'][0].content
-        }
-
-        if (hasProcedural && (hasSemantic || hasEpisodic)) {
-            response += "\n\n**How to apply this:**\n"
-            response += sectorGroups['procedural'][0].content
-        }
-
-        if (hasEmotional) {
-            response += "\n\n**Emotional context:**\n"
-            response += sectorGroups['emotional'][0].content
-        }
-
-        if (hasReflective) {
-            response += "\n\n**Insight:**\n"
-            response += sectorGroups['reflective'][0].content
-        }
-    } else {
-        // For non-questions, combine multiple memory types
-        const allMemories = memories.slice(0, 5)
-
-        if (hasSemantic && hasEpisodic) {
-            response += `${sectorGroups['semantic'][0].content}\n\n`
-            response += `This connects to when ${sectorGroups['episodic'][0].content.toLowerCase()}`
-        } else if (hasSemantic) {
-            response += sectorGroups['semantic'].slice(0, 2).map(m => m.content).join('\n\n')
-        } else if (hasEpisodic) {
-            response += "Based on your experiences:\n\n"
-            response += sectorGroups['episodic'].slice(0, 3).map(m => m.content).join('\n\n')
-        } else {
-            response += allMemories.map(m => m.content).join('\n\n')
-        }
-
-        if (hasProcedural && response.length < 500) {
-            response += "\n\n**Steps involved:**\n"
-            response += sectorGroups['procedural'][0].content
-        }
-
-        if (hasReflective && response.length < 600) {
-            response += "\n\n**Reflection:**\n"
-            response += sectorGroups['reflective'][0].content
-        }
-    }
-
-    // Add metadata footer
-    const avgSalience = memories.length > 0
-        ? memories.reduce((sum, m) => sum + (m.salience * getSectorWeightings(m.sector)), 0) / memories.length
-        : 0
-    const confidence = avgSalience > 0.7 ? "high" : avgSalience > 0.4 ? "moderate" : "low"
-
-    const memoryCount = memories.length
-    const sectorCount = sectors.length
-
-    response += `\n\n---\n*Retrieved ${memoryCount} ${memoryCount === 1 ? 'memory' : 'memories'} from ${sectorCount} ${sectorCount === 1 ? 'sector' : 'sectors'} • Confidence: ${confidence}*`
-
-    // Stream response content in chunks
-    const chunks = response.split('\n\n')
-    for (let i = 0; i < chunks.length; i++) {
-        yield `data: ${JSON.stringify({
-            type: 'response' as const,
-            content: chunks[i] + (i < chunks.length - 1 ? '\n\n' : '')
-        })}\n\n`
-        await new Promise(resolve => setTimeout(resolve, 50)) // Simulate thoughtful pause
-    }
-
-    // Final completion marker
-    yield `data: ${JSON.stringify({
-        type: 'complete' as const,
-        content: '',
-        confidence,
-        memory_count: memoryCount,
-        sector_count: sectorCount
-    })}\n\n`
-}
-
 export async function POST(request: NextRequest) {
     try {
-        const { messages, embedding_mode } = await request.json()
-        const userMessage = messages.find((m: any) => m.role === 'user')
+        const startTime = Date.now()
+        const { messages: requestMessages, embedding_mode } = await request.json()
+        const userMessage = [...requestMessages].reverse().find((m: any) => m.role === 'user')
         const query = userMessage?.content || ''
 
         if (!query.trim()) {
@@ -202,6 +34,7 @@ export async function POST(request: NextRequest) {
 
         // Query memories from backend
         let memories: MemoryReference[] = []
+        let memoryIds: string[] = []
         try {
             const response = await fetch(`${API_BASE_URL}/memory/query`, {
                 method: "POST",
@@ -222,6 +55,7 @@ export async function POST(request: NextRequest) {
                     content: match.content,
                     salience: match.salience || match.score,
                 }))
+                memoryIds = memories.map(m => m.id)
             } else {
                 console.warn('Memory query failed, proceeding with empty memories')
             }
@@ -229,58 +63,102 @@ export async function POST(request: NextRequest) {
             console.error('Error querying memories:', error)
         }
 
-        // Try AI SDK streaming if available; it may be stubbed or not present in
-        // every environment. This is a best-effort integration: if the AI SDK
-        // is present and the `streamText` function is available, use it and
-        // return `toUIMessageStreamResponse()`. Otherwise fall back to the
-        // existing ReadableStream SSE-based fallback.
-        if (typeof streamText === 'function') {
-            try {
-                // Use a memoryModel that reproduces the same behavior as the
-                // SSE fallback. The provider integration is optional, so we
-                // cast to `any` here to avoid type errors for some providers.
-                const memoryModel = {
-                    api: async () => ({
-                        shouldStream: true,
-                        supportsStructuredOutputs: false
-                    }),
-                }
+        // Compute telemetry data
+        const avgSalience = memories.length > 0 ? memories.reduce((sum, m) => sum + (m.salience * getSectorWeightings(m.sector)), 0) / memories.length : 0
+        const confidence = avgSalience > 0.7 ? 'high' : avgSalience > 0.4 ? 'moderate' : 'low'
 
-                const result = await streamText({
-                    model: memoryModel as any,
-                    prompt: `Generate a memory-augmented response for: "${query}"`,
-                })
+        // Construct prompt with memory context
+        const memoryContext = memories.length > 0
+            ? `Given the following relevant memories:\n\n${memories.map((m, i) =>
+                `[${i + 1}] ${m.content} (sector: ${m.sector}, relevance: ${(m.salience * 100).toFixed(1)}%)`
+            ).join('\n\n')}\n\n`
+            : 'No relevant memories found.\n\n'
 
-                if (result && typeof result.toUIMessageStreamResponse === 'function') {
-                    return result.toUIMessageStreamResponse()
-                }
-            } catch (err) {
-                console.warn('AI SDK streaming integration skipped (streamText call failed):', String(err))
+        // Build messages array for AI SDK
+        const apiMessages: any[] = [
+            {
+                role: 'system' as const,
+                content: `Context from ${memories.length} memories:\n\n${memoryContext}`,
+            },
+            {
+                role: 'user' as const,
+                content: query,
+            },
+        ]
+
+        // Create AI model (using OpenAI)
+        const isTestMode = process.env.OM_TEST_MODE === '1'
+        const model = process.env.OPENAI_API_KEY ? openai('gpt-4o-mini') : null
+        if (!model) {
+            if (isTestMode) {
+                // Synthetic response for testing
+                const syntheticContent = `Synthetic response to: ${query}`;
+                const message = { content: syntheticContent } as any;
+                // Add telemetry and memories markers
+                message.content += `\n\n[[OM_TELEMETRY]]${JSON.stringify({
+                    stream_duration_ms: Date.now() - startTime,
+                    memory_ids: memoryIds,
+                    embedding_mode: embedding_mode || 'unknown',
+                    confidence,
+                    memory_count: memories.length,
+                    sector_count: new Set(memories.map(m => m.sector)).size
+                })}[[/OM_TELEMETRY]]`;
+                message.content += `\n\n[[OM_MEMORIES]]${JSON.stringify(memories.map(m => ({
+                    id: m.id,
+                    sector: m.sector,
+                    content: m.content.substring(0, 100),
+                    salience: m.salience,
+                    title: m.content.substring(0, 50) + (m.content.length > 50 ? "..." : "")
+                })))}[[/OM_MEMORIES]]`;
+
+                const syntheticResponse = `data: ${JSON.stringify({
+                    role: 'assistant',
+                    content: message.content,
+                    id: `synthetic-${Date.now()}`,
+                    type: 'text',
+                    toolCalls: []
+                })}\n\ndata: [DONE]\n\n`;
+
+                const stream = new ReadableStream({
+                    start(controller) {
+                        controller.enqueue(new TextEncoder().encode(syntheticResponse));
+                        controller.close();
+                    }
+                });
+
+                return new Response(stream, {
+                    headers: { 'Content-Type': 'text/event-stream' }
+                });
+            } else {
+                return new Response(JSON.stringify({ error: 'Chat generation disabled - LLM provider (e.g., OPENAI_API_KEY) not configured. Use synthetic mode for testing.' }), { status: 503, headers: { 'Content-Type': 'application/json' } })
             }
         }
 
-        // For now, use the original approach since AI SDK v5 streaming is complex
-        // This creates a Response that streams the memory-based content
-        const stream = new ReadableStream({
-            async start(controller) {
-                try {
-                    for await (const chunk of generateResponseStream(query, memories, embedding_mode || 'unknown')) {
-                        controller.enqueue(new TextEncoder().encode(chunk))
-                    }
-                    controller.close()
-                } catch (error) {
-                    console.error('Streaming error:', error)
-                    controller.error(error)
-                }
-            }
+        const result = await streamText({
+            model: model as any,
+            messages: apiMessages,
+            temperature: 0.7,
         })
 
-        return new Response(stream, {
-            headers: {
-                'Content-Type': 'text/plain; charset=utf-8',
+        return result.toUIMessageStreamResponse({
+            onFinish: (message) => {
+                (message as any).content += `\n\n[[OM_TELEMETRY]]${JSON.stringify({
+                    stream_duration_ms: Date.now() - startTime,
+                    memory_ids: memoryIds,
+                    embedding_mode: embedding_mode || 'unknown',
+                    confidence,
+                    memory_count: memories.length,
+                    sector_count: new Set(memories.map(m => m.sector)).size
+                })}[[/OM_TELEMETRY]]`
+                    ; (message as any).content += `\n\n[[OM_MEMORIES]]${JSON.stringify(memories.map(m => ({
+                        id: m.id,
+                        sector: m.sector,
+                        content: m.content.substring(0, 100),
+                        salience: m.salience,
+                        title: m.content.substring(0, 50) + (m.content.length > 50 ? "..." : "")
+                    })))}[[/OM_MEMORIES]]`
             }
         })
-
     } catch (error) {
         console.error('Chat API error:', error)
         return new Response('Internal server error', { status: 500 })

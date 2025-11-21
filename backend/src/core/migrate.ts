@@ -9,7 +9,6 @@ import logger from "./logger";
 
 const is_pg = env.metadata_backend === "postgres";
 
-const log = (msg: string) => logger.info({ component: "MIGRATE" }, "[MIGRATE] %s", msg);
 const log = (msg: string) => {
     if (env.log_migrate) logger.info({ component: "MIGRATE" }, "[MIGRATE] %s", msg);
 };

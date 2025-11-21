@@ -1,0 +1,30 @@
+{
+    "compilerOptions": {
+        "target": "ES2022",
+        "module": "ESNext",
+        "moduleResolution": "Bundler",
+        "strict": true,
+        "skipLibCheck": true,
+        "resolveJsonModule": true,
+        "allowJs": true,
+        "jsx": "react-jsx",
+        "types": [
+            "bun",
+            "node"
+        ],
+        "baseUrl": ".",
+        "paths": {
+            "ai": [
+                "node_modules/ai/index.d.ts"
+            ],
+            "ai/*": [
+                "node_modules/ai/*"
+            ]
+        }
+    },
+    "include": [
+        "tests/**/*.ts",
+        "tests/**/*.tsx",
+        "types/**/*.d.ts"
+    ]
+}

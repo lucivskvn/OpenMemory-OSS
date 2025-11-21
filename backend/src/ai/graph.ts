@@ -43,7 +43,7 @@ const summary_line_limit = 160;
 const trunc = (txt: string, max = 320) =>
     txt.length <= max ? txt : `${txt.slice(0, max).trimEnd()}...`;
 
-const safe_parse = <T>(val: string | null, fb: T): T => {
+const safe_parse = <T>(val: string | null | undefined, fb: T): T => {
     if (!val) return fb;
     try {
         return JSON.parse(val) as T;

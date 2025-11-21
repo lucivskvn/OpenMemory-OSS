@@ -291,8 +291,13 @@ export async function ingestDocumentFromFile(
                             }
                         }
                     }
+                    streamOk = true; // Mark as successful only when we complete the loop without errors
                 } catch (e) {
-                    // Streaming read failed; best-effort cancel and fall back to arrayBuffer
+                    // Check if this is a FileTooLargeError that should not fall back to arrayBuffer
+                    if ((e as any).name === 'FileTooLargeError') {
+                        throw e; // Re-throw FileTooLargeError to prevent fallback
+                    }
+                    // Other streaming errors: best-effort cancel and fall back to arrayBuffer
                     try { await reader.cancel(); } catch (_) { }
                 }
 
@@ -408,7 +413,7 @@ export async function ingestDocumentFromFile(
         // Integrate temporal tagging for multi-modal content
         const isMultiModal = effectiveType.startsWith("image/") || effectiveType.startsWith("audio/") || effectiveType.startsWith("video/");
         if (isMultiModal) {
-            const temporalMetadata = extractTemporalMetadata(effectiveType, buffer.buffer);
+            const temporalMetadata = extractTemporalMetadata(effectiveType, buffer.buffer as ArrayBuffer);
             if (temporalMetadata) {
                 // Find the main memory object to tag (assuming single strategy for multi-modal)
                 // In a full implementation, this would need to handle root-child strategy as well

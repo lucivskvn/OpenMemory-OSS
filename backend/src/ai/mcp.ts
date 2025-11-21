@@ -40,15 +40,15 @@ const send_err = (res: ServerResponse, code: rpc_err_code, msg: string, id: numb
 const uid = (val?: string | null) => val?.trim() ? val.trim() : undefined
 
 export const create_mcp_srv = () => {
-    const srv = new McpServer({ name: 'openmemory-mcp', version: '2.1.0', protocolVersion: '2025-06-18' }, { capabilities: { tools: {}, resources: {}, logging: {} } })
+    const srv = new McpServer({ name: 'openmemory-mcp', version: '2.1.0' }, { capabilities: { tools: {}, resources: {}, logging: {} } })
 
-    srv.tool('openmemory_query', 'Run a semantic retrieval against OpenMemory', {
+    srv.tool('openmemory_query', {
         query: z.string().min(1, 'query text is required').describe('Free-form search text'),
         k: z.number().int().min(1).max(32).default(8).describe('Maximum results to return'),
         sector: sec_enum.optional().describe('Restrict search to a specific sector'),
         min_salience: z.number().min(0).max(1).optional().describe('Minimum salience threshold'),
         user_id: z.string().trim().min(1).optional().describe('Isolate results to a specific user identifier')
-    }, async ({ query, k, sector, min_salience, user_id }) => {
+    }, { title: 'Run a semantic retrieval against OpenMemory' }, async ({ query, k, sector, min_salience, user_id }) => {
         const u = uid(user_id)
         const flt = sector || min_salience !== undefined || u ? {
             ...(sector ? { sectors: [sector as sector_type] } : {}),
