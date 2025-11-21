@@ -78,21 +78,11 @@ jobs:
         with:
           bun-version: '1.3.2'
 
-      - name: Cache bun (backend)
-        uses: actions/cache@v4
+      - name: Setup Bun and install backend deps
+        uses: ./.github/actions/setup-bun-cache
         with:
-          path: |
-            ~/.bun
-            backend/.bun
-          key: ${{ runner.os }}-bun-deps-backend-${{ hashFiles('backend/bun.lock','backend/bun.lockb') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-deps-backend-
-
-      - name: Install backend deps
-        working-directory: backend
-        run: |
-          # Enforce frozen lockfile in CI for reproducible installs
-          bun install --frozen-lockfile --no-save
+          working-directory: backend
+          lockfiles: backend/bun.lock,backend/bun.lockb
 
       - name: Log resolved backend deps
         working-directory: backend
@@ -200,20 +190,11 @@ jobs:
             }
           done
 
-      - name: Cache bun (postgres)
-        uses: actions/cache@v4
+      - name: Setup Bun and install backend deps
+        uses: ./.github/actions/setup-bun-cache
         with:
-          path: |
-            ~/.bun
-            backend/.bun
-          key: ${{ runner.os }}-bun-deps-backend-${{ hashFiles('backend/bun.lock','backend/bun.lockb') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-deps-backend-
-
-      - name: Install backend deps
-        working-directory: backend
-        run: |
-          bun install --frozen-lockfile --no-save
+          working-directory: backend
+          lockfiles: backend/bun.lock,backend/bun.lockb
 
       - name: Log resolved backend deps
         working-directory: backend
@@ -383,20 +364,11 @@ jobs:
         with:
           bun-version: '1.3.2'
 
-      - name: Cache bun (dashboard)
-        uses: actions/cache@v4
+      - name: Setup Bun and install dashboard deps
+        uses: ./.github/actions/setup-bun-cache
         with:
-          path: |
-            ~/.bun
-            dashboard/.bun
-          key: ${{ runner.os }}-bun-deps-dashboard-${{ hashFiles('dashboard/bun.lock','dashboard/bun.lockb') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-deps-dashboard-
-
-      - name: Install dashboard deps
-        working-directory: dashboard
-        run: |
-          bun install --frozen-lockfile --no-save
+          working-directory: dashboard
+          lockfiles: dashboard/bun.lock,dashboard/bun.lockb
 
       - name: Log resolved dashboard deps
         working-directory: dashboard
@@ -423,20 +395,11 @@ jobs:
         with:
           bun-version: '1.3.2'
 
-      - name: Cache bun (IDE)
-        uses: actions/cache@v4
-          with:
-            path: |
-              ~/.bun
-              IDE/.bun
-            key: ${{ runner.os }}-bun-deps-ide-${{ hashFiles('IDE/bun.lock','IDE/bun.lockb') }}
-            restore-keys: |
-              ${{ runner.os }}-bun-deps-ide-
-
-      - name: Install IDE deps
-        working-directory: IDE
-        run: |
-          bun install --frozen-lockfile --no-save
+      - name: Setup Bun and install IDE deps
+        uses: ./.github/actions/setup-bun-cache
+        with:
+          working-directory: IDE
+          lockfiles: IDE/bun.lock,IDE/bun.lockb
 
       - name: Log resolved IDE deps
         working-directory: IDE
@@ -470,33 +433,17 @@ jobs:
         with:
           bun-version: '1.3.2'
 
-      - name: Cache bun (backend)
-        uses: actions/cache@v4
+      - name: Setup Bun and install backend deps
+        uses: ./.github/actions/setup-bun-cache
         with:
-          path: |
-            ~/.bun
-            backend/.bun
-          key: ${{ runner.os }}-bun-deps-backend-${{ hashFiles('backend/bun.lock','backend/bun.lockb') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-deps-backend-
+          working-directory: backend
+          lockfiles: backend/bun.lock,backend/bun.lockb
 
-      - name: Install backend deps
-        working-directory: backend
-        run: bun install --frozen-lockfile --no-save
-
-      - name: Cache bun (dashboard)
-        uses: actions/cache@v4
+      - name: Setup Bun and install dashboard deps
+        uses: ./.github/actions/setup-bun-cache
         with:
-          path: |
-            ~/.bun
-            dashboard/.bun
-          key: ${{ runner.os }}-bun-deps-dashboard-${{ hashFiles('dashboard/bun.lock','dashboard/bun.lockb') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-deps-dashboard-
-
-      - name: Install dashboard deps
-        working-directory: dashboard
-        run: bun install --frozen-lockfile --no-save
+          working-directory: dashboard
+          lockfiles: dashboard/bun.lock,dashboard/bun.lockb
 
       - name: Start backend server in background
         run: |

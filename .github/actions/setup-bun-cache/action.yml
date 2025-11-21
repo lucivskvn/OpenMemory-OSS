@@ -1,0 +1,48 @@
+name: "setup-bun-cache"
+description: "Composite action to set up Bun, restore cache and install deps for a workspace"
+author: "Repo Maintainer"
+inputs:
+  working-directory:
+    description: "Path to install from (e.g., backend, dashboard, IDE, sdk-js)"
+    required: false
+    default: "."
+  bun-version:
+    description: "Bun version to install"
+    required: false
+    default: "1.3.2"
+  lockfiles:
+    description: "Comma-separated lockfile paths to include in cache key (relative to repo root)"
+    required: false
+    default: ""
+runs:
+  using: "composite"
+  steps:
+    - id: setup-cache
+      name: Setup cache key
+      shell: bash
+      run: |
+        # Build a hash for lockfiles input (supports comma-separated list)
+        export LOCKFILES_INPUT='${{ inputs.lockfiles }}'
+        KEY_BASE="$RUNNER_OS-bun-deps-$(echo "$LOCKFILES_INPUT" | sed -e "s/,/ /g" | xargs -I {} bash -lc "if [ -f {} ]; then echo $(sha1sum {} | cut -d' ' -f1); else echo ''; fi" | tr -d '\n')"
+        echo "computed-key=$KEY_BASE" >> $GITHUB_OUTPUT
+
+    - name: Restore Bun cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.bun
+          ${{ inputs.working-directory }}/.bun
+        key: ${{ steps.setup-cache.outputs.computed-key }}
+        restore-keys: |
+          ${{ runner.os }}-bun-deps-
+
+    - name: Setup Bun runtime
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: ${{ inputs.bun-version }}
+
+    - name: Install dependencies
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        bun install --frozen-lockfile --no-save

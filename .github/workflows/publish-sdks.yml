@@ -57,18 +57,12 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Publishing @openmemory/sdk@$VERSION"
 
-      - name: Cache bun (sdk-js)
-        uses: actions/cache@v4
+      - name: Setup Bun and install sdk-js deps
+        uses: ./.github/actions/setup-bun-cache
         with:
-          path: |
-            ~/.bun
-            sdk-js/.bun
-          key: ${{ runner.os }}-bun-deps-sdk-js-${{ hashFiles('sdk-js/bun.lock','sdk-js/bun.lockb') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-deps-sdk-js-
+          working-directory: sdk-js
+          lockfiles: sdk-js/bun.lock,sdk-js/bun.lockb
 
-      - name: install deps
-        run: cd sdk-js && bun install --frozen-lockfile
 
       - name: build
         run: cd sdk-js && bun run build
