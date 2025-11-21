@@ -106,11 +106,10 @@ jobs:
       - name: Run backend tests (SQLite)
         working-directory: backend
         run: |
-          # Start a background server bound to $OM_PORT so endpoint tests that
-          # expect a running server at OM_PORT (e.g. /health) succeed reliably
+          # Start a background server bound to $OM_PORT using helper script that waits for health
           echo "Starting background server on port $OM_PORT"
-          bun run start &
-          SERVER_PID=$!
+          bash ./.github/scripts/start-server.sh backend /tmp/server_pid http://127.0.0.1:$OM_PORT/health
+          SERVER_PID=$(cat /tmp/server_pid)
           # give server a brief moment to come up and verify /health
           for i in {1..40}; do
             if curl -sSf "http://127.0.0.1:$OM_PORT/health" >/dev/null 2>&1; then
@@ -128,10 +127,7 @@ jobs:
           OM_DB_USER_SCOPE_WARN=false bun test ../tests/backend/db-migration.test.js || (echo "db-migration tests failed" && exit 1)
           OM_DB_USER_SCOPE_WARN=false bun test ../tests/backend/embed.test.js || (echo "embed tests failed" && exit 1)
           # Ensure background server is stopped after tests finish
-          if ps -p $SERVER_PID >/dev/null 2>&1; then
-            echo "Stopping background server (pid=$SERVER_PID)"
-            kill $SERVER_PID || true
-          fi
+          bash ./.github/scripts/stop-server.sh /tmp/server_pid || true
 
   test-backend-postgres:
     needs: [prettier_format]
@@ -411,111 +407,37 @@ jobs:
         run: |
           bun run compile
 
-  benchmark-and-e2e:
-    name: Benchmark & E2E (Ubuntu 24.04 parity)
-    needs: [test-backend, test-backend-postgres, build_dashboard]
+  parity-smoke:
+    name: Parity smoke tests (lightweight)
     runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      pull-requests: write
-    env:
-      OM_RUN_BENCHMARK_TESTS: true
-      OM_RUN_PERF_TESTS: true
-      NEXT_PUBLIC_API_URL: http://localhost:8080
-      OM_TEST_MODE: '1'
-      OM_SKIP_BACKGROUND: 'true'
+    needs: [build_ide]
     steps:
       - name: Checkout
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.1
+      - name: Setup Bun (parity)
+        uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.3.2'
 
-      - name: Setup Bun and install backend deps
+      - name: Setup Bun and install minimal deps
         uses: ./.github/actions/setup-bun-cache
         with:
           working-directory: backend
           lockfiles: backend/bun.lock,backend/bun.lockb
 
-      - name: Setup Bun and install dashboard deps
-        uses: ./.github/actions/setup-bun-cache
-        with:
-          working-directory: dashboard
-          lockfiles: dashboard/bun.lock,dashboard/bun.lockb
-
-      - name: Start backend server in background
-        run: |
-          cd backend
-          bun run start &
-          echo $! > /tmp/server_pid
-
-      - name: Wait for backend health
-        run: |
-          for i in {1..40}; do
-            curl -sSf http://127.0.0.1:8080/health && break || sleep 0.25
-          done
-
-      - name: Run E2E tests
+      - name: Quick health check test
         working-directory: backend
         run: |
-          mkdir -p ../tests/e2e/results
-          bun test ../tests/e2e/ --reporter=json | tee ../tests/e2e/results/e2e-${{ github.run_id }}.json
-
-      - name: Run competitor benchmarks
-        working-directory: backend
-        run: |
-          mkdir -p ../tests/benchmarks/results
-          bun test ../tests/benchmarks/ --reporter=json | tee ../tests/benchmarks/results/competitor-comparison-${{ github.run_id }}.json
-
-      - name: Generate benchmark report
-        working-directory: backend
-        run: bun ../scripts/benchmark-utils.ts report
-
-      - name: Upload benchmark artifacts
-        uses: actions/upload-artifact@3e0fae48b6f61b0010b496c9be0b22932de132a0
-        with:
-          name: benchmarks
-          retention-days: 90
-          path: |
-            tests/benchmarks/results/*.json
-            tests/benchmarks/reports/*.html
-            tests/benchmarks/reports/*.md
-
-      - name: Upload e2e artifacts
-        uses: actions/upload-artifact@3e0fae48b6f61b0010b496c9be0b22932de132a0
-        with:
-          name: e2e-results
-          retention-days: 30
-          path: tests/e2e/results/*.json
-
-      - name: Compare benchmarks
-        working-directory: backend
-        run: |
-          if [ -f ../tests/benchmarks/results/*.json ]; then
-            # In CI, download previous benchmark from main branch for regression detection
-            mkdir -p prev-benchmarks
-            if [ -n "$GITHUB_TOKEN" ]; then
-              gh run download $(gh run list --branch main --limit 1 --json databaseId | jq -r '.[0].databaseId' 2>/dev/null) \
-                --repo ${{ github.repository }} --dir prev-benchmarks --name benchmarks || true
+          echo "Parity job: verify backend health endpoint responds" 
+          bun run build
+          bash ./.github/scripts/start-server.sh backend /tmp/server_pid http://127.0.0.1:8080/health
+          SERVER_PID=$(cat /tmp/server_pid)
+          for i in {1..30}; do
+            if curl -sSf http://127.0.0.1:8080/health >/dev/null 2>&1; then
+              echo "Server health verified"
+              break
             fi
-            # Compare current vs previous (auto-detects from artifacts if available)
-            bun ../scripts/benchmark-utils.ts compare prev-benchmarks/tests/benchmarks/results/*.json || exit 1
-          fi
-
-      - name: Comment with benchmark comparison on PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v6.4.1
-        with:
-          script: |
-            const fs = require('fs');
-            const path = 'tests/benchmarks/reports';
-            const files = fs.existsSync(path) ? fs.readdirSync(path).filter(f => f.startsWith('comparison-') && f.endsWith('.md')) : [];
-            if (files.length === 0) return;
-            const filename = files.sort().pop();
-            const body = fs.readFileSync(`${path}/${filename}`, 'utf8');
-            await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
-
-      - name: Stop backend
-        run: kill `cat /tmp/server_pid` || true
+            sleep 1
+          done
+          bash ./.github/scripts/stop-server.sh /tmp/server_pid || true

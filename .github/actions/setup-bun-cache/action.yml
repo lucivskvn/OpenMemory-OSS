@@ -45,4 +45,18 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       run: |
-        bun install --frozen-lockfile --no-save
+        # Retry bun install up to 3 times with exponential backoff to reduce CI flakes
+        set -o pipefail
+        attempts=3
+        i=0
+        until [ $i -ge $attempts ]
+        do
+          bun install --frozen-lockfile --no-save && break
+          i=$((i+1))
+          echo "bun install failed, attempt $i/$attempts; retrying in $((i*5))s"
+          sleep $((i*5))
+        done
+        if [ $i -ge $attempts ]; then
+          echo "bun install failed after $attempts attempts" >&2
+          exit 1
+        fi

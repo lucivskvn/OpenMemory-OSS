@@ -125,6 +125,44 @@ Use real tests sparingly to avoid API costs; they are recommended for pull reque
   - Check CORS on API endpoints
   - Use browser DevTools to inspect SSE or fetch responses
 
+### Mock model requirements for `streamText`
+
+- If you are running `streamText` with a synthetic/mock language model (e.g., in `dashboard/scripts/verify-ai-sdk.ts`), the AI SDK v5 requires the model to identify itself as implementing specification version `v2`.
+- Missing or undefined `specificationVersion` will cause AI SDK to throw `AI_UnsupportedModelVersionError: Unsupported model version undefined for provider "undefined" and model "undefined"`.
+- Provide the minimal metadata fields on your mock model so the `streamText` function accepts it. Example minimal structure:
+
+```ts
+// Minimal mock language model accepted by AI SDK v5 for streamText
+const mockModel = {
+  // REQUIRED: v5 uses a spec version check. Use "v2" for the current API.
+  specificationVersion: 'v2',
+  // REQUIRED: provider id for diagnostic/info messages
+  provider: 'mock',
+  // REQUIRED: a modelId for logging/diagnostics
+  modelId: 'mock-model',
+
+  // The `api` object must implement a generator-like execute method that yields chunks
+  api: async (params: any) => ({
+    shouldStream: true,
+    execute: async function* (callbacks: any) {
+      yield ['0:', 'Mock AI response'];
+      callbacks.onFinish({
+        finishReason: 'stop',
+        usage: { promptTokens: 1, completionTokens: 3, totalTokens: 4 },
+        experimental_providerMetadata: {},
+      });
+    },
+    modelId: 'mock-model',
+  }),
+
+  // Optional: other flags used by SDK internals
+  supportsStructuredOutputs: false,
+  maxToolRoundtrips: 0,
+};
+```
+
+Add these fields when mocking models for `streamText` to avoid runtime errors during CI or local verification.
+
 ## Features in v5.0.93 relevant for the dashboard
 
 - `useChat` — client-side hook for streaming chat states

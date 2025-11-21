@@ -498,6 +498,11 @@ async function main() {
       try {
         // Mock model attempt — not all environments support custom provider mocks in v5
         const mockModel = {
+          // AI SDK v5+ requires a language model object that implements specification "v2"
+          // Provide minimal required metadata so streamText can accept the mock.
+          specificationVersion: 'v2',
+          provider: 'mock',
+          modelId: 'mock-model',
           api: async (params: any) => ({
             shouldStream: true,
             execute: async function* (callbacks: any) {

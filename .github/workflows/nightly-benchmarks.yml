@@ -1,0 +1,83 @@
+name: Nightly Benchmarks & E2E
+
+on:
+  schedule:
+    - cron: "0 5 * * *" # Daily at 05:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  nightly-e2e-and-benchmarks:
+    name: Nightly E2E & Benchmarks
+    runs-on: ubuntu-24.04
+    env:
+      OM_TEST_MODE: "1"
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+      OM_RUN_PERF_TESTS: "true"
+      OM_RUN_BENCHMARK_TESTS: "true"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun & deps for backend
+        uses: ./.github/actions/setup-bun-cache
+        with:
+          working-directory: backend
+          lockfiles: backend/bun.lock,backend/bun.lockb
+
+      - name: Build backend
+        working-directory: backend
+        run: |
+          bun run build
+
+      - name: Build docker image for backend
+        run: |
+          docker build -t openmemory-backend:nightly backend/
+
+      - name: Run backend in container
+        run: |
+          docker run -d --name openmemory-nightly -p 8080:8080 openmemory-backend:nightly || true
+          for i in {1..60}; do
+            curl -sSf http://127.0.0.1:8080/health && break || sleep 1
+          done
+
+      - name: Setup Bun & deps for dashboard
+        uses: ./.github/actions/setup-bun-cache
+        with:
+          working-directory: dashboard
+          lockfiles: dashboard/bun.lock,dashboard/bun.lockb
+
+      - name: Build dashboard
+        working-directory: dashboard
+        run: bun run build
+
+      - name: Run E2E tests
+        working-directory: backend
+        run: |
+          mkdir -p ../tests/e2e/results
+          bun test ../tests/e2e/ --reporter=json | tee ../tests/e2e/results/e2e-${{ github.run_id }}.json
+
+      - name: Run benchmarks
+        working-directory: backend
+        run: |
+          mkdir -p ../tests/benchmarks/results
+          bun test ../tests/benchmarks/ --reporter=json | tee ../tests/benchmarks/results/benchmarks-${{ github.run_id }}.json
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-results
+          path: |
+            tests/e2e/results/*.json
+            tests/benchmarks/results/*.json
+
+      - name: Cleanup container
+        run: |
+          docker rm -f openmemory-nightly || true

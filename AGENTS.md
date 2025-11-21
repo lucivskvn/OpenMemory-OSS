@@ -50,6 +50,8 @@ When an agent is assigned to add or modify dashboard AI features, follow these g
 - The current server-side chat streaming is implemented using a `ReadableStream` SSE flow in `dashboard/app/api/chat/route.ts`; integrate `streamText()` when migrating to AI SDK native streaming in a future phase.
 - Use Server Actions, RSC streaming (`createStreamableValue`), or `streamUI` for generative UI; test on Bun by importing `ai/rsc` in a small script.
 
+- When using mocked language models for `streamText` or `useChat` tests, ensure the mock includes `specificationVersion: 'v2'` and `provider`/`modelId` keys so AI SDK v5 accepts the mock.
+
 - Goal: "Integrate `useChat` from AI SDK v5.0.93 into chat page"
 
 Agent example task (integration):
