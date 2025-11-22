@@ -173,6 +173,28 @@ If Bun is not available, you can fall back to `npx`/`npm`/`node` locally, though
 
 - Note for Mint 22 / Ubuntu 24.04: Native modules (e.g., crypto/OpenSSL-linked) require `build-essential` and `libssl-dev` via apt; install if `bun install` fails with header errors. Integrates with AGENTS.md Bun patterns (@types/bun, tsconfig.json) and Podman rootless setup.
 
+### Unified automation helper (new)
+
+To simplify local workflows and CI, we added a small wrapper script and npm aliases to centralize common tasks. The wrapper forwards flags to the existing scripts in `scripts/` and provides a single place for help and automation.
+
+Examples:
+
+```bash
+# show help
+bun run automation
+
+# run pre-push checks
+bun run automation:prepush
+
+# run a containerized smoke E2E
+bun run automation:e2e:containers:smoke
+
+# print OS-specific suggestions and install hints
+bun run automation:suggest-system
+```
+
+These are intentionally low-friction wrappers — they help contributors and CI teams run consistent checks without memorizing multiple script file paths.
+
 > [!NOTE] > **New in v1.3.1:** Bun.file() migration for extract/ingest yields ~2–3× faster document processing. CI has been hardened with SHA-pinned actions, Trivy scanning, and SLSA attestations. See [CHANGELOG.md](CHANGELOG.md) for details.
 
 For additional CI hardening and GitHub Actions best practices, see `docs/security/github-actions-hardening.md` which outlines SHA pins, provenance, and SLSA attestation recommendations.
@@ -304,7 +326,7 @@ npm run dev:node
 
 **Bun Compatibility:**
 
-The dashboard is fully compatible with Bun v1.3.2+ and uses Vercel AI SDK v5.0.93 for chat functionality. All scripts use `bunx` for optimal performance. Node.js fallback scripts are available for compatibility.
+The dashboard is fully compatible with Bun v1.3.2+ and uses Vercel AI SDK v5.0.98 for chat functionality. All scripts use `bunx` for optimal performance. Node.js fallback scripts are available for compatibility.
 
 ### AI SDK Verification (Dashboard)
 
@@ -313,6 +335,8 @@ To validate the AI SDK is installed and running with Bun on Linux Mint 22, run:
 ```bash
 cd dashboard
 bun run verify:ai-sdk
+
+CI: Use `bun run verify:ai-sdk:ci` in GitHub Actions to avoid failing unrelated CI jobs. Set `OM_VERIFY_STRICT=1` to make verification fail CI on errors.
 ```
 
 This script runs checks for Bun version, AI SDK importability, Web API availability (fetch, ReadableStream, TextEncoder), and basic streaming support. For a manual checklist and more detail, see `dashboard/AI_SDK_VERIFICATION.md`.

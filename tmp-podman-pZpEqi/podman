@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+case "$1" in
+  compose)
+    # Simulate external provider message on "compose version"
+    if [ "$2" = "version" ]; then
+      echo "Executing external compose provider: podman-machine"
+      exit 0
+    fi
+    ;;
+  rm)
+    # pretend removal ok
+    exit 0
+    ;;
+  run)
+    # Simulate starting a container successfully (daemon started) but we will not expose a health endpoint
+    sleep 0.1
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac

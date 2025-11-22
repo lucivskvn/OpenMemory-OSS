@@ -15,8 +15,8 @@
   - Added Node.js fallback scripts (`dev:node`, `build:node`) for compatibility
   - Added `verify:bun` script to check Bun + Next.js compatibility
   - Created `dashboard/bunfig.toml` for Bun-specific configuration
-  - Verified Vercel AI SDK v5.0.93 compatibility with Bun runtime
-    - **AI SDK v5.0.93 Integration**: Now fully integrated into dashboard chat UI and `/api/chat` streaming route using `useMemoryChat`/`useChat` in `ChatInner.tsx`, `streamText` + `toUIMessageStreamResponse` in `route.ts`. Includes streaming telemetry/memory markers, embedding mode propagation, and Bun/Mint 22 verification with streaming tests for reliable real-time data injection.
+  - Verified Vercel AI SDK v5.0.98 compatibility with Bun runtime
+    - **AI SDK v5.0.98 Integration**: Now fully integrated into dashboard chat UI and `/api/chat` streaming route using `useMemoryChat`/`useChat` in `ChatInner.tsx`, `streamText` + `toUIMessageStreamResponse` in `route.ts`. Includes streaming telemetry/memory markers, embedding mode propagation, and Bun/Mint 22 verification with streaming tests for reliable real-time data injection.
 
 - **Documentation**: Comprehensive dashboard Bun migration guide
 

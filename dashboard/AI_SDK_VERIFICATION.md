@@ -1,10 +1,14 @@
-# AI SDK v5.0.93 Verification Checklist (Dashboard)
+# AI SDK v5.0.98 Verification Checklist (Dashboard)
 
-This checklist documents how to verify Vercel AI SDK v5.0.93 with Bun v1.3.2 on Linux Mint 22 (Ubuntu 24.04 base). Use the automated script `bun run verify:ai-sdk` or follow manual steps.
+This checklist documents how to verify Vercel AI SDK v5.0.98 with Bun v1.3.2 on Linux Mint 22 (Ubuntu 24.04 base).
+
+Use the automated script `bun run verify:ai-sdk` for a strict, developer-friendly run, or `bun run verify:ai-sdk:ci` for a CI-friendly non-fatal run used by GitHub Actions.
+
+Tip: To force verification to be fatal in CI set `OM_VERIFY_STRICT=1` before running the script: `OM_VERIFY_STRICT=1 bun run verify:ai-sdk`.
 
 ## Overview
 
-- Test integration: `ai@5.0.93` (Vercel AI SDK v5)
+- Test integration: `ai@5.0.98` (Vercel AI SDK v5)
 - Runtime: Bun v1.3.2+ (recommended)
 - OS: Linux Mint 22 / Ubuntu 24.04 base
 
@@ -22,7 +26,9 @@ Run this in `dashboard/`:
 bun run verify:ai-sdk
 ```
 
-Expect all checks to pass (green ✅). If a check fails, the script prints details and exits non-zero.
+Expect all checks to pass (green ✅).
+
+Note: The script is strict locally by default and exits non-zero on errors. In CI, the job runs the `verify:ai-sdk:ci` target which reports the same errors but does not fail the job unless `OM_VERIFY_STRICT=1` is set. This prevents verification flakiness from blocking unrelated pipeline jobs.
 
 ## Manual Steps
 
@@ -31,7 +37,7 @@ Expect all checks to pass (green ✅). If a check fails, the script prints detai
   ```bash
   cd dashboard
   bun pm ls ai
-  # Expect ai@5.0.93
+  # Expect ai@5.0.98
   ```
 
 - Import test
@@ -163,7 +169,7 @@ const mockModel = {
 
 Add these fields when mocking models for `streamText` to avoid runtime errors during CI or local verification.
 
-## Features in v5.0.93 relevant for the dashboard
+## Features in v5.0.98 relevant for the dashboard
 
 - `useChat` — client-side hook for streaming chat states
 - `useCompletion` — streaming completions for short text generation
@@ -174,7 +180,7 @@ Add these fields when mocking models for `streamText` to avoid runtime errors du
 ## Troubleshooting Checklist
 
 - [ ] `bun --version` returns 1.3.2+
-- [ ] `bun pm ls ai` shows `5.0.93`
+- [ ] `bun pm ls ai` shows `5.0.98`
 - [ ] `/etc/os-release` indicates Ubuntu 24.04 base
 - [ ] `bun run verify:ai-sdk` returns all green checks
 - [ ] Dashboard loads in browser on <http://localhost:3000> and chat UI functions

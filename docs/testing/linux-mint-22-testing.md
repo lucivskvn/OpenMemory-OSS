@@ -121,11 +121,12 @@ OM_API_KEY=your-hashed-key bun run dev
 In dashboard chat interface, verify:
 
 - User input sends query
-- Server streams response chunks with `{role: 'assistant', content: ...}` format (Vercel AI SDK v5.0.93 standard)
+- Server streams response chunks with AI SDK data-stream format (both real LLM and synthetic test modes share the same protocol)
+- `Content-Type: text/plain; charset=utf-8` with `0:`-prefixed frames (AI SDK v5 data streams)
 - Memories are retrieved and injected, telemetry markers present
 - Streaming completes without errors
 
-**Note**: Integration uses Vercel AI SDK v5.0.93 end-to-end with `streamText` + `toUIMessageStreamResponse`.
+**Note**: Integration uses Vercel AI SDK v5.0.98 end-to-end with `streamText` + `toUIMessageStreamResponse` for normal usage.
 
 ### AI SDK v5.0.93 Specific Verification
 
@@ -135,10 +136,10 @@ Ensure the AI SDK is correctly installed and that Bun's Web APIs interoperate wi
 
 ```bash
 cd dashboard
-bun pm ls ai  # expect ai@5.0.93
+bun pm ls ai  # expect ai@5.0.98
 ```
 
-2. Import test (simple):
+1. Import test (simple):
 
 ```bash
 cat > /tmp/test-ai-sdk.ts << 'EOF'
@@ -150,20 +151,22 @@ cd dashboard && bunx --bun tsx /tmp/test-ai-sdk.ts
 rm /tmp/test-ai-sdk.ts
 ```
 
-3. Streaming test (manual):
+1. Streaming test (manual):
 
 - Start backend: `cd backend && bun run dev` (port 8080)
 - Start dashboard: `cd dashboard && bun run dev` (port 3000)
 - Open the Chat page and verify SSE/network streaming in DevTools
 
-4. Automated verification: use the script in `dashboard/scripts/verify-ai-sdk.ts`
+1. Automated verification: use the script in `dashboard/scripts/verify-ai-sdk.ts`
 
 ```bash
 cd dashboard
 bun run verify:ai-sdk
+
+CI notes: in GitHub Actions we use `bun run verify:ai-sdk:ci` to avoid failing non-critical checks during the CI run. To make verification fatal in CI set `OM_VERIFY_STRICT=1`.
 ```
 
-5. Benchmark verification:
+1. Benchmark verification:
 
 ```bash
 cd backend
@@ -216,7 +219,7 @@ See `docs/testing/benchmark-tracking.md` for full tracking.
 
 Simulate GitHub Actions locally using `act`.
 
-### Prerequisites
+### CI Simulation Prerequisites
 
 ```bash
 # Install act
@@ -296,7 +299,7 @@ bun install --frozen-lockfile
 
 #### AI SDK Issues on Mint 22
 
-- Ensure real LLM provider configured: `bun add @ai-sdk/openai` or `@ai-sdk/ollama`, set OPENAI_API_KEY or OLLAMA_URL=http://localhost:11434
+- Ensure real LLM provider configured: `bun add @ai-sdk/openai` or `@ai-sdk/ollama`, set OPENAI_API_KEY or OLLAMA_URL=<http://localhost:11434>
 - Verify streaming format: `curl -v POST /api/chat` (expect text/plain; charset=utf-8 with AI SDK v5 data-stream format and `0:"..."` frames)
 - Common: Missing libssl-dev causes native builds to fail; restart after adding to render/video groups for GPU access
 

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo '.')
+
+echo "Pre-push: Run local verification"
+
+# Make the local check strict by default. To speed up local push, use SKIP_HEAVY=1
+SKIP_HEAVY=${SKIP_HEAVY:-0}
+
+bash "$REPO_ROOT/scripts/pre-push-checks.sh"
+
+exit 0

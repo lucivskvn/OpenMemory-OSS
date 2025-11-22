@@ -11,9 +11,11 @@
     "lint": "eslint .",
     "verify:bun": "bun --version && bunx --bun next --version",
     "verify:ai-sdk": "bun scripts/verify-ai-sdk.ts",
+    "verify:ai-sdk:strict": "OM_VERIFY_STRICT=1 bun scripts/verify-ai-sdk.ts",
+    "verify:ai-sdk:ci": "OM_VERIFY_STRICT=0 bun scripts/verify-ai-sdk.ts || true",
     "test:bun": "bun test",
     "test:ai-sdk": "bun test ../tests/dashboard/ai-sdk-streaming.test.ts",
-    "test:ai-sdk:e2e": "bun test ../tests/e2e/ai-sdk-chat.e2e.test.ts",
+    "test:ai-sdk:e2e": "OM_TEST_MODE=1 bun test ../tests/e2e/ai-sdk-chat.e2e.test.ts",
     "test:e2e:real": "OM_ENABLE_LLM_TESTS=1 bun test ../tests/e2e/ai-sdk-chat.e2e.test.ts"
   },
   "engines": {

@@ -95,7 +95,7 @@ bun run dev
 
 ### AI SDK Verification
 
-- Quick verification: `cd dashboard && bun run verify:ai-sdk` (automated checks for Bun & ai imports)
+- Quick verification: `cd dashboard && bun run verify:ai-sdk` (automated local checks for Bun & ai imports). Use `bun run verify:ai-sdk:ci` in CI to avoid breaking unrelated jobs. To force the CI to fail on verification issues, set `OM_VERIFY_STRICT=1`.
 - Expected output: All checks return ✅.
 - Link to detailed checklist: `dashboard/AI_SDK_VERIFICATION.md`
 

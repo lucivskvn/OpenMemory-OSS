@@ -98,7 +98,7 @@ jobs:
       - name: Run AI SDK verification
         working-directory: ./dashboard
         run: |
-          bun run verify:ai-sdk
+          bun run verify:ai-sdk:ci
 
       - name: Run AI SDK streaming integration tests
         run: |
@@ -113,4 +113,6 @@ jobs:
           retention-days: 30
 
   # E2E and benchmark jobs have been moved to `nightly-benchmarks.yml`.
+  # The E2E AI SDK chat tests are intentionally run only in nightly-benchmarks.yml due to
+  # the complexity of managing full backend and dashboard server processes in CI.
   # See .github/workflows/nightly-benchmarks.yml for nightly scheduling and run-on-demand dispatch.

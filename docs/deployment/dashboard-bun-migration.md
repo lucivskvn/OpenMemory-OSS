@@ -1,15 +1,15 @@
-# Dashboard Bun Migration & Vercel AI SDK v5.0.93 Integration
+# Dashboard Bun Migration & Vercel AI SDK v5.0.98 Integration
 
-This document describes Dashboard migration to Bun runtime and details AI SDK (Vercel `ai` v5.0.93) integration patterns and verification steps.
+This document describes Dashboard migration to Bun runtime and details AI SDK (Vercel `ai` v5.0.98) integration patterns and verification steps.
 
 ## Bun + Dashboard summary
 
 - Bun v1.3.2 provides significantly faster dev server and build times for Next.js 16.
 - Use `bunx --bun next` to ensure Bun's runtime is used for Next commands.
 
-## Vercel AI SDK v5.0.93 Integration
+## Vercel AI SDK v5.0.98 Integration
 
-AI SDK v5.0.93 is used in the Dashboard for chat-related features and RSC streaming. Key features:
+AI SDK v5.0.98 is used in the Dashboard for chat-related features and RSC streaming. Key features:
 
 - `useChat` — client-side hook for reactive chat streams
 - `useCompletion` — streaming completions for text generation
@@ -17,7 +17,7 @@ AI SDK v5.0.93 is used in the Dashboard for chat-related features and RSC stream
 - `createStreamableValue` — React Server Component streaming helper
 - `streamUI` — generative UI helpers for RSC
 
-**Version:** `ai@5.0.93` is the pinned and tested version for OpenMemory (Nov 2025).
+**Version:** Tested with `ai@5.0.98`, compatible with 5.x series.
 
 ### Why it works with Bun
 
@@ -33,7 +33,7 @@ AI SDK v5.0.93 is used in the Dashboard for chat-related features and RSC stream
 
 ### Current Implementation in OpenMemory
 
-- AI SDK v5.0.93 is **fully integrated** in the Dashboard chat flow.
+- AI SDK v5.0.98 is **fully integrated** in the Dashboard chat flow.
 - `dashboard/app/chat/page.tsx` uses `useMemoryChat` (custom wrapper around `useChat` from `@ai-sdk/react`) for client-side reactive streaming.
 - `dashboard/app/api/chat/route.ts` uses `streamText` (from `ai` package) + `toUIMessageStreamResponse` for server-side LLM streaming with memory augmentation.
 - Streaming: Single source using AI SDK native `streamText` and compatible SSE stream, no legacy fallbacks.
@@ -78,7 +78,7 @@ See `dashboard/AI_SDK_VERIFICATION.md` for a complete checklist and `bun run ver
 - Use `bunx --bun next` for all Next dev/build commands to ensure runtime consistency
 - Test streaming flows with the backend running on port 8080
 - Use `.env.local` for API keys
-- Run `bun run verify:ai-sdk` in CI to catch runtime/import issues early
+- Run `bun run verify:ai-sdk:ci` in CI to catch runtime/import issues early (non-fatal by default). To fail CI on verification issues set `OM_VERIFY_STRICT=1`.
 
 ### Troubleshooting
 

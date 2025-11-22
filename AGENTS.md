@@ -45,7 +45,7 @@ Agent example task (integration):
 When an agent is assigned to add or modify dashboard AI features, follow these guidelines:
 
 - Confirm the AI SDK version: `cd dashboard && bun pm ls ai` (expect `ai@5.0.93`).
-- Verify the SDK and runtime: `cd dashboard && bun run verify:ai-sdk` (runs automated checks for Bun version, OS, imports and web API compatibility).
+ Verify with `bun run verify:ai-sdk` (developer strict mode) or `bun run verify:ai-sdk:ci` (CI-friendly) and `bun run test:benchmarks`.
 - `useChat` is available from `ai/react` for client chat usage but may not be integrated in the current code; `dashboard/app/chat/page.tsx` uses a custom streaming fallback. Use `useChat` when you implement PHASE 6.5.
 - The current server-side chat streaming is implemented using a `ReadableStream` SSE flow in `dashboard/app/api/chat/route.ts`; integrate `streamText()` when migrating to AI SDK native streaming in a future phase.
 - Use Server Actions, RSC streaming (`createStreamableValue`), or `streamUI` for generative UI; test on Bun by importing `ai/rsc` in a small script.
@@ -58,7 +58,7 @@ Agent example task (integration):
 
 - Goal: "Integrate `useChat` from AI SDK v5.0.93 into chat page"
 - Steps:
-  1. Run `bun run verify:ai-sdk` to ensure runtime and SDK imports are sound.
+  1. Run `bun run verify:ai-sdk` to ensure runtime and SDK imports are sound. Use `bun run verify:ai-sdk:ci` on CI to avoid failing unrelated jobs or `OM_VERIFY_STRICT=1 bun run verify:ai-sdk` to force CI to break on verification issues.
   2. Replace custom message management with `useChat` from `ai/react`.
   3. Update `dashboard/app/api/chat/route.ts` to use `streamText()` for LLM streaming.
   4. Add tests for streaming and memory injection; run `bun test` and `bun run test:benchmarks`.

@@ -106,23 +106,42 @@ export default function ChatInner() {
       stream_duration_ms?: number;
       memory_ids?: string[];
     } | null = null;
-    const start = text.indexOf('[[OM_TELEMETRY]]');
-    const end = text.indexOf('[[/OM_TELEMETRY]]');
-    if (start !== -1 && end !== -1) {
-      const json = text.slice(start + '[[OM_TELEMETRY]]'.length, end);
-      try {
-        telemetry = JSON.parse(json);
-      } catch {}
+
+    // Extract telemetry and memory markers using improved parsing
+    const telemetryStart = text.indexOf('[[OM_TELEMETRY]]');
+    const telemetryEnd = text.indexOf('[[/OM_TELEMETRY]]');
+    if (telemetryStart !== -1 && telemetryEnd !== -1 && telemetryEnd > telemetryStart) {
+      const telemetryJson = text.slice(telemetryStart + '[[OM_TELEMETRY]]'.length, telemetryEnd);
+      if (telemetryJson.trim()) {
+        try {
+          telemetry = JSON.parse(telemetryJson);
+        } catch (error) {
+          console.warn('Failed to parse telemetry markers:', error instanceof Error ? error.message : String(error));
+          console.warn('Telemetry content was:', telemetryJson);
+        }
+      }
     }
+
     let memories: MemoryReference[] = [];
-    const memStart = text.indexOf('[[OM_MEMORIES]]');
-    const memEnd = text.indexOf('[[/OM_MEMORIES]]');
-    if (memStart !== -1 && memEnd !== -1) {
-      const memoriesJson = text.slice(memStart + 14, memEnd);
-      try {
-        memories = JSON.parse(memoriesJson);
-      } catch {}
+    const memoriesStart = text.indexOf('[[OM_MEMORIES]]');
+    const memoriesEnd = text.indexOf('[[/OM_MEMORIES]]');
+    if (memoriesStart !== -1 && memoriesEnd !== -1 && memoriesEnd > memoriesStart) {
+      const memoriesJson = text.slice(memoriesStart + '[[OM_MEMORIES]]'.length, memoriesEnd);
+      if (memoriesJson.trim()) {
+        try {
+          memories = JSON.parse(memoriesJson);
+          // Add length guard to avoid UI slowdowns from extremely large payloads
+          if (memories.length > 100) {
+            console.warn('Large memories array detected, truncating to first 100 entries');
+            memories = memories.slice(0, 100);
+          }
+        } catch (error) {
+          console.warn('Failed to parse memory markers:', error instanceof Error ? error.message : String(error));
+          console.warn('Memory content was:', memoriesJson);
+        }
+      }
     }
+
     return { telemetry, memories };
   }, [chatMessages]);
 

@@ -1,3 +1,13 @@
+## Interactive usage
+
+You can enable interactive prompts to confirm potentially destructive actions (like deleting containers or pulling large models) by setting `INTERACTIVE=1` before running, e.g.
+
+```bash
+INTERACTIVE=1 bun run e2e:containers
+INTERACTIVE=1 bun run prepush:fast
+```
+
+In CI `INTERACTIVE` should not be enabled.
 # Contributing to OpenMemory
 
 <!-- markdownlint-disable MD040 -->
@@ -195,7 +205,137 @@ Server functions & patterns:
 
 Verification and best practices:
 
-- Run `cd dashboard && bun run verify:ai-sdk` to execute the automated verification script (checks Bun version, OS, AI SDK import, and Web APIs).
+- Run `cd dashboard && bun run verify:ai-sdk` to execute the strict automated verification script (checks Bun version, OS, AI SDK import, and Web APIs). Use `bun run verify:ai-sdk:ci` in CI to avoid failing unrelated jobs, or set `OM_VERIFY_STRICT=1` to force failures in CI.
+
+### Local pre-push checks
+
+We provide a script to run a full set of local checks before pushing. This runs lint checks, AI SDK verification, backend and dashboard tests, and a dashboard build:
+
+```bash
+# Run full checks locally (takes time)
+bun run prepush
+
+# If you want to skip heavy tests during an iteration, e.g. to push quickly:
+SKIP_HEAVY=1 bun run prepush
+
+If you want to run the containerized E2E within the pre-push checks, set:
+
+```bash
+RUN_CONTAINER_E2E=1 bun run prepush
+```
+
+There is also a convenience alias which runs only the containerized E2E path (skips other heavy tests):
+
+```bash
+bun run prepush:containers
+```
+
+### Unified automation helper
+
+We added a single entrypoint to simplify common developer workflows and make automation easier to remember and run.
+
+- `bash ./scripts/automation.sh <command>` - thin wrapper around existing scripts in `scripts/` (help, prepush, e2e:containers, verify, check-resources, suggest-system, install-hooks).
+- Convenience npm scripts are available at the repo root, for example:
+
+```bash
+bun run automation                      # show help
+bun run automation:prepush              # run pre-push checks
+bun run automation:prepush:containers   # run pre-push with containerized E2E early
+bun run automation:e2e:containers:smoke # run smoke-mode containerized E2E
+bun run automation:verify               # run strict verification + lint
+bun run automation:suggest-system       # prints OS-specific setup and QoS commands
+```
+
+These wrappers are lightweight and forward flags onto the underlying scripts. They are intentionally non-invasive and are useful for CI, local debugging, and onboarding.
+
+Note: previously the script only attempted to run containers after heavy tests — that could make it look like nothing ran if heavy tests failed early. The pre-push flow has been updated so `RUN_CONTAINER_E2E=1` runs the containerized E2E early (before heavy tests) to make debugging container runs easier.
+
+- Note: installing git hooks will automatically run this when pushing. Use `npm run install-hooks` to enable `.githooks/pre-push`.
+
+### Containerized E2E testing locally
+
+Spin up the whole stack, run backend tests using the `tests` service in the compose file, run the dashboard tests from host and tear down the environment. It will remove built images and volumes by default.
+
+```bash
+# Default (docker): build local images, run tests, cleanup images/volumes
+bun run e2e:containers
+
+# Podman (e.g., on rootless Mint 22)
+CONTAINER_ENGINE=podman COMPOSE_PROFILES=ollama bun run e2e:containers
+
+# Keep containers for debugging and don't remove images
+KEEP_CONTAINERS=1 bun run e2e:containers
+# Pull the latest upstream images before running tests
+PULL_IMAGES=1 COMPOSE_PROFILES=ollama bun run e2e:containers
+
+Quick smoke test (fast): start a minimal cluster (backend + Ollama), pull the embedding model and run a small verification that the model is installed.
+
+```bash
+# Smoke test: minimal check for Ollama + embedding model
+bun run e2e:containers:smoke
+
+# Or explicitly include Ollama and test a specific model
+COMPOSE_PROFILES=ollama EMBEDDING_MODEL=nomic-embed-text bun run e2e:containers:smoke
+```
+
+By default the E2E container tests will pull one small embedding model to the `ollama` sidecar so tests can exercise embedding and memory flows. Use `EMBEDDING_MODEL` to override which model to pull (default is `nomic-embed-text`) and `EMBEDDING_MODEL_WAIT_SECONDS` to control the model pull timeout.
+
+Two additional environment variables can help when troubleshooting or when models take longer to fetch:
+
+- `SHOW_OLLAMA_LOGS=1` — print periodic Ollama container logs while the script waits for the model to appear (useful when model downloads stall or you need more visibility). Default: 0
+- `E2E_VERBOSE=1` — enable extra progress/status output from the backend's /embed/ollama/status endpoint while waiting. Default: 0
+
+When the backend exposes richer download information on `/embed/ollama/status` (for example `percent`, or `downloaded_bytes` / `total_bytes`), the script will parse these fields and print a human-friendly progress line such as:
+
+```text
+Download progress: 42% (12.3MB / 27.4MB)
+```
+
+This output is only shown when `E2E_VERBOSE=1` or `SHOW_OLLAMA_LOGS=1` to avoid noisy CI logs by default.
+
+Example: test with a tiny model and allow 120s for it to download
+
+```bash
+EMBEDDING_MODEL=whisper:tiny EMBEDDING_MODEL_WAIT_SECONDS=120 PULL_IMAGES=1 bun run e2e:containers
+
+Build and cleanup options
+
+- `FORCE_REBUILD=1` — rebuild images from local source before starting the compose stack so containers use your latest code (default: 1). This avoids using previously cached images.
+- `NO_CACHE=1` — when used with rebuild, pass --no-cache to image builds (default: 1). Use for the cleanest reproducible runs.
+- `PRUNE_DANGLING=1` — after tests finish, prune dangling images, build cache and volumes left behind (default: 1). NOTE: this will remove dangling images/volumes and may affect other local resources.
+
+Resource-aware behavior
+
+The scripts now proactively check host memory & swap before running heavy work. Behavior:
+
+- If available memory is below a critical threshold, the scripts will abort and print an actionable message recommending freeing RAM/swap or running tests on a more capable host.
+- If memory/swap is low but not critical, the scripts will automatically fall back to a safer mode: reduce parallel test runs and avoid aggressive rebuilds/pruning so you don't exhaust RAM and swap while building or testing.
+
+If you prefer to manually increase swap on a Linux host for heavier local runs, a quick temporary swap file can be created (requires sudo):
+
+```bash
+# create 8GB swapfile
+sudo fallocate -l 8G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+# To make permanent, add to /etc/fstab (be careful) or run 'sudo swapoff /swapfile && rm /swapfile' to remove.
+```
+
+We recommend using a host with sufficient RAM for heavy parallel tests & builds (e.g., 16+ GB free for comfortable local E2E runs) or using a remote CI runner / dedicated machine for the containerized E2E flow.
+
+```
+
+Quick prepush modes:
+
+```bash
+# Fast (critical-only) : lint + verify only
+bun run prepush:fast
+
+# Run heavy tests in parallel (if you have multiple cores) to reduce wall-time
+PARALLEL_TESTS=1 bun run prepush
+```
+
 - Use `bun pm ls ai` to confirm installed version is `5.0.93`.
 - Use `.env.local` for API keys and never commit secrets.
 - To ensure Bun runtime for next commands, use `bunx --bun next dev`.

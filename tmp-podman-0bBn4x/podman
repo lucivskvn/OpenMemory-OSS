@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+case "$1" in
+  compose)
+    # Simulate external provider message on "compose version"
+    if [ "$2" = "version" ]; then
+      echo "Executing external compose provider: podman-machine"
+      exit 0
+    fi
+    ;;
+  rm)
+    exit 0
+    ;;
+  run)
+    # pretend to start container successfully
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac

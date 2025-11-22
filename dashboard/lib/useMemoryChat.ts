@@ -20,12 +20,12 @@ export function useMemoryChat(
     error: c.error,
     status: c.status,
     sendMessage: (text: string) => {
-      // append a user message and rely on the chat hook to stream or handle
-      // the assistant response according to SDK behaviour
-      c.append?.({ role: 'user' as const, content: text });
-      // if the SDK provides a submit/handleSubmit call we can call it as a fallback
-      if (typeof c.submit === 'function') {
+      if (typeof c.append === 'function') {
+        c.append({ role: 'user' as const, content: text });
+      } else if (typeof c.submit === 'function') {
         c.submit(text);
+      } else {
+        console.error('useMemoryChat: No sendMessage implementation available');
       }
     },
   };
