@@ -572,6 +572,13 @@ Expanded tables preserved.
 	<tbody>
 		<tr>
             <td align="center">
+                <a href="https://github.com/lucivskvn">
+                    <img src="https://avatars.githubusercontent.com/u/7908015?v=4" width="100;" alt="lucivskvn"/>
+                    <br />
+                    <sub><b>Elang Swa Buana Putra</b></sub>
+                </a>
+            </td>
+            <td align="center">
                 <a href="https://github.com/nullure">
                     <img src="https://avatars.githubusercontent.com/u/81895400?v=4" width="100;" alt="nullure"/>
                     <br />
@@ -606,6 +613,8 @@ Expanded tables preserved.
                     <sub><b>Elvoro</b></sub>
                 </a>
             </td>
+		</tr>
+		<tr>
             <td align="center">
                 <a href="https://github.com/fparrav">
                     <img src="https://avatars.githubusercontent.com/u/9319430?v=4" width="100;" alt="fparrav"/>
@@ -613,8 +622,6 @@ Expanded tables preserved.
                     <sub><b>Felipe Parra</b></sub>
                 </a>
             </td>
-		</tr>
-		<tr>
             <td align="center">
                 <a href="https://github.com/msris108">
                     <img src="https://avatars.githubusercontent.com/u/43115330?v=4" width="100;" alt="msris108"/>
@@ -650,6 +657,8 @@ Expanded tables preserved.
                     <sub><b>Peter Chung</b></sub>
                 </a>
             </td>
+		</tr>
+		<tr>
             <td align="center">
                 <a href="https://github.com/therexone">
                     <img src="https://avatars.githubusercontent.com/u/27387245?v=4" width="100;" alt="therexone"/>
@@ -657,8 +666,6 @@ Expanded tables preserved.
                     <sub><b>Ayush Singh</b></sub>
                 </a>
             </td>
-		</tr>
-		<tr>
             <td align="center">
                 <a href="https://github.com/ammesonb">
                     <img src="https://avatars.githubusercontent.com/u/2522710?v=4" width="100;" alt="ammesonb"/>
@@ -694,6 +701,8 @@ Expanded tables preserved.
                     <sub><b>EikoocS</b></sub>
                 </a>
             </td>
+		</tr>
+		<tr>
             <td align="center">
                 <a href="https://github.com/josephgoksu">
                     <img src="https://avatars.githubusercontent.com/u/6523823?v=4" width="100;" alt="josephgoksu"/>
@@ -701,8 +710,6 @@ Expanded tables preserved.
                     <sub><b>Joseph Goksu</b></sub>
                 </a>
             </td>
-		</tr>
-		<tr>
             <td align="center">
                 <a href="https://github.com/lwsinclair">
                     <img src="https://avatars.githubusercontent.com/u/2829939?v=4" width="100;" alt="lwsinclair"/>
