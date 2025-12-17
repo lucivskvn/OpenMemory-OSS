@@ -44,6 +44,7 @@ type q_type = {
     ins_user: { run: (...p: any[]) => Promise<void> };
     get_user: { get: (user_id: string) => Promise<any> };
     upd_user_summary: { run: (...p: any[]) => Promise<void> };
+    get_mems_by_ids: { all: (ids: string[]) => Promise<any[]> };
 };
 
 let run_async: (sql: string, p?: any[]) => Promise<void>;
@@ -414,6 +415,10 @@ if (is_pg) {
                     p,
                 ),
         },
+        get_mems_by_ids: {
+            all: (ids) =>
+                all_async(`select * from ${m} where id = ANY($1)`, [ids]),
+        },
     };
 } else {
     const db_path =
@@ -783,6 +788,16 @@ if (is_pg) {
                     "update users set summary=?,reflection_count=reflection_count+1,updated_at=? where user_id=?",
                     p,
                 ),
+        },
+        get_mems_by_ids: {
+            all: (ids) => {
+                if (ids.length === 0) return Promise.resolve([]);
+                const placeholders = ids.map(() => "?").join(",");
+                return many(
+                    `select * from memories where id in (${placeholders})`,
+                    ids,
+                );
+            },
         },
     };
 }
