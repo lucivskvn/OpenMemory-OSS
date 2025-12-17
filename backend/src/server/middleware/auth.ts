@@ -1,5 +1,6 @@
 import { env } from "../../core/cfg";
 import crypto from "crypto";
+import { Elysia } from "elysia";
 
 const rate_limit_store = new Map<
     string,
@@ -25,10 +26,10 @@ function is_public_endpoint(path: string): boolean {
     );
 }
 
-function extract_api_key(req: any): string | null {
-    const x_api_key = req.headers[auth_config.api_key_header];
+function extract_api_key(headers: any): string | null {
+    const x_api_key = headers[auth_config.api_key_header];
     if (x_api_key) return x_api_key;
-    const auth_header = req.headers["authorization"];
+    const auth_header = headers["authorization"];
     if (auth_header) {
         if (auth_header.startsWith("Bearer ")) return auth_header.slice(7);
         if (auth_header.startsWith("ApiKey ")) return auth_header.slice(7);
@@ -73,56 +74,73 @@ function check_rate_limit(client_id: string): {
     };
 }
 
-function get_client_id(req: any, api_key: string | null): string {
+function get_client_id(ip: string, api_key: string | null): string {
     if (api_key)
         return crypto
             .createHash("sha256")
             .update(api_key)
             .digest("hex")
             .slice(0, 16);
-    return req.ip || req.connection.remoteAddress || "unknown";
+    return ip || "unknown";
 }
 
-export function authenticate_api_request(req: any, res: any, next: any) {
-    const path = req.path || req.url;
-    if (is_public_endpoint(path)) return next();
-    if (!auth_config.api_key || auth_config.api_key === "") {
-        console.warn("[AUTH] No API key configured");
-        return next();
-    }
-    const provided = extract_api_key(req);
-    if (!provided)
-        return res
-            .status(401)
-            .json({
+// Elysia plugin for authentication
+export const authPlugin = (app: Elysia) =>
+    app.onBeforeHandle(({ request, set, path, headers }) => {
+        if (is_public_endpoint(path)) return;
+
+        if (!auth_config.api_key || auth_config.api_key === "") {
+            // console.warn("[AUTH] No API key configured");
+            return;
+        }
+
+        const provided = extract_api_key(headers);
+        if (!provided) {
+            set.status = 401;
+            return {
                 error: "authentication_required",
                 message: "API key required",
-            });
-    if (!validate_api_key(provided, auth_config.api_key))
-        return res.status(403).json({ error: "invalid_api_key" });
-    const client_id = get_client_id(req, provided);
-    const rl = check_rate_limit(client_id);
-    if (auth_config.rate_limit_enabled) {
-        res.setHeader("X-RateLimit-Limit", auth_config.rate_limit_max_requests);
-        res.setHeader("X-RateLimit-Remaining", rl.remaining);
-        res.setHeader("X-RateLimit-Reset", Math.floor(rl.reset_time / 1000));
-    }
-    if (!rl.allowed)
-        return res.status(429).json({
-            error: "rate_limit_exceeded",
-            retry_after: Math.ceil((rl.reset_time - Date.now()) / 1000),
-        });
-    next();
-}
+            };
+        }
 
-export function log_authenticated_request(req: any, res: any, next: any) {
-    const key = extract_api_key(req);
-    if (key)
-        console.log(
-            `[AUTH] ${req.method} ${req.path} [${crypto.createHash("sha256").update(key).digest("hex").slice(0, 8)}...]`,
-        );
-    next();
-}
+        if (!validate_api_key(provided, auth_config.api_key)) {
+            set.status = 403;
+            return { error: "invalid_api_key" };
+        }
+
+        // Rate limiting logic
+        // Need IP. Elysia request object has headers.
+        // Assuming IP is in X-Forwarded-For or similar if proxied, or we skip IP for now.
+        // Or use `server.requestIP(request)` if available in context?
+        // Elysia's `ip` property is available in recent versions if configured.
+        // For now, use provided key as client ID if available, else skip IP check or default.
+        const client_id = get_client_id("unknown", provided);
+        const rl = check_rate_limit(client_id);
+
+        if (auth_config.rate_limit_enabled) {
+            set.headers["X-RateLimit-Limit"] = String(auth_config.rate_limit_max_requests);
+            set.headers["X-RateLimit-Remaining"] = String(rl.remaining);
+            set.headers["X-RateLimit-Reset"] = String(Math.floor(rl.reset_time / 1000));
+        }
+
+        if (!rl.allowed) {
+            set.status = 429;
+            return {
+                error: "rate_limit_exceeded",
+                retry_after: Math.ceil((rl.reset_time - Date.now()) / 1000),
+            };
+        }
+    });
+
+// Log authenticated request
+export const logAuthPlugin = (app: Elysia) =>
+    app.onRequest(({ request, headers }) => {
+        const key = extract_api_key(headers);
+        if (key)
+            console.log(
+                `[AUTH] ${request.method} ${new URL(request.url).pathname} [${crypto.createHash("sha256").update(key).digest("hex").slice(0, 8)}...]`,
+            );
+    });
 
 setInterval(
     () => {

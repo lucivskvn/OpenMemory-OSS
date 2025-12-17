@@ -1,16 +1,25 @@
-const server = require("./server.js");
 import { env, tier } from "../core/cfg";
 import { run_decay_process, prune_weak_waypoints } from "../memory/hsg";
 import { mcp } from "../ai/mcp";
-import { routes } from "./routes";
 import {
-    authenticate_api_request,
-    log_authenticated_request,
+    authPlugin,
+    logAuthPlugin,
 } from "./middleware/auth";
 import { start_reflection } from "../memory/reflect";
 import { start_user_summary_reflection } from "../memory/user_summary";
 import { sendTelemetry } from "../core/telemetry";
-import { req_tracker_mw } from "./routes/dashboard";
+import { req_tracker_plugin, dash } from "./routes/dashboard";
+import { mem } from "./routes/memory";
+import { sys } from "./routes/system";
+import { dynroutes } from "./routes/dynamics";
+import { ide } from "./routes/ide";
+import { compression } from "./routes/compression";
+import { lg } from "./routes/langgraph";
+import { usr } from "./routes/users";
+import { temporal } from "./routes/temporal";
+import { vercel } from "./routes/vercel";
+import { Elysia } from "elysia";
+import { cors } from "@elysiajs/cors";
 
 const ASC = `   ____                   __  __                                 
   / __ \\                 |  \\/  |                                
@@ -21,14 +30,37 @@ const ASC = `   ____                   __  __
         | |                                                 __/ |
         |_|                                                |___/ `;
 
-const app = server({ max_payload_size: env.max_payload_size });
+const app = new Elysia()
+    .use(cors({
+        origin: "*",
+        methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allowedHeaders: ["Content-Type", "Authorization", "x-api-key"],
+    }))
+    .use(req_tracker_plugin)
+    .use(authPlugin);
+
+if (process.env.OM_LOG_AUTH === "true") {
+    app.use(logAuthPlugin);
+}
+
+// Register all route plugins
+app.use(mem);
+app.use(sys);
+app.use(dynroutes);
+app.use(ide);
+app.use(compression);
+app.use(lg);
+app.use(usr);
+app.use(temporal);
+app.use(dash);
+app.use(vercel);
+app.use(mcp);
 
 console.log(ASC);
 console.log(`[CONFIG] Vector Dimension: ${env.vec_dim}`);
 console.log(`[CONFIG] Cache Segments: ${env.cache_segments}`);
 console.log(`[CONFIG] Max Active Queries: ${env.max_active}`);
 
-// Warn about configuration mismatch that causes embedding incompatibility
 if (env.emb_kind !== "synthetic" && (tier === "hybrid" || tier === "fast")) {
     console.warn(
         `[CONFIG] ⚠️  WARNING: Embedding configuration mismatch detected!\n` +
@@ -38,34 +70,6 @@ if (env.emb_kind !== "synthetic" && (tier === "hybrid" || tier === "fast")) {
     );
 }
 
-app.use(req_tracker_mw());
-
-app.use((req: any, res: any, next: any) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader(
-        "Access-Control-Allow-Methods",
-        "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-    );
-    res.setHeader(
-        "Access-Control-Allow-Headers",
-        "Content-Type,Authorization,x-api-key",
-    );
-    if (req.method === "OPTIONS") {
-        res.status(200).end();
-        return;
-    }
-    next();
-});
-
-app.use(authenticate_api_request);
-
-if (process.env.OM_LOG_AUTH === "true") {
-    app.use(log_authenticated_request);
-}
-
-routes(app);
-
-mcp(app);
 if (env.mode === "langgraph") {
     console.log("[MODE] LangGraph integration enabled");
 }
@@ -86,6 +90,7 @@ setInterval(async () => {
         console.error("[DECAY] Process failed:", error);
     }
 }, decayIntervalMs);
+
 setInterval(
     async () => {
         console.log("[PRUNE] Pruning weak waypoints...");
@@ -98,6 +103,7 @@ setInterval(
     },
     7 * 24 * 60 * 60 * 1000,
 );
+
 setTimeout(() => {
     run_decay_process()
         .then((result: any) => {

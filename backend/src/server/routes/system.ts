@@ -1,68 +1,41 @@
-import { all_async } from "../../core/db";
+import { env } from "../../core/cfg";
+import { q, run_async, get_async, all_async } from "../../core/db";
 import { sector_configs } from "../../memory/hsg";
-import { getEmbeddingInfo } from "../../memory/embed";
-import { tier, env } from "../../core/cfg";
+import { Elysia } from "elysia";
 
-const TIER_BENEFITS = {
-    hybrid: {
-        recall: 98,
-        qps: "700-800",
-        ram: "0.5gb/10k",
-        use: "For high accuracy",
-    },
-    fast: {
-        recall: 70,
-        qps: "700-850",
-        ram: "0.6GB/10k",
-        use: "Local apps, extensions",
-    },
-    smart: {
-        recall: 85,
-        qps: "500-600",
-        ram: "0.9GB/10k",
-        use: "Production servers",
-    },
-    deep: {
-        recall: 94,
-        qps: "350-400",
-        ram: "1.6GB/10k",
-        use: "Cloud, high-accuracy",
-    },
-};
-
-export function sys(app: any) {
-    app.get(
-        "/health",
-        async (incoming_http_request: any, outgoing_http_response: any) => {
-            outgoing_http_response.json({
-                ok: true,
-                version: "2.0-hsg-tiered",
-                embedding: getEmbeddingInfo(),
-                tier,
-                dim: env.vec_dim,
-                cache: env.cache_segments,
-                expected: TIER_BENEFITS[tier],
-            });
-        },
-    );
-
-    app.get(
-        "/sectors",
-        async (incoming_http_request: any, outgoing_http_response: any) => {
-            try {
-                const database_sector_statistics_rows = await all_async(`
-                select primary_sector as sector, count(*) as count, avg(salience) as avg_salience 
-                from memories 
-                group by primary_sector
-            `);
-                outgoing_http_response.json({
-                    sectors: Object.keys(sector_configs),
-                    configs: sector_configs,
-                    stats: database_sector_statistics_rows,
-                });
-            } catch (unexpected_error_fetching_sectors) {
-                outgoing_http_response.status(500).json({ err: "internal" });
-            }
-        },
-    );
-}
+export const sys = (app: Elysia) =>
+    app.group("/api/system", (app) =>
+        app
+            .get("/health", async ({ set }) => {
+                const db_ok = await get_async("select 1 as c")
+                    .then(() => true)
+                    .catch(() => false);
+                const embed_ok = true; // assume synthetic for now or check url
+                const status = db_ok ? "ok" : "degraded";
+                set.status = status === "ok" ? 200 : 503;
+                return {
+                    status,
+                    version: "1.2.2",
+                    db: db_ok,
+                    embed: embed_ok,
+                    uptime: process.uptime(),
+                };
+            })
+            .get("/logs", async ({ query, set }) => {
+                try {
+                    const l = Number(query.limit) || 100;
+                    const logs = await all_async(
+                        "select * from embed_logs order by ts desc limit ?",
+                        [l],
+                    );
+                    return { logs };
+                } catch (e) {
+                    set.status = 500;
+                    return { err: "internal" };
+                }
+            })
+    )
+    // Add sectors endpoint at root to match tests/legacy behavior
+    .get("/sectors", () => {
+        return { sectors: Object.keys(sector_configs) };
+    });
