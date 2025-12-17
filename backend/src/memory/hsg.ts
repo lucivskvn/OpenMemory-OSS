@@ -808,18 +808,18 @@ export async function hsg_query(
             : await expand_via_waypoints(Array.from(ids), k * 2);
         for (const e of exp) ids.add(e.id);
 
+        const unique_ids = Array.from(ids);
+        const all_fetched_mems = unique_ids.length > 0
+            ? await q.get_mems_by_ids.all(unique_ids)
+            : [];
+        const mem_map = new Map(all_fetched_mems.map((m) => [m.id, m]));
+
         let keyword_scores = new Map<string, number>();
         if (tier === "hybrid") {
-            const all_mems = await Promise.all(
-                Array.from(ids).map(async (id) => {
-                    const m = await q.get_mem.get(id);
-                    return m ? { id, content: m.content } : null;
-                }),
-            );
-            const valid_mems = all_mems.filter((m) => m !== null) as Array<{
-                id: string;
-                content: string;
-            }>;
+            const valid_mems = all_fetched_mems.map(m => ({
+                id: m.id,
+                content: m.content
+            }));
             keyword_scores = await keyword_filter_memories(
                 qt,
                 valid_mems,
@@ -828,8 +828,8 @@ export async function hsg_query(
         }
 
         const res: hsg_q_result[] = [];
-        for (const mid of Array.from(ids)) {
-            const m = await q.get_mem.get(mid);
+        for (const mid of unique_ids) {
+            const m = mem_map.get(mid);
             if (!m || (f?.minSalience && m.salience < f.minSalience)) continue;
             if (f?.user_id && m.user_id !== f.user_id) continue;
             if (f?.startTime && m.created_at < f.startTime) continue;
