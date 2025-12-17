@@ -1,360 +1,180 @@
-import { exec } from "child_process";
-import { promisify } from "util";
-import mammoth from "mammoth";
-import * as fs from "fs";
-import * as path from "path";
-import * as os from "os";
-import ffmpeg from "fluent-ffmpeg";
 import OpenAI from "openai";
-const TurndownService = require("turndown");
+import { env } from "../core/cfg";
+import path from "path";
+import { v4 as uuidv4 } from "uuid";
+// @ts-ignore
+import pdf from "pdf-parse";
+import mammoth from "mammoth";
+import TurndownService from "turndown";
+import ffmpeg from "fluent-ffmpeg";
+import * as fs from "node:fs"; // Import node:fs properly
 
-const execAsync = promisify(exec);
+// Setup OpenAI for Whisper
+const openai = new OpenAI({
+    apiKey: env.openai_key,
+    baseURL: env.openai_base_url,
+});
+
+const turndownService = new TurndownService();
+
+// Helper to save temp file
+async function saveTempFile(buffer: Buffer, ext: string): Promise<string> {
+    const tempDir = path.resolve(process.cwd(), "temp");
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+
+    const tempFilePath = path.join(tempDir, `${uuidv4()}.${ext}`);
+    await Bun.write(tempFilePath, buffer);
+    return tempFilePath;
+}
+
+async function removeFile(path: string) {
+    try {
+        const file = Bun.file(path);
+        if (await file.exists()) {
+            fs.unlinkSync(path);
+        }
+    } catch (e) {
+        console.warn("Failed to delete temp file", path, e);
+    }
+}
+
+export const extract_text_from_pdf = async (buffer: Buffer): Promise<string> => {
+    try {
+        const data = await pdf(buffer);
+        return data.text;
+    } catch (e) {
+        console.error("PDF extraction failed", e);
+        return "";
+    }
+};
+
+export const extract_text_from_docx = async (buffer: Buffer): Promise<string> => {
+    try {
+        const result = await mammoth.extractRawText({ buffer });
+        return result.value;
+    } catch (e) {
+        console.error("DOCX extraction failed", e);
+        return "";
+    }
+};
+
+export const extract_text_from_html = (html: string): string => {
+    return turndownService.turndown(html);
+};
+
+export const transcribe_audio = async (buffer: Buffer): Promise<string> => {
+    const tempFilePath = await saveTempFile(buffer, "mp3");
+    try {
+        const file = new File([buffer], "audio.mp3", { type: "audio/mp3" });
+        const response = await openai.audio.transcriptions.create({
+            file: file,
+            model: "whisper-1",
+        });
+        return response.text;
+    } catch (e) {
+        console.error("Audio transcription failed", e);
+        return "";
+    } finally {
+        await removeFile(tempFilePath);
+    }
+};
+
+export const extract_audio_from_video = async (buffer: Buffer): Promise<Buffer> => {
+    return new Promise(async (resolve, reject) => {
+        const videoPath = await saveTempFile(buffer, "mp4");
+        const audioPath = videoPath.replace(".mp4", ".mp3");
+
+        ffmpeg(videoPath)
+            .toFormat("mp3")
+            .on("end", async () => {
+                try {
+                    const audioBuffer = await Bun.file(audioPath).arrayBuffer();
+                    await removeFile(videoPath);
+                    await removeFile(audioPath);
+                    resolve(Buffer.from(audioBuffer));
+                } catch (e) {
+                    reject(e);
+                }
+            })
+            .on("error", async (err) => {
+                await removeFile(videoPath);
+                if (await Bun.file(audioPath).exists()) await removeFile(audioPath);
+                reject(err);
+            })
+            .save(audioPath);
+    });
+};
+
+export const process_file = async (
+    file: { name: string; type: string; arrayBuffer: () => Promise<ArrayBuffer> },
+): Promise<string> => {
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const ext = file.name.split(".").pop()?.toLowerCase();
+
+    if (ext === "pdf") return await extract_text_from_pdf(buffer);
+    if (ext === "docx") return await extract_text_from_docx(buffer);
+    if (["html", "htm"].includes(ext || ""))
+        return extract_text_from_html(buffer.toString());
+    if (["mp3", "wav", "m4a", "ogg"].includes(ext || ""))
+        return await transcribe_audio(buffer);
+    if (["mp4", "mov", "avi", "webm"].includes(ext || "")) {
+        const audio = await extract_audio_from_video(buffer);
+        return await transcribe_audio(audio);
+    }
+    if (["txt", "md", "json", "csv", "xml"].includes(ext || ""))
+        return buffer.toString();
+
+    return "";
+};
 
 export interface ExtractionResult {
     text: string;
     metadata: {
+        title?: string;
+        source_url?: string;
         content_type: string;
-        char_count: number;
         estimated_tokens: number;
-        extraction_method: string;
         [key: string]: any;
     };
 }
 
-function estimateTokens(text: string): number {
-    return Math.ceil(text.length / 4);
-}
+const estimateTokens = (t: string) => Math.ceil(t.length / 4);
 
-export async function extractPDF(buffer: Buffer): Promise<ExtractionResult> {
-    const { PDFParse } = await import("pdf-parse");
-    const parser = new PDFParse({ data: buffer });
-    const textResult = await parser.getText();
-    const infoResult = await parser.getInfo();
-
-    return {
-        text: textResult.text,
-        metadata: {
-            content_type: "pdf",
-            char_count: textResult.text.length,
-            estimated_tokens: estimateTokens(textResult.text),
-            extraction_method: "pdf-parse",
-            pages: textResult.total,
-            info: infoResult,
-        },
-    };
-}
-
-export async function extractDOCX(buffer: Buffer): Promise<ExtractionResult> {
-    const result = await mammoth.extractRawText({ buffer });
-
-    return {
-        text: result.value,
-        metadata: {
-            content_type: "docx",
-            char_count: result.value.length,
-            estimated_tokens: estimateTokens(result.value),
-            extraction_method: "mammoth",
-            messages: result.messages,
-        },
-    };
-}
-
-export async function extractHTML(html: string): Promise<ExtractionResult> {
-    const turndown = new TurndownService({
-        headingStyle: "atx",
-        codeBlockStyle: "fenced",
-    });
-
-    const markdown = turndown.turndown(html);
-
-    return {
-        text: markdown,
-        metadata: {
-            content_type: "html",
-            char_count: markdown.length,
-            estimated_tokens: estimateTokens(markdown),
-            extraction_method: "turndown",
-            original_html_length: html.length,
-        },
-    };
-}
-
-export async function extractURL(url: string): Promise<ExtractionResult> {
-    const response = await fetch(url);
-    if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+export const extractText = async (textOrUrl: string, data?: string | Buffer): Promise<ExtractionResult> => {
+    let text = "";
+    if (data) {
+        if (typeof data === "string") text = data;
+        else if (Buffer.isBuffer(data)) text = data.toString();
+        else text = String(data);
+    } else {
+        text = textOrUrl;
     }
 
-    const html = await response.text();
-
-    const turndown = new TurndownService({
-        headingStyle: "atx",
-        codeBlockStyle: "fenced",
-    });
-
-    const markdown = turndown.turndown(html);
-
     return {
-        text: markdown,
+        text,
         metadata: {
-            content_type: "url",
-            char_count: markdown.length,
-            estimated_tokens: estimateTokens(markdown),
-            extraction_method: "node-fetch+turndown",
-            source_url: url,
-            fetched_at: new Date().toISOString(),
-        },
+            content_type: "text",
+            estimated_tokens: estimateTokens(text)
+        }
     };
-}
+};
 
-export async function extractAudio(
-    buffer: Buffer,
-    mimeType: string,
-): Promise<ExtractionResult> {
-    const apiKey = process.env.OPENAI_API_KEY || process.env.OM_OPENAI_API_KEY;
-    if (!apiKey) {
-        throw new Error(
-            "OpenAI API key required for audio transcription. Set OPENAI_API_KEY in .env",
-        );
-    }
-
-    // Check file size (Whisper API limit is 25MB)
-    const maxSize = 25 * 1024 * 1024; // 25MB
-    if (buffer.length > maxSize) {
-        throw new Error(
-            `Audio file too large: ${(buffer.length / 1024 / 1024).toFixed(2)}MB. Maximum size is 25MB.`,
-        );
-    }
-
-    // Create temporary file for Whisper API
-    const tempDir = os.tmpdir();
-    const ext = getAudioExtension(mimeType);
-    const tempFilePath = path.join(tempDir, `audio-${Date.now()}${ext}`);
-
+export const extractURL = async (url: string): Promise<ExtractionResult> => {
     try {
-        // Write buffer to temp file
-        fs.writeFileSync(tempFilePath, buffer);
-
-        // Initialize OpenAI client
-        const openai = new OpenAI({ apiKey });
-
-        // Transcribe audio using Whisper
-        const transcription = await openai.audio.transcriptions.create({
-            file: fs.createReadStream(tempFilePath),
-            model: "whisper-1",
-            response_format: "verbose_json",
-        });
-
-        const text = transcription.text;
-
+        const res = await fetch(url);
+        const html = await res.text();
+        const text = extract_text_from_html(html);
         return {
             text,
             metadata: {
-                content_type: "audio",
-                char_count: text.length,
-                estimated_tokens: estimateTokens(text),
-                extraction_method: "whisper",
-                audio_format: ext.replace(".", ""),
-                file_size_bytes: buffer.length,
-                file_size_mb: (buffer.length / 1024 / 1024).toFixed(2),
-                duration_seconds: (transcription as any).duration || null,
-                language: (transcription as any).language || null,
-            },
-        };
-    } catch (error: any) {
-        console.error("[EXTRACT] Audio transcription failed:", error);
-        throw new Error(`Audio transcription failed: ${error.message}`);
-    } finally {
-        // Clean up temp file
-        try {
-            if (fs.existsSync(tempFilePath)) {
-                fs.unlinkSync(tempFilePath);
+                title: url,
+                source_url: url,
+                content_type: "html",
+                estimated_tokens: estimateTokens(text)
             }
-        } catch (e) {
-            console.warn("[EXTRACT] Failed to clean up temp file:", e);
-        }
+        };
+    } catch (e) {
+        console.error("URL extraction failed", e);
+        throw e;
     }
-}
-
-export async function extractVideo(
-    buffer: Buffer,
-): Promise<ExtractionResult> {
-    // Create temporary files for video and audio
-    const tempDir = os.tmpdir();
-    const videoPath = path.join(
-        tempDir,
-        `video-${Date.now()}.mp4`,
-    );
-    const audioPath = path.join(
-        tempDir,
-        `audio-${Date.now()}.mp3`,
-    );
-
-    try {
-        // Write video buffer to temp file
-        fs.writeFileSync(videoPath, buffer);
-
-        // Extract audio using ffmpeg
-        await new Promise<void>((resolve, reject) => {
-            ffmpeg(videoPath)
-                .output(audioPath)
-                .noVideo()
-                .audioCodec("libmp3lame")
-                .on("end", () => resolve())
-                .on("error", (err: Error) => reject(err))
-                .run();
-        });
-
-        // Read extracted audio
-        const audioBuffer = fs.readFileSync(audioPath);
-
-        // Transcribe extracted audio
-        const result = await extractAudio(audioBuffer, "audio/mpeg");
-
-        // Update metadata to reflect video source
-        result.metadata.content_type = "video";
-        result.metadata.extraction_method = "ffmpeg+whisper";
-        result.metadata.video_file_size_bytes = buffer.length;
-        result.metadata.video_file_size_mb = (
-            buffer.length /
-            1024 /
-            1024
-        ).toFixed(2);
-
-        return result;
-    } catch (error: any) {
-        if (error.message?.includes("ffmpeg")) {
-            throw new Error(
-                "FFmpeg not found. Please install FFmpeg to process video files. Visit: https://ffmpeg.org/download.html",
-            );
-        }
-        console.error("[EXTRACT] Video processing failed:", error);
-        throw new Error(`Video processing failed: ${error.message}`);
-    } finally {
-        // Clean up temp files
-        try {
-            if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath);
-            if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
-        } catch (e) {
-            console.warn("[EXTRACT] Failed to clean up temp files:", e);
-        }
-    }
-}
-
-function getAudioExtension(mimeType: string): string {
-    const mimeMap: Record<string, string> = {
-        "audio/mpeg": ".mp3",
-        "audio/mp3": ".mp3",
-        "audio/wav": ".wav",
-        "audio/wave": ".wav",
-        "audio/x-wav": ".wav",
-        "audio/mp4": ".m4a",
-        "audio/m4a": ".m4a",
-        "audio/x-m4a": ".m4a",
-        "audio/webm": ".webm",
-        "audio/ogg": ".ogg",
-    };
-    return mimeMap[mimeType.toLowerCase()] || ".mp3";
-}
-
-export async function extractText(
-    contentType: string,
-    data: string | Buffer,
-): Promise<ExtractionResult> {
-    const type = contentType.toLowerCase();
-
-    // Audio formats
-    if (
-        type === "mp3" ||
-        type === "audio" ||
-        type === "audio/mpeg" ||
-        type === "audio/mp3" ||
-        type === "audio/wav" ||
-        type === "audio/wave" ||
-        type === "audio/x-wav" ||
-        type === "wav" ||
-        type === "m4a" ||
-        type === "audio/mp4" ||
-        type === "audio/m4a" ||
-        type === "audio/x-m4a" ||
-        type === "webm" ||
-        type === "audio/webm" ||
-        type === "ogg" ||
-        type === "audio/ogg"
-    ) {
-        const buffer = Buffer.isBuffer(data)
-            ? data
-            : Buffer.from(data as string, "base64");
-        return extractAudio(buffer, type.startsWith("audio/") ? type : `audio/${type}`);
-    }
-
-    // Video formats
-    if (
-        type === "mp4" ||
-        type === "video" ||
-        type === "video/mp4" ||
-        type === "video/webm" ||
-        type === "video/mpeg" ||
-        type === "avi" ||
-        type === "video/avi" ||
-        type === "mov" ||
-        type === "video/quicktime"
-    ) {
-        const buffer = Buffer.isBuffer(data)
-            ? data
-            : Buffer.from(data as string, "base64");
-        return extractVideo(buffer);
-    }
-
-    switch (type) {
-        case "pdf":
-            return extractPDF(
-                Buffer.isBuffer(data)
-                    ? data
-                    : Buffer.from(data as string, "base64"),
-            );
-
-        case "docx":
-        case "doc":
-            return extractDOCX(
-                Buffer.isBuffer(data)
-                    ? data
-                    : Buffer.from(data as string, "base64"),
-            );
-
-        case "html":
-        case "htm":
-            return extractHTML(data.toString());
-
-        case "md":
-        case "markdown": {
-            const text = data.toString();
-            return {
-                text,
-                metadata: {
-                    content_type: "markdown",
-                    char_count: text.length,
-                    estimated_tokens: estimateTokens(text),
-                    extraction_method: "passthrough",
-                },
-            };
-        }
-
-        case "txt":
-        case "text": {
-            const text = data.toString();
-            return {
-                text,
-                metadata: {
-                    content_type: "txt",
-                    char_count: text.length,
-                    estimated_tokens: estimateTokens(text),
-                    extraction_method: "passthrough",
-                },
-            };
-        }
-
-        default:
-            throw new Error(`Unsupported content type: ${contentType}`);
-    }
-}
+};

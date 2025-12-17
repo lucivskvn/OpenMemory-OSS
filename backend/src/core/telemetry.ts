@@ -1,17 +1,11 @@
 import os from 'node:os'
 import { env } from './cfg'
+import pkg from '../../package.json' with { type: "json" };
 
 const DISABLED = (process.env.OM_TELEMETRY ?? '').toLowerCase() === 'false'
 const gatherVersion = (): string => {
     if (process.env.npm_package_version) return process.env.npm_package_version
-    try {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const pkg = require('../../package.json')
-        if (pkg?.version) return pkg.version
-    } catch {
-        // ignore
-    }
-    return 'unknown'
+    return pkg?.version || 'unknown'
 }
 
 export const sendTelemetry = async () => {
@@ -44,4 +38,3 @@ export const sendTelemetry = async () => {
         // silently ignore telemetry errors
     }
 }
-

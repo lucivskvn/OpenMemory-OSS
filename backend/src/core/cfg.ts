@@ -1,7 +1,6 @@
 import path from "path";
-import dotenv from "dotenv";
 
-dotenv.config({ path: path.resolve(__dirname, "../../../.env") });
+// Bun automatically loads .env files. No need for dotenv.
 const num = (v: string | undefined, d: number) => Number(v) || d;
 const str = (v: string | undefined, d: string) => v || d;
 const bool = (v: string | undefined) => v === "true";
@@ -24,7 +23,7 @@ export const env = {
     port: num(process.env.OM_PORT, 8080),
     db_path: str(
         process.env.OM_DB_PATH,
-        path.resolve(__dirname, "../../data/openmemory.sqlite"),
+        path.resolve(process.cwd(), "data/openmemory.sqlite"),
     ),
     api_key: process.env.OM_API_KEY,
     rate_limit_enabled: bool(process.env.OM_RATE_LIMIT_ENABLED),

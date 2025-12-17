@@ -1,38 +1,36 @@
 # ===== BUILD STAGE =====
-FROM node:20-alpine AS builder
+FROM oven/bun:1.3.4 AS builder
 
 WORKDIR /app
 
 # Install dependencies
-COPY package*.json ./
-RUN npm install
+COPY package.json ./
+RUN bun install --frozen-lockfile
 
 # Copy source code
 COPY . .
 
 # Build the Next.js application
-RUN npm run build
+RUN bun run build
 
 # ===== PRODUCTION STAGE =====
-FROM node:20-alpine AS production
+FROM oven/bun:1.3.4
 
 WORKDIR /app
 
-# Install only production dependencies
-COPY package*.json ./
-RUN npm install --omit=dev
-
-# Copy built assets from builder
+# Install only production dependencies (or copy if bun works that way, usually bun install --production)
+# Copying node_modules from builder is safer if we want exact same.
+COPY --from=builder /app/node_modules ./node_modules
+# Actually Next.js standalone mode is often better, but let's stick to standard run
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/next.config.ts ./next.config.ts
+COPY package.json ./
 
 # Create a dedicated non-root user for security
-RUN addgroup -g 1001 -S nodejs \
- && adduser -u 1001 -S nextjs -G nodejs \
- && chown -R nextjs:nodejs /app
+RUN chown -R bun:bun /app
 
-USER nextjs
+USER bun
 
 # Expose the application port
 EXPOSE 3000
@@ -41,4 +39,4 @@ EXPOSE 3000
 ENV NODE_ENV=production
 
 # Start the Next.js application
-CMD ["npm", "start"]
+CMD ["bun", "start"]
