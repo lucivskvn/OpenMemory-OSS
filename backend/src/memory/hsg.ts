@@ -499,10 +499,11 @@ export async function create_single_waypoint(
         ? await q.all_mem_by_user.all(user_id, 1000, 0)
         : await q.all_mem.all(1000, 0);
     let best: { id: string; similarity: number } | null = null;
+    const new_mean_f32 = new Float32Array(new_mean);
     for (const mem of mems) {
         if (mem.id === new_id || !mem.mean_vec) continue;
         const ex_mean = buf_to_vec(mem.mean_vec);
-        const sim = cos_sim(new Float32Array(new_mean), ex_mean);
+        const sim = cos_sim(new_mean_f32, ex_mean);
         if (!best || sim > best.similarity) {
             best = { id: mem.id, similarity: sim };
         }
@@ -530,10 +531,11 @@ export async function create_inter_mem_waypoints(
     const thresh = 0.75;
     const wt = 0.5;
     const vecs = await vector_store.getVectorsBySector(prim_sec);
+    const new_vec_f32 = new Float32Array(new_vec);
     for (const vr of vecs) {
         if (vr.id === new_id) continue;
         const ex_vec = vr.vector;
-        const sim = cos_sim(new Float32Array(new_vec), new Float32Array(ex_vec));
+        const sim = cos_sim(new_vec_f32, new Float32Array(ex_vec));
         if (sim >= thresh) {
             await q.ins_waypoint.run(
                 new_id,
