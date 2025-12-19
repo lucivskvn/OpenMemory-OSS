@@ -8,8 +8,9 @@ import { usr } from "./users";
 import { temporal } from "./temporal";
 import { dash } from "./dashboard";
 import { vercel } from "./vercel";
+import { Elysia } from "elysia";
 
-export function routes(app: any) {
+export function routes(app: Elysia) {
     sys(app);
     mem(app);
     dynroutes(app);
@@ -21,4 +22,3 @@ export function routes(app: any) {
     dash(app);
     vercel(app);
 }
-

@@ -15,6 +15,7 @@ import type {
     ingest_url_req,
 } from "../../core/types";
 import { Elysia, t } from "elysia";
+import { log } from "../../core/log";
 
 export const mem = (app: Elysia) =>
     app.group("/memory", (app) =>
@@ -35,11 +36,12 @@ export const mem = (app: Elysia) =>
 
                     if (b.user_id) {
                         update_user_summary(b.user_id).catch((e) =>
-                            console.error("[mem] user summary update failed:", e),
+                            log.error("[mem] user summary update failed", e),
                         );
                     }
                     return m;
                 } catch (e: any) {
+                    log.error("Memory add failed", { error: e.message });
                     set.status = 500;
                     return { err: e.message };
                 }
@@ -59,6 +61,7 @@ export const mem = (app: Elysia) =>
                         b.user_id,
                     );
                 } catch (e: any) {
+                    log.error("Ingest failed", { error: e.message });
                     set.status = 500;
                     return { err: "ingest_fail", msg: e.message };
                 }
@@ -72,6 +75,7 @@ export const mem = (app: Elysia) =>
                 try {
                     return await ingestURL(b.url, b.metadata, b.config, b.user_id);
                 } catch (e: any) {
+                    log.error("URL ingest failed", { error: e.message });
                     set.status = 500;
                     return { err: "url_fail", msg: e.message };
                 }
@@ -100,6 +104,7 @@ export const mem = (app: Elysia) =>
                         })),
                     };
                 } catch (e: any) {
+                    log.error("Query failed", { error: e.message });
                     return { query: b.query, matches: [] };
                 }
             })
@@ -146,6 +151,7 @@ export const mem = (app: Elysia) =>
                         set.status = 404;
                         return { err: "nf" };
                     } else {
+                        log.error("Update memory failed", { error: e.message });
                         set.status = 500;
                         return { err: "internal" };
                     }
@@ -183,6 +189,7 @@ export const mem = (app: Elysia) =>
                     }));
                     return { items: i };
                 } catch (e: any) {
+                    log.error("Get all memories failed", { error: e.message });
                     set.status = 500;
                     return { err: "internal" };
                 }
@@ -219,13 +226,14 @@ export const mem = (app: Elysia) =>
                         user_id: m.user_id,
                     };
                 } catch (e: any) {
+                    log.error("Get memory failed", { error: e.message });
                     set.status = 500;
                     return { err: "internal" };
                 }
             })
             .delete("/:id", async ({ params: { id }, query, body, set }) => {
                 try {
-                    const b = body as any;
+                    const b = body as { user_id?: string };
                     const user_id = (query.user_id as string) || b?.user_id;
                     const m = await q.get_mem.get(id);
                     if (!m) {
@@ -243,6 +251,7 @@ export const mem = (app: Elysia) =>
                     await q.del_waypoints.run(id, id);
                     return { ok: true };
                 } catch (e: any) {
+                    log.error("Delete memory failed", { error: e.message });
                     set.status = 500;
                     return { err: "internal" };
                 }

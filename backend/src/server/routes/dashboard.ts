@@ -2,6 +2,7 @@ import { env } from "../../core/cfg";
 import { q, run_async, get_async, all_async } from "../../core/db";
 import { get_memory_stats } from "../../memory/stats";
 import { Elysia } from "elysia";
+import { log } from "../../core/log";
 
 export const req_tracker_plugin = (app: Elysia) => {
     let requests = 0;
@@ -10,7 +11,7 @@ export const req_tracker_plugin = (app: Elysia) => {
             run_async(
                 "insert into stats(type,count,ts) values('request',?,?)",
                 [requests, Date.now()],
-            ).catch(console.error);
+            ).catch(e => log.error("Request stats logging failed", e));
             requests = 0;
         }
     }, 60000);
@@ -61,8 +62,8 @@ export const dash = (app: Elysia) =>
                         })),
                         maintenance: maintenanceStats,
                     };
-                } catch (e) {
-                    console.error(e);
+                } catch (e: any) {
+                    log.error("Dashboard stats failed", { error: e.message });
                     set.status = 500;
                     return { error: "Failed to fetch stats" };
                 }
@@ -76,7 +77,8 @@ export const dash = (app: Elysia) =>
                         [limit, offset],
                     );
                     return { memories };
-                } catch (e) {
+                } catch (e: any) {
+                    log.error("Dashboard memories failed", { error: e.message });
                     set.status = 500;
                     return { error: "Failed to fetch memories" };
                 }

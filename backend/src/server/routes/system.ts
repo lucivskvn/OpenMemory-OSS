@@ -2,6 +2,7 @@ import { env } from "../../core/cfg";
 import { q, run_async, get_async, all_async } from "../../core/db";
 import { sector_configs } from "../../memory/hsg";
 import { Elysia } from "elysia";
+import { log } from "../../core/log";
 
 export const sys = (app: Elysia) =>
     app.group("/api/system", (app) =>
@@ -29,7 +30,8 @@ export const sys = (app: Elysia) =>
                         [l],
                     );
                     return { logs };
-                } catch (e) {
+                } catch (e: any) {
+                    log.error("Get logs failed", { error: e.message });
                     set.status = 500;
                     return { err: "internal" };
                 }

@@ -32,7 +32,7 @@ const ASC = `   ____                   __  __
 
 const app = new Elysia()
     .use(cors({
-        origin: "*",
+        origin: env.ide_allowed_origins,
         methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allowedHeaders: ["Content-Type", "Authorization", "x-api-key"],
     }))

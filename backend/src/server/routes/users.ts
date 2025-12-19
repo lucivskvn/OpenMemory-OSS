@@ -1,6 +1,7 @@
 import { q } from "../../core/db";
 import { p } from "../../utils";
 import { Elysia } from "elysia";
+import { log } from "../../core/log";
 
 export const usr = (app: Elysia) =>
     app.group("/users", (app) =>
@@ -20,6 +21,7 @@ export const usr = (app: Elysia) =>
                         updated_at: u.updated_at,
                     };
                 } catch (e: any) {
+                    log.error("Get user failed", { error: e.message });
                     set.status = 500;
                     return { err: "internal" };
                 }
@@ -42,6 +44,7 @@ export const usr = (app: Elysia) =>
                     }));
                     return { items: i };
                 } catch (e: any) {
+                    log.error("Get user memories failed", { error: e.message });
                     set.status = 500;
                     return { err: "internal" };
                 }
