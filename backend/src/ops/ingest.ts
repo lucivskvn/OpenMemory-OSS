@@ -2,6 +2,7 @@ import { add_hsg_memory } from "../memory/hsg";
 import { q, transaction } from "../core/db";
 import { rid, now, j } from "../utils";
 import { extractText, ExtractionResult } from "./extract";
+import { log } from "../core/log";
 
 const LG = 8000,
     SEC = 3000;
@@ -70,7 +71,7 @@ const mkRoot = async (
         await transaction.commit();
         return id;
     } catch (e) {
-        console.error("[ERROR] Root failed:", e);
+        log.error("Root creation failed", { error: e });
         await transaction.rollback();
         throw e;
     }
@@ -110,12 +111,12 @@ const link = async (
     try {
         await q.ins_waypoint.run(rid, cid, user_id || "anonymous", 1.0, ts, ts);
         await transaction.commit();
-        console.log(
-            `[INGEST] Linked: ${rid.slice(0, 8)} -> ${cid.slice(0, 8)} (section ${idx})`,
+        log.info(
+            `Linked root to child`, { root: rid.slice(0, 8), child: cid.slice(0, 8), section: idx }
         );
     } catch (e) {
         await transaction.rollback();
-        console.error(`[INGEST] Link failed for section ${idx}:`, e);
+        log.error(`Link failed for section`, { section: idx, error: e });
         throw e;
     }
 };
@@ -155,15 +156,14 @@ export async function ingestDocument(
     }
 
     const secs = split(text, sz);
-    console.log(`[INGEST] Document: ${exMeta.estimated_tokens} tokens`);
-    console.log(`[INGEST] Splitting into ${secs.length} sections`);
+    log.info("Ingesting document", { tokens: exMeta.estimated_tokens, sections: secs.length });
 
     let rid: string;
     const cids: string[] = [];
 
     try {
         rid = await mkRoot(text, ex, meta, user_id);
-        console.log(`[INGEST] Root memory created: ${rid}`);
+        log.info("Root memory created", { id: rid });
         for (let i = 0; i < secs.length; i++) {
             try {
                 const cid = await mkChild(
@@ -176,19 +176,18 @@ export async function ingestDocument(
                 );
                 cids.push(cid);
                 await link(rid, cid, i, user_id);
-                console.log(
-                    `[INGEST] Section ${i + 1}/${secs.length} processed: ${cid}`,
+                log.info(
+                    `Section processed`, { index: i + 1, total: secs.length, id: cid }
                 );
             } catch (e) {
-                console.error(
-                    `[INGEST] Section ${i + 1}/${secs.length} failed:`,
-                    e,
+                log.error(
+                    `Section processing failed`, { index: i + 1, total: secs.length, error: e }
                 );
                 throw e;
             }
         }
-        console.log(
-            `[INGEST] Completed: ${cids.length} sections linked to ${rid}`,
+        log.info(
+            "Ingestion completed", { root: rid, child_count: cids.length }
         );
         return {
             root_memory_id: rid,
@@ -198,7 +197,7 @@ export async function ingestDocument(
             extraction: exMeta,
         };
     } catch (e) {
-        console.error("[INGEST] Document ingestion failed:", e);
+        log.error("Document ingestion failed", { error: e });
         throw e;
     }
 }
@@ -237,15 +236,14 @@ export async function ingestURL(
     }
 
     const secs = split(ex.text, sz);
-    console.log(`[INGEST] URL: ${ex.metadata.estimated_tokens} tokens`);
-    console.log(`[INGEST] Splitting into ${secs.length} sections`);
+    log.info("Ingesting URL", { url, tokens: ex.metadata.estimated_tokens, sections: secs.length });
 
     let rid: string;
     const cids: string[] = [];
 
     try {
         rid = await mkRoot(ex.text, ex, { ...meta, source_url: url }, user_id);
-        console.log(`[INGEST] Root memory for URL: ${rid}`);
+        log.info("Root memory created for URL", { id: rid });
         for (let i = 0; i < secs.length; i++) {
             try {
                 const cid = await mkChild(
@@ -258,19 +256,18 @@ export async function ingestURL(
                 );
                 cids.push(cid);
                 await link(rid, cid, i, user_id);
-                console.log(
-                    `[INGEST] URL section ${i + 1}/${secs.length} processed: ${cid}`,
+                log.info(
+                    `URL Section processed`, { index: i + 1, total: secs.length, id: cid }
                 );
             } catch (e) {
-                console.error(
-                    `[INGEST] URL section ${i + 1}/${secs.length} failed:`,
-                    e,
+                log.error(
+                    `URL Section processing failed`, { index: i + 1, total: secs.length, error: e }
                 );
                 throw e;
             }
         }
-        console.log(
-            `[INGEST] URL completed: ${cids.length} sections linked to ${rid}`,
+        log.info(
+            "URL Ingestion completed", { root: rid, child_count: cids.length }
         );
         return {
             root_memory_id: rid,
@@ -280,7 +277,7 @@ export async function ingestURL(
             extraction: ex.metadata,
         };
     } catch (e) {
-        console.error("[INGEST] URL ingestion failed:", e);
+        log.error("URL ingestion failed", { error: e });
         throw e;
     }
 }

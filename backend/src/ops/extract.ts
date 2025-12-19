@@ -2,12 +2,13 @@ import OpenAI from "openai";
 import { env } from "../core/cfg";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
-// @ts-ignore
-import pdf from "pdf-parse";
+import * as pdf_parse from "pdf-parse";
+const pdf = pdf_parse.default || pdf_parse;
 import mammoth from "mammoth";
 import TurndownService from "turndown";
 import ffmpeg from "fluent-ffmpeg";
-import * as fs from "node:fs"; // Import node:fs properly
+import * as fs from "node:fs";
+import { log } from "../core/log";
 
 // Setup OpenAI for Whisper
 const openai = new OpenAI({
@@ -34,7 +35,7 @@ async function removeFile(path: string) {
             fs.unlinkSync(path);
         }
     } catch (e) {
-        console.warn("Failed to delete temp file", path, e);
+        log.warn("Failed to delete temp file", { path, error: e });
     }
 }
 
@@ -43,7 +44,7 @@ export const extract_text_from_pdf = async (buffer: Buffer): Promise<string> => 
         const data = await pdf(buffer);
         return data.text;
     } catch (e) {
-        console.error("PDF extraction failed", e);
+        log.error("PDF extraction failed", { error: e });
         return "";
     }
 };
@@ -53,7 +54,7 @@ export const extract_text_from_docx = async (buffer: Buffer): Promise<string> =>
         const result = await mammoth.extractRawText({ buffer });
         return result.value;
     } catch (e) {
-        console.error("DOCX extraction failed", e);
+        log.error("DOCX extraction failed", { error: e });
         return "";
     }
 };
@@ -72,7 +73,7 @@ export const transcribe_audio = async (buffer: Buffer): Promise<string> => {
         });
         return response.text;
     } catch (e) {
-        console.error("Audio transcription failed", e);
+        log.error("Audio transcription failed", { error: e });
         return "";
     } finally {
         await removeFile(tempFilePath);
@@ -174,7 +175,7 @@ export const extractURL = async (url: string): Promise<ExtractionResult> => {
             }
         };
     } catch (e) {
-        console.error("URL extraction failed", e);
+        log.error("URL extraction failed", { error: e });
         throw e;
     }
 };

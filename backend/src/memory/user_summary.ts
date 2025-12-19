@@ -1,17 +1,6 @@
 import { q } from "../core/db";
 import { env } from "../core/cfg";
-
-const cos = (a: number[], b: number[]): number => {
-    let d = 0,
-        ma = 0,
-        mb = 0;
-    for (let i = 0; i < a.length; i++) {
-        d += a[i] * b[i];
-        ma += a[i] * a[i];
-        mb += b[i] * b[i];
-    }
-    return d / (Math.sqrt(ma) * Math.sqrt(mb));
-};
+import { log } from "../core/log";
 
 const gen_user_summary = (mems: any[]): string => {
     if (!mems.length) return "User profile initializing... (No memories recorded yet)";
@@ -65,7 +54,7 @@ export const update_user_summary = async (user_id: string): Promise<void> => {
             await q.upd_user_summary.run(user_id, summary, now);
         }
     } catch (e) {
-        console.error(`[USER_SUMMARY] Fatal error for ${user_id}:`, e);
+        log.error(`User summary update failed`, { user_id, error: e });
     }
 };
 
@@ -81,7 +70,7 @@ export const auto_update_user_summaries = async (): Promise<{
             await update_user_summary(uid as string);
             updated++;
         } catch (e) {
-            console.error(`[USER_SUMMARY] Failed for ${uid}:`, e);
+            log.error(`User summary auto-update failed`, { user_id: uid, error: e });
         }
     }
 
@@ -96,7 +85,7 @@ export const start_user_summary_reflection = () => {
     timer = setInterval(
         () =>
             auto_update_user_summaries().catch((e) =>
-                console.error("[USER_SUMMARY]", e),
+                log.error("User summary reflection loop failed", { error: e }),
             ),
         int,
     );

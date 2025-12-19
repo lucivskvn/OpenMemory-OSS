@@ -126,3 +126,9 @@ export type ide_context_query_req = {
 };
 
 export type ide_session_req = { user?: string; project?: string; ide?: string };
+
+export type compression_req = { content: string };
+
+export type dynamics_resonance_req = { source_sector: string; target_sector: string; content_similarity?: number };
+
+export type dynamics_propagate_req = { source_id: string; reinforcement_value: number; linked_nodes?: Array<{ target_id: string; weight: number }> };

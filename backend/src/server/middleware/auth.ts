@@ -1,6 +1,7 @@
 import { env } from "../../core/cfg";
 import crypto from "crypto";
 import { Elysia } from "elysia";
+import { log } from "../../core/log";
 
 const rate_limit_store = new Map<
     string,
@@ -90,7 +91,7 @@ export const authPlugin = (app: Elysia) =>
         if (is_public_endpoint(path)) return;
 
         if (!auth_config.api_key || auth_config.api_key === "") {
-            // console.warn("[AUTH] No API key configured");
+            // log.warn("[AUTH] No API key configured");
             return;
         }
 
@@ -109,11 +110,6 @@ export const authPlugin = (app: Elysia) =>
         }
 
         // Rate limiting logic
-        // Need IP. Elysia request object has headers.
-        // Assuming IP is in X-Forwarded-For or similar if proxied, or we skip IP for now.
-        // Or use `server.requestIP(request)` if available in context?
-        // Elysia's `ip` property is available in recent versions if configured.
-        // For now, use provided key as client ID if available, else skip IP check or default.
         const client_id = get_client_id("unknown", provided);
         const rl = check_rate_limit(client_id);
 
@@ -137,8 +133,12 @@ export const logAuthPlugin = (app: Elysia) =>
     app.onRequest(({ request, headers }) => {
         const key = extract_api_key(headers);
         if (key)
-            console.log(
-                `[AUTH] ${request.method} ${new URL(request.url).pathname} [${crypto.createHash("sha256").update(key).digest("hex").slice(0, 8)}...]`,
+            log.info(
+                `Authenticated request`, {
+                    method: request.method,
+                    path: new URL(request.url).pathname,
+                    key_hash: crypto.createHash("sha256").update(key).digest("hex").slice(0, 8)
+                }
             );
     });
 

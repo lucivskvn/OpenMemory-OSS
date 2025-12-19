@@ -2,6 +2,7 @@ import { q, log_maint_op } from "../core/db";
 import { add_hsg_memory } from "./hsg";
 import { env } from "../core/cfg";
 import { j } from "../utils";
+import { log } from "../core/log";
 
 const cos = (a: number[], b: number[]): number => {
     let d = 0,
@@ -108,18 +109,18 @@ const boost = async (ids: string[]) => {
 };
 
 export const run_reflection = async () => {
-    console.log("[REFLECT] Starting reflection job...");
+    log.info("[REFLECT] Starting reflection job...");
     const min = env.reflect_min || 20;
     const mems = await q.all_mem.all(100, 0);
-    console.log(
+    log.info(
         `[REFLECT] Fetched ${mems.length} memories (min required: ${min})`,
     );
     if (mems.length < min) {
-        console.log("[REFLECT] Not enough memories, skipping");
+        log.info("[REFLECT] Not enough memories, skipping");
         return { created: 0, reason: "low" };
     }
     const cls = cluster(mems);
-    console.log(`[REFLECT] Clustered into ${cls.length} groups`);
+    log.info(`[REFLECT] Clustered into ${cls.length} groups`);
     let n = 0;
     for (const c of cls) {
         const txt = summ(c);
@@ -131,7 +132,7 @@ export const run_reflection = async () => {
             freq: c.n,
             at: new Date().toISOString(),
         };
-        console.log(
+        log.info(
             `[REFLECT] Creating reflection: ${c.n} memories, salience=${s.toFixed(3)}, sector=${c.mem[0].primary_sector}`,
         );
         await add_hsg_memory(txt, j(["reflect:auto"]), meta);
@@ -140,7 +141,7 @@ export const run_reflection = async () => {
         n++;
     }
     if (n > 0) await log_maint_op("reflect", n);
-    console.log(`[REFLECT] Job complete: created ${n} reflections`);
+    log.info(`[REFLECT] Job complete: created ${n} reflections`);
     return { created: n, clusters: cls.length };
 };
 
@@ -150,10 +151,10 @@ export const start_reflection = () => {
     if (!env.auto_reflect || timer) return;
     const int = (env.reflect_interval || 10) * 60000;
     timer = setInterval(
-        () => run_reflection().catch((e) => console.error("[REFLECT]", e)),
+        () => run_reflection().catch((e) => log.error("Reflection job failed", { error: e })),
         int,
     );
-    console.log(`[REFLECT] Started: every ${env.reflect_interval || 10}m`);
+    log.info(`[REFLECT] Started: every ${env.reflect_interval || 10}m`);
 };
 
 export const stop_reflection = () => {
