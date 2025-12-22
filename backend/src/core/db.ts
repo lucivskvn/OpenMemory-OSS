@@ -8,7 +8,12 @@ import { PostgresVectorStore } from "./vector/postgres";
 import { ValkeyVectorStore } from "./vector/valkey";
 import { run_migrations_core } from "./migrations";
 
-type q_type = {
+/**
+ * Repository interface for all database queries.
+ * Provides type-safe access to common operations.
+ */
+type QueryRepository = {
+    /** Insert or update a memory record */
     ins_mem: { run: (...p: any[]) => Promise<void> };
     upd_mean_vec: { run: (...p: any[]) => Promise<void> };
     upd_compressed_vec: { run: (...p: any[]) => Promise<void> };
@@ -17,7 +22,10 @@ type q_type = {
     upd_mem: { run: (...p: any[]) => Promise<void> };
     upd_mem_with_sector: { run: (...p: any[]) => Promise<void> };
     del_mem: { run: (...p: any[]) => Promise<void> };
+    /** Get a single memory by ID */
     get_mem: { get: (id: string) => Promise<any> };
+    /** Batch retrieval of memories by ID list */
+    get_mems_by_ids: { all: (ids: string[]) => Promise<any[]> };
     get_mem_by_simhash: { get: (simhash: string) => Promise<any> };
     all_mem: { all: (limit: number, offset: number) => Promise<any[]> };
     all_mem_by_sector: {
@@ -41,9 +49,19 @@ type q_type = {
     upd_log: { run: (...p: any[]) => Promise<void> };
     get_pending_logs: { all: () => Promise<any[]> };
     get_failed_logs: { all: () => Promise<any[]> };
+    get_recent_logs: { all: (limit: number) => Promise<any[]> };
     ins_user: { run: (...p: any[]) => Promise<void> };
     get_user: { get: (user_id: string) => Promise<any> };
+    get_all_user_ids: { all: () => Promise<any[]> };
+    /** Aggregate system statistics for dashboard */
+    get_system_stats: { get: () => Promise<any> };
     upd_user_summary: { run: (...p: any[]) => Promise<void> };
+    // Temporal
+    ins_fact: { run: (...p: any[]) => Promise<void> };
+    get_facts: { all: (f: { subject?: string; predicate?: string; object?: string; valid_at?: number }) => Promise<any[]> };
+    inv_fact: { run: (id: string, valid_to: number) => Promise<void> };
+    ins_edge: { run: (...p: any[]) => Promise<void> };
+    get_edges: { all: (source_id: string) => Promise<any[]> };
 };
 
 let run_async: (sql: string, p?: any[]) => Promise<void>;
@@ -54,12 +72,24 @@ let transaction: {
     commit: () => Promise<void>;
     rollback: () => Promise<void>;
 };
-let q: q_type;
+let q: QueryRepository;
 let vector_store: VectorStore;
 let memories_table: string;
 let dbReadyPromise: Promise<void>;
 
 const is_pg = env.metadata_backend === "postgres";
+const sc = process.env.OM_PG_SCHEMA || "public";
+
+// Constants for table names
+export const TABLE_MEMORIES = is_pg ? `"${sc}"."${process.env.OM_PG_TABLE || "openmemory_memories"}"` : "memories";
+export const TABLE_VECTORS = `"${sc}"."${process.env.OM_VECTOR_TABLE || "openmemory_vectors"}"`;
+export const TABLE_WAYPOINTS = is_pg ? `"${sc}"."openmemory_waypoints"` : "waypoints";
+export const TABLE_LOGS = is_pg ? `"${sc}"."openmemory_embed_logs"` : "embed_logs";
+export const TABLE_USERS = is_pg ? `"${sc}"."openmemory_users"` : "users";
+export const TABLE_STATS = is_pg ? `"${sc}"."stats"` : "stats";
+export const TABLE_TF = is_pg ? `"${sc}"."temporal_facts"` : "temporal_facts";
+export const TABLE_TE = is_pg ? `"${sc}"."temporal_edges"` : "temporal_edges";
+
 
 function convertPlaceholders(sql: string): string {
     if (!is_pg) return sql;
@@ -68,7 +98,6 @@ function convertPlaceholders(sql: string): string {
 }
 
 export const init_db = async () => {
-    // Await the global initialization promise to ensure migrations are done.
     if (dbReadyPromise) {
         await dbReadyPromise;
     }
@@ -112,10 +141,6 @@ if (is_pg) {
         }
     };
 
-    const sc = process.env.OM_PG_SCHEMA || "public";
-    memories_table = `"${sc}"."${process.env.OM_PG_TABLE || "openmemory_memories"}"`;
-    const v = `"${sc}"."${process.env.OM_VECTOR_TABLE || "openmemory_vectors"}"`;
-
     const exec = async (query: string, p: any[] = []) => {
         return await pg.unsafe(convertPlaceholders(query), p);
     };
@@ -151,6 +176,9 @@ if (is_pg) {
     const internal_init = async () => {
         await ensureDb();
 
+        // Ensure pgvector extension
+        await pg`CREATE EXTENSION IF NOT EXISTS vector`;
+
         await run_migrations_core({
             run_async: async (s, p) => { await exec(s, p); },
             get_async: async (s, p) => (await exec(s, p))[0],
@@ -162,8 +190,8 @@ if (is_pg) {
             vector_store = new ValkeyVectorStore();
             console.log("[DB] Using Valkey VectorStore");
         } else {
-            vector_store = new PostgresVectorStore({ run_async, get_async, all_async }, v.replace(/"/g, ""));
-            console.log(`[DB] Using Postgres VectorStore with table: ${v}`);
+            vector_store = new PostgresVectorStore({ run_async, get_async, all_async }, TABLE_VECTORS.replace(/"/g, ""));
+            console.log(`[DB] Using Postgres VectorStore with table: ${TABLE_VECTORS}`);
         }
     };
 
@@ -203,8 +231,6 @@ if (is_pg) {
     db.run("PRAGMA wal_autocheckpoint=20000");
     db.run("PRAGMA locking_mode=NORMAL");
     db.run("PRAGMA busy_timeout=5000");
-
-    memories_table = "memories";
 
     // Raw execution wrapper for migrations
     const exec = async (sql: string, p: any[] = []) => {
@@ -272,224 +298,294 @@ if (is_pg) {
     };
 }
 
+// Helpers for SQL generation
+const gen_upsert = (table: string, keys: string[], on_conflict: string, update_cols: string[]) => {
+    const vals = keys.map(() => "?").join(",");
+    const updates = update_cols.map(c => `${c}=excluded.${c}`).join(",");
+    return `insert into ${table}(${keys.join(",")}) values(${vals}) on conflict(${on_conflict}) do update set ${updates}`;
+};
+const gen_replace = (table: string, keys: string[]) => {
+    const vals = keys.map(() => "?").join(",");
+    return `insert or replace into ${table}(${keys.join(",")}) values(${vals})`;
+};
+
 q = {
     ins_mem: {
         run: (...p) =>
             run_async(
-                `insert into ${memories_table}(id,user_id,segment,content,simhash,primary_sector,tags,meta,created_at,updated_at,last_seen_at,salience,decay_lambda,version,mean_dim,mean_vec,compressed_vec,feedback_score) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) on conflict(id) do update set user_id=excluded.user_id,segment=excluded.segment,content=excluded.content,simhash=excluded.simhash,primary_sector=excluded.primary_sector,tags=excluded.tags,meta=excluded.meta,created_at=excluded.created_at,updated_at=excluded.updated_at,last_seen_at=excluded.last_seen_at,salience=excluded.salience,decay_lambda=excluded.decay_lambda,version=excluded.version,mean_dim=excluded.mean_dim,mean_vec=excluded.mean_vec,compressed_vec=excluded.compressed_vec,feedback_score=excluded.feedback_score`,
+                `insert into ${TABLE_MEMORIES}(id,user_id,segment,content,simhash,primary_sector,tags,meta,created_at,updated_at,last_seen_at,salience,decay_lambda,version,mean_dim,mean_vec,compressed_vec,feedback_score) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) on conflict(id) do update set user_id=excluded.user_id,segment=excluded.segment,content=excluded.content,simhash=excluded.simhash,primary_sector=excluded.primary_sector,tags=excluded.tags,meta=excluded.meta,created_at=excluded.created_at,updated_at=excluded.updated_at,last_seen_at=excluded.last_seen_at,salience=excluded.salience,decay_lambda=excluded.decay_lambda,version=excluded.version,mean_dim=excluded.mean_dim,mean_vec=excluded.mean_vec,compressed_vec=excluded.compressed_vec,feedback_score=excluded.feedback_score`,
                 p,
             ),
     },
     upd_mean_vec: {
         run: (...p) =>
             run_async(
-                `update ${memories_table} set mean_dim=?,mean_vec=? where id=?`,
+                `update ${TABLE_MEMORIES} set mean_dim=?,mean_vec=? where id=?`,
                 p,
             ),
     },
     upd_compressed_vec: {
         run: (...p) =>
-            run_async(`update ${memories_table} set compressed_vec=? where id=?`, p),
+            run_async(`update ${TABLE_MEMORIES} set compressed_vec=? where id=?`, p),
     },
     upd_feedback: {
         run: (...p) =>
-            run_async(`update ${memories_table} set feedback_score=? where id=?`, p),
+            run_async(`update ${TABLE_MEMORIES} set feedback_score=? where id=?`, p),
     },
     upd_seen: {
         run: (...p) =>
             run_async(
-                `update ${memories_table} set last_seen_at=?,salience=?,updated_at=? where id=?`,
+                `update ${TABLE_MEMORIES} set last_seen_at=?,salience=?,updated_at=? where id=?`,
                 p,
             ),
     },
     upd_mem: {
         run: (...p) =>
             run_async(
-                `update ${memories_table} set content=?,tags=?,meta=?,updated_at=?,version=version+1 where id=?`,
+                `update ${TABLE_MEMORIES} set content=?,tags=?,meta=?,updated_at=?,version=version+1 where id=?`,
                 p,
             ),
     },
     upd_mem_with_sector: {
         run: (...p) =>
             run_async(
-                `update ${memories_table} set content=?,primary_sector=?,tags=?,meta=?,updated_at=?,version=version+1 where id=?`,
+                `update ${TABLE_MEMORIES} set content=?,primary_sector=?,tags=?,meta=?,updated_at=?,version=version+1 where id=?`,
                 p,
             ),
     },
     del_mem: {
-        run: (...p) => run_async(`delete from ${memories_table} where id=?`, p),
+        run: (...p) => run_async(`delete from ${TABLE_MEMORIES} where id=?`, p),
     },
     get_mem: {
-        get: (id) => get_async(`select * from ${memories_table} where id=?`, [id]),
+        get: (id) => get_async(`select * from ${TABLE_MEMORIES} where id=?`, [id]),
+    },
+    get_mems_by_ids: {
+        all: async (ids: string[]) => {
+            if (ids.length === 0) return [];
+            const placeholders = ids.map(() => "?").join(",");
+            return all_async(`select * from ${TABLE_MEMORIES} where id in (${placeholders})`, ids);
+        }
+    },
+    get_all_user_ids: {
+        all: () => {
+            return all_async(`select distinct user_id from ${TABLE_MEMORIES} where user_id is not null`, []);
+        }
     },
     get_mem_by_simhash: {
         get: (simhash) =>
             get_async(
-                `select * from ${memories_table} where simhash=? order by salience desc limit 1`,
+                `select * from ${TABLE_MEMORIES} where simhash=? order by salience desc limit 1`,
                 [simhash],
             ),
     },
     all_mem: {
         all: (limit, offset) =>
             all_async(
-                `select * from ${memories_table} order by created_at desc limit ? offset ?`,
+                `select * from ${TABLE_MEMORIES} order by created_at desc limit ? offset ?`,
                 [limit, offset],
             ),
     },
     all_mem_by_sector: {
         all: (sector, limit, offset) =>
             all_async(
-                `select * from ${memories_table} where primary_sector=? order by created_at desc limit ? offset ?`,
+                `select * from ${TABLE_MEMORIES} where primary_sector=? order by created_at desc limit ? offset ?`,
                 [sector, limit, offset],
             ),
     },
     get_segment_count: {
         get: (segment) =>
-            get_async(`select count(*) as c from ${memories_table} where segment=?`, [
+            get_async(`select count(*) as c from ${TABLE_MEMORIES} where segment=?`, [
                 segment,
             ]),
     },
     get_max_segment: {
         get: () =>
             get_async(
-                `select coalesce(max(segment), 0) as max_seg from ${memories_table}`,
+                `select coalesce(max(segment), 0) as max_seg from ${TABLE_MEMORIES}`,
                 [],
             ),
     },
     get_segments: {
         all: () =>
             all_async(
-                `select distinct segment from ${memories_table} order by segment desc`,
+                `select distinct segment from ${TABLE_MEMORIES} order by segment desc`,
                 [],
             ),
     },
     get_mem_by_segment: {
         all: (segment) =>
             all_async(
-                `select * from ${memories_table} where segment=? order by created_at desc`,
+                `select * from ${TABLE_MEMORIES} where segment=? order by created_at desc`,
                 [segment],
             ),
     },
     ins_waypoint: {
         run: (...p) => {
-            const w = is_pg ? `"${process.env.OM_PG_SCHEMA || "public"}"."openmemory_waypoints"` : "waypoints";
+            const cols = ["src_id", "dst_id", "user_id", "weight", "created_at", "updated_at"];
             const sql = is_pg
-                 ? `insert into ${w}(src_id,dst_id,user_id,weight,created_at,updated_at) values(?,?,?,?,?,?) on conflict(src_id,user_id) do update set dst_id=excluded.dst_id,weight=excluded.weight,updated_at=excluded.updated_at`
-                 : `insert or replace into waypoints(src_id,dst_id,user_id,weight,created_at,updated_at) values(?,?,?,?,?,?)`;
+                 ? gen_upsert(TABLE_WAYPOINTS, cols, "src_id,user_id", ["dst_id", "weight", "updated_at"])
+                 : gen_replace(TABLE_WAYPOINTS, cols);
             return run_async(sql, p);
         },
     },
     get_neighbors: {
         all: (src) => {
-            const w = is_pg ? `"${process.env.OM_PG_SCHEMA || "public"}"."openmemory_waypoints"` : "waypoints";
             return all_async(
-                `select dst_id,weight from ${w} where src_id=? order by weight desc`,
+                `select dst_id,weight from ${TABLE_WAYPOINTS} where src_id=? order by weight desc`,
                 [src],
             );
         }
     },
     get_waypoints_by_src: {
         all: (src) => {
-             const w = is_pg ? `"${process.env.OM_PG_SCHEMA || "public"}"."openmemory_waypoints"` : "waypoints";
             return all_async(
-                `select src_id,dst_id,weight,created_at,updated_at from ${w} where src_id=?`,
+                `select src_id,dst_id,weight,created_at,updated_at from ${TABLE_WAYPOINTS} where src_id=?`,
                 [src],
             );
         }
     },
     get_waypoint: {
         get: (src, dst) => {
-             const w = is_pg ? `"${process.env.OM_PG_SCHEMA || "public"}"."openmemory_waypoints"` : "waypoints";
             return get_async(
-                `select weight from ${w} where src_id=? and dst_id=?`,
+                `select weight from ${TABLE_WAYPOINTS} where src_id=? and dst_id=?`,
                 [src, dst],
             );
         }
     },
     upd_waypoint: {
         run: (...p) => {
-             const w = is_pg ? `"${process.env.OM_PG_SCHEMA || "public"}"."openmemory_waypoints"` : "waypoints";
             return run_async(
-                `update ${w} set weight=?,updated_at=? where src_id=? and dst_id=?`,
+                `update ${TABLE_WAYPOINTS} set weight=?,updated_at=? where src_id=? and dst_id=?`,
                 p,
             );
         }
     },
     del_waypoints: {
         run: (...p) => {
-             const w = is_pg ? `"${process.env.OM_PG_SCHEMA || "public"}"."openmemory_waypoints"` : "waypoints";
-            return run_async(`delete from ${w} where src_id=? or dst_id=?`, p);
+            return run_async(`delete from ${TABLE_WAYPOINTS} where src_id=? or dst_id=?`, p);
         }
     },
     prune_waypoints: {
         run: (t) => {
-             const w = is_pg ? `"${process.env.OM_PG_SCHEMA || "public"}"."openmemory_waypoints"` : "waypoints";
-            return run_async(`delete from ${w} where weight<?`, [t]);
+            return run_async(`delete from ${TABLE_WAYPOINTS} where weight<?`, [t]);
         }
     },
     ins_log: {
         run: (...p) => {
-            const l = is_pg ? `"${process.env.OM_PG_SCHEMA || "public"}"."openmemory_embed_logs"` : "embed_logs";
+             const cols = ["id", "model", "status", "ts", "err"];
              const sql = is_pg
-                 ? `insert into ${l}(id,model,status,ts,err) values(?,?,?,?,?) on conflict(id) do update set model=excluded.model,status=excluded.status,ts=excluded.ts,err=excluded.err`
-                 : `insert or replace into embed_logs(id,model,status,ts,err) values(?,?,?,?,?)`;
+                 ? gen_upsert(TABLE_LOGS, cols, "id", ["model", "status", "ts", "err"])
+                 : gen_replace(TABLE_LOGS, cols);
             return run_async(sql, p);
         },
     },
     upd_log: {
         run: (...p) => {
-             const l = is_pg ? `"${process.env.OM_PG_SCHEMA || "public"}"."openmemory_embed_logs"` : "embed_logs";
-            return run_async(`update ${l} set status=?,err=? where id=?`, p);
+            return run_async(`update ${TABLE_LOGS} set status=?,err=? where id=?`, p);
         }
     },
     get_pending_logs: {
         all: () => {
-             const l = is_pg ? `"${process.env.OM_PG_SCHEMA || "public"}"."openmemory_embed_logs"` : "embed_logs";
-            return all_async(`select * from ${l} where status=?`, ["pending"]);
+            return all_async(`select * from ${TABLE_LOGS} where status=?`, ["pending"]);
         }
     },
     get_failed_logs: {
         all: () => {
-             const l = is_pg ? `"${process.env.OM_PG_SCHEMA || "public"}"."openmemory_embed_logs"` : "embed_logs";
             return all_async(
-                `select * from ${l} where status=? order by ts desc limit 100`,
+                `select * from ${TABLE_LOGS} where status=? order by ts desc limit 100`,
                 ["failed"],
+            );
+        }
+    },
+    get_recent_logs: {
+        all: (limit: number) => {
+            return all_async(
+                `select * from ${TABLE_LOGS} order by ts desc limit ?`,
+                [limit],
             );
         }
     },
     all_mem_by_user: {
         all: (user_id, limit, offset) =>
             all_async(
-                `select * from ${memories_table} where user_id=? order by created_at desc limit ? offset ?`,
+                `select * from ${TABLE_MEMORIES} where user_id=? order by created_at desc limit ? offset ?`,
                 [user_id, limit, offset],
             ),
     },
     ins_user: {
         run: (...p) => {
-             const u = is_pg ? `"${process.env.OM_PG_SCHEMA || "public"}"."openmemory_users"` : "users";
+            const cols = ["user_id", "summary", "reflection_count", "created_at", "updated_at"];
              const sql = is_pg
-                ? `insert into ${u}(user_id,summary,reflection_count,created_at,updated_at) values(?,?,?,?,?) on conflict(user_id) do update set summary=excluded.summary,reflection_count=excluded.reflection_count,updated_at=excluded.updated_at`
-                : `insert or ignore into users(user_id,summary,reflection_count,created_at,updated_at) values(?,?,?,?,?)`;
+                ? gen_upsert(TABLE_USERS, cols, "user_id", ["summary", "reflection_count", "updated_at"])
+                : `insert or ignore into users(${cols.join(",")}) values(?,?,?,?,?)`;
             return run_async(sql, p);
         },
     },
     get_user: {
         get: (user_id) => {
-             const u = is_pg ? `"${process.env.OM_PG_SCHEMA || "public"}"."openmemory_users"` : "users";
             return get_async(
-                `select * from ${u} where user_id=?`,
+                `select * from ${TABLE_USERS} where user_id=?`,
                 [user_id],
             );
         }
     },
+    get_system_stats: {
+        get: async () => {
+            const [totalMemories, totalUsers, requestStats, maintenanceStats] = await Promise.all([
+                get_async(`select count(*) as c from ${TABLE_MEMORIES}`),
+                get_async(`select count(*) as c from ${TABLE_USERS}`),
+                all_async(`select * from ${TABLE_STATS} where type='request' order by ts desc limit 60`),
+                all_async(`select * from ${TABLE_STATS} where type in ('decay','reflect','consolidate') order by ts desc limit 50`)
+            ]);
+            return { totalMemories, totalUsers, requestStats, maintenanceStats };
+        }
+    },
     upd_user_summary: {
         run: (...p) => {
-             const u = is_pg ? `"${process.env.OM_PG_SCHEMA || "public"}"."openmemory_users"` : "users";
             return run_async(
-                `update ${u} set summary=?,reflection_count=reflection_count+1,updated_at=? where user_id=?`,
+                `update ${TABLE_USERS} set summary=?,reflection_count=reflection_count+1,updated_at=? where user_id=?`,
                 p,
             );
         }
+    },
+    ins_fact: {
+        run: (...p) => {
+            const cols = ["id", "subject", "predicate", "object", "valid_from", "valid_to", "confidence", "last_updated", "metadata"];
+            const sql = is_pg
+                ? gen_upsert(TABLE_TF, cols, "subject,predicate,object,valid_from", ["valid_to", "confidence", "last_updated", "metadata"])
+                : gen_replace(TABLE_TF, cols);
+            return run_async(sql, p);
+        },
+    },
+    get_facts: {
+        all: async (f) => {
+            let sql = `select * from ${TABLE_TF} where 1=1`;
+            const params = [];
+            if (f.subject) { sql += ` and subject=?`; params.push(f.subject); }
+            if (f.predicate) { sql += ` and predicate=?`; params.push(f.predicate); }
+            if (f.object) { sql += ` and object=?`; params.push(f.object); }
+            if (f.valid_at) {
+                sql += ` and valid_from <= ? and (valid_to is null or valid_to >= ?)`;
+                params.push(f.valid_at, f.valid_at);
+            }
+            sql += ` order by valid_from desc`;
+            return all_async(sql, params);
+        }
+    },
+    inv_fact: {
+        run: (id, valid_to) => run_async(`update ${TABLE_TF} set valid_to=?, last_updated=? where id=?`, [valid_to, Date.now(), id]),
+    },
+    ins_edge: {
+        run: (...p) => {
+            const cols = ["id", "source_id", "target_id", "relation_type", "valid_from", "valid_to", "weight", "metadata"];
+            const sql = is_pg
+                ? gen_upsert(TABLE_TE, cols, "id", ["valid_to", "weight", "metadata"]) // TE id is primary key
+                : gen_replace(TABLE_TE, cols);
+            return run_async(sql, p);
+        },
+    },
+    get_edges: {
+        all: (source_id) => all_async(`select * from ${TABLE_TE} where source_id=?`, [source_id]),
     },
 };
 
@@ -498,9 +594,7 @@ export const log_maint_op = async (
     cnt = 1,
 ) => {
     try {
-        const sql = is_pg
-            ? `insert into "${process.env.OM_PG_SCHEMA || "public"}"."stats"(type,count,ts) values(?,?,?)`
-            : "insert into stats(type,count,ts) values(?,?,?)";
+        const sql = `insert into ${TABLE_STATS}(type,count,ts) values(?,?,?)`;
         await run_async(sql, [type, cnt, Date.now()]);
     } catch (e) {
         console.error("[DB] Maintenance log error:", e);

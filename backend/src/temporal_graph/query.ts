@@ -1,6 +1,5 @@
 
-
-import { get_async, all_async } from '../core/db'
+import { get_async, all_async, TABLE_TF, TABLE_TE } from '../core/db'
 import { TemporalFact, TemporalQuery, TimelineEntry } from './types'
 
 
@@ -41,7 +40,7 @@ export const query_facts_at_time = async (
 
     const sql = `
         SELECT id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
-        FROM temporal_facts
+        FROM ${TABLE_TF}
         WHERE ${conditions.join(' AND ')}
         ORDER BY confidence DESC, valid_from DESC
     `
@@ -69,7 +68,7 @@ export const get_current_fact = async (
 
     const row = await get_async(`
         SELECT id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
-        FROM temporal_facts
+        FROM ${TABLE_TF}
         WHERE subject = ? AND predicate = ? AND valid_to IS NULL
         ORDER BY valid_from DESC
         LIMIT 1
@@ -132,7 +131,7 @@ export const query_facts_in_range = async (
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
     const sql = `
         SELECT id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
-        FROM temporal_facts
+        FROM ${TABLE_TF}
         ${where}
         ORDER BY valid_from DESC
     `
@@ -161,7 +160,7 @@ export const find_conflicting_facts = async (
 
     const rows = await all_async(`
         SELECT id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
-        FROM temporal_facts
+        FROM ${TABLE_TF}
         WHERE subject = ? AND predicate = ?
         AND (valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?))
         ORDER BY confidence DESC
@@ -192,7 +191,7 @@ export const get_facts_by_subject = async (
     if (include_historical) {
         sql = `
             SELECT id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
-            FROM temporal_facts
+            FROM ${TABLE_TF}
             WHERE subject = ?
             ORDER BY predicate ASC, valid_from DESC
         `
@@ -201,7 +200,7 @@ export const get_facts_by_subject = async (
         const timestamp = at ? at.getTime() : Date.now()
         sql = `
             SELECT id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
-            FROM temporal_facts
+            FROM ${TABLE_TF}
             WHERE subject = ?
             AND (valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?))
             ORDER BY predicate ASC, confidence DESC
@@ -234,7 +233,7 @@ export const search_facts = async (
 
     const sql = `
         SELECT id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
-        FROM temporal_facts
+        FROM ${TABLE_TF}
         WHERE ${field} LIKE ?
         AND (valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?))
         ORDER BY confidence DESC, valid_from DESC
@@ -272,8 +271,8 @@ export const get_related_facts = async (
 
     const sql = `
         SELECT f.*, e.relation_type, e.weight
-        FROM temporal_edges e
-        JOIN temporal_facts f ON e.target_id = f.id
+        FROM ${TABLE_TE} e
+        JOIN ${TABLE_TF} f ON e.target_id = f.id
         WHERE e.source_id = ?
         AND ${conditions.join(' AND ')}
         AND (f.valid_from <= ? AND (f.valid_to IS NULL OR f.valid_to >= ?))

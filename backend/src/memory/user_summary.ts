@@ -61,8 +61,8 @@ export const update_user_summary = async (user_id: string): Promise<void> => {
 export const auto_update_user_summaries = async (): Promise<{
     updated: number;
 }> => {
-    const all_mems = await q.all_mem.all(10000, 0);
-    const user_ids = new Set(all_mems.map((m) => m.user_id).filter(Boolean));
+    const users = await q.get_all_user_ids.all();
+    const user_ids = users.map((u: any) => u.user_id).filter(Boolean);
 
     let updated = 0;
     for (const uid of user_ids) {

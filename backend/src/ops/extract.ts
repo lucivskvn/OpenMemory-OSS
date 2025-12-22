@@ -64,8 +64,8 @@ export const extract_text_from_html = (html: string): string => {
 };
 
 export const transcribe_audio = async (buffer: Buffer): Promise<string> => {
-    const tempFilePath = await saveTempFile(buffer, "mp3");
     try {
+        // Create a File object directly from buffer (supported in Bun)
         const file = new File([buffer], "audio.mp3", { type: "audio/mp3" });
         const response = await openai.audio.transcriptions.create({
             file: file,
@@ -75,8 +75,6 @@ export const transcribe_audio = async (buffer: Buffer): Promise<string> => {
     } catch (e) {
         log.error("Audio transcription failed", { error: e });
         return "";
-    } finally {
-        await removeFile(tempFilePath);
     }
 };
 
@@ -106,26 +104,26 @@ export const extract_audio_from_video = async (buffer: Buffer): Promise<Buffer> 
     });
 };
 
-export const process_file = async (
-    file: { name: string; type: string; arrayBuffer: () => Promise<ArrayBuffer> },
-): Promise<string> => {
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const ext = file.name.split(".").pop()?.toLowerCase();
-
-    if (ext === "pdf") return await extract_text_from_pdf(buffer);
-    if (ext === "docx") return await extract_text_from_docx(buffer);
-    if (["html", "htm"].includes(ext || ""))
-        return extract_text_from_html(buffer.toString());
-    if (["mp3", "wav", "m4a", "ogg"].includes(ext || ""))
-        return await transcribe_audio(buffer);
-    if (["mp4", "mov", "avi", "webm"].includes(ext || "")) {
+export const processBuffer = async (buffer: Buffer, ext: string): Promise<string> => {
+    const e = ext.toLowerCase().replace(".", "");
+    if (e === "pdf") return await extract_text_from_pdf(buffer);
+    if (e === "docx") return await extract_text_from_docx(buffer);
+    if (["html", "htm"].includes(e)) return extract_text_from_html(buffer.toString());
+    if (["mp3", "wav", "m4a", "ogg"].includes(e)) return await transcribe_audio(buffer);
+    if (["mp4", "mov", "avi", "webm"].includes(e)) {
         const audio = await extract_audio_from_video(buffer);
         return await transcribe_audio(audio);
     }
-    if (["txt", "md", "json", "csv", "xml"].includes(ext || ""))
-        return buffer.toString();
+    // Default to treating as text
+    return buffer.toString();
+};
 
-    return "";
+export const process_file = async (
+    file: { name: string; type?: string; arrayBuffer: () => Promise<ArrayBuffer> },
+): Promise<string> => {
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const ext = file.name.split(".").pop()?.toLowerCase() || "";
+    return processBuffer(buffer, ext);
 };
 
 export interface ExtractionResult {
@@ -141,20 +139,38 @@ export interface ExtractionResult {
 
 const estimateTokens = (t: string) => Math.ceil(t.length / 4);
 
-export const extractText = async (textOrUrl: string, data?: string | Buffer): Promise<ExtractionResult> => {
+export const extractText = async (textOrUrlOrType: string, data?: string | Buffer): Promise<ExtractionResult> => {
     let text = "";
+    let type = "text";
+
     if (data) {
-        if (typeof data === "string") text = data;
-        else if (Buffer.isBuffer(data)) text = data.toString();
-        else text = String(data);
+        type = textOrUrlOrType;
+        let buf: Buffer;
+
+        if (Buffer.isBuffer(data)) {
+            buf = data;
+        } else {
+            // Check if binary type to decide on base64 decoding
+            // ingest_req sends strings. If it's a binary format, we expect base64.
+            const binaryTypes = ["pdf", "docx", "audio", "mp3", "wav", "mp4", "mov", "avi"];
+            const isBinary = binaryTypes.some(t => type.toLowerCase().includes(t));
+
+            if (isBinary) {
+                buf = Buffer.from(data, 'base64');
+            } else {
+                buf = Buffer.from(data);
+            }
+        }
+        text = await processBuffer(buf, type);
     } else {
-        text = textOrUrl;
+        // No data, assume textOrUrlOrType is the text content
+        text = textOrUrlOrType;
     }
 
     return {
         text,
         metadata: {
-            content_type: "text",
+            content_type: type,
             estimated_tokens: estimateTokens(text)
         }
     };

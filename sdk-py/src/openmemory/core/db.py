@@ -16,9 +16,10 @@ def init_db(custom_path=None):
         return
 
     db_path = custom_path or env["db_path"] or "./data/openmemory.sqlite"
-    directory = os.path.dirname(db_path)
-    if directory and not os.path.exists(directory):
-        os.makedirs(directory, exist_ok=True)
+    if db_path != ":memory:":
+        directory = os.path.dirname(db_path)
+        if directory and not os.path.exists(directory):
+            os.makedirs(directory, exist_ok=True)
 
     db = sqlite3.connect(db_path, check_same_thread=False)
     db.row_factory = sqlite3.Row
@@ -185,6 +186,53 @@ class Q:
         def get(id):
             return one_query("select * from memories where id=?", (id,))
 
-    # ... Add other queries as needed ...
+    class get_mems_by_ids:
+        @staticmethod
+        def all(ids):
+            if not ids:
+                return []
+            ph = ",".join(["?"] * len(ids))
+            return many_query(f"select * from memories where id in ({ph})", ids)
+
+    class ins_fact:
+        @staticmethod
+        def run(*p):
+            exec_query("insert or replace into temporal_facts(id,subject,predicate,object,valid_from,valid_to,confidence,last_updated,metadata) values(?,?,?,?,?,?,?,?,?)", p)
+
+    class get_facts:
+        @staticmethod
+        def all(f):
+            sql = "select * from temporal_facts where 1=1"
+            params = []
+            if f.get('subject'):
+                sql += " and subject=?"
+                params.append(f['subject'])
+            if f.get('predicate'):
+                sql += " and predicate=?"
+                params.append(f['predicate'])
+            if f.get('object'):
+                sql += " and object=?"
+                params.append(f['object'])
+            if f.get('valid_at'):
+                sql += " and valid_from <= ? and (valid_to is null or valid_to >= ?)"
+                params.append(f['valid_at'])
+                params.append(f['valid_at'])
+            sql += " order by valid_from desc"
+            return many_query(sql, tuple(params))
+
+    class inv_fact:
+        @staticmethod
+        def run(id, valid_to):
+            exec_query("update temporal_facts set valid_to=?, last_updated=? where id=?", (valid_to, int(time.time()*1000), id))
+
+    class ins_edge:
+        @staticmethod
+        def run(*p):
+            exec_query("insert or replace into temporal_edges(id,source_id,target_id,relation_type,valid_from,valid_to,weight,metadata) values(?,?,?,?,?,?,?,?)", p)
+
+    class get_edges:
+        @staticmethod
+        def all(source_id):
+            return many_query("select * from temporal_edges where source_id=?", (source_id,))
 
 q = Q

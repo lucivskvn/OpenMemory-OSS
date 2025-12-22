@@ -196,6 +196,12 @@ export class ValkeyVectorStore implements VectorStore {
         return results;
     }
 
+    async getVectorsForMemoryIds(ids: string[]): Promise<Array<{ id: string; sector: string; vector: number[]; dim: number }>> {
+        const promises = ids.map(id => this.getVectorsById(id).then(vecs => vecs.map(v => ({ id, ...v }))));
+        const results = await Promise.all(promises);
+        return results.flat();
+    }
+
     async getVectorsBySector(sector: string): Promise<Array<{ id: string; vector: number[]; dim: number }>> {
         const results: Array<{ id: string; vector: number[]; dim: number }> = [];
         let cursor = "0";

@@ -1,6 +1,6 @@
 
 
-import { all_async } from '../core/db'
+import { all_async, TABLE_TF } from '../core/db'
 import { TemporalFact, TimelineEntry } from './types'
 
 
@@ -18,7 +18,7 @@ export const get_subject_timeline = async (
 
     const sql = `
         SELECT subject, predicate, object, confidence, valid_from, valid_to
-        FROM temporal_facts
+        FROM ${TABLE_TF}
         WHERE ${conditions.join(' AND ')}
         ORDER BY valid_from ASC
     `
@@ -74,7 +74,7 @@ export const get_predicate_timeline = async (
 
     const sql = `
         SELECT subject, predicate, object, confidence, valid_from, valid_to
-        FROM temporal_facts
+        FROM ${TABLE_TF}
         WHERE ${conditions.join(' AND ')}
         ORDER BY valid_from ASC
     `
@@ -127,7 +127,7 @@ export const get_changes_in_window = async (
 
     const sql = `
         SELECT subject, predicate, object, confidence, valid_from, valid_to
-        FROM temporal_facts
+        FROM ${TABLE_TF}
         WHERE ((valid_from >= ? AND valid_from <= ?) OR (valid_to >= ? AND valid_to <= ?))
         ${where}
         ORDER BY valid_from ASC
@@ -180,14 +180,14 @@ export const compare_time_points = async (
     // Get all facts for subject at both times
     const facts_t1 = await all_async(`
         SELECT id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
-        FROM temporal_facts
+        FROM ${TABLE_TF}
         WHERE subject = ?
         AND valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?)
     `, [subject, t1_ts, t1_ts])
 
     const facts_t2 = await all_async(`
         SELECT id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
-        FROM temporal_facts
+        FROM ${TABLE_TF}
         WHERE subject = ?
         AND valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?)
     `, [subject, t2_ts, t2_ts])
@@ -249,7 +249,7 @@ export const get_change_frequency = async (
 
     const rows = await all_async(`
         SELECT valid_from, valid_to
-        FROM temporal_facts
+        FROM ${TABLE_TF}
         WHERE subject = ? AND predicate = ?
         AND valid_from >= ?
         ORDER BY valid_from ASC
@@ -292,7 +292,7 @@ export const get_volatile_facts = async (
 
     const sql = `
         SELECT subject, predicate, COUNT(*) as change_count, AVG(confidence) as avg_confidence
-        FROM temporal_facts
+        FROM ${TABLE_TF}
         ${where}
         GROUP BY subject, predicate
         HAVING change_count > 1

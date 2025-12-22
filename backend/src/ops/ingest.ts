@@ -49,24 +49,29 @@ const mkRoot = async (
     try {
         await q.ins_mem.run(
             id,
-            cnt,
-            "reflective",
-            j([]),
+            user_id || "anonymous", // user_id
+            0, // segment (default 0 for root)
+            cnt, // content
+            "", // simhash (not computed for root meta-doc yet, or should be?)
+            "reflective", // primary_sector
+            j([]), // tags
             j({
                 ...meta,
                 ...ex.metadata,
                 is_root: true,
                 ingestion_strategy: "root-child",
                 ingested_at: ts,
-            }),
-            ts,
-            ts,
-            ts,
-            1.0,
-            0.1,
-            1,
-            user_id || "anonymous",
-            null,
+            }), // meta
+            ts, // created_at
+            ts, // updated_at
+            ts, // last_seen_at
+            1.0, // salience
+            0.1, // decay_lambda
+            1, // version
+            null, // mean_dim
+            null, // mean_vec
+            null, // compressed_vec
+            0 // feedback_score
         );
         await transaction.commit();
         return id;

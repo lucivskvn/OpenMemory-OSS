@@ -1,7 +1,7 @@
 import { env } from "../../core/cfg";
-import { q, run_async, get_async, all_async } from "../../core/db";
+import { q, run_async, get_async, all_async, TABLE_MEMORIES, TABLE_STATS, TABLE_USERS } from "../../core/db";
 import { get_memory_stats } from "../../memory/stats";
-import { Elysia } from "elysia";
+import { Elysia, t } from "elysia";
 import { log } from "../../core/log";
 
 export const req_tracker_plugin = (app: Elysia) => {
@@ -9,7 +9,7 @@ export const req_tracker_plugin = (app: Elysia) => {
     setInterval(() => {
         if (requests > 0) {
             run_async(
-                "insert into stats(type,count,ts) values('request',?,?)",
+                `insert into ${TABLE_STATS}(type,count,ts) values('request',?,?)`,
                 [requests, Date.now()],
             ).catch(e => log.error("Request stats logging failed", e));
             requests = 0;
@@ -27,10 +27,7 @@ export const dash = (app: Elysia) =>
             .get("/stats", async ({ set }) => {
                 try {
                     const memoryStats = await get_memory_stats();
-                    const totalMemories = await get_async(
-                        "select count(*) as c from memories",
-                    );
-                    const totalUsers = await get_async("select count(*) as c from users");
+                    const stats = await q.get_system_stats.get();
 
                     let dbSize = 0;
                     if (env.metadata_backend === "sqlite") {
@@ -41,26 +38,19 @@ export const dash = (app: Elysia) =>
                         }
                     }
 
-                    const requestStats = await all_async(
-                        "select * from stats where type='request' order by ts desc limit 60",
-                    );
-                    const maintenanceStats = await all_async(
-                        "select * from stats where type in ('decay','reflect','consolidate') order by ts desc limit 50",
-                    );
-
                     return {
                         overview: {
-                            total_memories: totalMemories.c,
-                            total_users: totalUsers.c,
+                            total_memories: stats.totalMemories.c,
+                            total_users: stats.totalUsers.c,
                             db_size_bytes: dbSize,
                             uptime_seconds: process.uptime(),
                             active_segments: memoryStats.active_segments,
                         },
-                        activity: requestStats.map((r) => ({
+                        activity: stats.requestStats.map((r: any) => ({
                             ts: r.ts,
                             count: r.count,
                         })),
-                        maintenance: maintenanceStats,
+                        maintenance: stats.maintenanceStats,
                     };
                 } catch (e: any) {
                     log.error("Dashboard stats failed", { error: e.message });
@@ -72,16 +62,18 @@ export const dash = (app: Elysia) =>
                 try {
                     const limit = Number(query.limit) || 20;
                     const offset = Number(query.offset) || 0;
-                    const memories = await all_async(
-                        "select * from memories order by created_at desc limit ? offset ?",
-                        [limit, offset],
-                    );
+                    const memories = await q.all_mem.all(limit, offset);
                     return { memories };
                 } catch (e: any) {
                     log.error("Dashboard memories failed", { error: e.message });
                     set.status = 500;
                     return { error: "Failed to fetch memories" };
                 }
+            }, {
+                query: t.Object({
+                    limit: t.Optional(t.Union([t.String(), t.Numeric()])),
+                    offset: t.Optional(t.Union([t.String(), t.Numeric()]))
+                })
             })
             .get("/config", () => {
                 return {

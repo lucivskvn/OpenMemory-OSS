@@ -29,6 +29,10 @@ type hydrated_mem = {
     metadata?: Record<string, unknown>;
 };
 
+/**
+ * Maps LangGraph node types to memory sectors.
+ * Used to classify memories automatically based on the source node.
+ */
 export const node_sector_map: Record<string, sector_type> = {
     observe: "episodic",
     plan: "semantic",
@@ -112,10 +116,16 @@ const hydrate_mem_row = async (
     inc_meta: boolean,
     score?: number,
     path?: string[],
+    prefetched_vectors?: Array<{ sector: string }>,
 ): Promise<hydrated_mem> => {
     const tags = safe_parse<string[]>(row.tags, []);
-    const vecs = await vector_store.getVectorsById(row.id);
-    const secs = vecs.map((v) => v.sector);
+    let secs: string[];
+    if (prefetched_vectors) {
+        secs = prefetched_vectors.map((v) => v.sector);
+    } else {
+        const vecs = await vector_store.getVectorsById(row.id);
+        secs = vecs.map((v) => v.sector);
+    }
     const mem: hydrated_mem = {
         id: row.id,
         node:
@@ -188,6 +198,10 @@ const create_auto_refl = async (
     };
 };
 
+/**
+ * Stores a memory from a LangGraph node.
+ * Automatically handles sector classification, tagging, and optional reflection generation.
+ */
 export async function store_node_mem(p: lgm_store_req) {
     if (!p?.node || !p?.content)
         throw new Error("node and content are required");
@@ -216,6 +230,10 @@ export async function store_node_mem(p: lgm_store_req) {
     return { memory: stored, reflection: refl };
 }
 
+/**
+ * Retrieves memories for a specific LangGraph node.
+ * Filters by namespace, graph ID, and node type (sector).
+ */
 export async function retrieve_node_mems(p: lgm_retrieve_req) {
     if (!p?.node) throw new Error("node is required");
     const ns = resolve_ns(p.namespace);
@@ -224,41 +242,70 @@ export async function retrieve_node_mems(p: lgm_retrieve_req) {
     const lim = p.limit || env.lg_max_context;
     const inc_meta = p.include_metadata ?? false;
     const gid = p.graph_id;
-    const items: hydrated_mem[] = [];
+
+    let rows: mem_row[] = [];
+    const scores = new Map<string, number>();
+    const paths = new Map<string, string[]>();
+
     if (p.query) {
         const matches = await hsg_query(p.query, Math.max(lim * 2, lim), {
             sectors: [sec],
         });
-        for (const match of matches) {
-            const row = (await q.get_mem.get(match.id)) as mem_row | undefined;
-            if (!row) continue;
-            const meta = safe_parse<Record<string, unknown>>(row.meta, {});
-            if (!matches_ns(meta, ns, gid)) continue;
-            const hyd = await hydrate_mem_row(
-                row,
-                meta,
-                inc_meta,
-                match.score,
-                match.path,
-            );
-            items.push(hyd);
-            if (items.length >= lim) break;
+        const ids = matches.map(m => m.id);
+        if (ids.length > 0) {
+            rows = await q.get_mems_by_ids.all(ids);
         }
+        // Preserve score/path info
+        for (const match of matches) {
+            scores.set(match.id, match.score);
+            paths.set(match.id, match.path);
+        }
+        // Sort rows by match order (preserving hsg_query rank)
+        const id_order = new Map(ids.map((id, i) => [id, i]));
+        rows.sort((a, b) => (id_order.get(a.id) ?? 0) - (id_order.get(b.id) ?? 0));
     } else {
-        const raw_rows = (await q.all_mem_by_sector.all(
+        rows = (await q.all_mem_by_sector.all(
             sec,
             lim * 4,
             0,
         )) as mem_row[];
-        for (const row of raw_rows) {
-            const meta = safe_parse<Record<string, unknown>>(row.meta, {});
-            if (!matches_ns(meta, ns, gid)) continue;
-            const hyd = await hydrate_mem_row(row, meta, inc_meta);
-            items.push(hyd);
-            if (items.length >= lim) break;
-        }
+    }
+
+    // Filter by namespace/graph_id and collect candidates
+    const candidates: { row: mem_row; meta: Record<string, unknown> }[] = [];
+    for (const row of rows) {
+        const meta = safe_parse<Record<string, unknown>>(row.meta, {});
+        if (!matches_ns(meta, ns, gid)) continue;
+        candidates.push({ row, meta });
+        if (candidates.length >= lim) break;
+    }
+
+    // Batch fetch vectors for all candidates to avoid N+1
+    const candidate_ids = candidates.map(c => c.row.id);
+    const all_vecs = await vector_store.getVectorsForMemoryIds(candidate_ids);
+    const vectors_map = new Map<string, Array<{ sector: string }>>();
+    for (const v of all_vecs) {
+        if (!vectors_map.has(v.id)) vectors_map.set(v.id, []);
+        vectors_map.get(v.id)!.push(v);
+    }
+
+    const items: hydrated_mem[] = [];
+    for (const { row, meta } of candidates) {
+        const hyd = await hydrate_mem_row(
+            row,
+            meta,
+            inc_meta,
+            scores.get(row.id),
+            paths.get(row.id),
+            vectors_map.get(row.id) || []
+        );
+        items.push(hyd);
+    }
+
+    if (!p.query) {
         items.sort((a, b) => b.last_seen_at - a.last_seen_at);
     }
+
     return {
         node,
         sector: sec,

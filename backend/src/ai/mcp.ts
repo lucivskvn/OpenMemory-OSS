@@ -1,5 +1,7 @@
+// ... imports ...
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { JSONRPCMessage, JSONRPCResponse } from "@modelcontextprotocol/sdk/types.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { env } from "../core/cfg";
@@ -15,6 +17,7 @@ import { j, p } from "../utils";
 import type { sector_type, mem_row } from "../core/types";
 import { update_user_summary } from "../memory/user_summary";
 import { Elysia } from "elysia";
+import crypto from "node:crypto";
 
 const sec_enum = z.enum([
     "episodic",
@@ -47,6 +50,7 @@ const fmt_matches = (matches: Awaited<ReturnType<typeof hsg_query>>) =>
 const uid = (val?: string | null) => (val?.trim() ? val.trim() : undefined);
 
 export const create_mcp_srv = () => {
+    // ... same content as before ...
     const srv = new McpServer(
         {
             name: "openmemory-mcp",
@@ -59,51 +63,23 @@ export const create_mcp_srv = () => {
         "openmemory_query",
         "Run a semantic retrieval against OpenMemory",
         {
-            query: z
-                .string()
-                .min(1, "query text is required")
-                .describe("Free-form search text"),
-            k: z
-                .number()
-                .int()
-                .min(1)
-                .max(32)
-                .default(8)
-                .describe("Maximum results to return"),
-            sector: sec_enum
-                .optional()
-                .describe("Restrict search to a specific sector"),
-            min_salience: z
-                .number()
-                .min(0)
-                .max(1)
-                .optional()
-                .describe("Minimum salience threshold"),
-            user_id: z
-                .string()
-                .trim()
-                .min(1)
-                .optional()
-                .describe("Isolate results to a specific user identifier"),
+            query: z.string().min(1, "query text is required").describe("Free-form search text"),
+            k: z.number().int().min(1).max(32).default(8).describe("Maximum results to return"),
+            sector: sec_enum.optional().describe("Restrict search to a specific sector"),
+            min_salience: z.number().min(0).max(1).optional().describe("Minimum salience threshold"),
+            user_id: z.string().trim().min(1).optional().describe("Isolate results to a specific user identifier"),
         },
         async ({ query, k, sector, min_salience, user_id }) => {
             const u = uid(user_id);
-            const flt =
-                sector || min_salience !== undefined || u
+            const flt = sector || min_salience !== undefined || u
                     ? {
-                        ...(sector
-                            ? { sectors: [sector as sector_type] }
-                            : {}),
-                        ...(min_salience !== undefined
-                            ? { minSalience: min_salience }
-                            : {}),
+                        ...(sector ? { sectors: [sector as sector_type] } : {}),
+                        ...(min_salience !== undefined ? { minSalience: min_salience } : {}),
                         ...(u ? { user_id: u } : {}),
                     }
                     : undefined;
             const matches = await hsg_query(query, k ?? 8, flt);
-            const summ = matches.length
-                ? fmt_matches(matches)
-                : "No memories matched the supplied query.";
+            const summ = matches.length ? fmt_matches(matches) : "No memories matched the supplied query.";
             const pay = matches.map((m: any) => ({
                 id: m.id,
                 score: Number(m.score.toFixed(4)),
@@ -117,10 +93,7 @@ export const create_mcp_srv = () => {
             return {
                 content: [
                     { type: "text", text: summ },
-                    {
-                        type: "text",
-                        text: JSON.stringify({ query, matches: pay }, null, 2),
-                    },
+                    { type: "text", text: JSON.stringify({ query, matches: pay }, null, 2) },
                 ],
             };
         },
@@ -132,31 +105,13 @@ export const create_mcp_srv = () => {
         {
             content: z.string().min(1).describe("Raw memory text to store"),
             tags: z.array(z.string()).optional().describe("Optional tag list"),
-            metadata: z
-                .record(z.any())
-                .optional()
-                .describe("Arbitrary metadata blob"),
-            user_id: z
-                .string()
-                .trim()
-                .min(1)
-                .optional()
-                .describe(
-                    "Associate the memory with a specific user identifier",
-                ),
+            metadata: z.record(z.any()).optional().describe("Arbitrary metadata blob"),
+            user_id: z.string().trim().min(1).optional().describe("Associate the memory with a specific user identifier"),
         },
         async ({ content, tags, metadata, user_id }) => {
             const u = uid(user_id);
-            const res = await add_hsg_memory(
-                content,
-                j(tags || []),
-                metadata,
-                u,
-            );
-            if (u)
-                update_user_summary(u).catch((err) =>
-                    console.error("[MCP] user summary update failed:", err),
-                );
+            const res = await add_hsg_memory(content, j(tags || []), metadata, u);
+            if (u) update_user_summary(u).catch((err) => console.error("[MCP] user summary update failed:", err));
             const txt = `Stored memory ${res.id} (primary=${res.primary_sector}) across sectors: ${res.sectors.join(", ")}${u ? ` [user=${u}]` : ""}`;
             const payload = {
                 id: res.id,
@@ -178,21 +133,13 @@ export const create_mcp_srv = () => {
         "Boost salience for an existing memory",
         {
             id: z.string().min(1).describe("Memory identifier to reinforce"),
-            boost: z
-                .number()
-                .min(0.01)
-                .max(1)
-                .default(0.1)
-                .describe("Salience boost amount (default 0.1)"),
+            boost: z.number().min(0.01).max(1).default(0.1).describe("Salience boost amount (default 0.1)"),
         },
         async ({ id, boost }) => {
             await reinforce_memory(id, boost);
             return {
                 content: [
-                    {
-                        type: "text",
-                        text: `Reinforced memory ${id} by ${boost}`,
-                    },
+                    { type: "text", text: `Reinforced memory ${id} by ${boost}` },
                 ],
             };
         },
@@ -202,35 +149,18 @@ export const create_mcp_srv = () => {
         "openmemory_list",
         "List recent memories for quick inspection",
         {
-            limit: z
-                .number()
-                .int()
-                .min(1)
-                .max(50)
-                .default(10)
-                .describe("Number of memories to return"),
-            sector: sec_enum
-                .optional()
-                .describe("Optionally limit to a sector"),
-            user_id: z
-                .string()
-                .trim()
-                .min(1)
-                .optional()
-                .describe("Restrict results to a specific user identifier"),
+            limit: z.number().int().min(1).max(50).default(10).describe("Number of memories to return"),
+            sector: sec_enum.optional().describe("Optionally limit to a sector"),
+            user_id: z.string().trim().min(1).optional().describe("Restrict results to a specific user identifier"),
         },
         async ({ limit, sector, user_id }) => {
             const u = uid(user_id);
             let rows: mem_row[];
             if (u) {
                 const all = await q.all_mem_by_user.all(u, limit ?? 10, 0);
-                rows = sector
-                    ? all.filter((row) => row.primary_sector === sector)
-                    : all;
+                rows = sector ? all.filter((row) => row.primary_sector === sector) : all;
             } else {
-                rows = sector
-                    ? await q.all_mem_by_sector.all(sector, limit ?? 10, 0)
-                    : await q.all_mem.all(limit ?? 10, 0);
+                rows = sector ? await q.all_mem_by_sector.all(sector, limit ?? 10, 0) : await q.all_mem.all(limit ?? 10, 0);
             }
             const items = rows.map((row) => ({
                 ...build_mem_snap(row),
@@ -243,10 +173,7 @@ export const create_mcp_srv = () => {
             );
             return {
                 content: [
-                    {
-                        type: "text",
-                        text: lns.join("\n\n") || "No memories stored yet.",
-                    },
+                    { type: "text", text: lns.join("\n\n") || "No memories stored yet." },
                     { type: "text", text: JSON.stringify({ items }, null, 2) },
                 ],
             };
@@ -258,40 +185,15 @@ export const create_mcp_srv = () => {
         "Fetch a single memory by identifier",
         {
             id: z.string().min(1).describe("Memory identifier to load"),
-            include_vectors: z
-                .boolean()
-                .default(false)
-                .describe("Include sector vector metadata"),
-            user_id: z
-                .string()
-                .trim()
-                .min(1)
-                .optional()
-                .describe(
-                    "Validate ownership against a specific user identifier",
-                ),
+            include_vectors: z.boolean().default(false).describe("Include sector vector metadata"),
+            user_id: z.string().trim().min(1).optional().describe("Validate ownership against a specific user identifier"),
         },
         async ({ id, include_vectors, user_id }) => {
             const u = uid(user_id);
             const mem = await q.get_mem.get(id);
-            if (!mem)
-                return {
-                    content: [
-                        { type: "text", text: `Memory ${id} not found.` },
-                    ],
-                };
-            if (u && mem.user_id !== u)
-                return {
-                    content: [
-                        {
-                            type: "text",
-                            text: `Memory ${id} not found for user ${u}.`,
-                        },
-                    ],
-                };
-            const vecs = include_vectors
-                ? await vector_store.getVectorsById(id)
-                : [];
+            if (!mem) return { content: [{ type: "text", text: `Memory ${id} not found.` }] };
+            if (u && mem.user_id !== u) return { content: [{ type: "text", text: `Memory ${id} not found for user ${u}.` }] };
+            const vecs = include_vectors ? await vector_store.getVectorsById(id) : [];
             const pay = {
                 id: mem.id,
                 content: mem.content,
@@ -304,9 +206,7 @@ export const create_mcp_srv = () => {
                 user_id: mem.user_id,
                 tags: p(mem.tags || "[]"),
                 metadata: p(mem.meta || "{}"),
-                sectors: include_vectors
-                    ? vecs.map((v) => v.sector)
-                    : undefined,
+                sectors: include_vectors ? vecs.map((v) => v.sector) : undefined,
             };
             return {
                 content: [{ type: "text", text: JSON.stringify(pay, null, 2) }],
@@ -319,8 +219,7 @@ export const create_mcp_srv = () => {
         "openmemory://config",
         {
             mimeType: "application/json",
-            description:
-                "Runtime configuration snapshot for the OpenMemory MCP server",
+            description: "Runtime configuration snapshot for the OpenMemory MCP server",
         },
         async () => {
             const stats = await all_async(
@@ -342,17 +241,13 @@ export const create_mcp_srv = () => {
             };
             return {
                 contents: [
-                    {
-                        uri: "openmemory://config",
-                        text: JSON.stringify(pay, null, 2),
-                    },
+                    { uri: "openmemory://config", text: JSON.stringify(pay, null, 2) },
                 ],
             };
         },
     );
 
     srv.server.oninitialized = () => {
-        // Use stderr for debug output, not stdout
         console.error(
             "[MCP] initialization completed with client:",
             srv.server.getClientVersion(),
@@ -361,59 +256,95 @@ export const create_mcp_srv = () => {
     return srv;
 };
 
-// Use explicit imports to avoid confusion
-import http from "http";
+// Custom transport for Elysia (Bun)
+class ElysiaSSETransport implements Transport {
+    private _sessionId: string;
+    private _push: (event: string, data: string) => void;
+
+    onmessage?: (message: JSONRPCMessage) => void;
+    onclose?: () => void;
+    onerror?: (error: Error) => void;
+
+    constructor(push: (event: string, data: string) => void, sessionId?: string) {
+        this._push = push;
+        this._sessionId = sessionId || crypto.randomUUID();
+    }
+
+    async start(): Promise<void> {
+        this._push("endpoint", `/api/mcp/message?sessionId=${this._sessionId}`);
+    }
+
+    async close(): Promise<void> {
+        this.onclose?.();
+    }
+
+    async send(message: JSONRPCMessage): Promise<void> {
+        this._push("message", JSON.stringify(message));
+    }
+
+    async handleMessage(message: JSONRPCMessage): Promise<void> {
+        this.onmessage?.(message);
+    }
+
+    get sessionId() {
+        return this._sessionId;
+    }
+}
+
+const transports = new Map<string, ElysiaSSETransport>();
 
 export const mcp = (app: Elysia) => {
-    // We cannot easily mount the Node.js StreamableHTTPServerTransport in Elysia directly
-    // because it relies on req/res streams.
-    // However, we can create a standalone server handler or adapter.
-    // Given the constraints, we will adapt the MCP request handling to Elysia.
-    // But StreamableHTTPServerTransport expects (req, res).
-    // We can create a mock adapter or just use a raw handler.
+    console.log("[MCP] Registering MCP routes...");
+    return app.group("/api/mcp", (app) =>
+        app
+            .get("/sse", async ({ request, set }) => {
+                console.log("[MCP] SSE Connection Requested");
+                const { readable, writable } = new TransformStream();
+                const writer = writable.getWriter();
+                const encoder = new TextEncoder();
 
-    // Simpler approach: Create the MCP server instance and transport.
-    const srv = create_mcp_srv();
-    const trans = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined,
-        enableJsonResponse: true,
-    });
+                const push = (event: string, data: string) => {
+                    writer.write(encoder.encode(`event: ${event}\ndata: ${data}\n\n`));
+                };
 
-    srv.connect(trans).catch(err => console.error("[MCP] Connect error:", err));
+                const srv = create_mcp_srv();
+                const transport = new ElysiaSSETransport(push);
+                transports.set(transport.sessionId, transport);
 
-    app.post("/mcp", async ({ request }) => {
-        // We need to convert Web Request to something MCP transport can handle?
-        // Actually, StreamableHTTPServerTransport expects Node.js IncomingMessage and ServerResponse.
-        // Bun Request is not compatible.
-        // We might need to implement a custom Transport for Web Standard Request/Response.
-        // Or we can cheat by creating a minimal mock.
+                srv.connect(transport).catch(e => console.error("MCP Connect Error:", e));
 
-        // Since implementing a full transport is out of scope for a quick fix,
-        // we can try to bridge it.
-        // But `StreamableHTTPServerTransport` is designed for long-lived connections (SSE) or JSON-RPC over HTTP.
-        // If it's just JSON-RPC over HTTP POST, we can just handle the JSON body and pass to `srv.server.processRequest`.
+                request.signal.addEventListener("abort", () => {
+                    transport.close();
+                    transports.delete(transport.sessionId);
+                    writer.close();
+                });
 
-        try {
-            const body = await request.json();
-            if (!body) return { error: { code: -32600, message: "Invalid Request" } };
+                return new Response(readable, {
+                    headers: {
+                        "Content-Type": "text/event-stream",
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                    }
+                });
+            })
+            .post("/message", async ({ query, body, set }) => {
+                const sessionId = query.sessionId as string;
+                const transport = transports.get(sessionId);
 
-            // This bypasses the transport and talks to the server directly via JSON-RPC protocol
-            // We need a transport that handles the message.
-            // Let's use `srv.server.processRequest` if exposed, but it's protected usually.
-            // But we can use `trans.handleMessage` if we were using a different transport.
+                if (!transport) {
+                    set.status = 404;
+                    return "Session not found";
+                }
 
-            // Alternative: use Stdio transport if we don't need HTTP MCP?
-            // User likely wants HTTP MCP since there is an endpoint.
-
-            // Hack: Create a fake Node req/res and pass to transport.handleRequest
-            // This is complex in Bun/Elysia environment.
-
-            return { error: "MCP over HTTP temporarily unavailable in Elysia migration. Use Stdio or wait for update." };
-
-        } catch (e) {
-            return { error: "Internal Error" };
-        }
-    });
+                try {
+                    await transport.handleMessage(body as JSONRPCMessage);
+                    return "Accepted";
+                } catch (e: any) {
+                    set.status = 500;
+                    return e.message;
+                }
+            })
+    );
 };
 
 export const start_mcp_stdio = async () => {

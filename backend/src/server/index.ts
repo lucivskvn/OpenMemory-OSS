@@ -20,6 +20,7 @@ import { temporal } from "./routes/temporal";
 import { vercel } from "./routes/vercel";
 import { Elysia } from "elysia";
 import { cors } from "@elysiajs/cors";
+import { log } from "../core/log";
 
 const ASC = `   ____                   __  __                                 
   / __ \\                 |  \\/  |                                
@@ -54,15 +55,22 @@ app.use(usr);
 app.use(temporal);
 app.use(dash);
 app.use(vercel);
-app.use(mcp);
 
-console.log(ASC);
-console.log(`[CONFIG] Vector Dimension: ${env.vec_dim}`);
-console.log(`[CONFIG] Cache Segments: ${env.cache_segments}`);
-console.log(`[CONFIG] Max Active Queries: ${env.max_active}`);
+log.info("[SERVER] Registering MCP plugin...");
+if (typeof mcp === 'function') {
+    app.use(mcp);
+    log.info("[SERVER] MCP plugin registered.");
+} else {
+    log.error("[SERVER] MCP plugin is NOT a function", { mcp });
+}
+
+console.log(ASC); // Keep banner raw
+log.info(`[CONFIG] Vector Dimension: ${env.vec_dim}`);
+log.info(`[CONFIG] Cache Segments: ${env.cache_segments}`);
+log.info(`[CONFIG] Max Active Queries: ${env.max_active}`);
 
 if (env.emb_kind !== "synthetic" && (tier === "hybrid" || tier === "fast")) {
-    console.warn(
+    log.warn(
         `[CONFIG] ⚠️  WARNING: Embedding configuration mismatch detected!\n` +
         `         OM_EMBEDDINGS=${env.emb_kind} but OM_TIER=${tier}\n` +
         `         Storage will use ${env.emb_kind} embeddings, but queries will use synthetic embeddings.\n` +
@@ -71,34 +79,34 @@ if (env.emb_kind !== "synthetic" && (tier === "hybrid" || tier === "fast")) {
 }
 
 if (env.mode === "langgraph") {
-    console.log("[MODE] LangGraph integration enabled");
+    log.info("[MODE] LangGraph integration enabled");
 }
 
 const decayIntervalMs = env.decay_interval_minutes * 60 * 1000;
-console.log(
+log.info(
     `[DECAY] Interval: ${env.decay_interval_minutes} minutes (${decayIntervalMs / 1000}s)`,
 );
 
 setInterval(async () => {
-    console.log("[DECAY] Running HSG decay process...");
+    log.info("[DECAY] Running HSG decay process...");
     try {
         const result = await run_decay_process();
-        console.log(
+        log.info(
             `[DECAY] Completed: ${result.decayed}/${result.processed} memories updated`,
         );
     } catch (error) {
-        console.error("[DECAY] Process failed:", error);
+        log.error("[DECAY] Process failed", { error });
     }
 }, decayIntervalMs);
 
 setInterval(
     async () => {
-        console.log("[PRUNE] Pruning weak waypoints...");
+        log.info("[PRUNE] Pruning weak waypoints...");
         try {
             const pruned = await prune_weak_waypoints();
-            console.log(`[PRUNE] Completed: ${pruned} waypoints removed`);
+            log.info(`[PRUNE] Completed: ${pruned} waypoints removed`);
         } catch (error) {
-            console.error("[PRUNE] Failed:", error);
+            log.error("[PRUNE] Failed", { error });
         }
     },
     7 * 24 * 60 * 60 * 1000,
@@ -107,19 +115,19 @@ setInterval(
 setTimeout(() => {
     run_decay_process()
         .then((result: any) => {
-            console.log(
+            log.info(
                 `[INIT] Initial decay: ${result.decayed}/${result.processed} memories updated`,
             );
         })
-        .catch(console.error);
+        .catch((e) => log.error("[INIT] Initial decay failed", { error: e }));
 }, 3000);
 
 start_reflection();
 start_user_summary_reflection();
 
-console.log(`[SERVER] Starting on port ${env.port}`);
+log.info(`[SERVER] Starting on port ${env.port}`);
 app.listen(env.port, () => {
-    console.log(`[SERVER] Running on http://localhost:${env.port}`);
+    log.info(`[SERVER] Running on http://localhost:${env.port}`);
     sendTelemetry().catch(() => {
         // ignore telemetry failures
     });

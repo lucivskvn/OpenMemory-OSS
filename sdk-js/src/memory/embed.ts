@@ -500,10 +500,10 @@ export const vectorToBuffer = (v: number[]) => {
     for (let i = 0; i < v.length; i++) b.writeFloatLE(v[i], i * 4);
     return b;
 };
-export const bufferToVector = (b: Buffer) => {
-    const v: number[] = [];
-    for (let i = 0; i < b.length; i += 4) v.push(b.readFloatLE(i));
-    return v;
+export const bufferToVector = (b: Buffer): number[] => {
+    // Optimized conversion using Float32Array directly from buffer backing store
+    const f32 = new Float32Array(b.buffer, b.byteOffset, b.byteLength / 4);
+    return Array.from(f32);
 };
 export const embed = (t: string) => embedForSector(t, "semantic");
 export const getEmbeddingProvider = () => env.emb_kind;
