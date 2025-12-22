@@ -1,6 +1,8 @@
 import os from 'node:os'
+import crypto from 'node:crypto'
 import { env } from './cfg'
 import pkg from '../../package.json' with { type: "json" };
+import { log } from './log';
 
 const DISABLED = (process.env.OM_TELEMETRY ?? '').toLowerCase() === 'false'
 const gatherVersion = (): string => {
@@ -8,13 +10,15 @@ const gatherVersion = (): string => {
     return pkg?.version || 'unknown'
 }
 
+const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
+
 export const sendTelemetry = async () => {
     if (DISABLED) return
     try {
         const ramMb = Math.round(os.totalmem() / (1024 * 1024))
         const storageMb = ramMb * 4
         const payload = {
-            name: os.hostname(),
+            name: sha256(os.hostname()), // Anonymize hostname
             os: os.platform(),
             embeddings: env.emb_kind || 'synthetic',
             metadata: env.metadata_backend || 'sqlite',
@@ -30,11 +34,11 @@ export const sendTelemetry = async () => {
             keepalive: true,
         })
         if (!res.ok) {
-            console.warn(``)
+            log.warn(`[telemetry] failed: ${res.status}`)
         } else {
-            console.log(`[telemetry] sent`)
+            log.info(`[telemetry] sent`)
         }
-    } catch {
+    } catch (e) {
         // silently ignore telemetry errors
     }
 }

@@ -23,3 +23,9 @@ export const vec_to_buf = (v: number[]): Buffer => {
 export const buf_to_vec = (buf: Buffer): Float32Array => {
     return new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
 };
+
+export const parse_int = (x: any, d: number) => Number.isFinite(+x) ? Math.floor(+x) : d;
+export const parse_f = (x: any, d: number) => (Number.isFinite(+x) ? +x : d);
+export const parse_bool = (x: any, d: boolean) => x === "true" ? true : x === "false" ? false : d;
+export const clamp_f = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
+export const clamp_i = (v: number, a: number, b: number) => Math.min(b, Math.max(a, Math.floor(v)));

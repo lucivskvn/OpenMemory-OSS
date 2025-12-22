@@ -107,3 +107,17 @@ export const env = {
     keyword_boost: num(process.env.OM_KEYWORD_BOOST, 2.5),
     keyword_min_length: num(process.env.OM_KEYWORD_MIN_LENGTH, 3),
 };
+
+export const authConfig = {
+    api_key: env.api_key,
+    api_key_header: "x-api-key",
+    rate_limit_enabled: env.rate_limit_enabled,
+    rate_limit_window_ms: env.rate_limit_window_ms,
+    rate_limit_max_requests: env.rate_limit_max_requests,
+    public_endpoints: [
+        "/health",
+        "/api/system/health",
+        "/api/system/stats",
+        "/dashboard/health",
+    ],
+};

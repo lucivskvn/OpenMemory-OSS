@@ -1,8 +1,9 @@
 import { env } from "../../core/cfg";
 import { q, run_async, get_async, all_async } from "../../core/db";
 import { sector_configs } from "../../memory/hsg";
-import { Elysia } from "elysia";
+import { Elysia, t } from "elysia";
 import { log } from "../../core/log";
+import pkg from "../../../package.json" with { type: "json" };
 
 export const sys = (app: Elysia) =>
     app.group("/api/system", (app) =>
@@ -16,7 +17,7 @@ export const sys = (app: Elysia) =>
                 set.status = status === "ok" ? 200 : 503;
                 return {
                     status,
-                    version: "1.2.2",
+                    version: pkg.version || "unknown",
                     db: db_ok,
                     embed: embed_ok,
                     uptime: process.uptime(),
@@ -24,17 +25,18 @@ export const sys = (app: Elysia) =>
             })
             .get("/logs", async ({ query, set }) => {
                 try {
-                    const l = Number(query.limit) || 100;
-                    const logs = await all_async(
-                        "select * from embed_logs order by ts desc limit ?",
-                        [l],
-                    );
+                    const l = query.limit ? Number(query.limit) : 100;
+                    const logs = await q.get_recent_logs.all(l);
                     return { logs };
                 } catch (e: any) {
                     log.error("Get logs failed", { error: e.message });
                     set.status = 500;
                     return { err: "internal" };
                 }
+            }, {
+                query: t.Object({
+                    limit: t.Optional(t.Union([t.String(), t.Numeric()]))
+                })
             })
     )
     // Add sectors endpoint at root to match tests/legacy behavior

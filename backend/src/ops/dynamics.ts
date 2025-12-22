@@ -1,7 +1,9 @@
-import { all_async, run_async, get_async, q, memories_table } from "../core/db";
+import { all_async, run_async, get_async, q, TABLE_MEMORIES, TABLE_WAYPOINTS } from "../core/db";
 import { now } from "../utils";
-import { cosineSimilarity } from "../memory/embed";
+import { cosineSimilarity, bufferToVector } from "../memory/embed";
+import { log } from "../core/log";
 
+// Constants for Learning and Decay
 export const ALPHA_LEARNING_RATE_FOR_RECALL_REINFORCEMENT = 0.15;
 export const BETA_LEARNING_RATE_FOR_EMOTIONAL_FREQUENCY = 0.2;
 export const GAMMA_ATTENUATION_CONSTANT_FOR_GRAPH_DISTANCE = 0.35;
@@ -32,16 +34,6 @@ export interface DynamicSalienceWeightingParameters {
     decay_constant_lambda: number;
     recall_reinforcement_count: number;
     emotional_frequency_metric: number;
-}
-
-export interface AssociativeWaypointGraphNode {
-    node_memory_id: string;
-    activation_energy_level: number;
-    connected_waypoint_edges: Array<{
-        target_node_id: string;
-        link_weight_value: number;
-        time_gap_delta_t: number;
-    }>;
 }
 
 const sig = (x: number) => 1 / (1 + Math.exp(-x));
@@ -81,24 +73,6 @@ export async function calculateAssociativeWaypointLinkWeight(
     return Math.max(0, sim / (1 + td));
 }
 
-export async function calculateSpreadingActivationEnergyForNode(
-    nid: string,
-    an: Map<string, number>,
-    gr: Map<string, AssociativeWaypointGraphNode>,
-): Promise<number> {
-    const nd = gr.get(nid);
-    if (!nd) return 0;
-    let tot = 0;
-    for (const e of nd.connected_waypoint_edges) {
-        const na = an.get(e.target_node_id) || 0;
-        const att = Math.exp(
-            -GAMMA_ATTENUATION_CONSTANT_FOR_GRAPH_DISTANCE * 1,
-        );
-        tot += e.link_weight_value * na * att;
-    }
-    return tot;
-}
-
 export async function applyRetrievalTraceReinforcementToMemory(
     mid: string,
     sal: number,
@@ -117,7 +91,7 @@ export async function propagateAssociativeReinforcementToLinkedNodes(
     const ups: Array<{ node_id: string; new_salience: number }> = [];
     for (const wp of wps) {
         const ld = (await get_async(
-            "select salience from memories where id=?",
+            `select salience from ${TABLE_MEMORIES} where id=?`,
             [wp.target_id],
         )) as any;
         if (ld) {
@@ -150,79 +124,99 @@ export async function determineEnergyBasedRetrievalThreshold(
     return Math.max(0.1, Math.min(0.9, tau * (1 + Math.log(nrm + 1))));
 }
 
-export async function applyDualPhaseDecayToAllMemories(): Promise<void> {
-    const mems = await all_async(
-        "select id,salience,decay_lambda,last_seen_at,updated_at,created_at from memories",
-    );
+/**
+ * Applies time-based decay to all memories.
+ * Optimized to process in chunks to avoid locking the database or exhausting memory.
+ */
+export async function applyDualPhaseDecayToAllMemories(): Promise<{ processed: number; decayed: number }> {
+    const limit = 1000;
+    let offset = 0;
     const ts = now();
-    const ops = mems.map(async (m: any) => {
-        const tms = Math.max(0, ts - (m.last_seen_at || m.updated_at));
-        const td = tms / 86400000;
-        const rt = await calculateDualPhaseDecayMemoryRetention(td);
-        const nsal = m.salience * rt;
-        await run_async(
-            `update ${memories_table} set salience=?,updated_at=? where id=?`,
-            [Math.max(0, nsal), ts, m.id],
+    let total_processed = 0;
+    let total_decayed = 0;
+
+    log.info("[DECAY] Starting dual-phase decay process...");
+
+    while (true) {
+        // Fetch only necessary columns
+        const mems = await all_async(
+            `select id,salience,decay_lambda,last_seen_at,updated_at,created_at from ${TABLE_MEMORIES} limit ? offset ?`,
+            [limit, offset]
         );
-    });
-    await Promise.all(ops);
-    console.log(`[DECAY] Applied to ${mems.length} memories`);
-}
 
-export async function buildAssociativeWaypointGraphFromMemories(): Promise<
-    Map<string, AssociativeWaypointGraphNode>
-> {
-    const gr = new Map<string, AssociativeWaypointGraphNode>();
-    const wps = (await all_async(
-        "select src_id,dst_id,weight,created_at from waypoints",
-    )) as any[];
-    const ids = new Set<string>();
-    for (const wp of wps) {
-        ids.add(wp.src_id);
-        ids.add(wp.dst_id);
-    }
-    for (const id of ids)
-        gr.set(id, {
-            node_memory_id: id,
-            activation_energy_level: 0,
-            connected_waypoint_edges: [],
+        if (mems.length === 0) break;
+
+        // Use a temp counter for this batch to ensure safety if needed, but local var capture is safe in JS event loop
+        let batch_decayed = 0;
+
+        const ops = mems.map(async (m: any) => {
+            const tms = Math.max(0, ts - (m.last_seen_at || m.updated_at));
+            const td = tms / 86400000;
+            const rt = await calculateDualPhaseDecayMemoryRetention(td);
+            const nsal = m.salience * rt;
+
+            // Only update if change is significant (> 0.001)
+            if (Math.abs(nsal - m.salience) > 0.001) {
+                await run_async(
+                    `update ${TABLE_MEMORIES} set salience=?,updated_at=? where id=?`,
+                    [Math.max(0, nsal), ts, m.id],
+                );
+                batch_decayed++;
+            }
         });
-    for (const wp of wps) {
-        const sn = gr.get(wp.src_id);
-        if (sn) {
-            const tg = Math.abs(now() - wp.created_at);
-            sn.connected_waypoint_edges.push({
-                target_node_id: wp.dst_id,
-                link_weight_value: wp.weight,
-                time_gap_delta_t: tg,
-            });
-        }
+
+        await Promise.all(ops);
+        total_processed += mems.length;
+        total_decayed += batch_decayed;
+        offset += limit;
+
+        // Yield to event loop
+        if (offset % 5000 === 0) await new Promise(resolve => setTimeout(resolve, 10));
     }
-    return gr;
+    log.info(`[DECAY] Processed ${total_processed} memories, updated ${total_decayed}`);
+    return { processed: total_processed, decayed: total_decayed };
 }
 
+/**
+ * Performs Spreading Activation on the waypoint graph.
+ * Fetches edges incrementally from the database instead of loading the entire graph.
+ */
 export async function performSpreadingActivationRetrieval(
     init: string[],
     max: number,
 ): Promise<Map<string, number>> {
-    const gr = await buildAssociativeWaypointGraphFromMemories();
     const act = new Map<string, number>();
     for (const id of init) act.set(id, 1.0);
+
+    // Iterate for 'max' steps (hops)
     for (let i = 0; i < max; i++) {
+        const sources = Array.from(act.keys());
+        if (sources.length === 0) break;
+
+        // Fetch outgoing edges for all currently active nodes
+        // Use IN clause for batching
+        const placeholders = sources.map(() => '?').join(',');
+        const edges = await all_async(
+            `select src_id, dst_id, weight from ${TABLE_WAYPOINTS} where src_id in (${placeholders})`,
+            sources
+        );
+
+        if (edges.length === 0) break;
+
         const ups = new Map<string, number>();
-        for (const [nid, ca] of act) {
-            const nd = gr.get(nid);
-            if (!nd) continue;
-            for (const e of nd.connected_waypoint_edges) {
-                const pe = await calculateSpreadingActivationEnergyForNode(
-                    e.target_node_id,
-                    act,
-                    gr,
-                );
-                const ex = ups.get(e.target_node_id) || 0;
-                ups.set(e.target_node_id, ex + pe);
-            }
+
+        // Process edges
+        for (const e of edges) {
+            const ca = act.get(e.src_id) || 0;
+            // Attenuation based on hop distance (simplified to 1 per hop here)
+            const att = Math.exp(-GAMMA_ATTENUATION_CONSTANT_FOR_GRAPH_DISTANCE);
+            const energy = e.weight * ca * att;
+
+            const current_dst_energy = ups.get(e.dst_id) || 0;
+            ups.set(e.dst_id, current_dst_energy + energy);
         }
+
+        // Update activations: Keep max of current or new energy
         for (const [uid, nav] of ups) {
             const cv = act.get(uid) || 0;
             act.set(uid, Math.max(cv, nav));
@@ -231,42 +225,72 @@ export async function performSpreadingActivationRetrieval(
     return act;
 }
 
+/**
+ * Retrieves memories based on vector similarity + sector resonance + spreading activation.
+ * Optimized to fetch vectors first, score, and then fetch content for top candidates.
+ */
 export async function retrieveMemoriesWithEnergyThresholding(
     qv: number[],
     qs: string,
     me: number,
 ): Promise<any[]> {
-    const mems = (await all_async(
-        "select id,content,primary_sector,salience,mean_vec from memories where salience>0.01",
+    // 1. Fetch Candidates (Vector + Metadata only)
+    // Filter by salience to avoid dead memories
+    const rows = (await all_async(
+        `select id,primary_sector,salience,mean_vec from ${TABLE_MEMORIES} where salience > 0.01`,
     )) as any[];
+
     const sc = new Map<string, number>();
-    for (const m of mems) {
+
+    // 2. Score Candidates (CPU bound, but efficient with Float32Array)
+    const candidates = [];
+    for (const m of rows) {
         if (!m.mean_vec) continue;
-        const buf = Buffer.isBuffer(m.mean_vec)
-            ? m.mean_vec
-            : Buffer.from(m.mean_vec);
-        const ev: number[] = [];
-        for (let i = 0; i < buf.length; i += 4) ev.push(buf.readFloatLE(i));
-        const bs = cosineSimilarity(qv, ev);
+        const vec = bufferToVector(m.mean_vec);
+        const bs = cosineSimilarity(qv, vec);
         const cs = await calculateCrossSectorResonanceScore(
             m.primary_sector,
             qs,
             bs,
         );
-        sc.set(m.id, cs * m.salience);
+        const score = cs * m.salience;
+        sc.set(m.id, score);
+        candidates.push({ id: m.id, score });
     }
-    const sp = await performSpreadingActivationRetrieval(
-        Array.from(sc.keys()).slice(0, 5),
-        3,
-    );
-    const cmb = new Map<string, number>();
-    for (const m of mems)
-        cmb.set(m.id, (sc.get(m.id) || 0) + (sp.get(m.id) || 0) * 0.3);
-    const te = Array.from(cmb.values()).reduce((s, v) => s + v, 0);
-    const thr = await determineEnergyBasedRetrievalThreshold(te, me);
-    return mems
-        .filter((m: any) => (cmb.get(m.id) || 0) > thr)
-        .map((m: any) => ({ ...m, activation_energy: cmb.get(m.id) }));
+
+    // Sort and pick top K for spreading activation seeds
+    candidates.sort((a, b) => b.score - a.score);
+    const topK = candidates.slice(0, 5).map(c => c.id);
+
+    // 3. Spreading Activation
+    const sp = await performSpreadingActivationRetrieval(topK, 3);
+
+    // 4. Combine Scores
+    const combined_scores = new Map<string, number>();
+    for (const c of candidates) {
+        const base = c.score;
+        const activation = sp.get(c.id) || 0;
+        combined_scores.set(c.id, base + activation * 0.3);
+    }
+
+    // 5. Thresholding
+    const total_energy = Array.from(combined_scores.values()).reduce((s, v) => s + v, 0);
+    const thr = await determineEnergyBasedRetrievalThreshold(total_energy, me);
+
+    const final_ids = candidates
+        .filter(c => (combined_scores.get(c.id) || 0) > thr)
+        .map(c => c.id);
+
+    if (final_ids.length === 0) return [];
+
+    // 6. Fetch Content (Batch)
+    const final_mems = await q.get_mems_by_ids.all(final_ids);
+
+    // Attach activation energy to result
+    return final_mems.map((m: any) => ({
+        ...m,
+        activation_energy: combined_scores.get(m.id)
+    }));
 }
 
 export const apply_decay = applyDualPhaseDecayToAllMemories;

@@ -1,6 +1,6 @@
 import { q } from "../../core/db";
 import { p } from "../../utils";
-import { Elysia } from "elysia";
+import { Elysia, t } from "elysia";
 import { log } from "../../core/log";
 
 export const usr = (app: Elysia) =>
@@ -25,11 +25,13 @@ export const usr = (app: Elysia) =>
                     set.status = 500;
                     return { err: "internal" };
                 }
+            }, {
+                params: t.Object({ id: t.String() })
             })
             .get("/:id/memories", async ({ params: { id }, query, set }) => {
                 try {
-                    const l = Number(query.limit) || 20;
-                    const o = Number(query.offset) || 0;
+                    const l = query.limit ? Number(query.limit) : 20;
+                    const o = query.offset ? Number(query.offset) : 0;
                     const m = await q.all_mem_by_user.all(id, l, o);
                     const i = m.map((x: any) => ({
                         id: x.id,
@@ -48,5 +50,11 @@ export const usr = (app: Elysia) =>
                     set.status = 500;
                     return { err: "internal" };
                 }
+            }, {
+                params: t.Object({ id: t.String() }),
+                query: t.Object({
+                    limit: t.Optional(t.Union([t.String(), t.Numeric()])),
+                    offset: t.Optional(t.Union([t.String(), t.Numeric()]))
+                })
             })
     );

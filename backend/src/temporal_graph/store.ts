@@ -1,4 +1,4 @@
-import { run_async, get_async, all_async } from '../core/db'
+import { run_async, get_async, all_async, TABLE_TF, TABLE_TE } from '../core/db'
 import { TemporalFact, TemporalEdge } from './types'
 import { randomUUID } from 'crypto'
 
@@ -15,24 +15,24 @@ export const insert_fact = async (
     const valid_from_ts = valid_from.getTime()
 
     const existing = await all_async(`
-        SELECT id, valid_from FROM temporal_facts 
+        SELECT id, valid_from FROM ${TABLE_TF}
         WHERE subject = ? AND predicate = ? AND valid_to IS NULL
         ORDER BY valid_from DESC
     `, [subject, predicate])
 
     for (const old of existing) {
         if (old.valid_from < valid_from_ts) {
-            await run_async(`UPDATE temporal_facts SET valid_to = ? WHERE id = ?`, [valid_from_ts - 1, old.id])
-            console.error(`[TEMPORAL] Closed fact ${old.id} at ${new Date(valid_from_ts - 1).toISOString()}`) // Use stderr for MCP compatibility
+            await run_async(`UPDATE ${TABLE_TF} SET valid_to = ? WHERE id = ?`, [valid_from_ts - 1, old.id])
+            console.error(`[TEMPORAL] Closed fact ${old.id} at ${new Date(valid_from_ts - 1).toISOString()}`)
         }
     }
 
     await run_async(`
-        INSERT INTO temporal_facts (id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata)
+        INSERT INTO ${TABLE_TF} (id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata)
         VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)
     `, [id, subject, predicate, object, valid_from_ts, confidence, now, metadata ? JSON.stringify(metadata) : null])
 
-    console.error(`[TEMPORAL] Inserted fact: ${subject} ${predicate} ${object} (from ${valid_from.toISOString()}, confidence=${confidence})`) // Use stderr for MCP compatibility
+    console.error(`[TEMPORAL] Inserted fact: ${subject} ${predicate} ${object} (from ${valid_from.toISOString()}, confidence=${confidence})`)
     return id
 }
 
@@ -56,19 +56,19 @@ export const update_fact = async (id: string, confidence?: number, metadata?: Re
     params.push(id)
 
     if (updates.length > 0) {
-        await run_async(`UPDATE temporal_facts SET ${updates.join(', ')} WHERE id = ?`, params)
-        console.error(`[TEMPORAL] Updated fact ${id}`) // Use stderr for MCP compatibility
+        await run_async(`UPDATE ${TABLE_TF} SET ${updates.join(', ')} WHERE id = ?`, params)
+        console.error(`[TEMPORAL] Updated fact ${id}`)
     }
 }
 
 export const invalidate_fact = async (id: string, valid_to: Date = new Date()): Promise<void> => {
-    await run_async(`UPDATE temporal_facts SET valid_to = ?, last_updated = ? WHERE id = ?`, [valid_to.getTime(), Date.now(), id])
-    console.error(`[TEMPORAL] Invalidated fact ${id} at ${valid_to.toISOString()}`) // Use stderr for MCP compatibility
+    await run_async(`UPDATE ${TABLE_TF} SET valid_to = ?, last_updated = ? WHERE id = ?`, [valid_to.getTime(), Date.now(), id])
+    console.error(`[TEMPORAL] Invalidated fact ${id} at ${valid_to.toISOString()}`)
 }
 
 export const delete_fact = async (id: string): Promise<void> => {
-    await run_async(`DELETE FROM temporal_facts WHERE id = ?`, [id])
-    console.error(`[TEMPORAL] Deleted fact ${id}`) // Use stderr for MCP compatibility
+    await run_async(`DELETE FROM ${TABLE_TF} WHERE id = ?`, [id])
+    console.error(`[TEMPORAL] Deleted fact ${id}`)
 }
 
 export const insert_edge = async (
@@ -83,7 +83,7 @@ export const insert_edge = async (
     const valid_from_ts = valid_from.getTime()
 
     await run_async(`
-        INSERT INTO temporal_edges (id, source_id, target_id, relation_type, valid_from, valid_to, weight, metadata)
+        INSERT INTO ${TABLE_TE} (id, source_id, target_id, relation_type, valid_from, valid_to, weight, metadata)
         VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
     `, [id, source_id, target_id, relation_type, valid_from_ts, weight, metadata ? JSON.stringify(metadata) : null])
 
@@ -92,7 +92,7 @@ export const insert_edge = async (
 }
 
 export const invalidate_edge = async (id: string, valid_to: Date = new Date()): Promise<void> => {
-    await run_async(`UPDATE temporal_edges SET valid_to = ? WHERE id = ?`, [valid_to.getTime(), id])
+    await run_async(`UPDATE ${TABLE_TE} SET valid_to = ? WHERE id = ?`, [valid_to.getTime(), id])
     console.log(`[TEMPORAL] Invalidated edge ${id}`)
 }
 
@@ -134,7 +134,7 @@ export const apply_confidence_decay = async (decay_rate: number = 0.01): Promise
     const one_day = 86400000
 
     await run_async(`
-        UPDATE temporal_facts 
+        UPDATE ${TABLE_TF}
         SET confidence = MAX(0.1, confidence * (1 - ? * ((? - valid_from) / ?)))
         WHERE valid_to IS NULL AND confidence > 0.1
     `, [decay_rate, now, one_day])
@@ -146,11 +146,11 @@ export const apply_confidence_decay = async (decay_rate: number = 0.01): Promise
 }
 
 export const get_active_facts_count = async (): Promise<number> => {
-    const result = await get_async(`SELECT COUNT(*) as count FROM temporal_facts WHERE valid_to IS NULL`) as any
+    const result = await get_async(`SELECT COUNT(*) as count FROM ${TABLE_TF} WHERE valid_to IS NULL`) as any
     return result?.count || 0
 }
 
 export const get_total_facts_count = async (): Promise<number> => {
-    const result = await get_async(`SELECT COUNT(*) as count FROM temporal_facts`) as any
+    const result = await get_async(`SELECT COUNT(*) as count FROM ${TABLE_TF}`) as any
     return result?.count || 0
 }

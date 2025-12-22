@@ -2,19 +2,14 @@ import {
     calculateCrossSectorResonanceScore,
     propagateAssociativeReinforcementToLinkedNodes,
 } from "../../ops/dynamics";
-import { Elysia } from "elysia";
+import { Elysia, t } from "elysia";
 import { log } from "../../core/log";
-import { dynamics_resonance_req, dynamics_propagate_req } from "../../core/types";
 
 export const dynroutes = (app: Elysia) =>
     app.group("/dynamics", (app) =>
         app
             .post("/resonance", async ({ body, set }) => {
-                const b = body as dynamics_resonance_req;
-                if (!b?.source_sector || !b?.target_sector) {
-                    set.status = 400;
-                    return { err: "missing_sectors" };
-                }
+                const b = body;
                 try {
                     const score = await calculateCrossSectorResonanceScore(
                         b.source_sector,
@@ -27,13 +22,15 @@ export const dynroutes = (app: Elysia) =>
                     set.status = 500;
                     return { err: e.message };
                 }
+            }, {
+                body: t.Object({
+                    source_sector: t.String(),
+                    target_sector: t.String(),
+                    content_similarity: t.Optional(t.Numeric())
+                })
             })
             .post("/propagate", async ({ body, set }) => {
-                const b = body as dynamics_propagate_req;
-                if (!b?.source_id || !b?.reinforcement_value) {
-                    set.status = 400;
-                    return { err: "missing_params" };
-                }
+                const b = body;
                 try {
                     const updated =
                         await propagateAssociativeReinforcementToLinkedNodes(
@@ -50,5 +47,14 @@ export const dynroutes = (app: Elysia) =>
                     set.status = 500;
                     return { err: e.message };
                 }
+            }, {
+                body: t.Object({
+                    source_id: t.String(),
+                    reinforcement_value: t.Numeric(),
+                    linked_nodes: t.Optional(t.Array(t.Object({
+                        target_id: t.String(),
+                        weight: t.Numeric()
+                    })))
+                })
             })
     );

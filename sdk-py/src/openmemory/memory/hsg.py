@@ -82,33 +82,31 @@ async def create_cross_sector_waypoints(id, primary, additional, user_id):
 
 async def hsg_query(query, k=10, filters=None):
     # 1. Embed query
-    # For now, just use synthetic or openai based on config
-    # We need a way to get query embedding. 
-    # Re-use embed_multi_sector but just take the first vector
-    
     embeddings = await embed_multi_sector("query", query, ["query"])
     if not embeddings:
         return []
     
     query_vec = embeddings[0]["vector"]
     
-    # 2. Fetch all memories (naive scan for now, or use vector search if DB supported it)
-    # Since we use SQLite without vector extension in this basic port, we have to do linear scan
-    # or rely on the JS implementation's logic. JS implementation uses `sqlite-vec` or manual cosine sim?
-    # The JS `db.ts` showed `v blob`. It didn't show vector search queries. 
-    # Wait, `get_vecs_by_sector` returns all vectors.
+    # 2. Fetch only vectors (id, mean_vec) to compute similarity, then fetch content
+    # We add get_all_mean_vecs to db.py or use a custom query here
+    from ..core.db import many_query, q
     
-    # Naive implementation: fetch all vectors, compute cosine sim, sort
-    # This is slow but functional for local mode with small data
+    # Use many_query directly for optimization or add to Q
+    # Filter by user_id at DB level if possible?
+    # db.py doesn't have get_mean_vecs_by_user yet.
     
-    # TODO: Optimize with vector index
+    sql = "select id, mean_vec, user_id, salience, created_at from memories order by created_at desc limit 1000"
+    if filters and filters.get("user_id"):
+        sql = f"select id, mean_vec, user_id, salience, created_at from memories where user_id='{filters['user_id']}' order by created_at desc limit 1000"
+
+    candidates = many_query(sql)
     
-    all_memories = q.all_mem.all(1000, 0) # Limit to 1000 for now
-    
-    results = []
-    for mem in all_memories:
+    scored = []
+    for mem in candidates:
         if not mem["mean_vec"]: continue
         
+        # Apply filters on metadata fields available
         if filters:
             if filters.get("user_id") and mem["user_id"] != filters["user_id"]: continue
             if filters.get("startTime") and mem["created_at"] < filters["startTime"]: continue
@@ -118,20 +116,34 @@ async def hsg_query(query, k=10, filters=None):
         vec = buffer_to_vector(mem["mean_vec"])
         if len(vec) != len(query_vec): continue
         
-        # Cosine similarity
         if np:
             score = np.dot(vec, query_vec)
         else:
             score = sum(a*b for a,b in zip(vec, query_vec))
         
-        results.append({
-            **dict(mem), # Ensure it's a dict
-            "score": float(score)
-        })
+        scored.append((mem["id"], float(score)))
         
-    # Sort by score
-    results.sort(key=lambda x: x["score"], reverse=True)
-    return results[:k]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    top_k = scored[:k]
+
+    if not top_k:
+        return []
+
+    # 3. Fetch full content for top k
+    ids = [x[0] for x in top_k]
+    full_mems = q.get_mems_by_ids.all(ids)
+
+    # Map back to results with score
+    id_map = {m["id"]: m for m in full_mems}
+    results = []
+    for mid, score in top_k:
+        if mid in id_map:
+            results.append({
+                **dict(id_map[mid]),
+                "score": score
+            })
+
+    return results
 
 async def reinforce_memory(id, boost=0.1):
     mem = q.get_mem.get(id)

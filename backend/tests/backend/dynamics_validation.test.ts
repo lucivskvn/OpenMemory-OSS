@@ -26,37 +26,28 @@ async function makeRequest(url: string, options: any = {}) {
     };
 }
 
-describe("LangGraph API", () => {
-    test("Store Memory", async () => {
-        const res = await makeRequest(`${BASE_URL}/lg/store`, {
+describe('Dynamics Validation', () => {
+    test('Resonance: Invalid Payload', async () => {
+        const res = await makeRequest(`${BASE_URL}/dynamics/resonance`, {
             method: 'POST',
             body: JSON.stringify({
-                content: "LangGraph test memory",
-                metadata: { thread_id: "t1" }
+                source_sector: "semantic",
+                // missing target_sector
             })
         });
-
-        if (res.status === 404) {
-             console.warn("LangGraph Mode disabled, skipping tests");
-             return;
-        }
-
-        expect(res.status).toBe(200);
-        expect(res.data).toHaveProperty('ok', true);
+        expect(res.status).toBe(400);
+        expect(res.data.err).toBe("invalid_params");
     });
 
-    test("Retrieve Memory", async () => {
-        const res = await makeRequest(`${BASE_URL}/lg/retrieve`, {
+    test('Propagate: Invalid Payload', async () => {
+        const res = await makeRequest(`${BASE_URL}/dynamics/propagate`, {
             method: 'POST',
             body: JSON.stringify({
-                query: "test",
-                thread_id: "t1"
+                source_id: "123",
+                reinforcement_value: "high" // should be number
             })
         });
-
-        if (res.status === 404) return;
-
-        expect(res.status).toBe(200);
-        expect(Array.isArray(res.data.results)).toBe(true);
+        expect(res.status).toBe(400);
+        expect(res.data.err).toBe("invalid_params");
     });
 });

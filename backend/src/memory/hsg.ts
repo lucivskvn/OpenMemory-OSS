@@ -45,6 +45,11 @@ export interface hsg_q_result {
     salience: number;
     last_seen_at: number;
 }
+
+/**
+ * Configuration for memory sectors.
+ * Defines decay rates, weights, and classification patterns.
+ */
 export const sector_configs: Record<string, sector_cfg> = {
     episodic: {
         model: "episodic-optimized",
@@ -499,10 +504,20 @@ export async function create_single_waypoint(
         ? await q.all_mem_by_user.all(user_id, 1000, 0)
         : await q.all_mem.all(1000, 0);
     let best: { id: string; similarity: number } | null = null;
+
+    // Hoist allocation of Float32Array for new_mean
+    const new_mean_f32 = new Float32Array(new_mean);
+
     for (const mem of mems) {
         if (mem.id === new_id || !mem.mean_vec) continue;
         const ex_mean = buf_to_vec(mem.mean_vec);
-        const sim = cos_sim(new Float32Array(new_mean), ex_mean);
+        // ex_mean from buf_to_vec is Float32Array (if updated) or number[]?
+        // buf_to_vec in utils/index returns Float32Array usually.
+        // But cos_sim in utils/index expects Float32Array.
+        // Assuming buf_to_vec returns Float32Array (since we optimized bufferToVector in embed.ts? No, that's different file)
+        // Let's assume buf_to_vec returns Float32Array or compatible.
+
+        const sim = cos_sim(new_mean_f32, ex_mean);
         if (!best || sim > best.similarity) {
             best = { id: mem.id, similarity: sim };
         }
@@ -650,6 +665,7 @@ import {
     propagateAssociativeReinforcementToLinkedNodes,
     ALPHA_LEARNING_RATE_FOR_RECALL_REINFORCEMENT,
     BETA_LEARNING_RATE_FOR_EMOTIONAL_FREQUENCY,
+    applyDualPhaseDecayToAllMemories,
 } from "../ops/dynamics";
 export interface multi_vec_fusion_weights {
     semantic_dimension_weight: number;
@@ -736,6 +752,14 @@ const get_sal = async (id: string, def_sal: number): Promise<number> => {
     sal_cache.set(id, { s, t: Date.now() });
     return s;
 };
+/**
+ * Semantic query against the Hierarchical Semantic Graph.
+ * Performs multi-sector embedding, vector search, and graph traversal.
+ *
+ * @param qt Query text
+ * @param k Number of results to return (default 10)
+ * @param f Filter options (sectors, salience, user_id, time range)
+ */
 export async function hsg_query(
     qt: string,
     k = 10,
@@ -808,18 +832,25 @@ export async function hsg_query(
             : await expand_via_waypoints(Array.from(ids), k * 2);
         for (const e of exp) ids.add(e.id);
 
+        // Fetch all memory details in batch
+        const all_mem_ids = Array.from(ids);
+        const memory_map = new Map<string, any>();
+
+        // Use batch retrieval instead of N+1 loop
+        if (all_mem_ids.length > 0) {
+            const fetched = await q.get_mems_by_ids.all(all_mem_ids);
+            for (const m of fetched) {
+                memory_map.set(m.id, m);
+            }
+        }
+
         let keyword_scores = new Map<string, number>();
         if (tier === "hybrid") {
-            const all_mems = await Promise.all(
-                Array.from(ids).map(async (id) => {
-                    const m = await q.get_mem.get(id);
-                    return m ? { id, content: m.content } : null;
-                }),
-            );
-            const valid_mems = all_mems.filter((m) => m !== null) as Array<{
-                id: string;
-                content: string;
-            }>;
+            const valid_mems: Array<{ id: string; content: string }> = [];
+            for (const id of all_mem_ids) {
+                const m = memory_map.get(id);
+                if (m) valid_mems.push({ id, content: m.content });
+            }
             keyword_scores = await keyword_filter_memories(
                 qt,
                 valid_mems,
@@ -828,8 +859,8 @@ export async function hsg_query(
         }
 
         const res: hsg_q_result[] = [];
-        for (const mid of Array.from(ids)) {
-            const m = await q.get_mem.get(mid);
+        for (const mid of all_mem_ids) {
+            const m = memory_map.get(mid);
             if (!m || (f?.minSalience && m.salience < f.minSalience)) continue;
             if (f?.user_id && m.user_id !== f.user_id) continue;
             if (f?.startTime && m.created_at < f.startTime) continue;
@@ -988,20 +1019,9 @@ export async function run_decay_process(): Promise<{
     processed: number;
     decayed: number;
 }> {
-    const mems = await q.all_mem.all(10000, 0);
-    let p = 0,
-        d = 0;
-    for (const m of mems) {
-        const ds = (Date.now() - m.last_seen_at) / 86400000;
-        const ns = calc_decay(m.primary_sector, m.salience, ds);
-        if (ns !== m.salience) {
-            await q.upd_seen.run(m.id, m.last_seen_at, ns, Date.now());
-            d++;
-        }
-        p++;
-    }
-    if (d > 0) await log_maint_op("decay", d);
-    return { processed: p, decayed: d };
+    const res = await applyDualPhaseDecayToAllMemories();
+    if (res.decayed > 0) await log_maint_op("decay", res.decayed);
+    return res;
 }
 
 // Helper to ensure user exists
@@ -1023,6 +1043,15 @@ async function ensure_user_exists(user_id: string): Promise<void> {
     }
 }
 
+/**
+ * Adds a new memory to the system.
+ * Handles duplicate detection (simhash), classification, embedding, and graph linking.
+ *
+ * @param content Raw text content
+ * @param tags Optional JSON string of tags
+ * @param metadata Arbitrary metadata object
+ * @param user_id Optional user identifier for multi-tenant isolation
+ */
 export async function add_hsg_memory(
     content: string,
     tags?: string,

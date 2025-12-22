@@ -1,5 +1,5 @@
-import { all_async, run_async, q, vector_store, memories_table } from "../core/db";
-import { now } from "../utils";
+import { all_async, run_async, q, vector_store, TABLE_MEMORIES } from "../core/db";
+import { now, parse_int, parse_f, parse_bool, clamp_f, clamp_i } from "../utils";
 import { env } from "../core/cfg";
 
 type mem = {
@@ -27,15 +27,6 @@ type decay_cfg = {
     time_unit_ms: number;
 };
 
-const parse_int = (x: any, d: number) =>
-    Number.isFinite(+x) ? Math.floor(+x) : d;
-const parse_f = (x: any, d: number) => (Number.isFinite(+x) ? +x : d);
-const parse_bool = (x: any, d: boolean) =>
-    x === "true" ? true : x === "false" ? false : d;
-const clamp_f = (v: number, a: number, b: number) =>
-    Math.min(b, Math.max(a, v));
-const clamp_i = (v: number, a: number, b: number) =>
-    Math.min(b, Math.max(a, Math.floor(v)));
 const tick = () => new Promise<void>((r) => setImmediate(r));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -241,7 +232,7 @@ export const apply_decay = async () => {
     for (const seg of segments) {
         const segment = seg.segment;
         const rows = await all_async(
-            "select id,content,summary,salience,decay_lambda,last_seen_at,updated_at,primary_sector,coactivations from memories where segment=?",
+            `select id,content,summary,salience,decay_lambda,last_seen_at,updated_at,primary_sector,coactivations from ${TABLE_MEMORIES} where segment=?`,
             [segment],
         );
 
@@ -323,7 +314,7 @@ export const apply_decay = async () => {
 
                                 if (new_summary !== (m.summary || "")) {
                                     await run_async(
-                                        "update memories set summary=? where id=?",
+                                        `update ${TABLE_MEMORIES} set summary=? where id=?`,
                                         [new_summary, m.id],
                                     );
                                 }
@@ -342,7 +333,7 @@ export const apply_decay = async () => {
                             fp.vector.length,
                         );
                         await run_async(
-                            "update memories set summary=? where id=?",
+                            `update ${TABLE_MEMORIES} set summary=? where id=?`,
                             [fp.summary, m.id],
                         );
                         fingerprinted = true;
@@ -352,7 +343,7 @@ export const apply_decay = async () => {
 
                     if (changed) {
                         await run_async(
-                            `update ${memories_table} set salience=?,updated_at=? where id=?`,
+                            `update ${TABLE_MEMORIES} set salience=?,updated_at=? where id=?`,
                             [new_sal, now(), m.id],
                         );
                         tot_chg++;
@@ -414,7 +405,7 @@ export const on_query_hit = async (
     if (cfg.reinforce_on_query) {
         const new_sal = clamp_f((m.salience || 0.5) + 0.5, 0, 1);
         await run_async(
-            `update ${memories_table} set salience=?,last_seen_at=? where id=?`,
+            `update ${TABLE_MEMORIES} set salience=?,last_seen_at=? where id=?`,
             [new_sal, now(), mem_id],
         );
         updated = true;

@@ -1,51 +1,12 @@
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
+import yaml from "js-yaml";
+import { log } from "../core/log";
+
 interface model_cfg {
     [sector: string]: Record<string, string>;
 }
 let cfg: model_cfg | null = null;
-
-export const load_models = (): model_cfg => {
-    if (cfg) return cfg;
-    const p = join(__dirname, "../../../models.yml");
-    if (!existsSync(p)) {
-        console.warn("[MODELS] models.yml not found, using defaults");
-        return get_defaults();
-    }
-    try {
-        const yml = readFileSync(p, "utf-8");
-        cfg = parse_yaml(yml);
-        console.log(
-            `[MODELS] Loaded models.yml (${Object.keys(cfg).length} sectors)`,
-        );
-        return cfg;
-    } catch (e) {
-        console.error("[MODELS] Failed to parse models.yml:", e);
-        return get_defaults();
-    }
-};
-
-const parse_yaml = (yml: string): model_cfg => {
-    const lines = yml.split("\n");
-    const obj: model_cfg = {};
-    let cur_sec: string | null = null;
-    for (const line of lines) {
-        const trim = line.trim();
-        if (!trim || trim.startsWith("#")) continue;
-        const indent = line.search(/\S/);
-        const [key, ...val_parts] = trim.split(":");
-        const val = val_parts.join(":").trim();
-        if (indent === 0 && val) {
-            continue;
-        } else if (indent === 0) {
-            cur_sec = key;
-            obj[cur_sec] = {};
-        } else if (cur_sec && val) {
-            obj[cur_sec][key] = val;
-        }
-    }
-    return obj;
-};
 
 const get_defaults = (): model_cfg => ({
     episodic: {
@@ -84,6 +45,26 @@ const get_defaults = (): model_cfg => ({
         local: "all-mpnet-base-v2",
     },
 });
+
+export const load_models = (): model_cfg => {
+    if (cfg) return cfg;
+    const p = join(__dirname, "../../../models.yml");
+    if (!existsSync(p)) {
+        // log.warn("[MODELS] models.yml not found, using defaults");
+        return get_defaults();
+    }
+    try {
+        const yml = readFileSync(p, "utf-8");
+        cfg = yaml.load(yml) as model_cfg;
+        log.info(
+            `[MODELS] Loaded models.yml (${Object.keys(cfg || {}).length} sectors)`,
+        );
+        return cfg;
+    } catch (e) {
+        log.error("[MODELS] Failed to parse models.yml", { error: e });
+        return get_defaults();
+    }
+};
 
 export const get_model = (sector: string, provider: string): string => {
     const cfg = load_models();

@@ -1,4 +1,4 @@
-import { env } from "../../core/cfg";
+import { authConfig } from "../../core/cfg";
 import crypto from "crypto";
 import { Elysia } from "elysia";
 import { log } from "../../core/log";
@@ -7,28 +7,15 @@ const rate_limit_store = new Map<
     string,
     { count: number; reset_time: number }
 >();
-const auth_config = {
-    api_key: env.api_key,
-    api_key_header: "x-api-key",
-    rate_limit_enabled: env.rate_limit_enabled,
-    rate_limit_window_ms: env.rate_limit_window_ms,
-    rate_limit_max_requests: env.rate_limit_max_requests,
-    public_endpoints: [
-        "/health",
-        "/api/system/health",
-        "/api/system/stats",
-        "/dashboard/health",
-    ],
-};
 
 function is_public_endpoint(path: string): boolean {
-    return auth_config.public_endpoints.some(
+    return authConfig.public_endpoints.some(
         (e) => path === e || path.startsWith(e),
     );
 }
 
 function extract_api_key(headers: any): string | null {
-    const x_api_key = headers[auth_config.api_key_header];
+    const x_api_key = headers[authConfig.api_key_header];
     if (x_api_key) return x_api_key;
     const auth_header = headers["authorization"];
     if (auth_header) {
@@ -49,27 +36,27 @@ function check_rate_limit(client_id: string): {
     remaining: number;
     reset_time: number;
 } {
-    if (!auth_config.rate_limit_enabled)
+    if (!authConfig.rate_limit_enabled)
         return { allowed: true, remaining: -1, reset_time: -1 };
     const now = Date.now();
     const data = rate_limit_store.get(client_id);
     if (!data || now >= data.reset_time) {
         const new_data = {
             count: 1,
-            reset_time: now + auth_config.rate_limit_window_ms,
+            reset_time: now + authConfig.rate_limit_window_ms,
         };
         rate_limit_store.set(client_id, new_data);
         return {
             allowed: true,
-            remaining: auth_config.rate_limit_max_requests - 1,
+            remaining: authConfig.rate_limit_max_requests - 1,
             reset_time: new_data.reset_time,
         };
     }
     data.count++;
     rate_limit_store.set(client_id, data);
-    const remaining = auth_config.rate_limit_max_requests - data.count;
+    const remaining = authConfig.rate_limit_max_requests - data.count;
     return {
-        allowed: data.count <= auth_config.rate_limit_max_requests,
+        allowed: data.count <= authConfig.rate_limit_max_requests,
         remaining: Math.max(0, remaining),
         reset_time: data.reset_time,
     };
@@ -90,7 +77,7 @@ export const authPlugin = (app: Elysia) =>
     app.onBeforeHandle(({ request, set, path, headers }) => {
         if (is_public_endpoint(path)) return;
 
-        if (!auth_config.api_key || auth_config.api_key === "") {
+        if (!authConfig.api_key || authConfig.api_key === "") {
             // log.warn("[AUTH] No API key configured");
             return;
         }
@@ -104,7 +91,7 @@ export const authPlugin = (app: Elysia) =>
             };
         }
 
-        if (!validate_api_key(provided, auth_config.api_key)) {
+        if (!validate_api_key(provided, authConfig.api_key)) {
             set.status = 403;
             return { error: "invalid_api_key" };
         }
@@ -113,8 +100,8 @@ export const authPlugin = (app: Elysia) =>
         const client_id = get_client_id("unknown", provided);
         const rl = check_rate_limit(client_id);
 
-        if (auth_config.rate_limit_enabled) {
-            set.headers["X-RateLimit-Limit"] = String(auth_config.rate_limit_max_requests);
+        if (authConfig.rate_limit_enabled) {
+            set.headers["X-RateLimit-Limit"] = String(authConfig.rate_limit_max_requests);
             set.headers["X-RateLimit-Remaining"] = String(rl.remaining);
             set.headers["X-RateLimit-Reset"] = String(Math.floor(rl.reset_time / 1000));
         }
