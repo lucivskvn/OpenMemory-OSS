@@ -6,17 +6,17 @@ async function testBackendAPI() {
 
   try {
     console.log('1. Health Check...');
-    const health = await fetch(`${baseUrl}/health`);
+    const health = await fetch(`${baseUrl}/api/system/health`);
     const healthData = await health.json();
     console.log('✅ Health:', healthData);
 
     console.log('\n2. Get Sectors...');
-    const sectors = await fetch(`${baseUrl}/sectors`);
+    const sectors = await fetch(`${baseUrl}/api/memory/sectors`);
     const sectorsData = await sectors.json();
     console.log('✅ Sectors:', sectorsData.sectors);
 
     console.log('\n3. Add Memory...');
-    const addResponse = await fetch(`${baseUrl}/memory/add`, {
+    const addResponse = await fetch(`${baseUrl}/api/memory/add`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -29,7 +29,7 @@ async function testBackendAPI() {
     console.log('✅ Added memory:', memory);
 
     console.log('\n4. Query Memory...');
-    const queryResponse = await fetch(`${baseUrl}/memory/query`, {
+    const queryResponse = await fetch(`${baseUrl}/api/memory/query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -43,7 +43,7 @@ async function testBackendAPI() {
     if (results.matches.length > 0) {
       console.log('\n5. Update Memory (content only)...');
       const updateResponse = await fetch(
-        `${baseUrl}/memory/${results.matches[0].id}`,
+        `${baseUrl}/api/memory/${results.matches[0].id}`,
         {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
@@ -58,7 +58,7 @@ async function testBackendAPI() {
 
       console.log('\n6. Verify Update...');
       const getResponse = await fetch(
-        `${baseUrl}/memory/${results.matches[0].id}`,
+        `${baseUrl}/api/memory/${results.matches[0].id}`,
       );
       const updatedMemory = await getResponse.json();
       console.log(
@@ -72,7 +72,7 @@ async function testBackendAPI() {
 
     if (results.matches.length > 0) {
       console.log('\n7. Reinforce Memory...');
-      const reinforceResponse = await fetch(`${baseUrl}/memory/reinforce`, {
+      const reinforceResponse = await fetch(`${baseUrl}/api/memory/reinforce`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -85,7 +85,7 @@ async function testBackendAPI() {
     }
 
     console.log('\n8. List All Memories...');
-    const allResponse = await fetch(`${baseUrl}/memory/all?l=10`);
+    const allResponse = await fetch(`${baseUrl}/api/memory/all?l=10`);
     const allMemories = await allResponse.json();
     console.log('✅ Total memories:', allMemories.items.length);
   } catch (error) {

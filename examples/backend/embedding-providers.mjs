@@ -6,7 +6,7 @@ async function embeddingProviderExamples() {
 
   try {
     console.log('1. Check current embedding provider...');
-    const health = await fetch(`${baseUrl}/health`);
+    const health = await fetch(`${baseUrl}/api/system/health`);
     const healthData = await health.json();
     console.log('Current provider:', healthData.embedding.provider);
     console.log('Configuration:', healthData.embedding);
@@ -36,7 +36,7 @@ async function embeddingProviderExamples() {
 
     console.log('\n2. Testing sector classification with different content...');
     for (const example of examples) {
-      const response = await fetch(`${baseUrl}/memory/add`, {
+      const response = await fetch(`${baseUrl}/api/memory/add`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -55,7 +55,7 @@ async function embeddingProviderExamples() {
     }
 
     console.log('\n3. Testing cross-sector queries...');
-    const queryResponse = await fetch(`${baseUrl}/memory/query`, {
+    const queryResponse = await fetch(`${baseUrl}/api/memory/query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

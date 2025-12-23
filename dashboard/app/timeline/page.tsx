@@ -28,7 +28,7 @@ export default function timeline() {
         setloading(true)
         seterror(null)
         try {
-            const res = await fetch(`${API_BASE_URL}/dashboard/activity?limit=${limit}`, { headers: getHeaders() })
+            const res = await fetch(`${API_BASE_URL}/api/dashboard/activity?limit=${limit}`, { headers: getHeaders() })
             if (!res.ok) throw new Error('failed to fetch activity')
             const data = await res.json()
 

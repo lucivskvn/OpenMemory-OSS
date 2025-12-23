@@ -34,7 +34,7 @@ export default function ChatPage() {
 
     const queryMemories = async (query: string): Promise<MemoryReference[]> => {
         try {
-            const response = await fetch(`${API_BASE_URL}/memory/query`, {
+            const response = await fetch(`${API_BASE_URL}/api/memory/query`, {
                 method: "POST",
                 headers: getHeaders(),
                 body: JSON.stringify({
@@ -120,7 +120,7 @@ export default function ChatPage() {
 
     const addMemoryToBag = async (memory: MemoryReference) => {
         try {
-            await fetch(`${API_BASE_URL}/memory/reinforce`, {
+            await fetch(`${API_BASE_URL}/api/memory/reinforce`, {
                 method: "POST",
                 headers: getHeaders(),
                 body: JSON.stringify({

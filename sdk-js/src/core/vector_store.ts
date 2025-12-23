@@ -7,6 +7,7 @@ export interface VectorStore {
     searchSimilar(sector: string, queryVec: number[], topK: number): Promise<Array<{ id: string; score: number }>>;
     getVector(id: string, sector: string): Promise<{ vector: number[]; dim: number } | null>;
     getVectorsById(id: string): Promise<Array<{ sector: string; vector: number[]; dim: number }>>;
+    getVectorsForMemoryIds(ids: string[]): Promise<Array<{ id: string; sector: string; vector: number[]; dim: number }>>;
     getVectorsBySector(sector: string): Promise<Array<{ id: string; vector: number[]; dim: number }>>;
 }
 
@@ -61,6 +62,18 @@ export class SQLiteVectorStore implements VectorStore {
     async getVectorsById(id: string): Promise<Array<{ sector: string; vector: number[]; dim: number }>> {
         const rows = await this.db.all_async(`select sector,v,dim from ${this.table} where id=?`, [id]);
         return rows.map(row => ({ sector: row.sector, vector: bufferToVector(row.v), dim: row.dim }));
+    }
+
+    async getVectorsForMemoryIds(ids: string[]): Promise<Array<{ id: string; sector: string; vector: number[]; dim: number }>> {
+        if (ids.length === 0) return [];
+        const ph = ids.map(() => "?").join(",");
+        const rows = await this.db.all_async(`select id,sector,v,dim from ${this.table} where id in (${ph})`, ids);
+        return rows.map(row => ({
+            id: row.id,
+            sector: row.sector,
+            vector: bufferToVector(row.v),
+            dim: row.dim
+        }));
     }
 
     async getVectorsBySector(sector: string): Promise<Array<{ id: string; vector: number[]; dim: number }>> {

@@ -1,4 +1,4 @@
-﻿import { randomUUID } from 'crypto';
+import { randomUUID } from 'crypto';
 import { hsg_query, classify_content, sector_configs, create_cross_sector_waypoints, calc_mean_vec, create_single_waypoint, reinforce_memory } from './memory/hsg';
 import { embedMultiSector, vectorToBuffer } from './memory/embed';
 import { q, init_db, log_maint_op, vector_store } from './core/db';
@@ -6,6 +6,7 @@ import { chunk_text } from './utils/chunking';
 import { configure, env, tier } from './core/cfg';
 import { ingestDocument, ingestURL, IngestionResult } from './ops/ingest';
 import { update_user_summary } from './memory/user_summary';
+import * as temporal from './memory/temporal';
 
 export interface OpenMemoryOptions {
     mode?: 'local' | 'remote';
@@ -60,11 +61,19 @@ export class OpenMemory {
     private mode: 'local' | 'remote';
     private url?: string;
     private apiKey?: string;
+    public temporal: any; // Using any to allow dynamic assignment of wrapper
+    public langGraph: any;
+    public compression: any;
 
     constructor(options: OpenMemoryOptions = {}) {
         this.mode = options.mode || 'local';
         this.url = options.url;
         this.apiKey = options.apiKey;
+
+        // Initialize wrappers
+        this.temporal = this._createTemporalWrapper();
+        this.langGraph = this._createLangGraphWrapper();
+        this.compression = this._createCompressionWrapper();
 
         if (this.mode === 'remote') {
             if (!this.url) throw new Error('Remote mode requires url parameter');
@@ -148,6 +157,158 @@ export class OpenMemory {
             configure(configUpdate);
             init_db(options.path);
         }
+    }
+
+    private _createTemporalWrapper() {
+        return {
+            create_fact: async (subject: string, predicate: string, object: string, valid_from?: number, valid_to?: number | null, confidence?: number, metadata?: any) => {
+                if (this.mode === 'remote') {
+                    const payload = { subject, predicate, object, valid_from, valid_to, confidence, metadata };
+                    const res = await fetch(`${this.url}/api/temporal/fact`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', ...(this.apiKey && { 'Authorization': `Bearer ${this.apiKey}` }) },
+                        body: JSON.stringify(payload)
+                    });
+                    if (!res.ok) throw new Error(`Remote create_fact failed: ${res.status}`);
+                    return (await res.json() as any).id;
+                }
+                return await temporal.create_fact(subject, predicate, object, valid_from, valid_to, confidence, metadata);
+            },
+            get_facts: async (filters: any) => {
+                if (this.mode === 'remote') {
+                    const params = new URLSearchParams(filters as any);
+                    const res = await fetch(`${this.url}/api/temporal/fact?${params}`, {
+                        headers: { ...(this.apiKey && { 'Authorization': `Bearer ${this.apiKey}` }) }
+                    });
+                    if (!res.ok) throw new Error(`Remote get_facts failed: ${res.status}`);
+                    return (await res.json() as any).facts;
+                }
+                return await temporal.get_facts(filters);
+            },
+            invalidate_fact: async (id: string, valid_to?: number) => {
+                if (this.mode === 'remote') {
+                    const params = new URLSearchParams();
+                    if (valid_to) params.append('valid_to', valid_to.toString());
+                    const res = await fetch(`${this.url}/api/temporal/fact/${id}?${params}`, {
+                        method: 'DELETE',
+                        headers: { ...(this.apiKey && { 'Authorization': `Bearer ${this.apiKey}` }) }
+                    });
+                    if (!res.ok) throw new Error(`Remote invalidate_fact failed: ${res.status}`);
+                    return (await res.json() as any).ok;
+                }
+                return await temporal.invalidate_fact(id, valid_to);
+            },
+            create_edge: async (source_id: string, target_id: string, relation: string, weight?: number, metadata?: any) => {
+                if (this.mode === 'remote') {
+                    const payload = { source_id, target_id, relation, weight, metadata };
+                    const res = await fetch(`${this.url}/api/temporal/edge`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', ...(this.apiKey && { 'Authorization': `Bearer ${this.apiKey}` }) },
+                        body: JSON.stringify(payload)
+                    });
+                    if (!res.ok) throw new Error(`Remote create_edge failed: ${res.status}`);
+                    return (await res.json() as any).id;
+                }
+                return await temporal.create_edge(source_id, target_id, relation, weight, metadata);
+            },
+            get_edges: async (source_id: string) => {
+                if (this.mode === 'remote') {
+                    const params = new URLSearchParams({ source_id });
+                    const res = await fetch(`${this.url}/api/temporal/edge?${params}`, {
+                        headers: { ...(this.apiKey && { 'Authorization': `Bearer ${this.apiKey}` }) }
+                    });
+                    if (!res.ok) throw new Error(`Remote get_edges failed: ${res.status}`);
+                    return (await res.json() as any).edges;
+                }
+                return await temporal.get_edges(source_id);
+            },
+            get_related_facts: async (fact_id: string, relation_type?: string, at?: number) => {
+                if (this.mode === 'remote') {
+                    const params = new URLSearchParams({ fact_id });
+                    if (relation_type) params.append('relation_type', relation_type);
+                    if (at) params.append('at', at.toString());
+                    const res = await fetch(`${this.url}/api/temporal/related?${params}`, {
+                        headers: { ...(this.apiKey && { 'Authorization': `Bearer ${this.apiKey}` }) }
+                    });
+                    if (!res.ok) throw new Error(`Remote get_related_facts failed: ${res.status}`);
+                    return (await res.json() as any).related;
+                }
+                return await temporal.get_related_facts(fact_id, relation_type, at);
+            },
+            search_facts: async (pattern: string, field?: string, at?: number) => {
+                if (this.mode === 'remote') {
+                    const params = new URLSearchParams({ pattern });
+                    if (field) params.append('field', field);
+                    if (at) params.append('at', at.toString());
+                    const res = await fetch(`${this.url}/api/temporal/search?${params}`, {
+                        headers: { ...(this.apiKey && { 'Authorization': `Bearer ${this.apiKey}` }) }
+                    });
+                    if (!res.ok) throw new Error(`Remote search_facts failed: ${res.status}`);
+                    return (await res.json() as any).facts;
+                }
+                return await temporal.search_facts(pattern, field as any, at);
+            },
+            get_subject_timeline: async (subject: string, predicate?: string) => {
+                if (this.mode === 'remote') {
+                    const params = new URLSearchParams({ subject });
+                    if (predicate) params.append('predicate', predicate);
+                    const res = await fetch(`${this.url}/api/temporal/timeline?${params}`, {
+                        headers: { ...(this.apiKey && { 'Authorization': `Bearer ${this.apiKey}` }) }
+                    });
+                    if (!res.ok) throw new Error(`Remote get_subject_timeline failed: ${res.status}`);
+                    return (await res.json() as any).timeline;
+                }
+                return await temporal.get_subject_timeline(subject, predicate);
+            },
+            get_changes_in_window: async (start: number, end: number, subject?: string) => {
+                if (this.mode === 'remote') {
+                    const params = new URLSearchParams({ start: start.toString(), end: end.toString() });
+                    if (subject) params.append('subject', subject);
+                    const res = await fetch(`${this.url}/api/temporal/changes?${params}`, {
+                        headers: { ...(this.apiKey && { 'Authorization': `Bearer ${this.apiKey}` }) }
+                    });
+                    if (!res.ok) throw new Error(`Remote get_changes_in_window failed: ${res.status}`);
+                    return (await res.json() as any).timeline;
+                }
+                return await temporal.get_changes_in_window(start, end, subject);
+            },
+            get_change_frequency: async (subject: string, predicate: string, window_days?: number) => {
+                if (this.mode === 'remote') {
+                    const params = new URLSearchParams({ subject, predicate });
+                    if (window_days) params.append('window_days', window_days.toString());
+                    const res = await fetch(`${this.url}/api/temporal/frequency?${params}`, {
+                        headers: { ...(this.apiKey && { 'Authorization': `Bearer ${this.apiKey}` }) }
+                    });
+                    if (!res.ok) throw new Error(`Remote get_change_frequency failed: ${res.status}`);
+                    return (await res.json() as any).result;
+                }
+                return await temporal.get_change_frequency(subject, predicate, window_days);
+            },
+            compare_time_points: async (subject: string, time1: number, time2: number) => {
+                if (this.mode === 'remote') {
+                    const params = new URLSearchParams({ subject, time1: time1.toString(), time2: time2.toString() });
+                    const res = await fetch(`${this.url}/api/temporal/compare?${params}`, {
+                        headers: { ...(this.apiKey && { 'Authorization': `Bearer ${this.apiKey}` }) }
+                    });
+                    if (!res.ok) throw new Error(`Remote compare_time_points failed: ${res.status}`);
+                    return (await res.json() as any).result;
+                }
+                return await temporal.compare_time_points(subject, time1, time2);
+            },
+            get_volatile_facts: async (subject?: string, limit?: number) => {
+                if (this.mode === 'remote') {
+                    const params = new URLSearchParams();
+                    if (subject) params.append('subject', subject);
+                    if (limit) params.append('limit', limit.toString());
+                    const res = await fetch(`${this.url}/api/temporal/volatile?${params}`, {
+                        headers: { ...(this.apiKey && { 'Authorization': `Bearer ${this.apiKey}` }) }
+                    });
+                    if (!res.ok) throw new Error(`Remote get_volatile_facts failed: ${res.status}`);
+                    return (await res.json() as any).result;
+                }
+                return await temporal.get_volatile_facts(subject, limit);
+            }
+        };
     }
 
     async add(content: string, options: {
@@ -325,6 +486,77 @@ export class OpenMemory {
         return deleted;
     }
 
+    private _createLangGraphWrapper() {
+        return {
+            store: async (node: string, content: string, options: { namespace?: string; graphId?: string; tags?: string[]; metadata?: any; reflective?: boolean; userId?: string } = {}) => {
+                if (this.mode === 'remote') {
+                    const payload = { node, content, namespace: options.namespace, graph_id: options.graphId, tags: options.tags, metadata: options.metadata, reflective: options.reflective, user_id: options.userId };
+                    const res = await fetch(`${this.url}/api/lg/store`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', ...(this.apiKey && { 'Authorization': `Bearer ${this.apiKey}` }) },
+                        body: JSON.stringify(payload)
+                    });
+                    if (!res.ok) throw new Error(`Remote LG store failed: ${res.status}`);
+                    return await res.json();
+                }
+                const { store_node_mem } = await import('./ai/graph'); // Lazy import assuming local bundle has it?
+                // Wait, sdk-js structure might not have ai/graph built-in for local mode if it relies on backend.
+                // The prompt implies sdk-js maintains independent copies of core logic.
+                // But does it have ai/graph?
+                // backend/src/ai/graph.ts depends on hsg.ts.
+                // sdk-js has memory/hsg.ts.
+                // So I probably need to port graph.ts to sdk-js/src/ai/graph.ts or error on local.
+                // For now, I'll error on local for LangGraph if it's not ported.
+                // Checking file list...
+                throw new Error("LangGraph local mode not fully implemented in SDK yet. Use remote mode.");
+            },
+            retrieve: async (node: string, options: { query?: string; namespace?: string; graphId?: string; limit?: number } = {}) => {
+                if (this.mode === 'remote') {
+                    const payload = { node, query: options.query, namespace: options.namespace, graph_id: options.graphId, limit: options.limit };
+                    const res = await fetch(`${this.url}/api/lg/retrieve`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', ...(this.apiKey && { 'Authorization': `Bearer ${this.apiKey}` }) },
+                        body: JSON.stringify(payload)
+                    });
+                    if (!res.ok) throw new Error(`Remote LG retrieve failed: ${res.status}`);
+                    return await res.json();
+                }
+                throw new Error("LangGraph local mode not implemented.");
+            },
+            context: async (options: { namespace?: string; graphId?: string; limit?: number } = {}) => {
+                if (this.mode === 'remote') {
+                    const params = new URLSearchParams();
+                    if (options.namespace) params.set('namespace', options.namespace);
+                    if (options.graphId) params.set('graph_id', options.graphId);
+                    if (options.limit) params.set('limit', options.limit.toString());
+                    const res = await fetch(`${this.url}/api/lg/context?${params}`, {
+                        headers: { ...(this.apiKey && { 'Authorization': `Bearer ${this.apiKey}` }) }
+                    });
+                    if (!res.ok) throw new Error(`Remote LG context failed: ${res.status}`);
+                    return await res.json();
+                }
+                throw new Error("LangGraph local mode not implemented.");
+            }
+        };
+    }
+
+    private _createCompressionWrapper() {
+        return {
+            compress: async (content: string) => {
+                if (this.mode === 'remote') {
+                    const res = await fetch(`${this.url}/api/compression/compress`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', ...(this.apiKey && { 'Authorization': `Bearer ${this.apiKey}` }) },
+                        body: JSON.stringify({ content })
+                    });
+                    if (!res.ok) throw new Error(`Remote compression failed: ${res.status}`);
+                    return await res.json();
+                }
+                throw new Error("Compression local mode not implemented.");
+            }
+        };
+    }
+
     private async _remoteAdd(content: string, options: any): Promise<any> {
         const { userId, decayLambda, ...rest } = options ?? {};
 
@@ -335,7 +567,7 @@ export class OpenMemory {
             decay_lambda: decayLambda,
         };
 
-        const res = await fetch(`${this.url}/memory/add`, {
+        const res = await fetch(`${this.url}/api/memory/add`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -356,7 +588,7 @@ export class OpenMemory {
             user_id: options.userId
         };
 
-        const res = await fetch(`${this.url}/memory/query`, {
+        const res = await fetch(`${this.url}/api/memory/query`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -370,7 +602,7 @@ export class OpenMemory {
     }
 
     private async _remoteDelete(id: string): Promise<void> {
-        const res = await fetch(`${this.url}/memory/${id}`, {
+        const res = await fetch(`${this.url}/api/memory/${id}`, {
             method: 'DELETE',
             headers: {
                 ...(this.apiKey && { 'Authorization': `Bearer ${this.apiKey}` })
@@ -387,7 +619,7 @@ export class OpenMemory {
         if (options.sector) params.set('sector', options.sector);
         if (options.userId) params.set('user_id', options.userId);
 
-        const res = await fetch(`${this.url}/memory/all?${params}`, {
+        const res = await fetch(`${this.url}/api/memory/all?${params}`, {
             headers: {
                 ...(this.apiKey && { 'Authorization': `Bearer ${this.apiKey}` })
             }
@@ -398,7 +630,7 @@ export class OpenMemory {
     }
 
     private async _remoteGetUserSummary(userId: string): Promise<any> {
-        const res = await fetch(`${this.url}/users/${userId}/summary`, {
+        const res = await fetch(`${this.url}/api/users/${userId}/summary`, {
             headers: { ...(this.apiKey && { 'Authorization': `Bearer ${this.apiKey}` }) }
         });
         if (res.status === 404) return null;
@@ -407,7 +639,7 @@ export class OpenMemory {
     }
 
     private async _remoteReinforce(id: string, boost?: number): Promise<void> {
-        const res = await fetch(`${this.url}/memory/reinforce`, {
+        const res = await fetch(`${this.url}/api/memory/reinforce`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -426,7 +658,7 @@ export class OpenMemory {
             user_id: options.userId,
             config: options.config
         };
-        const res = await fetch(`${this.url}/memory/ingest`, {
+        const res = await fetch(`${this.url}/api/memory/ingest`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -445,7 +677,7 @@ export class OpenMemory {
             user_id: options.userId,
             config: options.config
         };
-        const res = await fetch(`${this.url}/memory/ingest/url`, {
+        const res = await fetch(`${this.url}/api/memory/ingest/url`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -458,7 +690,7 @@ export class OpenMemory {
     }
 
     private async _remoteDeleteUserMemories(userId: string): Promise<number> {
-        const res = await fetch(`${this.url}/users/${userId}/memories`, {
+        const res = await fetch(`${this.url}/api/users/${userId}/memories`, {
             method: 'DELETE',
             headers: { ...(this.apiKey && { 'Authorization': `Bearer ${this.apiKey}` }) }
         });

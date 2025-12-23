@@ -1,20 +1,32 @@
 import { createHash } from "crypto";
 
 export interface CompressionMetrics {
+    /** Original estimated token count */
     ogTok: number;
+    /** Compressed estimated token count */
     compTok: number;
+    /** Compression ratio (compressed / original) */
     ratio: number;
+    /** Estimated tokens saved */
     saved: number;
+    /** Percentage saved */
     pct: number;
+    /** Processing latency estimation */
     latency: number;
+    /** Algorithm used */
     algo: string;
+    /** Timestamp */
     ts: number;
 }
 
 export interface CompressionResult {
+    /** Original text */
     og: string;
+    /** Compressed text */
     comp: string;
+    /** Compression metrics */
     metrics: CompressionMetrics;
+    /** Hash of the original text */
     hash: string;
 }
 
@@ -29,6 +41,10 @@ export interface CompressionStats {
     updated: number;
 }
 
+/**
+ * Engine for text compression to optimize memory storage and context usage.
+ * Supports semantic, syntactic, and aggressive compression strategies.
+ */
 class MemoryCompressionEngine {
     private stats: CompressionStats = {
         total: 0,
@@ -42,9 +58,13 @@ class MemoryCompressionEngine {
     };
 
     private cache = new Map<string, CompressionResult>();
-    private readonly MAX = 500;
-    private readonly MS = 0.05;
+    private readonly MAX_CACHE_SIZE = 500;
+    private readonly MS_PER_TOKEN = 0.05;
 
+    /**
+     * Estimates token count based on characters and words.
+     * Naive approximation: char/4 + words/2.
+     */
     private tok(t: string): number {
         if (!t) return 0;
         const w = t.split(/\s+/).length;
@@ -52,9 +72,13 @@ class MemoryCompressionEngine {
         return Math.ceil(c / 4 + w / 2);
     }
 
+    /**
+     * Semantic compression: Removes filler words and simplifies redundant phrases.
+     */
     private sem(t: string): string {
         if (!t || t.length < 50) return t;
         let c = t;
+        // Remove duplicate sentences/phrases
         const s = c.split(/[.!?]+\s+/);
         const u = s.filter((x, i, a) => {
             if (i === 0) return true;
@@ -63,6 +87,8 @@ class MemoryCompressionEngine {
             return n !== p;
         });
         c = u.join(". ").trim();
+
+        // Filler words to remove
         const f = [
             /\b(just|really|very|quite|rather|somewhat|somehow)\b/gi,
             /\b(actually|basically|essentially|literally)\b/gi,
@@ -71,6 +97,8 @@ class MemoryCompressionEngine {
         ];
         for (const p of f) c = c.replace(p, "");
         c = c.replace(/\s+/g, " ").trim();
+
+        // Semantic replacements
         const r: [RegExp, string][] = [
             [/\bat this point in time\b/gi, "now"],
             [/\bdue to the fact that\b/gi, "because"],
@@ -85,6 +113,9 @@ class MemoryCompressionEngine {
         return c;
     }
 
+    /**
+     * Syntactic compression: Contractions and symbol replacements.
+     */
     private syn(t: string): string {
         if (!t || t.length < 30) return t;
         let c = t;
@@ -103,19 +134,28 @@ class MemoryCompressionEngine {
             [/\bhave been\b/gi, "been"],
         ];
         for (const [p, x] of ct) c = c.replace(p, x);
+        // Remove articles before nouns (heuristic)
         c = c.replace(/\b(the|a|an)\s+(\w+),\s+(the|a|an)\s+/gi, "$2, ");
+        // Simplify braces/brackets
         c = c.replace(/\s*{\s*/g, "{").replace(/\s*}\s*/g, "}");
         c = c.replace(/\s*\(\s*/g, "(").replace(/\s*\)\s*/g, ")");
         c = c.replace(/\s*;\s*/g, ";");
         return c;
     }
 
+    /**
+     * Aggressive compression: Applies semantic, syntactic, and domain-specific abbreviations.
+     * Also removes URLs and special characters.
+     */
     private agg(t: string): string {
         if (!t) return t;
         let c = this.sem(t);
         c = this.syn(c);
         c = c.replace(/[*_~`#]/g, "");
+        // Remove URLs
         c = c.replace(/https?:\/\/(www\.)?([^\/\s]+)(\/[^\s]*)?/gi, "$2");
+
+        // Domain abbreviations (Programming context)
         const a: [RegExp, string][] = [
             [/\bJavaScript\b/gi, "JS"],
             [/\bTypeScript\b/gi, "TS"],
@@ -134,6 +174,8 @@ class MemoryCompressionEngine {
             [/\bdocumentation\b/gi, "docs"],
         ];
         for (const [p, x] of a) c = c.replace(p, x);
+
+        // Collapse newlines
         c = c.replace(/\n{3,}/g, "\n\n");
         c = c
             .split("\n")
@@ -142,6 +184,9 @@ class MemoryCompressionEngine {
         return c.trim();
     }
 
+    /**
+     * Compress text using the specified algorithm.
+     */
     compress(
         t: string,
         a: "semantic" | "syntactic" | "aggressive" = "semantic",
@@ -156,7 +201,13 @@ class MemoryCompressionEngine {
         }
 
         const k = `${a}:${this.hash(t)}`;
-        if (this.cache.has(k)) return this.cache.get(k)!;
+        if (this.cache.has(k)) {
+            // Re-insert to mark as recently used (simple LRU)
+            const res = this.cache.get(k)!;
+            this.cache.delete(k);
+            this.cache.set(k, res);
+            return res;
+        }
 
         const ot = this.tok(t);
         let c: string;
@@ -178,8 +229,8 @@ class MemoryCompressionEngine {
         const ct = this.tok(c);
         const sv = ot - ct;
         const r = ct / ot;
-        const p = (sv / ot) * 100;
-        const l = sv * this.MS;
+        const p = ot > 0 ? (sv / ot) * 100 : 0;
+        const l = sv * this.MS_PER_TOKEN;
 
         const m: CompressionMetrics = {
             ogTok: ot,
@@ -198,11 +249,14 @@ class MemoryCompressionEngine {
             metrics: m,
             hash: this.hash(t),
         };
-        this.up(m);
-        this.store(k, res);
+        this.updateStats(m);
+        this.cacheResult(k, res);
         return res;
     }
 
+    /**
+     * Batch compress multiple strings.
+     */
     batch(
         ts: string[],
         a: "semantic" | "syntactic" | "aggressive" = "semantic",
@@ -210,6 +264,9 @@ class MemoryCompressionEngine {
         return ts.map((t) => this.compress(t, a));
     }
 
+    /**
+     * Automatically select compression strategy based on content.
+     */
     auto(t: string): CompressionResult {
         if (!t || t.length < 50) return this.compress(t, "semantic");
         const code =
@@ -227,6 +284,9 @@ class MemoryCompressionEngine {
         return { ...this.stats };
     }
 
+    /**
+     * Analyze compression performance across all algorithms for a given text.
+     */
     analyze(t: string): Record<string, CompressionMetrics> {
         const r: Record<string, CompressionMetrics> = {};
         for (const a of ["semantic", "syntactic", "aggressive"] as const) {
@@ -270,7 +330,7 @@ class MemoryCompressionEngine {
         return createHash("md5").update(t).digest("hex").substring(0, 16);
     }
 
-    private up(m: CompressionMetrics): void {
+    private updateStats(m: CompressionMetrics): void {
         this.stats.total++;
         this.stats.ogTok += m.ogTok;
         this.stats.compTok += m.compTok;
@@ -283,8 +343,9 @@ class MemoryCompressionEngine {
         this.stats.updated = Date.now();
     }
 
-    private store(k: string, r: CompressionResult): void {
-        if (this.cache.size >= this.MAX) {
+    private cacheResult(k: string, r: CompressionResult): void {
+        if (this.cache.size >= this.MAX_CACHE_SIZE) {
+            // Remove oldest inserted (Map keys are in insertion order)
             const f = this.cache.keys().next().value;
             if (f) this.cache.delete(f);
         }

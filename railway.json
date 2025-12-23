@@ -8,7 +8,7 @@
     "deploy": {
         "startCommand": "npm start",
         "restartPolicyType": "ON_FAILURE",
-        "healthcheckPath": "/"
+        "healthcheckPath": "/api/system/health"
     },
     "env": {
         "NODE_ENV": "production"

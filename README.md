@@ -566,7 +566,6 @@ Expanded tables preserved.
 
 # Contributors
 
-<<<<<<< HEAD
 <!-- readme: collaborators,contributors -start -->
 <table>
 	<tbody>
@@ -749,12 +748,7 @@ Expanded tables preserved.
 	<tbody>
 </table>
 <!-- readme: collaborators,contributors -end -->
-=======
-Discord
 
----
-
-# 16. License
+# License
 
 Apache 2.0
->>>>>>> 35e13e0534700202ef8d983e366a20227d80a0a6

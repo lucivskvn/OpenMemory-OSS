@@ -248,7 +248,9 @@ export async function retrieve_node_mems(p: lgm_retrieve_req) {
     const paths = new Map<string, string[]>();
 
     if (p.query) {
-        const matches = await hsg_query(p.query, Math.max(lim * 2, lim), {
+        // Increase candidate pool to improve recall when filtering by namespace/graph_id
+        const candidates_k = Math.max(lim * 10, 50);
+        const matches = await hsg_query(p.query, candidates_k, {
             sectors: [sec],
         });
         const ids = matches.map(m => m.id);

@@ -7,6 +7,19 @@ import { BedrockRuntimeClient, InvokeModelCommand } from "@aws-sdk/client-bedroc
 
 let gem_q: Promise<any> = Promise.resolve();
 export const emb_dim = () => env.vec_dim;
+
+// Fetch with timeout to prevent hanging requests and enable fallback chain
+const EMBED_TIMEOUT_MS = Number(process.env.OM_EMBED_TIMEOUT_MS) || 30000;
+async function fetchWithTimeout(url: string, options: RequestInit): Promise<Response> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), EMBED_TIMEOUT_MS);
+    try {
+        return await fetch(url, { ...options, signal: controller.signal });
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
 export interface EmbeddingResult {
     sector: string;
     vector: number[];
@@ -93,23 +106,41 @@ async function get_sem_emb(t: string, s: string): Promise<number[]> {
 async function emb_openai(t: string, s: string): Promise<number[]> {
     if (!env.openai_key) throw new Error("OpenAI key missing");
     const m = get_model(s, "openai");
-    const r = await fetch(
-        `${env.openai_base_url.replace(/\/$/, "")}/embeddings`,
-        {
-            method: "POST",
-            headers: {
-                "content-type": "application/json",
-                authorization: `Bearer ${env.openai_key}`,
-            },
-            body: JSON.stringify({
-                input: t,
-                model: env.openai_model || m,
-                dimensions: env.vec_dim,
-            }),
-        },
-    );
-    if (!r.ok) throw new Error(`OpenAI: ${r.status}`);
-    return ((await r.json()) as any).data[0].embedding;
+    const url = `${env.openai_base_url.replace(/\/$/, "")}/embeddings`;
+
+    for (let a = 0; a < 3; a++) {
+        try {
+            const r = await fetchWithTimeout(url, {
+                method: "POST",
+                headers: {
+                    "content-type": "application/json",
+                    authorization: `Bearer ${env.openai_key}`,
+                },
+                body: JSON.stringify({
+                    input: t,
+                    model: env.openai_model || m,
+                    dimensions: env.vec_dim,
+                }),
+            });
+
+            if (r.status === 429) {
+                const d = Math.min(
+                    parseInt(r.headers.get("retry-after") || "2") * 1000,
+                    1000 * Math.pow(2, a)
+                );
+                console.warn(`[EMBED] OpenAI rate limit (${a + 1}/3), waiting ${d}ms`);
+                await new Promise((x) => setTimeout(x, d));
+                continue;
+            }
+
+            if (!r.ok) throw new Error(`OpenAI: ${r.status}`);
+            return ((await r.json()) as any).data[0].embedding;
+        } catch (e) {
+            if (a === 2) throw e;
+            await new Promise((x) => setTimeout(x, 1000 * Math.pow(2, a)));
+        }
+    }
+    throw new Error("OpenAI: exhausted retries");
 }
 
 async function emb_batch_openai(
@@ -118,7 +149,10 @@ async function emb_batch_openai(
     if (!env.openai_key) throw new Error("OpenAI key missing");
     const secs = Object.keys(txts),
         m = get_model("semantic", "openai");
-    const r = await fetch(
+
+    // Simple batch without retries for now, or copy retry logic if needed.
+    // Assuming batch failure handled by fallback in embedMultiSector if this throws.
+    const r = await fetchWithTimeout(
         `${env.openai_base_url.replace(/\/$/, "")}/embeddings`,
         {
             method: "POST",

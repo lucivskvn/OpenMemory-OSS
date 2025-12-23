@@ -40,6 +40,7 @@ export const sys = (app: Elysia) =>
             })
     )
     // Add sectors endpoint at root to match tests/legacy behavior
+    // Deprecated: use /api/memory/sectors
     .get("/sectors", () => {
         return { sectors: Object.keys(sector_configs) };
     });

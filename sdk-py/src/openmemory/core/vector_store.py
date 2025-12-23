@@ -28,6 +28,10 @@ class VectorStore(ABC):
         pass
 
     @abstractmethod
+    async def get_vectors_for_memory_ids(self, ids: List[str]) -> List[Dict[str, Any]]:
+        pass
+
+    @abstractmethod
     async def get_vectors_by_sector(self, sector: str) -> List[Dict[str, Any]]:
         pass
 
@@ -98,6 +102,14 @@ class SQLiteVectorStore(VectorStore):
         sql = f"select sector,v,dim from {self.table} where id=?"
         rows = self.db_ops['many'](sql, (id,))
         return [{"sector": r['sector'], "vector": self._blob_to_vec(r['v']), "dim": r['dim']} for r in rows]
+
+    async def get_vectors_for_memory_ids(self, ids: List[str]) -> List[Dict[str, Any]]:
+        if not ids:
+            return []
+        placeholders = ",".join("?" * len(ids))
+        sql = f"select id,sector,v,dim from {self.table} where id in ({placeholders})"
+        rows = self.db_ops['many'](sql, tuple(ids))
+        return [{"id": r['id'], "sector": r['sector'], "vector": self._blob_to_vec(r['v']), "dim": r['dim']} for r in rows]
 
     async def get_vectors_by_sector(self, sector: str) -> List[Dict[str, Any]]:
         sql = f"select id,v,dim from {self.table} where sector=?"

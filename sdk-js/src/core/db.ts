@@ -55,6 +55,7 @@ type q_type = {
     upd_log: { run: (...p: any[]) => Promise<void> };
     get_pending_logs: { all: () => Promise<any[]> };
     get_failed_logs: { all: () => Promise<any[]> };
+    get_recent_logs: { all: (limit: number) => Promise<any[]> };
     ins_user: { run: (...p: any[]) => Promise<void> };
     get_user: { get: (user_id: string) => Promise<any> };
     upd_user_summary: { run: (...p: any[]) => Promise<void> };
@@ -64,6 +65,8 @@ type q_type = {
     inv_fact: { run: (id: string, valid_to: number) => Promise<void> };
     ins_edge: { run: (...p: any[]) => Promise<void> };
     get_edges: { all: (source_id: string) => Promise<any[]> };
+    get_all_user_ids: { all: () => Promise<any[]> };
+    get_system_stats: { get: () => Promise<any> };
 };
 
 let run_async: (sql: string, p?: any[]) => Promise<void>;
@@ -359,6 +362,14 @@ q = {
                 ["failed"],
             ),
     },
+    get_recent_logs: {
+        all: (limit: number) => {
+            return many(
+                `select * from ${TABLE_LOGS} order by ts desc limit ?`,
+                [limit],
+            );
+        }
+    },
     all_mem_by_user: {
         all: (user_id, limit, offset) =>
             many(
@@ -418,6 +429,22 @@ q = {
     },
     get_edges: {
         all: (source_id) => many(`select * from ${TABLE_TE} where source_id=?`, [source_id]),
+    },
+    get_all_user_ids: {
+        all: () => {
+            return many(`select distinct user_id from ${TABLE_MEMORIES} where user_id is not null`, []);
+        }
+    },
+    get_system_stats: {
+        get: async () => {
+            const [totalMemories, totalUsers, requestStats, maintenanceStats] = await Promise.all([
+                one(`select count(*) as c from ${TABLE_MEMORIES}`),
+                one(`select count(*) as c from ${TABLE_USERS}`),
+                many(`select * from ${TABLE_STATS} where type='request' order by ts desc limit 60`),
+                many(`select * from ${TABLE_STATS} where type in ('decay','reflect','consolidate') order by ts desc limit 50`)
+            ]);
+            return { totalMemories, totalUsers, requestStats, maintenanceStats };
+        }
     },
 };
 

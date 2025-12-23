@@ -7,7 +7,7 @@ import { compressionEngine } from "../../ops/compress";
 export const compression = (app: Elysia) => {
     if (!env.compression_enabled) return;
 
-    app.group("/compression", (app) =>
+    app.group("/api/compression", (app) =>
         app.post("/compress", async ({ body, set }) => {
             const b = body;
             try {

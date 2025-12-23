@@ -131,7 +131,12 @@ async def hsg_query(query, k=10, filters=None):
 
     # 3. Fetch full content for top k
     ids = [x[0] for x in top_k]
+
+    # Batch retrieval
     full_mems = q.get_mems_by_ids.all(ids)
+
+    # Use batch retrieval for vectors if needed (though we used mean_vec above)
+    # This aligns logic with backend for future extensions
 
     # Map back to results with score
     id_map = {m["id"]: m for m in full_mems}

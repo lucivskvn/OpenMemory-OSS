@@ -14,6 +14,7 @@ from openmemory.memory.embed import embed_multi_sector, buffer_to_vector, vector
 from openmemory.utils.chunking import chunk_text
 from openmemory.ops.ingest import ingest_document, ingest_url as ops_ingest_url
 from openmemory.utils.chunking import chunk_text
+from openmemory.memory import temporal as temporal_memory
 
 class OpenMemory:
     def __init__(self, mode="local", path=None, url=None, apiKey=None, tier=None, embeddings=None, compression=None, decay=None, reflection=None, vectorStore=None, langGraph=None):
@@ -74,6 +75,200 @@ class OpenMemory:
             
             configure(config_update)
             init_db(path)
+
+        # Initialize wrappers
+        self.temporal = self._create_temporal_wrapper()
+        self.lang_graph = self._create_lang_graph_wrapper()
+        self.compression = self._create_compression_wrapper()
+
+    def _create_temporal_wrapper(self):
+        class TemporalWrapper:
+            def __init__(self, om):
+                self.om = om
+
+            def create_fact(self, subject, predicate, object, valid_from=None, valid_to=None, confidence=1.0, metadata=None):
+                if self.om.mode == "remote":
+                    payload = {"subject": subject, "predicate": predicate, "object": object, "valid_from": valid_from, "valid_to": valid_to, "confidence": confidence, "metadata": metadata}
+                    headers = {"Content-Type": "application/json"}
+                    if self.om.api_key: headers["Authorization"] = f"Bearer {self.om.api_key}"
+                    res = requests.post(f"{self.om.url}/api/temporal/fact", json=payload, headers=headers)
+                    res.raise_for_status()
+                    return res.json()["id"]
+                return temporal_memory.create_fact(subject, predicate, object, valid_from, valid_to, confidence, metadata)
+
+            def get_facts(self, filters=None):
+                if self.om.mode == "remote":
+                    headers = {}
+                    if self.om.api_key: headers["Authorization"] = f"Bearer {self.om.api_key}"
+                    res = requests.get(f"{self.om.url}/api/temporal/fact", params=filters, headers=headers)
+                    res.raise_for_status()
+                    return res.json()["facts"]
+                return temporal_memory.get_facts(filters)
+
+            def invalidate_fact(self, id, valid_to=None):
+                if self.om.mode == "remote":
+                    params = {}
+                    if valid_to: params["valid_to"] = valid_to
+                    headers = {}
+                    if self.om.api_key: headers["Authorization"] = f"Bearer {self.om.api_key}"
+                    res = requests.delete(f"{self.om.url}/api/temporal/fact/{id}", params=params, headers=headers)
+                    res.raise_for_status()
+                    return res.json()["ok"]
+                return temporal_memory.invalidate_fact(id, valid_to)
+
+            def create_edge(self, source_id, target_id, relation, weight=1.0, metadata=None):
+                if self.om.mode == "remote":
+                    payload = {"source_id": source_id, "target_id": target_id, "relation": relation, "weight": weight, "metadata": metadata}
+                    headers = {"Content-Type": "application/json"}
+                    if self.om.api_key: headers["Authorization"] = f"Bearer {self.om.api_key}"
+                    res = requests.post(f"{self.om.url}/api/temporal/edge", json=payload, headers=headers)
+                    res.raise_for_status()
+                    return res.json()["id"]
+                return temporal_memory.create_edge(source_id, target_id, relation, weight, metadata)
+
+            def get_edges(self, source_id):
+                if self.om.mode == "remote":
+                    headers = {}
+                    if self.om.api_key: headers["Authorization"] = f"Bearer {self.om.api_key}"
+                    res = requests.get(f"{self.om.url}/api/temporal/edge", params={"source_id": source_id}, headers=headers)
+                    res.raise_for_status()
+                    return res.json()["edges"]
+                return temporal_memory.get_edges(source_id)
+
+            def get_related_facts(self, fact_id, relation_type=None, at=None):
+                if self.om.mode == "remote":
+                    params = {"fact_id": fact_id}
+                    if relation_type: params["relation_type"] = relation_type
+                    if at: params["at"] = at
+                    headers = {}
+                    if self.om.api_key: headers["Authorization"] = f"Bearer {self.om.api_key}"
+                    res = requests.get(f"{self.om.url}/api/temporal/related", params=params, headers=headers)
+                    res.raise_for_status()
+                    return res.json()["related"]
+                return temporal_memory.get_related_facts(fact_id, relation_type, at)
+
+            def search_facts(self, pattern, field="subject", at=None):
+                if self.om.mode == "remote":
+                    params = {"pattern": pattern, "field": field}
+                    if at: params["at"] = at
+                    headers = {}
+                    if self.om.api_key: headers["Authorization"] = f"Bearer {self.om.api_key}"
+                    res = requests.get(f"{self.om.url}/api/temporal/search", params=params, headers=headers)
+                    res.raise_for_status()
+                    return res.json()["facts"]
+                return temporal_memory.search_facts(pattern, field, at)
+
+            def get_subject_timeline(self, subject, predicate=None):
+                if self.om.mode == "remote":
+                    params = {"subject": subject}
+                    if predicate: params["predicate"] = predicate
+                    headers = {}
+                    if self.om.api_key: headers["Authorization"] = f"Bearer {self.om.api_key}"
+                    res = requests.get(f"{self.om.url}/api/temporal/timeline", params=params, headers=headers)
+                    res.raise_for_status()
+                    return res.json()["timeline"]
+                return temporal_memory.get_subject_timeline(subject, predicate)
+
+            def get_changes_in_window(self, start, end, subject=None):
+                if self.om.mode == "remote":
+                    params = {"start": start, "end": end}
+                    if subject: params["subject"] = subject
+                    headers = {}
+                    if self.om.api_key: headers["Authorization"] = f"Bearer {self.om.api_key}"
+                    res = requests.get(f"{self.om.url}/api/temporal/changes", params=params, headers=headers)
+                    res.raise_for_status()
+                    return res.json()["timeline"]
+                return temporal_memory.get_changes_in_window(start, end, subject)
+
+            def get_change_frequency(self, subject, predicate, window_days=30):
+                if self.om.mode == "remote":
+                    params = {"subject": subject, "predicate": predicate, "window_days": window_days}
+                    headers = {}
+                    if self.om.api_key: headers["Authorization"] = f"Bearer {self.om.api_key}"
+                    res = requests.get(f"{self.om.url}/api/temporal/frequency", params=params, headers=headers)
+                    res.raise_for_status()
+                    return res.json()["result"]
+                return temporal_memory.get_change_frequency(subject, predicate, window_days)
+
+            def compare_time_points(self, subject, time1, time2):
+                if self.om.mode == "remote":
+                    params = {"subject": subject, "time1": time1, "time2": time2}
+                    headers = {}
+                    if self.om.api_key: headers["Authorization"] = f"Bearer {self.om.api_key}"
+                    res = requests.get(f"{self.om.url}/api/temporal/compare", params=params, headers=headers)
+                    res.raise_for_status()
+                    return res.json()["result"]
+                return temporal_memory.compare_time_points(subject, time1, time2)
+
+            def get_volatile_facts(self, subject=None, limit=10):
+                if self.om.mode == "remote":
+                    params = {"limit": limit}
+                    if subject: params["subject"] = subject
+                    headers = {}
+                    if self.om.api_key: headers["Authorization"] = f"Bearer {self.om.api_key}"
+                    res = requests.get(f"{self.om.url}/api/temporal/volatile", params=params, headers=headers)
+                    res.raise_for_status()
+                    return res.json()["result"]
+                return temporal_memory.get_volatile_facts(subject, limit)
+
+        return TemporalWrapper(self)
+
+    def _create_lang_graph_wrapper(self):
+        class LangGraphWrapper:
+            def __init__(self, om):
+                self.om = om
+
+            def store(self, node, content, namespace=None, graph_id=None, tags=None, metadata=None, reflective=None, user_id=None):
+                if self.om.mode == "remote":
+                    payload = {"node": node, "content": content, "namespace": namespace, "graph_id": graph_id, "tags": tags, "metadata": metadata, "reflective": reflective, "user_id": user_id}
+                    headers = {"Content-Type": "application/json"}
+                    if self.om.api_key: headers["Authorization"] = f"Bearer {self.om.api_key}"
+                    res = requests.post(f"{self.om.url}/api/lg/store", json=payload, headers=headers)
+                    res.raise_for_status()
+                    return res.json()
+                raise NotImplementedError("LangGraph local mode not fully implemented in SDK yet. Use remote mode.")
+
+            def retrieve(self, node, query=None, namespace=None, graph_id=None, limit=None):
+                if self.om.mode == "remote":
+                    payload = {"node": node, "query": query, "namespace": namespace, "graph_id": graph_id, "limit": limit}
+                    headers = {"Content-Type": "application/json"}
+                    if self.om.api_key: headers["Authorization"] = f"Bearer {self.om.api_key}"
+                    res = requests.post(f"{self.om.url}/api/lg/retrieve", json=payload, headers=headers)
+                    res.raise_for_status()
+                    return res.json()
+                raise NotImplementedError("LangGraph local mode not implemented.")
+
+            def context(self, namespace=None, graph_id=None, limit=None):
+                if self.om.mode == "remote":
+                    params = {}
+                    if namespace: params["namespace"] = namespace
+                    if graph_id: params["graph_id"] = graph_id
+                    if limit: params["limit"] = limit
+                    headers = {}
+                    if self.om.api_key: headers["Authorization"] = f"Bearer {self.om.api_key}"
+                    res = requests.get(f"{self.om.url}/api/lg/context", params=params, headers=headers)
+                    res.raise_for_status()
+                    return res.json()
+                raise NotImplementedError("LangGraph local mode not implemented.")
+
+        return LangGraphWrapper(self)
+
+    def _create_compression_wrapper(self):
+        class CompressionWrapper:
+            def __init__(self, om):
+                self.om = om
+
+            def compress(self, content):
+                if self.om.mode == "remote":
+                    payload = {"content": content}
+                    headers = {"Content-Type": "application/json"}
+                    if self.om.api_key: headers["Authorization"] = f"Bearer {self.om.api_key}"
+                    res = requests.post(f"{self.om.url}/api/compression/compress", json=payload, headers=headers)
+                    res.raise_for_status()
+                    return res.json()
+                raise NotImplementedError("Compression local mode not implemented.")
+
+        return CompressionWrapper(self)
 
     def add(self, content, tags=None, metadata=None, userId=None, salience=None, decayLambda=None):
         # Wrapper to run async add in sync context if needed, or just use async
@@ -233,7 +428,7 @@ class OpenMemory:
         headers = {"Content-Type": "application/json"}
         if self.api_key: headers["Authorization"] = f"Bearer {self.api_key}"
         
-        res = requests.post(f"{self.url}/memory/add", json=payload, headers=headers)
+        res = requests.post(f"{self.url}/api/memory/add", json=payload, headers=headers)
         res.raise_for_status()
         return res.json()
 
@@ -243,14 +438,14 @@ class OpenMemory:
         headers = {"Content-Type": "application/json"}
         if self.api_key: headers["Authorization"] = f"Bearer {self.api_key}"
         
-        res = requests.post(f"{self.url}/memory/query", json=payload, headers=headers)
+        res = requests.post(f"{self.url}/api/memory/query", json=payload, headers=headers)
         res.raise_for_status()
         return res.json()
 
     def _remote_delete(self, id):
         headers = {}
         if self.api_key: headers["Authorization"] = f"Bearer {self.api_key}"
-        res = requests.delete(f"{self.url}/memory/{id}", headers=headers)
+        res = requests.delete(f"{self.url}/api/memory/{id}", headers=headers)
         res.raise_for_status()
 
     def _remote_get_all(self, limit, offset, sector, userId):
@@ -260,14 +455,14 @@ class OpenMemory:
         headers = {}
         if self.api_key: headers["Authorization"] = f"Bearer {self.api_key}"
         
-        res = requests.get(f"{self.url}/memory/all", params=params, headers=headers)
+        res = requests.get(f"{self.url}/api/memory/all", params=params, headers=headers)
         res.raise_for_status()
         return res.json()
 
     def _remote_get_user_summary(self, user_id):
         headers = {}
         if self.api_key: headers["Authorization"] = f"Bearer {self.api_key}"
-        res = requests.get(f"{self.url}/users/{user_id}/summary", headers=headers)
+        res = requests.get(f"{self.url}/api/users/{user_id}/summary", headers=headers)
         if res.status_code == 404: return None
         res.raise_for_status()
         return res.json()
@@ -276,7 +471,7 @@ class OpenMemory:
         payload = {"id": id, "boost": boost}
         headers = {"Content-Type": "application/json"}
         if self.api_key: headers["Authorization"] = f"Bearer {self.api_key}"
-        requests.post(f"{self.url}/memory/reinforce", json=payload, headers=headers).raise_for_status()
+        requests.post(f"{self.url}/api/memory/reinforce", json=payload, headers=headers).raise_for_status()
 
     def _remote_ingest(self, content, contentType, metadata, userId, config):
         payload = {
@@ -288,7 +483,7 @@ class OpenMemory:
         }
         headers = {"Content-Type": "application/json"}
         if self.api_key: headers["Authorization"] = f"Bearer {self.api_key}"
-        res = requests.post(f"{self.url}/memory/ingest", json=payload, headers=headers)
+        res = requests.post(f"{self.url}/api/memory/ingest", json=payload, headers=headers)
         res.raise_for_status()
         return res.json()
 
@@ -301,13 +496,13 @@ class OpenMemory:
         }
         headers = {"Content-Type": "application/json"}
         if self.api_key: headers["Authorization"] = f"Bearer {self.api_key}"
-        res = requests.post(f"{self.url}/memory/ingest/url", json=payload, headers=headers)
+        res = requests.post(f"{self.url}/api/memory/ingest/url", json=payload, headers=headers)
         res.raise_for_status()
         return res.json()
 
     def _remote_delete_user_memories(self, user_id):
         headers = {}
         if self.api_key: headers["Authorization"] = f"Bearer {self.api_key}"
-        res = requests.delete(f"{self.url}/users/{user_id}/memories", headers=headers)
+        res = requests.delete(f"{self.url}/api/users/{user_id}/memories", headers=headers)
         res.raise_for_status()
         return res.json().get("deleted", 0)

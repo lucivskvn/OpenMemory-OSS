@@ -122,7 +122,7 @@ services:
       - openmemory_data:/data
     restart: unless-stopped
     healthcheck:
-      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:8080/health']
+      test: ['CMD', 'wget', '--no-verbose', '--tries=1', '--spider', 'http://localhost:8080/api/system/health']
       interval: 30s
       timeout: 10s
       retries: 3

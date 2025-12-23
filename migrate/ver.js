@@ -1,56 +1,69 @@
-class V {
-  constructor(c) {
+class Verifier {
+  constructor(config) {
     const port = process.env.OM_PORT || '8080';
-    this.u = c.omu || `http://localhost:${port}`;
-    this.k = c.omk || process.env.OM_API_KEY || '';
-    this.h = {
+    this.baseUrl = config.openMemoryUrl || `http://localhost:${port}`;
+    this.apiKey = config.openMemoryKey || process.env.OM_API_KEY || '';
+    this.headers = {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${this.k}`,
+      Authorization: `Bearer ${this.apiKey}`,
     };
   }
-  async ver(st) {
-    const w = [];
+
+  async verify(stats) {
+    const warnings = [];
     try {
       console.log('[VERIFY] Checking memory count via API...');
-      const r = await fetch(`${this.u}/memory/search`, {
+      // Updated to use correct endpoint and payload for search/query
+      const response = await fetch(`${this.baseUrl}/api/memory/query`, {
         method: 'POST',
-        headers: this.h,
-        body: JSON.stringify({ query: '', limit: 10000 }),
+        headers: this.headers,
+        body: JSON.stringify({ query: '', k: 10000 }),
       });
-      if (!r.ok) {
+
+      if (!response.ok) {
         return {
           ok: false,
-          w: [`API verification unavailable: ${r.status}`],
+          warnings: [`API verification unavailable: ${response.status}`],
+          w: [`API verification unavailable: ${response.status}`]
         };
       }
-      const d = await r.json();
-      const mc = d.memories?.length || 0;
-      console.log(`[VERIFY] Found ${mc} memories in OpenMemory`);
-      if (Math.abs(mc - st.m) > st.m * 0.05)
-        w.push(`Memory count mismatch: expected ${st.m}, got ${mc}`);
+
+      const data = await response.json();
+      const memoryCount = data.matches?.length || 0;
+
+      console.log(`[VERIFY] Found ${memoryCount} memories in OpenMemory`);
+
+      const expected = stats.imported || stats.m;
+      if (Math.abs(memoryCount - expected) > expected * 0.05)
+        warnings.push(`Memory count mismatch: expected ${expected}, got ${memoryCount}`);
+
       console.log('[VERIFY] Checking for duplicates...');
-      const dups = await this.chkdup(d.memories || []);
-      if (dups > mc * 0.01)
-        w.push(`High duplicate rate: ${((dups / mc) * 100).toFixed(1)}%`);
-      return { ok: w.length === 0, w };
+      const duplicates = await this.checkDuplicates(data.matches || []);
+      if (duplicates > memoryCount * 0.01)
+        warnings.push(`High duplicate rate: ${((duplicates / memoryCount) * 100).toFixed(1)}%`);
+
+      return { ok: warnings.length === 0, warnings, w: warnings };
     } catch (e) {
-      return { ok: false, w: [`Verification failed: ${e.message}`] };
+      return { ok: false, warnings: [`Verification failed: ${e.message}`], w: [`Verification failed: ${e.message}`] };
     }
   }
-  async chkdup(mm) {
-    const h = new Set();
-    let d = 0;
-    for (const m of mm) {
-      const hh = this.hash(m.content);
-      if (h.has(hh)) d++;
-      else h.add(hh);
+
+  async checkDuplicates(memories) {
+    const hashes = new Set();
+    let duplicates = 0;
+    for (const m of memories) {
+      const h = this.hash(m.content);
+      if (hashes.has(h)) duplicates++;
+      else hashes.add(h);
     }
-    return d;
+    return duplicates;
   }
+
   hash(s) {
     let h = 0;
     for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0;
     return h;
   }
 }
-module.exports = V;
+
+module.exports = Verifier;

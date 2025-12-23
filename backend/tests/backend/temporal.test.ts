@@ -1,49 +1,28 @@
-import { describe, test, expect } from "bun:test";
-
-const BASE_URL = 'http://localhost:8080';
-const API_KEY = 'your';
-
-async function makeRequest(url: string, options: any = {}) {
-    const res = await fetch(url, {
-        method: options.method || 'GET',
-        headers: {
-            ...options.headers,
-            'Authorization': `Bearer ${API_KEY}`,
-            'Content-Type': 'application/json'
-        },
-        body: options.body
-    });
-    let data;
-    try {
-        data = await res.json();
-    } catch {
-        data = {};
-    }
-    return {
-        status: res.status,
-        data,
-        ok: res.ok
-    };
-}
+import { describe, expect, test, beforeAll, afterAll } from "bun:test";
+import { app } from "../../src/server"; // Import app to test routes
 
 describe("Temporal API", () => {
     test("Create Fact", async () => {
-        const res = await makeRequest(`${BASE_URL}/temporal/fact`, {
-            method: 'POST',
+        const res = await app.handle(new Request("http://localhost:8080/api/temporal/fact", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-                subject: "User",
-                predicate: "is_testing",
-                object: "Temporal API",
-                valid_from: Date.now()
+                subject: "TestSub",
+                predicate: "is_a",
+                object: "TestObj"
             })
-        });
+        }));
         expect(res.status).toBe(200);
-        expect(res.data).toHaveProperty('ok', true);
+        const data = await res.json();
+        expect(data.ok).toBe(true);
+        expect(data.id).toBeString();
     });
 
     test("Get Facts", async () => {
-        const res = await makeRequest(`${BASE_URL}/temporal/fact?subject=User`);
+        const res = await app.handle(new Request("http://localhost:8080/api/temporal/fact?subject=TestSub"));
         expect(res.status).toBe(200);
-        expect(Array.isArray(res.data.facts)).toBe(true);
+        const data = await res.json();
+        expect(data.facts).toBeArray();
+        expect(data.facts.length).toBeGreaterThan(0);
     });
 });

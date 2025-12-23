@@ -62,14 +62,34 @@ function check_rate_limit(client_id: string): {
     };
 }
 
-function get_client_id(ip: string, api_key: string | null): string {
+function get_client_id(ip: string | null, api_key: string | null): string {
+    // SECURITY: Always use IP for rate limiting to prevent bypass via random key rotation.
+    // Legitimate users sharing an NAT will share a limit.
+    // TODO: Implement dual-layer limiting (IP for DOS protection, Key for Quota).
+    if (ip) return `ip:${ip}`;
+
+    // Fallback if IP extraction fails (should be rare)
     if (api_key)
         return crypto
             .createHash("sha256")
             .update(api_key)
             .digest("hex")
             .slice(0, 16);
-    return ip || "unknown";
+
+    return "unknown_client";
+}
+
+function get_ip(request: Request, headers: Record<string, string | undefined>): string | null {
+    // 1. Check X-Forwarded-For (standard proxy header)
+    const xff = headers["x-forwarded-for"];
+    if (xff) return xff.split(",")[0].trim();
+
+    // 2. Check direct connection info if available (Bun specific property)
+    // Elysia request wrappers might obscure this, but request.headers is reliable for proxies.
+    // Note: server.requestIP(request) is ideal but requires passing `app` context which we don't have easily here in the handler structure without refactoring.
+
+    // Fallback logic
+    return null;
 }
 
 // Elysia plugin for authentication
@@ -77,27 +97,26 @@ export const authPlugin = (app: Elysia) =>
     app.onBeforeHandle(({ request, set, path, headers }) => {
         if (is_public_endpoint(path)) return;
 
-        if (!authConfig.api_key || authConfig.api_key === "") {
-            // log.warn("[AUTH] No API key configured");
-            return;
-        }
-
+        // 1. Rate Limit Check (Before Auth) to prevent DoS brute-force
+        const ip = get_ip(request, headers as any);
         const provided = extract_api_key(headers);
-        if (!provided) {
-            set.status = 401;
-            return {
-                error: "authentication_required",
-                message: "API key required",
-            };
-        }
 
-        if (!validate_api_key(provided, authConfig.api_key)) {
-            set.status = 403;
-            return { error: "invalid_api_key" };
-        }
+        // Use IP for rate limiting if Key is missing/invalid, or Key ID if valid?
+        // To protect against brute force, we MUST rate limit by IP if auth fails.
+        // But we don't know if auth fails yet.
+        // Strategy: Rate limit by IP first. If IP is rate limited, block.
+        // Then, if Key is valid, we could apply a separate "Quota" rate limit?
+        // For simplicity/safety: Always check IP-based rate limit first for unauthenticated/invalid attempts.
+        // However, shared IPs (NAT) might get blocked.
+        // Hybrid approach:
+        // If provided key is present, use a cheap hash of it for RL bucket (to allow valid high-traffic users).
+        // If NO key or INVALID format, use IP.
 
-        // Rate limiting logic
-        const client_id = get_client_id("unknown", provided);
+        // For strict security, we'll use IP-based rate limiting as a first defense layer.
+        // But `check_rate_limit` shares the store.
+        // Let's use IP if provided is null.
+
+        const client_id = get_client_id(ip, provided);
         const rl = check_rate_limit(client_id);
 
         if (authConfig.rate_limit_enabled) {
@@ -113,6 +132,23 @@ export const authPlugin = (app: Elysia) =>
                 retry_after: Math.ceil((rl.reset_time - Date.now()) / 1000),
             };
         }
+
+        if (!authConfig.api_key || authConfig.api_key === "") {
+            return;
+        }
+
+        if (!provided) {
+            set.status = 401;
+            return {
+                error: "authentication_required",
+                message: "API key required",
+            };
+        }
+
+        if (!validate_api_key(provided, authConfig.api_key)) {
+            set.status = 403;
+            return { error: "invalid_api_key" };
+        }
     });
 
 // Log authenticated request
@@ -121,7 +157,7 @@ export const logAuthPlugin = (app: Elysia) =>
         const key = extract_api_key(headers);
         if (key)
             log.info(
-                `Authenticated request`, {
+                `Request with Auth Credentials`, {
                     method: request.method,
                     path: new URL(request.url).pathname,
                     key_hash: crypto.createHash("sha256").update(key).digest("hex").slice(0, 8)

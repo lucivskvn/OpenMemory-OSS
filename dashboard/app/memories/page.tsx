@@ -60,8 +60,8 @@ export default function memories() {
         try {
             const offset = (page - 1) * limit
             const url = filt !== "all"
-                ? `${API_BASE_URL}/memory/all?l=${limit}&u=${offset}&sector=${filt}`
-                : `${API_BASE_URL}/memory/all?l=${limit}&u=${offset}`
+                ? `${API_BASE_URL}/api/memory/all?l=${limit}&u=${offset}&sector=${filt}`
+                : `${API_BASE_URL}/api/memory/all?l=${limit}&u=${offset}`
             const res = await fetch(url, { headers: getHeaders() })
             if (!res.ok) throw new Error('failed to fetch memories')
             const data = await res.json()
@@ -81,7 +81,7 @@ export default function memories() {
         setloading(true)
         seterror(null)
         try {
-            const res = await fetch(`${API_BASE_URL}/memory/query`, {
+            const res = await fetch(`${API_BASE_URL}/api/memory/query`, {
                 method: 'POST',
                 headers: getHeaders(),
                 body: JSON.stringify({
@@ -111,7 +111,7 @@ export default function memories() {
 
     async function handleAddMemory(content: string, sector: string, tags: string) {
         try {
-            const res = await fetch(`${API_BASE_URL}/memory/add`, {
+            const res = await fetch(`${API_BASE_URL}/api/memory/add`, {
                 method: 'POST',
                 headers: getHeaders(),
                 body: JSON.stringify({
@@ -130,7 +130,7 @@ export default function memories() {
 
     async function handleEditMemory(id: string, content: string, tags: string) {
         try {
-            const res = await fetch(`${API_BASE_URL}/memory/${id}`, {
+            const res = await fetch(`${API_BASE_URL}/api/memory/${id}`, {
                 method: 'PATCH',
                 headers: getHeaders(),
                 body: JSON.stringify({
@@ -149,7 +149,7 @@ export default function memories() {
 
     async function handleDeleteMemory(id: string) {
         try {
-            const res = await fetch(`${API_BASE_URL}/memory/${id}`, {
+            const res = await fetch(`${API_BASE_URL}/api/memory/${id}`, {
                 method: 'DELETE',
                 headers: getHeaders(),
             })

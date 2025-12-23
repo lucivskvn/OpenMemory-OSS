@@ -84,7 +84,7 @@ const addmem = async (txt, opts) => {
   const body = { content: txt };
   if (opts.usr) body.user_id = opts.usr;
   if (opts.tags) body.tags = opts.tags.split(',');
-  const r = await req('/memory/add', {
+  const r = await req('/api/memory/add', {
     method: 'POST',
     body: JSON.stringify(body),
   });
@@ -97,16 +97,17 @@ const addmem = async (txt, opts) => {
 const querymem = async (txt, opts) => {
   const body = { query: txt, k: opts.lim || 10 };
   if (opts.usr) body.filters = { user_id: opts.usr };
-  const r = await req('/memory/query', {
+  const r = await req('/api/memory/query', {
     method: 'POST',
     body: JSON.stringify(body),
   });
-  console.log(`[results] ${r.memories.length} found\n`);
-  r.memories.forEach((m, i) => {
+  const matches = r.matches || [];
+  console.log(`[results] ${matches.length} found\n`);
+  matches.forEach((m, i) => {
     console.log(`${i + 1}. [${m.primary_sector}] ${m.content}`);
     console.log(`   id: ${m.id}`);
     console.log(
-      `   score: ${m.score?.toFixed(3) || 'n/a'} | sal: ${m.salience.toFixed(
+      `   score: ${m.score?.toFixed(3) || 'n/a'} | sal: ${m.salience?.toFixed(
         3,
       )}`,
     );
@@ -120,69 +121,66 @@ const listmem = async (opts) => {
   const off = 0;
   let r;
   if (opts.usr) {
-    r = await req(`/users/${opts.usr}/memories?l=${lim}&u=${off}`);
+    r = await req(`/api/users/${opts.usr}/memories?limit=${lim}&offset=${off}`);
   } else {
-    r = await req(`/memory/all?limit=${lim}&offset=${off}`);
+    r = await req(`/api/memory/all?limit=${lim}&offset=${off}`);
   }
   const items = r.items || r.memories || [];
   console.log(`[memories] showing ${items.length}\n`);
   items.forEach((m, i) => {
     console.log(`${i + 1}. [${m.primary_sector}] ${m.content}`);
-    console.log(`   id: ${m.id} | user: ${opts.usr || 'system'}`);
-    console.log(`   sal: ${m.salience.toFixed(3)}`);
+    console.log(`   id: ${m.id} | user: ${opts.usr || m.user_id || 'system'}`);
+    console.log(`   sal: ${m.salience?.toFixed(3)}`);
     if (m.tags) console.log(`   tags: ${m.tags}`);
     console.log();
   });
 };
 
 const delmem = async (id) => {
-  await req(`/memory/${id}`, { method: 'DELETE' });
+  await req(`/api/memory/${id}`, { method: 'DELETE' });
   console.log(`[ok] memory ${id} deleted`);
 };
 
 const getstats = async () => {
-  const r = await req('/dashboard/stats');
+  const r = await req('/api/dashboard/stats');
+  const ov = r.overview || {};
   console.log('[stats]\n');
-  console.log(`total memories: ${r.totalMemories || 0}`);
-  console.log(`recent memories (24h): ${r.recentMemories || 0}`);
-  console.log(`avg salience: ${r.avgSalience || 'n/a'}`);
-  console.log(`\nmemories by sector:`);
-  Object.entries(r.sectorCounts || {}).forEach(([sec, cnt]) => {
-    console.log(`  ${sec}: ${cnt}`);
-  });
-  if (r.decayStats) {
-    console.log(`\ndecay stats:`);
-    console.log(`  avg lambda: ${r.decayStats.avgLambda}`);
-    console.log(`  min salience: ${r.decayStats.minSalience}`);
-    console.log(`  max salience: ${r.decayStats.maxSalience}`);
+  console.log(`total memories: ${ov.total_memories || 0}`);
+  console.log(`total users: ${ov.total_users || 0}`);
+  console.log(`active segments: ${ov.active_segments || 0}`);
+  console.log(`db size: ${(ov.db_size_bytes / 1024 / 1024).toFixed(2)} MB`);
+
+  if (r.activity) {
+    console.log(`\nrecent activity (last 60m): ${r.activity.length} events`);
   }
 };
 
 const listusers = async () => {
-  const r = await req('/users');
+  const r = await req('/api/users');
   console.log(`[users] ${r.users.length} found\n`);
   r.users.forEach((u, i) => {
     console.log(`${i + 1}. ${u.user_id}`);
-    console.log(`   memories: ${u.memory_count || 0}`);
     console.log(`   reflections: ${u.reflection_count || 0}`);
+    console.log(`   last active: ${new Date(u.updated_at).toLocaleString()}`);
     if (u.summary) console.log(`   summary: ${u.summary.substring(0, 100)}...`);
     console.log();
   });
 };
 
 const getuser = async (uid) => {
-  const r = await req(`/users/${uid}/summary`);
+  const r = await req(`/api/users/${uid}/summary`);
   console.log(`[user] ${uid}\n`);
   console.log(`summary:\n${r.summary || 'no summary'}\n`);
-  console.log(`memories: ${r.memory_count || 0}`);
   console.log(`reflections: ${r.reflection_count || 0}`);
+  console.log(`last active: ${new Date(r.updated_at).toLocaleString()}`);
 };
 
 const health = async () => {
-  const r = await req('/health');
+  const r = await req('/api/system/health');
   console.log(`[health] ${r.status}`);
   if (r.version) console.log(`version: ${r.version}`);
-  if (r.uptime) console.log(`uptime: ${Math.floor(r.uptime / 1000)}s`);
+  if (r.uptime) console.log(`uptime: ${Math.floor(r.uptime)}s`);
+  console.log(`db: ${r.db ? 'ok' : 'err'} | embed: ${r.embed ? 'ok' : 'err'}`);
 };
 
 // parse args

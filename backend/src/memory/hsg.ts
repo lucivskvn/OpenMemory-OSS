@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
 import { canonical_token_set } from "../utils/text";
-import { inc_q, dec_q, on_query_hit } from "./decay";
+import { inc_q, dec_q, on_query_hit } from "../ops/dynamics";
 import { env, tier } from "../core/cfg";
 import { cos_sim, buf_to_vec, vec_to_buf } from "../utils/index";
+import { log } from "../core/log";
+
 export interface sector_cfg {
     model: string;
     decay_lambda: number;
@@ -835,12 +837,24 @@ export async function hsg_query(
         // Fetch all memory details in batch
         const all_mem_ids = Array.from(ids);
         const memory_map = new Map<string, any>();
+        const vector_map = new Map<string, Array<{ sector: string }>>();
 
         // Use batch retrieval instead of N+1 loop
         if (all_mem_ids.length > 0) {
-            const fetched = await q.get_mems_by_ids.all(all_mem_ids);
-            for (const m of fetched) {
+            const [fetched_mems, fetched_vecs] = await Promise.all([
+                q.get_mems_by_ids.all(all_mem_ids),
+                vector_store.getVectorsForMemoryIds(all_mem_ids)
+            ]);
+
+            for (const m of fetched_mems) {
                 memory_map.set(m.id, m);
+            }
+
+            for (const v of fetched_vecs) {
+                if (!vector_map.has(v.id)) {
+                    vector_map.set(v.id, []);
+                }
+                vector_map.get(v.id)!.push({ sector: v.sector });
             }
         }
 
@@ -915,8 +929,9 @@ export async function hsg_query(
                 keyword_boost,
                 tag_match,
             );
-            const msec = await vector_store.getVectorsById(mid);
-            const sl = msec.map((v) => v.sector);
+
+            const msec_list = vector_map.get(mid) || [];
+            const sl = msec_list.map((v) => v.sector);
             res.push({
                 id: mid,
                 content: m.content,
@@ -1038,8 +1053,8 @@ async function ensure_user_exists(user_id: string): Promise<void> {
             );
         }
     } catch (error) {
-        console.error(`[HSG] Failed to ensure user ${user_id} exists:`, error);
-        // Don't throw, proceed with memory creation (legacy behavior)
+        log.error(`[HSG] Failed to ensure user ${user_id} exists`, { error });
+        // Don't throw, proceed with memory creation (legacy behavior for resilience)
     }
 }
 
@@ -1097,8 +1112,7 @@ export async function add_hsg_memory(
         const seg_cnt = seg_cnt_res?.c ?? 0;
         if (seg_cnt >= env.seg_size) {
             cur_seg++;
-            // Use stderr for debug output to avoid breaking MCP JSON-RPC protocol
-            console.error(
+            log.info(
                 `[HSG] Rotated to segment ${cur_seg} (previous segment full: ${seg_cnt} memories)`,
             );
         }

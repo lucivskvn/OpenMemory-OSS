@@ -1,52 +1,62 @@
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, beforeAll } from "bun:test";
+import { Elysia } from "elysia";
+import { ide } from "../../src/server/routes/ide";
+import { env } from "../../src/core/cfg";
 
-const BASE_URL = 'http://localhost:8080';
-const API_KEY = 'your';
-
-async function makeRequest(url: string, options: any = {}) {
-    const res = await fetch(url, {
-        method: options.method || 'GET',
-        headers: {
-            ...options.headers,
-            'Authorization': `Bearer ${API_KEY}`,
-            'Content-Type': 'application/json'
-        },
-        body: options.body
-    });
-    let data;
-    try {
-        data = await res.json();
-    } catch {
-        data = {};
-    }
-    return {
-        status: res.status,
-        data,
-        ok: res.ok
-    };
-}
+// Force enable IDE mode for testing
+env.ide_mode = true;
 
 describe('IDE Integration Real', () => {
+    let app: Elysia;
+
+    beforeAll(() => {
+        app = new Elysia().use(ide);
+    });
+
     test('Store IDE Event', async () => {
-        // Only works if IDE mode enabled (env.OM_IDE_MODE=true)
-        // Default might be false.
-        // But implementation checks env.ide_mode
-        const res = await makeRequest(`${BASE_URL}/ide/events`, {
+        const res = await app.handle(new Request("http://localhost/api/ide/events", {
             method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
             body: JSON.stringify({
-                event: "file_save",
+                event: "save",
                 metadata: { file: "test.ts" },
                 session_id: "test-sess"
             })
-        });
-
-        if (res.status === 404) {
-            console.warn("IDE mode disabled, skipping");
-            return;
-        }
+        }));
 
         expect(res.status).toBe(200);
-        expect(res.data).toHaveProperty('ok', true);
-        expect(res.data).toHaveProperty('id');
+        const data = await res.json();
+        expect(data).toHaveProperty('ok', true);
+        expect(data).toHaveProperty('id');
+    });
+
+    test('Query Context', async () => {
+        // First create an event to have something in context
+        await app.handle(new Request("http://localhost/api/ide/events", {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                event: "edit",
+                content: "function test() {}",
+                metadata: { file: "test.ts" },
+                session_id: "test-sess"
+            })
+        }));
+
+        const res = await app.handle(new Request("http://localhost/api/ide/context", {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                query: "test function",
+                session_id: "test-sess"
+            })
+        }));
+
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(data).toHaveProperty('memories');
+        expect(Array.isArray(data.memories)).toBe(true);
     });
 });
