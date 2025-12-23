@@ -42,8 +42,8 @@ export default function decay() {
         seterror(null)
         try {
             const [statsres, memsres] = await Promise.all([
-                fetch(`${API_BASE_URL}/dashboard/stats`, { headers: getHeaders() }),
-                fetch(`${API_BASE_URL}/memory/all?l=100&u=0`, { headers: getHeaders() })
+                fetch(`${API_BASE_URL}/api/dashboard/stats`, { headers: getHeaders() }),
+                fetch(`${API_BASE_URL}/api/memory/all?l=100&u=0`, { headers: getHeaders() })
             ])
 
             if (!statsres.ok || !memsres.ok) throw new Error('failed to fetch data')

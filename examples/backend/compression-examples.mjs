@@ -104,7 +104,7 @@ async function stats() {
 async function addMem() {
   const c =
     'I really think that it is very important that we basically need to ensure that the user experience is optimized at this point in time. In order to accomplish this goal, we should focus on implementing features that will actually improve the overall performance of the application.';
-  const r = await fetch(`${URL}/memory/add`, {
+  const r = await fetch(`${URL}/api/memory/add`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

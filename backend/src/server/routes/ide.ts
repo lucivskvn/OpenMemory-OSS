@@ -1,5 +1,5 @@
 import { env } from "../../core/cfg";
-import { add_hsg_memory } from "../../memory/hsg";
+import { add_hsg_memory, hsg_query } from "../../memory/hsg";
 import { j } from "../../utils";
 import { Elysia, t } from "elysia";
 import { log } from "../../core/log";
@@ -8,7 +8,7 @@ import crypto from "crypto";
 export const ide = (app: Elysia) => {
     if (!env.ide_mode) return;
 
-    app.group("/ide", (app) =>
+    app.group("/api/ide", (app) =>
         app
             .post("/events", async ({ body, set }) => {
                 const b = body;
@@ -44,28 +44,52 @@ export const ide = (app: Elysia) => {
                         t.Literal("pattern_detected"), t.Literal("api_call"),
                         t.Literal("definition"), t.Literal("reflection")
                     ]),
-                    file: t.Optional(t.String()),
-                    snippet: t.Optional(t.String()),
-                    comment: t.Optional(t.String()),
-                    metadata: t.Optional(t.Any()), // Made optional to be safe
-                    session_id: t.Optional(t.String())
+                    file_path: t.Optional(t.String()),
+                    language: t.Optional(t.String()),
+                    content: t.Optional(t.String()),
+                    metadata: t.Optional(t.Any()),
+                    session_id: t.Optional(t.String()),
+                    user_id: t.Optional(t.String()),
+                    timestamp: t.Optional(t.String())
                 })
             })
-            .get("/context", async ({ query, set }) => {
+            .post("/context", async ({ body, set }) => {
+                const b = body;
                 try {
-                    // Placeholder logic
-                    return { context: [] };
+                    // Use hsg_query to find relevant memories
+                    const k = b.limit || 10;
+                    const filters: any = {};
+                    if (b.session_id) filters.session_id = b.session_id; // hsg_query might not support session_id natively yet, but we can filter or use tag matching
+
+                    // Actually hsg_query supports filtering by sectors/user_id etc.
+                    // Ideally we should use session_id as a tag filter?
+                    // "session:123"
+
+                    if (b.session_id) {
+                        // TODO: Implement tag filtering in hsg_query interface properly
+                    }
+
+                    const memories = await hsg_query(b.query, k);
+
+                    return {
+                        memories: memories.map((m: any) => ({
+                            id: m.id,
+                            content: m.content,
+                            score: m.score,
+                            sector: m.primary_sector
+                        }))
+                    };
                 } catch (err: any) {
                     log.error("Error retrieving IDE context", { error: err.message });
                     set.status = 500;
                     return { err: "internal" };
                 }
             }, {
-                query: t.Object({
+                body: t.Object({
                     query: t.String(),
-                    k: t.Optional(t.Numeric()),
+                    limit: t.Optional(t.Numeric()),
                     session_id: t.Optional(t.String()),
-                    file_filter: t.Optional(t.String()),
+                    file_path: t.Optional(t.String()),
                     include_patterns: t.Optional(t.Boolean()),
                     include_knowledge: t.Optional(t.Boolean())
                 })
@@ -74,7 +98,7 @@ export const ide = (app: Elysia) => {
                 const b = body;
                 try {
                     const id = crypto.randomUUID();
-                    log.info("IDE Session started", { user: b.user, project: b.project, id });
+                    log.info("IDE Session started", { user: b.user_id, project: b.project_name, id });
                     return { session_id: id };
                 } catch (err: any) {
                     log.error("Error starting IDE session", { error: err.message });
@@ -83,9 +107,9 @@ export const ide = (app: Elysia) => {
                 }
             }, {
                 body: t.Object({
-                    user: t.Optional(t.String()),
-                    project: t.Optional(t.String()),
-                    ide: t.Optional(t.String())
+                    user_id: t.Optional(t.String()),
+                    project_name: t.Optional(t.String()),
+                    ide_name: t.Optional(t.String())
                 })
             })
             .post("/session/end", async ({ body, set }) => {
@@ -100,17 +124,23 @@ export const ide = (app: Elysia) => {
                 }
             }, {
                 body: t.Object({
-                    session_id: t.String()
+                    session_id: t.String(),
+                    user_id: t.Optional(t.String())
                 })
             })
-            .post("/patterns", async ({ body, set }) => {
+            .get("/patterns/:sid", async ({ params, set }) => {
                 try {
+                    // Placeholder for now
                     return { patterns: [] };
                 } catch (err: any) {
-                    log.error("Error detecting patterns", { error: err.message });
+                    log.error("Error retrieving patterns", { error: err.message });
                     set.status = 500;
                     return { err: "internal" };
                 }
+            }, {
+                params: t.Object({
+                    sid: t.String()
+                })
             })
     );
 };

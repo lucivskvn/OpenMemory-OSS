@@ -146,20 +146,28 @@ if (is_pg) {
     };
 
     let txClient: any = null;
+    let txDepth = 0;
 
     transaction = {
         begin: async () => {
-            if (txClient) throw new Error("Transaction already active");
+            if (txClient) {
+                txDepth++;
+                return;
+            }
             txClient = await (pg as any).reserve();
             await txClient.unsafe("BEGIN");
+            txDepth = 1;
         },
         commit: async () => {
             if (!txClient) return;
+            txDepth--;
+            if (txDepth > 0) return;
             try {
                 await txClient.unsafe("COMMIT");
             } finally {
                 txClient.release();
                 txClient = null;
+                txDepth = 0;
             }
         },
         rollback: async () => {
@@ -169,6 +177,7 @@ if (is_pg) {
             } finally {
                 txClient.release();
                 txClient = null;
+                txDepth = 0;
             }
         }
     };
@@ -285,15 +294,23 @@ if (is_pg) {
         return db.query(sql).all(p as any) as any[];
     };
 
+    let txDepth = 0;
     transaction = {
         begin: async () => {
-            db.run("BEGIN TRANSACTION");
+            if (txDepth === 0) {
+                db.run("BEGIN TRANSACTION");
+            }
+            txDepth++;
         },
         commit: async () => {
-            db.run("COMMIT");
+            if (txDepth > 0) txDepth--;
+            if (txDepth === 0) {
+                db.run("COMMIT");
+            }
         },
         rollback: async () => {
             db.run("ROLLBACK");
+            txDepth = 0;
         }
     };
 }
@@ -531,13 +548,14 @@ q = {
     },
     get_system_stats: {
         get: async () => {
-            const [totalMemories, totalUsers, requestStats, maintenanceStats] = await Promise.all([
+            const [totalMemories, totalUsers, requestStats, maintenanceStats, maxSeg] = await Promise.all([
                 get_async(`select count(*) as c from ${TABLE_MEMORIES}`),
                 get_async(`select count(*) as c from ${TABLE_USERS}`),
                 all_async(`select * from ${TABLE_STATS} where type='request' order by ts desc limit 60`),
-                all_async(`select * from ${TABLE_STATS} where type in ('decay','reflect','consolidate') order by ts desc limit 50`)
+                all_async(`select * from ${TABLE_STATS} where type in ('decay','reflect','consolidate') order by ts desc limit 50`),
+                get_async(`select coalesce(max(segment), 0) as max_seg from ${TABLE_MEMORIES}`)
             ]);
-            return { totalMemories, totalUsers, requestStats, maintenanceStats };
+            return { totalMemories, totalUsers, requestStats, maintenanceStats, activeSegments: maxSeg?.max_seg || 0 };
         }
     },
     upd_user_summary: {
@@ -594,8 +612,11 @@ export const log_maint_op = async (
     cnt = 1,
 ) => {
     try {
-        const sql = `insert into ${TABLE_STATS}(type,count,ts) values(?,?,?)`;
-        await run_async(sql, [type, cnt, Date.now()]);
+        await run_async(`insert into ${TABLE_STATS}(type,count,ts) values(?,?,?)`, [
+            type,
+            cnt,
+            Date.now(),
+        ]);
     } catch (e) {
         console.error("[DB] Maintenance log error:", e);
     }

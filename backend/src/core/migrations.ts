@@ -59,6 +59,50 @@ export const migrations: Migration[] = [
             `CREATE INDEX IF NOT EXISTS openmemory_stats_type_idx ON {s}(type)`,
         ],
     },
+    {
+        version: "1.3.0",
+        desc: "Temporal memory support",
+        sqlite: [
+            `CREATE TABLE IF NOT EXISTS temporal_facts(id TEXT PRIMARY KEY, subject TEXT NOT NULL, predicate TEXT NOT NULL, object TEXT NOT NULL, valid_from INTEGER NOT NULL, valid_to INTEGER, confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1), last_updated INTEGER NOT NULL, metadata TEXT, UNIQUE(subject, predicate, object, valid_from))`,
+            `CREATE TABLE IF NOT EXISTS temporal_edges(id TEXT PRIMARY KEY, source_id TEXT NOT NULL, target_id TEXT NOT NULL, relation_type TEXT NOT NULL, valid_from INTEGER NOT NULL, valid_to INTEGER, weight REAL NOT NULL, metadata TEXT, FOREIGN KEY(source_id) REFERENCES temporal_facts(id), FOREIGN KEY(target_id) REFERENCES temporal_facts(id))`,
+            `CREATE INDEX IF NOT EXISTS idx_temporal_subject ON temporal_facts(subject)`,
+            `CREATE INDEX IF NOT EXISTS idx_temporal_predicate ON temporal_facts(predicate)`,
+            `CREATE INDEX IF NOT EXISTS idx_temporal_validity ON temporal_facts(valid_from, valid_to)`,
+            `CREATE INDEX IF NOT EXISTS idx_temporal_composite ON temporal_facts(subject, predicate, valid_from, valid_to)`,
+            `CREATE INDEX IF NOT EXISTS idx_edges_source ON temporal_edges(source_id)`,
+            `CREATE INDEX IF NOT EXISTS idx_edges_target ON temporal_edges(target_id)`,
+            `CREATE INDEX IF NOT EXISTS idx_edges_validity ON temporal_edges(valid_from, valid_to)`,
+        ],
+        postgres: [
+            `CREATE TABLE IF NOT EXISTS {tf} (id TEXT PRIMARY KEY, subject TEXT NOT NULL, predicate TEXT NOT NULL, object TEXT NOT NULL, valid_from BIGINT NOT NULL, valid_to BIGINT, confidence DOUBLE PRECISION NOT NULL CHECK(confidence >= 0 AND confidence <= 1), last_updated BIGINT NOT NULL, metadata TEXT, UNIQUE(subject, predicate, object, valid_from))`,
+            `CREATE TABLE IF NOT EXISTS {te} (id TEXT PRIMARY KEY, source_id TEXT NOT NULL, target_id TEXT NOT NULL, relation_type TEXT NOT NULL, valid_from BIGINT NOT NULL, valid_to BIGINT, weight DOUBLE PRECISION NOT NULL, metadata TEXT, FOREIGN KEY(source_id) REFERENCES {tf}(id), FOREIGN KEY(target_id) REFERENCES {tf}(id))`,
+            `CREATE INDEX IF NOT EXISTS openmemory_temporal_subject_idx ON {tf}(subject)`,
+            `CREATE INDEX IF NOT EXISTS openmemory_temporal_predicate_idx ON {tf}(predicate)`,
+            `CREATE INDEX IF NOT EXISTS openmemory_temporal_validity_idx ON {tf}(valid_from, valid_to)`,
+            `CREATE INDEX IF NOT EXISTS openmemory_edges_source_idx ON {te}(source_id)`,
+            `CREATE INDEX IF NOT EXISTS openmemory_edges_target_idx ON {te}(target_id)`,
+        ],
+    },
+    {
+        version: "1.4.0",
+        desc: "Performance optimization indices",
+        sqlite: [
+            `CREATE INDEX IF NOT EXISTS idx_memories_created_at ON memories(created_at)`,
+            // Note: vectors primary key is (id, sector), covering sector searches if sector is leading?
+            // No, PK is usually indexed as declared. If PK(id, sector), it indexes ID first.
+            // We need sector index for retrieval efficiency.
+            // Wait, get_initial_schema_sqlite creates table vectors... but no index on sector?
+            // Actually check existing vector table definition in 1.2.0 or initial.
+            // 1.2.0 adds user_id index.
+            // Initial schema has: create table ... primary key(id,sector).
+            // So we add sector index.
+            `CREATE INDEX IF NOT EXISTS idx_vectors_sector ON vectors(sector)`,
+        ],
+        postgres: [
+            `CREATE INDEX IF NOT EXISTS openmemory_memories_created_at_idx ON {m}(created_at)`,
+            `CREATE INDEX IF NOT EXISTS openmemory_vectors_sector_idx ON {v}(sector)`,
+        ],
+    },
 ];
 
 export const get_initial_schema_sqlite = (vector_table: string) => [
@@ -74,8 +118,10 @@ export const get_initial_schema_sqlite = (vector_table: string) => [
     "create index if not exists idx_memories_segment on memories(segment)",
     "create index if not exists idx_memories_simhash on memories(simhash)",
     "create index if not exists idx_memories_ts on memories(last_seen_at)",
+    "create index if not exists idx_memories_created_at on memories(created_at)",
     "create index if not exists idx_memories_user on memories(user_id)",
     `create index if not exists idx_vectors_user on ${vector_table}(user_id)`,
+    `create index if not exists idx_vectors_sector on ${vector_table}(sector)`,
     "create index if not exists idx_waypoints_src on waypoints(src_id)",
     "create index if not exists idx_waypoints_dst on waypoints(dst_id)",
     "create index if not exists idx_waypoints_user on waypoints(user_id)",
@@ -104,8 +150,10 @@ export const get_initial_schema_pg = (tables: { m: string; v: string; w: string;
     `create index if not exists openmemory_memories_sector_idx on ${tables.m}(primary_sector)`,
     `create index if not exists openmemory_memories_segment_idx on ${tables.m}(segment)`,
     `create index if not exists openmemory_memories_simhash_idx on ${tables.m}(simhash)`,
+    `create index if not exists openmemory_memories_created_at_idx on ${tables.m}(created_at)`,
     `create index if not exists openmemory_memories_user_idx on ${tables.m}(user_id)`,
     `create index if not exists openmemory_vectors_user_idx on ${tables.v}(user_id)`,
+    `create index if not exists openmemory_vectors_sector_idx on ${tables.v}(sector)`,
     `create index if not exists openmemory_waypoints_user_idx on ${tables.w}(user_id)`,
     `create index if not exists openmemory_stats_ts_idx on ${tables.s}(ts)`,
     `create index if not exists openmemory_stats_type_idx on ${tables.s}(type)`,
@@ -267,6 +315,8 @@ export async function run_migrations_core(ops: DbOps) {
                         "{w}": `"${sc}"."openmemory_waypoints"`,
                         "{u}": `"${sc}"."openmemory_users"`,
                         "{s}": `"${sc}"."stats"`,
+                        "{tf}": `"${sc}"."temporal_facts"`,
+                        "{te}": `"${sc}"."temporal_edges"`,
                     };
                     for (let sql of m.postgres) {
                         for (const [k, v] of Object.entries(replacements)) {

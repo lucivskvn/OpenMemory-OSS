@@ -78,9 +78,8 @@ const summ = (c: any): string => {
     return `${n} ${sec} pattern: ${txt.substring(0, 200)}`;
 };
 
-const mark = async (ids: string[]) => {
-    for (const id of ids) {
-        const m = await q.get_mem.get(id);
+const mark = async (mems: any[]) => {
+    for (const m of mems) {
         if (m) {
             const meta = JSON.parse(m.meta || "{}");
             meta.consolidated = true;
@@ -89,21 +88,50 @@ const mark = async (ids: string[]) => {
                 m.tags,
                 JSON.stringify(meta),
                 Date.now(),
-                id,
+                m.id,
             );
         }
     }
 };
 
-const boost = async (ids: string[]) => {
-    for (const id of ids) {
-        const m = await q.get_mem.get(id);
-        if (m) await q.upd_mem.run(m.content, m.tags, m.meta, Date.now(), id);
+const boost = async (mems: any[]) => {
+    for (const m of mems) {
+        // We only need to update salience/last_seen, not full content unless intended
+        // Original logic: await q.upd_mem.run(...) then q.upd_seen.run(...)
+        // Why upd_mem? It was updating updated_at.
+        // Let's keep behavior but optimize retrieval.
+
+        // Actually, if we just want to boost salience, upd_seen is enough?
+        // Original code called upd_mem AND upd_seen.
+        // upd_mem call was: q.upd_mem.run(m.content, m.tags, m.meta, Date.now(), id);
+        // This just updates timestamp.
+
+        // We can optimize by NOT calling upd_mem if only timestamp changes, upd_seen does that too?
+        // upd_seen SQL: update memories set last_seen_at=?,salience=?,updated_at=? where id=?
+        // So upd_seen updates `updated_at`. Redundant upd_mem call removed.
+
         await q.upd_seen.run(
-            id,
+            m.last_seen_at, // Keep original last_seen or update? Original logic kept it?
+            // Wait, original: q.upd_seen.run(id, m.last_seen_at, sal, now)
+            // Signature: run: (...p) => ... set last_seen_at=?,salience=?,updated_at=? where id=?
+            // Params passed in original: [id, m.last_seen_at, val, now] -> Mismatch?
+
+            // Let's check db.ts definition for upd_seen:
+            // `update ${TABLE_MEMORIES} set last_seen_at=?,salience=?,updated_at=? where id=?`
+            // Expected params: [last_seen_at, salience, updated_at, id]
+
+            // Original boost call:
+            // await q.upd_seen.run(id, m.last_seen_at, Math.min(1, m.salience * 1.1), Date.now());
+            // Params passed: [id, last_seen, sal, now]
+            // Map to SQL: last_seen_at=id, salience=last_seen, updated_at=sal, id=now
+            // THIS IS ALSO A BUG in the original code!
+
+            // Fix: [last_seen_at, salience, updated_at, id]
+
             m.last_seen_at,
             Math.min(1, m.salience * 1.1),
             Date.now(),
+            m.id
         );
     }
 };
@@ -111,7 +139,6 @@ const boost = async (ids: string[]) => {
 export const run_reflection = async () => {
     log.info("[REFLECT] Starting reflection job...");
     const min = env.reflect_min || 20;
-    // Use batch retrieval instead of hardcoded 100 limit in logic if needed, but db limit is fine
     const mems = await q.all_mem.all(100, 0);
     log.info(
         `[REFLECT] Fetched ${mems.length} memories (min required: ${min})`,
@@ -126,10 +153,10 @@ export const run_reflection = async () => {
     for (const c of cls) {
         const txt = summ(c);
         const s = sal(c);
-        const src = c.mem.map((m: any) => m.id);
+        const src_ids = c.mem.map((m: any) => m.id);
         const meta = {
             type: "auto_reflect",
-            sources: src,
+            sources: src_ids,
             freq: c.n,
             at: new Date().toISOString(),
         };
@@ -137,8 +164,8 @@ export const run_reflection = async () => {
             `[REFLECT] Creating reflection: ${c.n} memories, salience=${s.toFixed(3)}, sector=${c.mem[0].primary_sector}`,
         );
         await add_hsg_memory(txt, j(["reflect:auto"]), meta);
-        await mark(src);
-        await boost(src);
+        await mark(c.mem);
+        await boost(c.mem);
         n++;
     }
     if (n > 0) await log_maint_op("reflect", n);

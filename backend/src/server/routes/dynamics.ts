@@ -6,7 +6,7 @@ import { Elysia, t } from "elysia";
 import { log } from "../../core/log";
 
 export const dynroutes = (app: Elysia) =>
-    app.group("/dynamics", (app) =>
+    app.group("/api/dynamics", (app) =>
         app
             .post("/resonance", async ({ body, set }) => {
                 const b = body;

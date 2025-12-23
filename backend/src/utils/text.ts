@@ -32,15 +32,9 @@ const stem_rules: Array<[RegExp, string]> = [
     [/ed$/, ""],
     [/s$/, ""],
 ];
-const tok_pat = /[a-z0-9]+/gi;
-
 export const tokenize = (text: string): string[] => {
-    const toks: string[] = [];
-    let m: RegExpExecArray | null;
-    while ((m = tok_pat.exec(text))) {
-        toks.push(m[0].toLowerCase());
-    }
-    return toks;
+    if (!text) return [];
+    return (text.match(/[a-z0-9]+/gi) || []).map(t => t.toLowerCase());
 };
 
 const stem = (tok: string): string => {

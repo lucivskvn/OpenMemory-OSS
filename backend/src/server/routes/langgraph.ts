@@ -6,7 +6,7 @@ import { store_node_mem, retrieve_node_mems, get_graph_ctx, create_refl } from "
 export const lg = (app: Elysia) => {
     if (env.mode !== "langgraph") return;
 
-    app.group("/lg", (app) =>
+    app.group("/api/lg", (app) =>
         app
             .post("/store", async ({ body, set }) => {
                 const b = body;

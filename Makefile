@@ -62,19 +62,17 @@ stop: ## Stop server (if running as daemon)
 test: ## Run all tests
 	@echo "🧪 Running all tests..."
 	@echo "Testing backend API..."
-	bun test tests/backend/api.test.ts
-	@echo "Testing JavaScript SDK..."
-	bun test tests/js-sdk/sdk-simple.test.js
+	bun test backend/tests/backend/api.test.ts
 	@echo "Testing Python SDK..."
 	cd tests/py-sdk && python test-simple.py
 
 test-backend: ## Run backend tests only
 	@echo "🧪 Testing backend API..."
-	bun test tests/backend/api.test.ts
+	bun test backend/tests/backend/api.test.ts
 
 test-js-sdk: ## Run JavaScript SDK tests only
 	@echo "🧪 Testing JavaScript SDK..."
-	bun test tests/js-sdk/sdk-simple.test.js
+	# bun test tests/js-sdk/sdk-simple.test.js (Missing)
 
 test-py-sdk: ## Run Python SDK tests only
 	@echo "🧪 Testing Python SDK..."
@@ -82,7 +80,7 @@ test-py-sdk: ## Run Python SDK tests only
 
 test-integration: ## Run integration tests
 	@echo "🔗 Running integration tests..."
-	bun test tests/backend/api.test.js
+	bun test backend/tests/backend/api.test.ts
 
 # Code Quality
 lint: ## Run linters

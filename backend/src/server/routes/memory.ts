@@ -44,6 +44,17 @@ export const mem = (app: Elysia) =>
                 user_id: t.Optional(t.String())
             })
         })
+        .get("/api/memory/sectors", async () => {
+            return {
+                sectors: [
+                    "episodic",
+                    "semantic",
+                    "procedural",
+                    "emotional",
+                    "reflective",
+                ]
+            };
+        })
         .post("/api/memory/ingest", async ({ body, set }) => {
             const b = body;
             try {

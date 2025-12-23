@@ -1,50 +1,90 @@
-import { describe, test, expect } from "bun:test";
+import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import {
-    insert_fact,
-    query_facts_at_time,
+    create_fact,
+    get_facts,
+    create_edge,
+    get_related_facts,
     get_subject_timeline,
+    search_facts,
+    get_change_frequency,
+    compare_time_points,
+    get_volatile_facts,
     invalidate_fact
-} from "../../src/temporal_graph";
+} from "../../src/memory/temporal";
 import { init_db } from "../../src/core/db";
+import { unlink } from "node:fs/promises";
 
-// Ensure DB is initialized before tests (though bun:test might run in parallel, init_db is safe)
-await init_db();
+const DB_PATH = "./test_temporal_deep.sqlite";
 
-describe("Temporal Graph (Deep Dive)", () => {
-    test("Full Lifecycle: Insert -> Query -> Invalidate -> Timeline", async () => {
-        const subject = `test_subject_${Date.now()}`;
-        const predicate = "is_testing";
-        const object = "true";
+describe("Temporal Graph Deep Dive Logic", () => {
+    beforeAll(async () => {
+        process.env.OM_DB_PATH = DB_PATH;
+        await init_db();
+    });
 
-        // 1. Insert
-        const id = await insert_fact(subject, predicate, object);
-        expect(id).toBeDefined();
+    afterAll(async () => {
+        try {
+            await unlink(DB_PATH);
+            await unlink(`${DB_PATH}-shm`);
+            await unlink(`${DB_PATH}-wal`);
+        } catch (e) {
+            // ignore
+        }
+    });
 
-        // 2. Query Current
-        const facts = await query_facts_at_time(subject, predicate);
-        expect(facts.length).toBe(1);
-        expect(facts[0].object).toBe(object);
-        expect(facts[0].valid_to).toBeNull();
+    test("Timeline Analysis", async () => {
+        const sub = "ProjectX";
+        await create_fact(sub, "status", "draft", Date.now() - 10000);
+        await create_fact(sub, "status", "review", Date.now() - 5000);
+        await create_fact(sub, "status", "live", Date.now());
 
-        // 3. Invalidate
-        await invalidate_fact(id);
+        const timeline = await get_subject_timeline(sub);
+        expect(timeline.length).toBeGreaterThanOrEqual(3);
+        expect(timeline[0].object).toBe("draft");
+        expect(timeline[timeline.length - 1].object).toBe("live");
+    });
 
-        // 4. Query Past (should exist)
-        const pastFacts = await query_facts_at_time(subject, predicate, undefined, new Date(Date.now() - 1000));
-        // Note: query_facts_at_time defaults to NOW. If we invalidated, valid_to is NOW.
-        // So querying at NOW might return nothing or the fact if valid_to >= NOW is inclusive?
-        // query logic: (valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?))
-        // if valid_to == query_time, it is included.
+    test("Graph Traversal", async () => {
+        const f1 = await create_fact("A", "knows", "B");
+        const f2 = await create_fact("B", "knows", "C");
+        await create_edge(f1, f2, "implies");
 
-        // 5. Query Future (should be gone)
-        const futureFacts = await query_facts_at_time(subject, predicate, undefined, new Date(Date.now() + 1000));
-        expect(futureFacts.length).toBe(0);
+        const related = await get_related_facts(f1);
+        expect(related.length).toBe(1);
+        expect(related[0].fact.id).toBe(f2);
+        expect(related[0].relation).toBe("implies");
+    });
 
-        // 6. Timeline
-        const timeline = await get_subject_timeline(subject);
-        expect(timeline.length).toBeGreaterThanOrEqual(1);
-        // Should have created event
-        const created = timeline.find(e => e.change_type === 'created');
-        expect(created).toBeDefined();
+    test("Search", async () => {
+        await create_fact("HiddenGem", "is", "found");
+        const res = await search_facts("Hidden");
+        expect(res.length).toBeGreaterThan(0);
+        expect(res[0].subject).toBe("HiddenGem");
+    });
+
+    test("Frequency Analysis", async () => {
+        const sub = "Volatile";
+        await create_fact(sub, "state", "1");
+        await create_fact(sub, "state", "2");
+        await create_fact(sub, "state", "3");
+
+        const freq = await get_change_frequency(sub, "state");
+        expect(freq.total_changes).toBeGreaterThanOrEqual(3);
+    });
+
+    test("Compare Time Points", async () => {
+        const sub = "TimeTraveler";
+        const t1 = Date.now() - 5000;
+        await create_fact(sub, "loc", "past", t1);
+
+        const t2 = Date.now();
+        await create_fact(sub, "loc", "present", t2); // This closes "past"
+
+        const diff = await compare_time_points(sub, t1, t2);
+        // At t1: loc=past. At t2: loc=present.
+        // So changed: past -> present
+        expect(diff.changed.length).toBe(1);
+        expect(diff.changed[0].before.object).toBe("past");
+        expect(diff.changed[0].after.object).toBe("present");
     });
 });

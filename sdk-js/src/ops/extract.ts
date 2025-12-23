@@ -134,7 +134,7 @@ export async function extractAudio(
         // Write buffer to temp file
         fs.writeFileSync(tempFilePath, buffer);
 
-        // Initialize OpenAI client
+        // Initialize OpenAI client (Lazy)
         const openai = new OpenAI({ apiKey });
 
         // Transcribe audio using Whisper

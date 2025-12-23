@@ -51,7 +51,8 @@ export const update_user_summary = async (user_id: string): Promise<void> => {
         if (!existing) {
             await q.ins_user.run(user_id, summary, 0, now, now);
         } else {
-            await q.upd_user_summary.run(user_id, summary, now);
+            // Fix param order: summary, updated_at, user_id
+            await q.upd_user_summary.run(summary, now, user_id);
         }
     } catch (e) {
         log.error(`User summary update failed`, { user_id, error: e });

@@ -1,67 +1,78 @@
 const fs = require('fs'),
-  rl = require('readline'),
-  p = require('path');
-class I {
-  constructor(c) {
-    this.c = c;
+  readline = require('readline'),
+  path = require('path');
+
+class Importer {
+  constructor(config) {
+    this.config = config;
     const port = process.env.OM_PORT || '8080';
-    this.u = c.omu || process.env.OPENMEMORY_URL || `http://localhost:${port}`;
-    this.k =
-      c.omk || process.env.OPENMEMORY_API_KEY || process.env.OM_API_KEY || '';
-    this.h = {
+    this.baseUrl = config.openMemoryUrl || process.env.OPENMEMORY_URL || `http://localhost:${port}`;
+    this.apiKey =
+      config.openMemoryKey || process.env.OPENMEMORY_API_KEY || process.env.OM_API_KEY || '';
+    this.headers = {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${this.k}`,
+      Authorization: `Bearer ${this.apiKey}`,
     };
   }
-  async imp(f) {
-    const t0 = Date.now();
-    let mc = 0,
-      fc = 0;
-    const rd = rl.createInterface({
-      input: fs.createReadStream(f),
+
+  async importFile(filePath) {
+    const startTime = Date.now();
+    let importedCount = 0,
+      failedCount = 0;
+
+    const fileStream = fs.createReadStream(filePath);
+    const lineReader = readline.createInterface({
+      input: fileStream,
       crlfDelay: Infinity,
     });
+
     console.log('[IMPORT] Processing export file...');
-    console.log(`[IMPORT] Target: ${this.u}`);
-    for await (const ln of rd) {
+    console.log(`[IMPORT] Target: ${this.baseUrl}`);
+
+    for await (const line of lineReader) {
       try {
-        const d = JSON.parse(ln);
-        await this.pm(d);
-        mc++;
-        if (mc % 100 === 0)
-          console.log(`[IMPORT] Progress: ${mc} memories imported`);
+        const data = JSON.parse(line);
+        await this.processMemory(data);
+        importedCount++;
+        if (importedCount % 100 === 0)
+          console.log(`[IMPORT] Progress: ${importedCount} memories imported`);
       } catch (e) {
-        fc++;
+        failedCount++;
         console.error(`[IMPORT] Warning: Skipped record - ${e.message}`);
       }
     }
-    rd.close();
-    const dur = ((Date.now() - t0) / 1000).toFixed(1);
-    return { m: mc, f: fc, d: dur };
+
+    lineReader.close();
+    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+    return { imported: importedCount, failed: failedCount, duration: duration, m: importedCount, f: failedCount, d: duration }; // Return both new and legacy props just in case
   }
-  async pm(d) {
+
+  async processMemory(data) {
     const payload = {
-      content: d.c,
-      tags: d.t || [],
+      content: data.c,
+      tags: data.t || [],
       metadata: {
-        ...d.meta,
+        ...data.meta,
         migrated: true,
-        orig_id: d.id,
-        orig_created_at: d.ca,
-        orig_last_seen: d.ls,
+        orig_id: data.id,
+        orig_created_at: data.ca,
+        orig_last_seen: data.ls,
       },
     };
-    if (d.uid && d.uid !== 'default') payload.user_id = d.uid;
-    const r = await fetch(`${this.u}/memory/add`, {
+    if (data.uid && data.uid !== 'default') payload.user_id = data.uid;
+
+    const response = await fetch(`${this.baseUrl}/api/memory/add`, {
       method: 'POST',
-      headers: this.h,
+      headers: this.headers,
       body: JSON.stringify(payload),
     });
-    if (!r.ok) {
-      const txt = await r.text().catch(() => 'No response');
-      throw new Error(`API ${r.status}: ${txt}`);
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => 'No response');
+      throw new Error(`API ${response.status}: ${text}`);
     }
-    return await r.json();
+    return await response.json();
   }
 }
-module.exports = I;
+
+module.exports = Importer;

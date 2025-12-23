@@ -1,6 +1,5 @@
 import { env } from "../../core/cfg";
 import { q, run_async, get_async, all_async, TABLE_MEMORIES, TABLE_STATS, TABLE_USERS } from "../../core/db";
-import { get_memory_stats } from "../../memory/stats";
 import { Elysia, t } from "elysia";
 import { log } from "../../core/log";
 
@@ -26,7 +25,6 @@ export const dash = (app: Elysia) =>
         app
             .get("/stats", async ({ set }) => {
                 try {
-                    const memoryStats = await get_memory_stats();
                     const stats = await q.get_system_stats.get();
 
                     let dbSize = 0;
@@ -44,7 +42,7 @@ export const dash = (app: Elysia) =>
                             total_users: stats.totalUsers.c,
                             db_size_bytes: dbSize,
                             uptime_seconds: process.uptime(),
-                            active_segments: memoryStats.active_segments,
+                            active_segments: stats.activeSegments,
                         },
                         activity: stats.requestStats.map((r: any) => ({
                             ts: r.ts,

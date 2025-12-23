@@ -244,23 +244,41 @@ async function emb_batch_with_fallback(
 async function emb_openai(t: string, s: string): Promise<number[]> {
     if (!env.openai_key) throw new Error("OpenAI key missing");
     const m = get_model(s, "openai");
-    const r = await fetchWithTimeout(
-        `${env.openai_base_url.replace(/\/$/, "")}/embeddings`,
-        {
-            method: "POST",
-            headers: {
-                "content-type": "application/json",
-                authorization: `Bearer ${env.openai_key}`,
-            },
-            body: JSON.stringify({
-                input: t,
-                model: env.openai_model || m,
-                dimensions: env.vec_dim,
-            }),
-        },
-    );
-    if (!r.ok) throw new Error(`OpenAI: ${r.status}`);
-    return ((await r.json()) as any).data[0].embedding;
+    const url = `${env.openai_base_url.replace(/\/$/, "")}/embeddings`;
+
+    for (let a = 0; a < 3; a++) {
+        try {
+            const r = await fetchWithTimeout(url, {
+                method: "POST",
+                headers: {
+                    "content-type": "application/json",
+                    authorization: `Bearer ${env.openai_key}`,
+                },
+                body: JSON.stringify({
+                    input: t,
+                    model: env.openai_model || m,
+                    dimensions: env.vec_dim,
+                }),
+            });
+
+            if (r.status === 429) {
+                const d = Math.min(
+                    parseInt(r.headers.get("retry-after") || "2") * 1000,
+                    1000 * Math.pow(2, a)
+                );
+                console.warn(`[EMBED] OpenAI rate limit (${a + 1}/3), waiting ${d}ms`);
+                await new Promise((x) => setTimeout(x, d));
+                continue;
+            }
+
+            if (!r.ok) throw new Error(`OpenAI: ${r.status}`);
+            return ((await r.json()) as any).data[0].embedding;
+        } catch (e) {
+            if (a === 2) throw e;
+            await new Promise((x) => setTimeout(x, 1000 * Math.pow(2, a)));
+        }
+    }
+    throw new Error("OpenAI: exhausted retries");
 }
 
 async function emb_batch_openai(

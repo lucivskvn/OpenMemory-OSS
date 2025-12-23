@@ -1,62 +1,48 @@
-import { describe, test, expect } from "bun:test";
+import { describe, test, expect, beforeAll } from "bun:test";
+import { Elysia } from "elysia";
+import { lg } from "../../src/server/routes/langgraph";
+import { env } from "../../src/core/cfg";
 
-const BASE_URL = 'http://localhost:8080';
-const API_KEY = 'your';
-
-async function makeRequest(url: string, options: any = {}) {
-    const res = await fetch(url, {
-        method: options.method || 'GET',
-        headers: {
-            ...options.headers,
-            'Authorization': `Bearer ${API_KEY}`,
-            'Content-Type': 'application/json'
-        },
-        body: options.body
-    });
-    let data;
-    try {
-        data = await res.json();
-    } catch {
-        data = {};
-    }
-    return {
-        status: res.status,
-        data,
-        ok: res.ok
-    };
-}
+// Force enable langgraph mode
+env.mode = "langgraph";
 
 describe("LangGraph API", () => {
+    let app: Elysia;
+
+    beforeAll(() => {
+        app = new Elysia();
+        app.use(lg);
+    });
+
     test("Store Memory", async () => {
-        const res = await makeRequest(`${BASE_URL}/lg/store`, {
+        const res = await app.handle(new Request("http://localhost/api/lg/store", {
             method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
+                node: "observe",
                 content: "LangGraph test memory",
                 metadata: { thread_id: "t1" }
             })
-        });
-
-        if (res.status === 404) {
-             console.warn("LangGraph Mode disabled, skipping tests");
-             return;
-        }
+        }));
 
         expect(res.status).toBe(200);
-        expect(res.data).toHaveProperty('ok', true);
+        const data = await res.json();
+        expect(data).toHaveProperty('ok', true);
     });
 
     test("Retrieve Memory", async () => {
-        const res = await makeRequest(`${BASE_URL}/lg/retrieve`, {
+        const res = await app.handle(new Request("http://localhost/api/lg/retrieve", {
             method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
+                node: "observe",
                 query: "test",
-                thread_id: "t1"
+                namespace: "default"
             })
-        });
-
-        if (res.status === 404) return;
+        }));
 
         expect(res.status).toBe(200);
-        expect(Array.isArray(res.data.results)).toBe(true);
+        const data = await res.json();
+        expect(Array.isArray(data.results)).toBe(true);
     });
 });

@@ -8,13 +8,22 @@ import mammoth from "mammoth";
 import TurndownService from "turndown";
 import ffmpeg from "fluent-ffmpeg";
 import * as fs from "node:fs";
+import { promises as fsPromises } from "node:fs";
 import { log } from "../core/log";
 
 // Setup OpenAI for Whisper
-const openai = new OpenAI({
-    apiKey: env.openai_key,
-    baseURL: env.openai_base_url,
-});
+// Lazy init to avoid startup crash if key is missing
+let openai: OpenAI | null = null;
+const getOpenAI = () => {
+    if (!openai) {
+        if (!env.openai_key) throw new Error("OpenAI key missing for transcription");
+        openai = new OpenAI({
+            apiKey: env.openai_key,
+            baseURL: env.openai_base_url,
+        });
+    }
+    return openai;
+};
 
 const turndownService = new TurndownService();
 
@@ -24,15 +33,19 @@ async function saveTempFile(buffer: Buffer, ext: string): Promise<string> {
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
     const tempFilePath = path.join(tempDir, `${uuidv4()}.${ext}`);
-    await Bun.write(tempFilePath, buffer);
-    return tempFilePath;
+    try {
+        await Bun.write(tempFilePath, buffer);
+        return tempFilePath;
+    } catch (e) {
+        log.error("Failed to save temp file", { path: tempFilePath, error: e });
+        throw e;
+    }
 }
 
 async function removeFile(path: string) {
     try {
-        const file = Bun.file(path);
-        if (await file.exists()) {
-            fs.unlinkSync(path);
+        if (fs.existsSync(path)) {
+            await fsPromises.unlink(path);
         }
     } catch (e) {
         log.warn("Failed to delete temp file", { path, error: e });
@@ -67,7 +80,8 @@ export const transcribe_audio = async (buffer: Buffer): Promise<string> => {
     try {
         // Create a File object directly from buffer (supported in Bun)
         const file = new File([buffer], "audio.mp3", { type: "audio/mp3" });
-        const response = await openai.audio.transcriptions.create({
+        const client = getOpenAI();
+        const response = await client.audio.transcriptions.create({
             file: file,
             model: "whisper-1",
         });
@@ -80,27 +94,35 @@ export const transcribe_audio = async (buffer: Buffer): Promise<string> => {
 
 export const extract_audio_from_video = async (buffer: Buffer): Promise<Buffer> => {
     return new Promise(async (resolve, reject) => {
-        const videoPath = await saveTempFile(buffer, "mp4");
-        const audioPath = videoPath.replace(".mp4", ".mp3");
+        let videoPath = "";
+        let audioPath = "";
+        try {
+            videoPath = await saveTempFile(buffer, "mp4");
+            audioPath = videoPath.replace(".mp4", ".mp3");
 
-        ffmpeg(videoPath)
-            .toFormat("mp3")
-            .on("end", async () => {
-                try {
-                    const audioBuffer = await Bun.file(audioPath).arrayBuffer();
+            ffmpeg(videoPath)
+                .toFormat("mp3")
+                .on("end", async () => {
+                    try {
+                        const audioBuffer = await Bun.file(audioPath).arrayBuffer();
+                        await removeFile(videoPath);
+                        await removeFile(audioPath);
+                        resolve(Buffer.from(audioBuffer));
+                    } catch (e) {
+                        reject(e);
+                    }
+                })
+                .on("error", async (err) => {
                     await removeFile(videoPath);
-                    await removeFile(audioPath);
-                    resolve(Buffer.from(audioBuffer));
-                } catch (e) {
-                    reject(e);
-                }
-            })
-            .on("error", async (err) => {
-                await removeFile(videoPath);
-                if (await Bun.file(audioPath).exists()) await removeFile(audioPath);
-                reject(err);
-            })
-            .save(audioPath);
+                    if (fs.existsSync(audioPath)) await removeFile(audioPath);
+                    reject(err);
+                })
+                .save(audioPath);
+        } catch (e) {
+            // Cleanup in case of setup failure
+            if (videoPath) await removeFile(videoPath);
+            reject(e);
+        }
     });
 };
 
@@ -114,7 +136,7 @@ export const processBuffer = async (buffer: Buffer, ext: string): Promise<string
         const audio = await extract_audio_from_video(buffer);
         return await transcribe_audio(audio);
     }
-    // Default to treating as text
+    // Default to treating as text for unknown types, assuming text content
     return buffer.toString();
 };
 
@@ -139,6 +161,8 @@ export interface ExtractionResult {
 
 const estimateTokens = (t: string) => Math.ceil(t.length / 4);
 
+const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB limit
+
 export const extractText = async (textOrUrlOrType: string, data?: string | Buffer): Promise<ExtractionResult> => {
     let text = "";
     let type = "text";
@@ -151,7 +175,6 @@ export const extractText = async (textOrUrlOrType: string, data?: string | Buffe
             buf = data;
         } else {
             // Check if binary type to decide on base64 decoding
-            // ingest_req sends strings. If it's a binary format, we expect base64.
             const binaryTypes = ["pdf", "docx", "audio", "mp3", "wav", "mp4", "mov", "avi"];
             const isBinary = binaryTypes.some(t => type.toLowerCase().includes(t));
 
@@ -161,6 +184,11 @@ export const extractText = async (textOrUrlOrType: string, data?: string | Buffe
                 buf = Buffer.from(data);
             }
         }
+
+        if (buf.length > MAX_FILE_SIZE) {
+            throw new Error(`File too large: ${buf.length} bytes (max ${MAX_FILE_SIZE})`);
+        }
+
         text = await processBuffer(buf, type);
     } else {
         // No data, assume textOrUrlOrType is the text content

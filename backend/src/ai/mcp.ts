@@ -111,7 +111,7 @@ export const create_mcp_srv = () => {
         async ({ content, tags, metadata, user_id }) => {
             const u = uid(user_id);
             const res = await add_hsg_memory(content, j(tags || []), metadata, u);
-            if (u) update_user_summary(u).catch((err) => console.error("[MCP] user summary update failed:", err));
+            if (u) update_user_summary(u).catch((err) => log.error("[MCP] user summary update failed:", { error: err }));
             const txt = `Stored memory ${res.id} (primary=${res.primary_sector}) across sectors: ${res.sectors.join(", ")}${u ? ` [user=${u}]` : ""}`;
             const payload = {
                 id: res.id,
@@ -248,9 +248,9 @@ export const create_mcp_srv = () => {
     );
 
     srv.server.oninitialized = () => {
-        console.error(
+        log.info(
             "[MCP] initialization completed with client:",
-            srv.server.getClientVersion(),
+            { version: srv.server.getClientVersion() },
         );
     };
     return srv;
@@ -311,7 +311,7 @@ export const mcp = (app: Elysia) => {
                 const transport = new ElysiaSSETransport(push);
                 transports.set(transport.sessionId, transport);
 
-                srv.connect(transport).catch(e => console.error("MCP Connect Error:", e));
+                srv.connect(transport).catch(e => log.error("MCP Connect Error:", { error: e }));
 
                 request.signal.addEventListener("abort", () => {
                     transport.close();

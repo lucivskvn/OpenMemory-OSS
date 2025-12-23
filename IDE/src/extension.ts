@@ -55,7 +55,6 @@ export function activate(context: vscode.ExtensionContext) {
         }
     });
 
-    // ... commands ...
     const query_cmd = vscode.commands.registerCommand('openmemory.queryContext', async () => {
         const editor = vscode.window.activeTextEditor;
         if (!editor) {
@@ -141,7 +140,6 @@ export function activate(context: vscode.ExtensionContext) {
     const setup_cmd = vscode.commands.registerCommand('openmemory.setup', () => show_quick_setup());
     const dashboard_cmd = vscode.commands.registerCommand('openmemory.dashboard', () => { DashboardPanel.createOrShow(context.extensionUri); });
 
-    // Initialize cache for all currently open documents
     vscode.workspace.textDocuments.forEach(doc => {
         if (doc.uri.scheme === 'file') {
             fileCache.set(doc.uri.toString(), doc.getText());
@@ -162,27 +160,18 @@ export function activate(context: vscode.ExtensionContext) {
 
             if (oldContent) {
                 const diff = generateDiff(oldContent, newContent, doc.uri.fsPath);
-                // If diff is huge, maybe cap it? For now, user requested "parts which changed"
                 contentToSend = diff;
             } else {
                 contentToSend = `[New File Snapshot]\n${newContent}`;
             }
 
-            // Update cache for next save
             fileCache.set(doc.uri.toString(), newContent);
 
-            send_event({ event_type: 'save', file_path: doc.uri.fsPath, language: doc.languageId, content: contentToSend });
+            send_event({ event: 'save', file_path: doc.uri.fsPath, language: doc.languageId, content: contentToSend });
         }
     });
 
-    context.subscriptions.push(status_click, status_bar, toggle_cmd, setup_cmd, dashboard_cmd, save_listener, open_listener);
-    // Note: Re-registering commands that were elided in this block for brevity if they weren't before. 
-    // Actually, I need to be careful not to delete the existing command registrations if I'm replacing a huge block.
-    // The target range seems to include most of activate.
-    // I will try to be more precise or include the commands.
-
-    // Commands were: query_cmd, add_cmd, note_cmd, patterns_cmd.
-    // I will include them in the full replacement to be safe since I selected a large range.
+    context.subscriptions.push(status_click, status_bar, toggle_cmd, setup_cmd, dashboard_cmd, save_listener, open_listener, query_cmd, add_cmd, note_cmd, patterns_cmd);
 }
 
 async function auto_link_all() {
@@ -360,20 +349,16 @@ async function show_quick_setup() {
 }
 
 function getUserId(context: vscode.ExtensionContext, config: vscode.WorkspaceConfiguration): string {
-    // 1. Check if user has configured a custom userId
     const configuredUserId = config.get<string>('userId');
     if (configuredUserId) return configuredUserId;
 
-    // 2. Check if we have a persistent userId in global state
     let persistedUserId = context.globalState.get<string>('openmemory.userId');
     if (persistedUserId) return persistedUserId;
 
-    // 3. Generate a new unique userId based on machine ID
-    const machineId = vscode.env.machineId; // Unique per machine
+    const machineId = vscode.env.machineId;
     const userName = process.env.USERNAME || process.env.USER || 'user';
     persistedUserId = `${userName}-${machineId.substring(0, 8)}`;
 
-    // 4. Persist it for future sessions
     context.globalState.update('openmemory.userId', persistedUserId);
 
     return persistedUserId;
@@ -381,7 +366,7 @@ function getUserId(context: vscode.ExtensionContext, config: vscode.WorkspaceCon
 
 async function check_connection(): Promise<boolean> {
     try {
-        const response = await fetch(`${backend_url}/health`, { method: 'GET', headers: get_headers() });
+        const response = await fetch(`${backend_url}/api/system/health`, { method: 'GET', headers: get_headers() });
         return response.ok;
     } catch {
         return false;
@@ -420,10 +405,10 @@ async function end_session() {
     } catch { }
 }
 
-async function send_event(event_data: { event_type: string; file_path: string; language: string; content?: string; metadata?: any; }) {
+async function send_event(event_data: { event: string; file_path: string; language: string; content?: string; metadata?: any; }) {
     if (!session_id || !is_tracking) return;
     try {
-        await fetch(`${backend_url}/api/ide/events`, { method: 'POST', headers: get_headers(), body: JSON.stringify({ session_id, user_id, event_type: event_data.event_type, file_path: event_data.file_path, language: event_data.language, content: event_data.content, metadata: event_data.metadata, timestamp: new Date().toISOString() }) });
+        await fetch(`${backend_url}/api/ide/events`, { method: 'POST', headers: get_headers(), body: JSON.stringify({ session_id, user_id, event: event_data.event, file_path: event_data.file_path, language: event_data.language, content: event_data.content, metadata: event_data.metadata, timestamp: new Date().toISOString() }) });
     } catch { }
 }
 
@@ -434,7 +419,7 @@ async function query_context(query: string, file: string) {
 }
 
 async function add_memory(content: string, file: string) {
-    const response = await fetch(`${backend_url}/memory/add`, {
+    const response = await fetch(`${backend_url}/api/memory/add`, {
         method: 'POST',
         headers: get_headers(),
         body: JSON.stringify({

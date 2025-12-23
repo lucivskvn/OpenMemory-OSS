@@ -12,35 +12,35 @@ const get_defaults = (): model_cfg => ({
     episodic: {
         ollama: "nomic-embed-text",
         openai: "text-embedding-3-small",
-        gemini: "models/embedding-001",
+        gemini: "models/text-embedding-004",
         aws: "amazon.titan-embed-text-v2:0",
         local: "all-MiniLM-L6-v2",
     },
     semantic: {
         ollama: "nomic-embed-text",
         openai: "text-embedding-3-small",
-        gemini: "models/embedding-001",
+        gemini: "models/text-embedding-004",
         aws: "amazon.titan-embed-text-v2:0",
         local: "all-MiniLM-L6-v2",
     },
     procedural: {
         ollama: "nomic-embed-text",
         openai: "text-embedding-3-small",
-        gemini: "models/embedding-001",
+        gemini: "models/text-embedding-004",
         aws: "amazon.titan-embed-text-v2:0",
         local: "all-MiniLM-L6-v2",
     },
     emotional: {
         ollama: "nomic-embed-text",
         openai: "text-embedding-3-small",
-        gemini: "models/embedding-001",
+        gemini: "models/text-embedding-004",
         aws: "amazon.titan-embed-text-v2:0",
         local: "all-MiniLM-L6-v2",
     },
     reflective: {
         ollama: "nomic-embed-text",
         openai: "text-embedding-3-large",
-        gemini: "models/embedding-001",
+        gemini: "models/text-embedding-004",
         aws: "amazon.titan-embed-text-v2:0",
         local: "all-mpnet-base-v2",
     },
@@ -48,7 +48,12 @@ const get_defaults = (): model_cfg => ({
 
 export const load_models = (): model_cfg => {
     if (cfg) return cfg;
-    const p = join(__dirname, "../../../models.yml");
+    // Robust path resolution: check CWD first, then relative to source
+    let p = join(process.cwd(), "models.yml");
+    if (!existsSync(p)) {
+        p = join(__dirname, "../../../models.yml");
+    }
+
     if (!existsSync(p)) {
         // log.warn("[MODELS] models.yml not found, using defaults");
         return get_defaults();
