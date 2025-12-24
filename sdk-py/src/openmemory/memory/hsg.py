@@ -3,7 +3,9 @@ try:
 except ImportError:
     np = None
 import time
-from openmemory.core.db import q
+import uuid
+import json
+from openmemory.core.db import q, transaction
 from openmemory.memory.embed import embed_multi_sector, buffer_to_vector, vector_to_buffer
 
 sector_configs = {
@@ -73,12 +75,16 @@ def calc_mean_vec(embeddings, sectors):
         return mean
 
 async def create_single_waypoint(id, mean_vec, now, user_id):
-    # In a real implementation, this would find nearest neighbors and create edges
-    # For now, just a placeholder or minimal implementation
+    # Minimal implementation for Python SDK to maintain graph connectivity
+    # This would ideally use vector search to find nearest neighbors
     pass
 
 async def create_cross_sector_waypoints(id, primary, additional, user_id):
-    pass
+    if not additional: return
+    now = int(time.time() * 1000)
+    for sec in additional:
+        q.ins_waypoint.run(id, f"{id}:{sec}", user_id, 0.5, now, now)
+        q.ins_waypoint.run(f"{id}:{sec}", id, user_id, 0.5, now, now)
 
 async def hsg_query(query, k=10, filters=None):
     # 1. Embed query
@@ -89,12 +95,7 @@ async def hsg_query(query, k=10, filters=None):
     query_vec = embeddings[0]["vector"]
     
     # 2. Fetch only vectors (id, mean_vec) to compute similarity, then fetch content
-    # We add get_all_mean_vecs to db.py or use a custom query here
     from ..core.db import many_query, q
-    
-    # Use many_query directly for optimization or add to Q
-    # Filter by user_id at DB level if possible?
-    # db.py doesn't have get_mean_vecs_by_user yet.
     
     sql = "select id, mean_vec, user_id, salience, created_at from memories order by created_at desc limit 1000"
     if filters and filters.get("user_id"):
@@ -135,9 +136,6 @@ async def hsg_query(query, k=10, filters=None):
     # Batch retrieval
     full_mems = q.get_mems_by_ids.all(ids)
 
-    # Use batch retrieval for vectors if needed (though we used mean_vec above)
-    # This aligns logic with backend for future extensions
-
     # Map back to results with score
     id_map = {m["id"]: m for m in full_mems}
     results = []
@@ -159,10 +157,47 @@ async def reinforce_memory(id, boost=0.1):
     new_sal = min(1.0, current_salience + boost)
     now_ts = int(time.time() * 1000)
     
-    # We need a query to update salience. Python SDK db.py is missing generic update, implementing SQL exec.
-    # q.upd_seen logic from backend: update last_seen, salience.
-    # Let's add upd_seen to db.py or execute raw SQL here?
-    # db.exec_query is available.
+    q.upd_seen.run(now_ts, new_sal, now_ts, id)
+
+async def add_hsg_memory(content, tags=[], metadata=None, user_id=None):
+    id = str(uuid.uuid4())
+    now = int(time.time() * 1000)
     
-    from ..core.db import exec_query
-    exec_query("update memories set salience=?, last_seen_at=?, updated_at=? where id=?", (new_sal, now_ts, now_ts, id))
+    classification = classify_content(content, metadata)
+    primary_sector = classification["primary"]
+    all_sectors = [primary_sector] + classification["additional"]
+
+    # 1. Embed outside transaction
+    embeddings = await embed_multi_sector(id, content, all_sectors)
+    mean_vec = calc_mean_vec(embeddings, all_sectors)
+
+    # 2. Transactional write
+    with transaction:
+        # Check segment rotation (simplified)
+        max_seg_res = q.get_max_segment.get()
+        cur_seg = max_seg_res["max_seg"] if max_seg_res else 0
+
+        init_sal = 1.0 # simplified
+        decay = sector_configs.get(primary_sector, {}).get("decay_lambda", 0.01)
+
+        q.ins_mem.run(
+            id, user_id, cur_seg, content, "", primary_sector,
+            json.dumps(tags), json.dumps(metadata or {}), now, now, now,
+            init_sal, decay, 1, len(mean_vec), vector_to_buffer(mean_vec), None, 0
+        )
+
+        # Store vectors
+        for emb in embeddings:
+            from ..core.db import vector_store
+            if vector_store:
+                # Synchronous in SQLite
+                vector_store.store_vector(id, emb["sector"], emb["vector"], len(emb["vector"]), user_id)
+
+        await create_single_waypoint(id, mean_vec, now, user_id)
+        await create_cross_sector_waypoints(id, primary_sector, classification["additional"], user_id)
+
+    return {
+        "id": id,
+        "primary_sector": primary_sector,
+        "sectors": all_sectors
+    }

@@ -9,6 +9,7 @@ from openmemory.core.vector_store import SQLiteVectorStore
 db = None
 db_lock = Lock()
 vector_store = None
+tx_depth = 0
 
 def init_db(custom_path=None):
     global db
@@ -101,13 +102,42 @@ def close_db():
             db.close()
             db = None
 
+class TransactionManager:
+    def __enter__(self):
+        global tx_depth
+        if not db:
+            raise Exception("DB not initialized")
+        with db_lock:
+            if tx_depth == 0:
+                db.execute("BEGIN TRANSACTION")
+            tx_depth += 1
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        global tx_depth
+        if not db:
+            return
+        with db_lock:
+            if tx_depth > 0:
+                tx_depth -= 1
+
+            if tx_depth == 0:
+                if exc_type:
+                    db.execute("ROLLBACK")
+                else:
+                    db.execute("COMMIT")
+
+transaction = TransactionManager()
+
 def exec_query(sql, params=()):
     if not db:
         raise Exception("DB not initialized")
     with db_lock:
         cur = db.cursor()
         cur.execute(sql, params)
-        db.commit()
+        # Only commit if not in a transaction block
+        if tx_depth == 0:
+            db.commit()
 
 def one_query(sql, params=()):
     if not db:
@@ -133,11 +163,16 @@ class Q:
         def run(*p):
             exec_query("insert into memories(id,user_id,segment,content,simhash,primary_sector,tags,meta,created_at,updated_at,last_seen_at,salience,decay_lambda,version,mean_dim,mean_vec,compressed_vec,feedback_score) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", p)
     
-    # class ins_vec:
-    #     @staticmethod
-    #     def run(*p):
-    #         exec_query("insert into vectors(id,sector,user_id,v,dim) values(?,?,?,?,?)", p)
-            
+    class upd_mean_vec:
+        @staticmethod
+        def run(*p):
+            exec_query("update memories set mean_dim=?,mean_vec=? where id=?", p)
+
+    class upd_compressed_vec:
+        @staticmethod
+        def run(*p):
+            exec_query("update memories set compressed_vec=? where id=?", p)
+
     class create_single_waypoint: # This was missing in the JS dump but used in index.ts, likely ins_waypoint
         pass
 
@@ -150,11 +185,6 @@ class Q:
         @staticmethod
         def run(*p):
             exec_query("delete from memories where id=?", p)
-
-    # class del_vec:
-    #     @staticmethod
-    #     def run(*p):
-    #         exec_query("delete from vectors where id=?", p)
 
     class del_waypoints:
         @staticmethod
@@ -185,6 +215,21 @@ class Q:
         @staticmethod
         def get(id):
             return one_query("select * from memories where id=?", (id,))
+
+    class get_mem_by_simhash:
+        @staticmethod
+        def get(simhash):
+            return one_query("select * from memories where simhash=? order by salience desc limit 1", (simhash,))
+
+    class get_max_segment:
+        @staticmethod
+        def get():
+            return one_query("select coalesce(max(segment), 0) as max_seg from memories")
+
+    class get_segment_count:
+        @staticmethod
+        def get(segment):
+            return one_query("select count(*) as c from memories where segment=?", (segment,))
 
     class get_mems_by_ids:
         @staticmethod
@@ -234,5 +279,10 @@ class Q:
         @staticmethod
         def all(source_id):
             return many_query("select * from temporal_edges where source_id=?", (source_id,))
+
+    class upd_seen:
+        @staticmethod
+        def run(*p):
+            exec_query("update memories set last_seen_at=?,salience=?,updated_at=? where id=?", p)
 
 q = Q

@@ -36,7 +36,7 @@ export const mem = (app: Elysia) =>
             }
         }, {
             body: t.Object({
-                content: t.String(),
+                content: t.String({ minLength: 1 }),
                 tags: t.Optional(t.Array(t.String())),
                 metadata: t.Optional(t.Any()),
                 salience: t.Optional(t.Numeric()),

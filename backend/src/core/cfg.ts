@@ -1,4 +1,5 @@
 import path from "path";
+import { log } from "./log";
 import { z } from "zod";
 
 // Helper transformers
@@ -11,7 +12,7 @@ type tier = "fast" | "smart" | "deep" | "hybrid";
 const get_tier = (): tier => {
     const man = process.env.OM_TIER as tier;
     if (man && ["fast", "smart", "deep", "hybrid"].includes(man)) return man;
-    console.warn(
+    log.warn(
         "[OpenMemory] OM_TIER not set! Please set OM_TIER=hybrid|fast|smart|deep in .env",
     );
     return "hybrid";
@@ -148,7 +149,7 @@ let parsed;
 try {
     parsed = envSchema.parse(rawEnv);
 } catch (e: any) {
-    console.error("[CONFIG] Invalid configuration:", e.errors);
+    log.error("[CONFIG] Invalid configuration:", { error: e.errors });
     process.exit(1);
 }
 

@@ -1,4 +1,5 @@
 import { VectorStore } from "../vector_store";
+import { log } from "../log";
 import { cosineSimilarity, bufferToVector, vectorToBuffer } from "../../memory/embed";
 
 export interface DbOps {
@@ -40,7 +41,7 @@ export class PostgresVectorStore implements VectorStore {
             const rows = await this.db.all_async(`select id,v,dim from ${this.table} where sector=$1`, [sector]);
 
             if (rows.length > 10000) {
-                console.warn(`[WARN] Postgres vector scan is slow with ${rows.length} rows. Consider migrating to pgvector or Valkey.`);
+                log.warn(`[DB] Postgres vector scan is slow with ${rows.length} rows. Consider migrating to pgvector or Valkey.`);
             }
 
             const sims: Array<{ id: string; score: number }> = [];

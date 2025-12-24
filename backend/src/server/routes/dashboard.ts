@@ -74,12 +74,14 @@ export const dash = (app: Elysia) =>
                 })
             })
             .get("/config", () => {
-                return {
-                    env: {
-                        ...env,
-                        api_key: "***",
-                        openai_key: "***",
-                    },
-                };
+                const safeEnv = { ...env } as Record<string, any>;
+                const sensitive = [
+                    "api_key", "openai_key", "gemini_key", "AWS_SECRET_ACCESS_KEY",
+                    "valkey_password"
+                ];
+                for (const k of sensitive) {
+                    if (safeEnv[k]) safeEnv[k] = "***";
+                }
+                return { env: safeEnv };
             })
     );

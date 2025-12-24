@@ -1104,6 +1104,24 @@ export async function add_hsg_memory(
     const use_chunking = chunks.length > 1;
     const classification = classify_content(content, metadata);
     const all_sectors = [classification.primary, ...classification.additional];
+
+    // Pre-calculate embeddings outside the transaction to avoid holding DB locks during API calls
+    let emb_res;
+    try {
+        emb_res = await embedMultiSector(
+            id,
+            content,
+            all_sectors,
+            use_chunking ? chunks : undefined,
+        );
+    } catch (error) {
+        log.error("[HSG] Embedding failed, aborting memory creation", { error });
+        throw error;
+    }
+
+    const mean_vec = calc_mean_vec(emb_res, all_sectors);
+    const mean_vec_buf = vectorToBuffer(mean_vec);
+
     await transaction.begin();
     try {
         const max_seg_res = await q.get_max_segment.get();
@@ -1141,17 +1159,12 @@ export async function add_hsg_memory(
             init_sal,
             sec_cfg.decay_lambda,
             1,
-            null,
-            null,
+            mean_vec.length,
+            mean_vec_buf,
             null, // compressed_vec
             0, // feedback_score
         );
-        const emb_res = await embedMultiSector(
-            id,
-            content,
-            all_sectors,
-            use_chunking ? chunks : undefined,
-        );
+
         for (const result of emb_res) {
             await vector_store.storeVector(
                 id,
@@ -1161,9 +1174,6 @@ export async function add_hsg_memory(
                 user_id || "anonymous",
             );
         }
-        const mean_vec = calc_mean_vec(emb_res, all_sectors);
-        const mean_vec_buf = vectorToBuffer(mean_vec);
-        await q.upd_mean_vec.run(id, mean_vec.length, mean_vec_buf);
 
         // Store compressed vector for smart tier (for future query optimization)
         if (tier === "smart" && mean_vec.length > 128) {

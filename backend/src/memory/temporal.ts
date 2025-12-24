@@ -1,4 +1,4 @@
-import { q, TABLE_TF, TABLE_TE, all_async, run_async } from "../core/db";
+import { q, TABLE_TF, TABLE_TE, all_async, run_async, transaction } from "../core/db";
 import { rid, now, j } from "../utils";
 
 export interface TemporalFact {
@@ -43,35 +43,42 @@ export const create_fact = async (
     confidence: number = 1.0,
     metadata: Record<string, any> = {}
 ) => {
-    // 1. Check for existing open facts to invalidate (enforce integrity)
-    // Only invalidate if the new fact starts after the old one.
-    const existing = await all_async(`
-        SELECT id, valid_from FROM ${TABLE_TF}
-        WHERE subject = ? AND predicate = ? AND valid_to IS NULL
-        ORDER BY valid_from DESC
-    `, [subject, predicate]);
+    await transaction.begin();
+    try {
+        // 1. Check for existing open facts to invalidate (enforce integrity)
+        // Only invalidate if the new fact starts after the old one.
+        const existing = await all_async(`
+            SELECT id, valid_from FROM ${TABLE_TF}
+            WHERE subject = ? AND predicate = ? AND valid_to IS NULL
+            ORDER BY valid_from DESC
+        `, [subject, predicate]);
 
-    for (const old of existing) {
-        if (old.valid_from < valid_from) {
-            // Close the old fact just before the new one starts
-            const close_time = valid_from - 1;
-            await run_async(`UPDATE ${TABLE_TF} SET valid_to = ? WHERE id = ?`, [close_time, old.id]);
-        } else if (old.valid_from === valid_from) {
-            // Collision: existing fact starts at exact same time.
-            // Bump the new fact's start time by 1ms to maintain strict ordering
-            valid_from += 1;
-            // And now invalidate the old one at valid_from - 1 (which is the original valid_from)
-            // Wait, if old starts at T, and new starts at T+1, we close old at T.
-            // That means old has duration 0.
-            const close_time = valid_from - 1;
-            await run_async(`UPDATE ${TABLE_TF} SET valid_to = ? WHERE id = ?`, [close_time, old.id]);
+        for (const old of existing) {
+            if (old.valid_from < valid_from) {
+                // Close the old fact just before the new one starts
+                const close_time = valid_from - 1;
+                await run_async(`UPDATE ${TABLE_TF} SET valid_to = ? WHERE id = ?`, [close_time, old.id]);
+            } else if (old.valid_from === valid_from) {
+                // Collision: existing fact starts at exact same time.
+                // Bump the new fact's start time by 1ms to maintain strict ordering
+                valid_from += 1;
+                // And now invalidate the old one at valid_from - 1 (which is the original valid_from)
+                // Wait, if old starts at T, and new starts at T+1, we close old at T.
+                // That means old has duration 0.
+                const close_time = valid_from - 1;
+                await run_async(`UPDATE ${TABLE_TF} SET valid_to = ? WHERE id = ?`, [close_time, old.id]);
+            }
         }
-    }
 
-    // 2. Insert the new fact
-    const id = rid();
-    await q.ins_fact.run(id, subject, predicate, object, valid_from, valid_to, confidence, now(), j(metadata));
-    return id;
+        // 2. Insert the new fact
+        const id = rid();
+        await q.ins_fact.run(id, subject, predicate, object, valid_from, valid_to, confidence, now(), j(metadata));
+        await transaction.commit();
+        return id;
+    } catch (error) {
+        await transaction.rollback();
+        throw error;
+    }
 };
 
 /**

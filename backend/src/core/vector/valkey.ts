@@ -1,6 +1,7 @@
 import { VectorStore } from "../vector_store";
 import { RedisClient } from "bun";
 import { env } from "../cfg";
+import { log } from "../log";
 import { vectorToBuffer, bufferToVector } from "../../memory/embed";
 
 export class ValkeyVectorStore implements VectorStore {
@@ -9,7 +10,10 @@ export class ValkeyVectorStore implements VectorStore {
     constructor() {
         // Bun's RedisClient works with URL or options but URL is main
         const url = `redis://${env.valkey_password ? `:${env.valkey_password}@` : ""}${env.valkey_host || "localhost"}:${env.valkey_port || 6379}`;
-        this.client = new RedisClient(url);
+        this.client = new RedisClient(url, {
+            retryStrategy: (times) => Math.min(times * 50, 2000), // Simple exponential backoff
+            connectTimeout: 10000,
+        });
     }
 
     private getKey(id: string, sector: string): string {
@@ -107,7 +111,7 @@ export class ValkeyVectorStore implements VectorStore {
             return results;
 
         } catch (e) {
-            console.warn(`[Valkey] FT.SEARCH failed for ${sector}, falling back to scan (slow):`, e);
+            log.warn(`[Valkey] FT.SEARCH failed for ${sector}, falling back to scan (slow):`, { error: e });
 
             let cursor = "0";
             const allVecs: Array<{ id: string; vector: number[] }> = [];
