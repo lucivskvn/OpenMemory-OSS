@@ -17,6 +17,7 @@ import { j, p } from "../utils";
 import type { sector_type, mem_row } from "../core/types";
 import { update_user_summary } from "../memory/user_summary";
 import { Elysia } from "elysia";
+import { log } from "../core/log";
 import crypto from "node:crypto";
 
 const sec_enum = z.enum([
@@ -294,11 +295,11 @@ class ElysiaSSETransport implements Transport {
 const transports = new Map<string, ElysiaSSETransport>();
 
 export const mcp = (app: Elysia) => {
-    console.log("[MCP] Registering MCP routes...");
+    log.info("[MCP] Registering MCP routes...");
     return app.group("/api/mcp", (app) =>
         app
             .get("/sse", async ({ request, set }) => {
-                console.log("[MCP] SSE Connection Requested");
+                log.info("[MCP] SSE Connection Requested");
                 const { readable, writable } = new TransformStream();
                 const writer = writable.getWriter();
                 const encoder = new TextEncoder();
@@ -355,7 +356,7 @@ export const start_mcp_stdio = async () => {
 
 if (import.meta.main) {
     void start_mcp_stdio().catch((error) => {
-        console.error("[MCP] STDIO startup failed:", error);
+        log.error("[MCP] STDIO startup failed:", { error });
         process.exitCode = 1;
     });
 }

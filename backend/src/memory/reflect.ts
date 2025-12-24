@@ -111,23 +111,6 @@ const boost = async (mems: any[]) => {
         // So upd_seen updates `updated_at`. Redundant upd_mem call removed.
 
         await q.upd_seen.run(
-            m.last_seen_at, // Keep original last_seen or update? Original logic kept it?
-            // Wait, original: q.upd_seen.run(id, m.last_seen_at, sal, now)
-            // Signature: run: (...p) => ... set last_seen_at=?,salience=?,updated_at=? where id=?
-            // Params passed in original: [id, m.last_seen_at, val, now] -> Mismatch?
-
-            // Let's check db.ts definition for upd_seen:
-            // `update ${TABLE_MEMORIES} set last_seen_at=?,salience=?,updated_at=? where id=?`
-            // Expected params: [last_seen_at, salience, updated_at, id]
-
-            // Original boost call:
-            // await q.upd_seen.run(id, m.last_seen_at, Math.min(1, m.salience * 1.1), Date.now());
-            // Params passed: [id, last_seen, sal, now]
-            // Map to SQL: last_seen_at=id, salience=last_seen, updated_at=sal, id=now
-            // THIS IS ALSO A BUG in the original code!
-
-            // Fix: [last_seen_at, salience, updated_at, id]
-
             m.last_seen_at,
             Math.min(1, m.salience * 1.1),
             Date.now(),

@@ -30,9 +30,9 @@ export const temporal = (app: Elysia) =>
                 }
             }, {
                 body: t.Object({
-                    subject: t.String(),
-                    predicate: t.String(),
-                    object: t.String(),
+                    subject: t.String({ minLength: 1 }),
+                    predicate: t.String({ minLength: 1 }),
+                    object: t.String({ minLength: 1 }),
                     valid_from: t.Optional(t.Numeric()),
                     valid_to: t.Optional(t.Numeric()),
                     confidence: t.Optional(t.Numeric()),

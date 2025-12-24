@@ -154,10 +154,24 @@ all_async = many;
 const sqlite_vector_table = TABLE_VECTORS;
 vector_store = new SQLiteVectorStore({ run_async, get_async, all_async }, sqlite_vector_table);
 
+let txDepth = 0;
 transaction = {
-    begin: () => exec("BEGIN TRANSACTION"),
-    commit: () => exec("COMMIT"),
-    rollback: () => exec("ROLLBACK"),
+    begin: async () => {
+        if (txDepth === 0) {
+            await exec("BEGIN TRANSACTION");
+        }
+        txDepth++;
+    },
+    commit: async () => {
+        if (txDepth > 0) txDepth--;
+        if (txDepth === 0) {
+            await exec("COMMIT");
+        }
+    },
+    rollback: async () => {
+        await exec("ROLLBACK");
+        txDepth = 0;
+    }
 };
 q = {
     ins_mem: {

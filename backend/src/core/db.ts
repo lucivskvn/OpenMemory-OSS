@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { SQL, sql } from "bun";
 import { env } from "./cfg";
+import { log } from "./log";
 import path from "node:path";
 import fs from "node:fs";
 import { VectorStore } from "./vector_store";
@@ -125,10 +126,10 @@ if (is_pg) {
                 const admin = new SQL(adminConfig as any);
                 try {
                     await admin`CREATE DATABASE ${sql(db_name)}`;
-                    console.log(`[DB] Created ${db_name}`);
+                    log.info(`[DB] Created ${db_name}`);
                 } catch (e: any) {
                     if (e.code !== "42P04") {
-                        console.warn("[DB] Create DB warning:", e);
+                        log.warn("[DB] Create DB warning:", { error: e });
                     }
                 } finally {
                     await admin.close();
@@ -197,15 +198,15 @@ if (is_pg) {
 
         if (env.vector_backend === "valkey") {
             vector_store = new ValkeyVectorStore();
-            console.log("[DB] Using Valkey VectorStore");
+            log.info("[DB] Using Valkey VectorStore");
         } else {
             vector_store = new PostgresVectorStore({ run_async, get_async, all_async }, TABLE_VECTORS.replace(/"/g, ""));
-            console.log(`[DB] Using Postgres VectorStore with table: ${TABLE_VECTORS}`);
+            log.info(`[DB] Using Postgres VectorStore with table: ${TABLE_VECTORS}`);
         }
     };
 
     dbReadyPromise = internal_init().catch(e => {
-        console.error("[DB] Init failed:", e);
+        log.error("[DB] Init failed:", { error: e });
         process.exit(1);
     });
 
@@ -264,15 +265,15 @@ if (is_pg) {
 
          if (env.vector_backend === "valkey") {
             vector_store = new ValkeyVectorStore();
-            console.log("[DB] Using Valkey VectorStore");
+            log.info("[DB] Using Valkey VectorStore");
         } else {
             vector_store = new PostgresVectorStore({ run_async, get_async, all_async }, sqlite_vector_table);
-            console.log(`[DB] Using SQLite VectorStore with table: ${sqlite_vector_table}`);
+            log.info(`[DB] Using SQLite VectorStore with table: ${sqlite_vector_table}`);
         }
     };
 
     dbReadyPromise = internal_init().catch(e => {
-        console.error("[DB] SQLite Init failed:", e);
+        log.error("[DB] SQLite Init failed:", { error: e });
         process.exit(1);
     });
 
@@ -618,7 +619,7 @@ export const log_maint_op = async (
             Date.now(),
         ]);
     } catch (e) {
-        console.error("[DB] Maintenance log error:", e);
+        log.error("[DB] Maintenance log error:", { error: e });
     }
 };
 

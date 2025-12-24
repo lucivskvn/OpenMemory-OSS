@@ -103,10 +103,10 @@ export default function decay() {
 
     async function boostmemory(id: string) {
         try {
-            const res = await fetch(`${API_BASE_URL}/memory/${id}`, {
-                method: 'PATCH',
+            const res = await fetch(`${API_BASE_URL}/api/memory/reinforce`, {
+                method: 'POST',
                 headers: getHeaders(),
-                body: JSON.stringify({ salience: 0.8 })
+                body: JSON.stringify({ id, boost: 0.8 })
             })
             if (!res.ok) throw new Error('failed to boost memory')
             fetchdata()

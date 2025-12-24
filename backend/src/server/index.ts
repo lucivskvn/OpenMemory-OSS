@@ -84,6 +84,7 @@ if (typeof mcp === 'function') {
 }
 
 if (import.meta.main) {
+    // eslint-disable-next-line no-console
     console.log(ASC); // Keep banner raw
     log.info(`[CONFIG] Vector Dimension: ${env.vec_dim}`);
     log.info(`[CONFIG] Cache Segments: ${env.cache_segments}`);
