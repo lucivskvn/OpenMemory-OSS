@@ -254,7 +254,7 @@ export async function applyDualPhaseDecayToAllMemories(): Promise<{ processed: n
 
     while (true) {
         const mems = await all_async(
-            `select id,salience,decay_lambda,last_seen_at,updated_at,created_at,content,summary,primary_sector from ${TABLE_MEMORIES} limit ? offset ?`,
+            `select id,salience,decay_lambda,last_seen_at,updated_at,created_at,content,summary,primary_sector from ${TABLE_MEMORIES} order by id limit ? offset ?`,
             [limit, offset]
         );
 

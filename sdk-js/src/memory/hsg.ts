@@ -44,6 +44,7 @@ export interface hsg_q_result {
     path: string[];
     salience: number;
     last_seen_at: number;
+    created_at?: number;
 }
 export const sector_configs: Record<string, sector_cfg> = {
     episodic: {
@@ -475,18 +476,50 @@ export async function create_single_waypoint(
     user_id?: string | null,
 ): Promise<void> {
     const thresh = 0.75;
-    const mems = user_id
-        ? await q.all_mem_by_user.all(user_id, 1000, 0)
-        : await q.all_mem.all(1000, 0);
+
+    // Optimization: Use vector search to find best semantic match instead of scanning 1000 recent
+    const candidates = await vector_store.search(new_mean, 20);
+
     let best: { id: string; similarity: number } | null = null;
-    for (const mem of mems) {
-        if (mem.id === new_id || !mem.mean_vec) continue;
-        const ex_mean = buf_to_vec(mem.mean_vec);
-        const sim = cos_sim(new Float32Array(new_mean), ex_mean);
-        if (!best || sim > best.similarity) {
-            best = { id: mem.id, similarity: sim };
+
+    if (candidates.length > 0) {
+        // Batch retrieve candidate details to filter by user if needed and get other metadata
+        const ids = candidates.map(c => c.id).filter(id => id !== new_id);
+        if (ids.length > 0) {
+            const mems = await q.get_mems_by_ids.all(ids);
+
+            for (const cand of candidates) {
+                if (cand.id === new_id) continue;
+
+                // Filter by user if specified
+                if (user_id) {
+                    const m = mems.find(x => x.id === cand.id);
+                    if (!m || m.user_id !== user_id) continue;
+                }
+
+                if (!best || cand.score > best.similarity) {
+                    best = { id: cand.id, similarity: cand.score };
+                }
+            }
         }
     }
+
+    // Fallback if vector search returned nothing useful (e.g. cold start)
+    if (!best) {
+        const mems = user_id
+            ? await q.all_mem_by_user.all(user_id, 50, 0)
+            : await q.all_mem.all(50, 0);
+
+        for (const mem of mems) {
+            if (mem.id === new_id || !mem.mean_vec) continue;
+            const ex_mean = buf_to_vec(mem.mean_vec);
+            const sim = cos_sim(new Float32Array(new_mean), ex_mean);
+            if (!best || sim > best.similarity) {
+                best = { id: mem.id, similarity: sim };
+            }
+        }
+    }
+
     if (best) {
         await q.ins_waypoint.run(
             new_id,
@@ -896,6 +929,7 @@ export async function hsg_query(
                 path: em?.path || [mid],
                 salience: sal,
                 last_seen_at: m.last_seen_at,
+                created_at: m.created_at,
             });
         }
         res.sort((a, b) => b.score - a.score);

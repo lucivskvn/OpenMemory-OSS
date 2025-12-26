@@ -20,6 +20,38 @@ export class ValkeyVectorStore implements VectorStore {
         return `vec:${sector}:${id}`;
     }
 
+    async init(): Promise<void> {
+        // Create indices for each sector
+        const sectors = ["episodic", "semantic", "procedural", "emotional", "reflective"];
+        const dim = env.vec_dim || 1536;
+
+        for (const sec of sectors) {
+            const idx = `idx:${sec}`;
+            try {
+                // Check if index exists
+                await this.client.send("FT.INFO", [idx]);
+            } catch (e) {
+                // Create index if missing
+                try {
+                    await this.client.send("FT.CREATE", [
+                        idx,
+                        "ON", "HASH",
+                        "PREFIX", "1", `vec:${sec}:`,
+                        "SCHEMA",
+                        "user_id", "TAG",
+                        "v", "VECTOR", "HNSW", "6",
+                        "TYPE", "FLOAT32",
+                        "DIM", dim.toString(),
+                        "DISTANCE_METRIC", "COSINE"
+                    ]);
+                    log.info(`[Valkey] Created index ${idx}`);
+                } catch (ce) {
+                    log.error(`[Valkey] Failed to create index ${idx}`, { error: ce });
+                }
+            }
+        }
+    }
+
     async storeVector(id: string, sector: string, vector: number[], dim: number, user_id?: string): Promise<void> {
         const key = this.getKey(id, sector);
         const buf = vectorToBuffer(vector);
@@ -65,22 +97,28 @@ export class ValkeyVectorStore implements VectorStore {
         } while (cursor !== "0");
     }
 
-    async searchSimilar(sector: string, queryVec: number[], topK: number): Promise<Array<{ id: string; score: number }>> {
+    async searchSimilar(sector: string, queryVec: number[], topK: number, user_id?: string): Promise<Array<{ id: string; score: number }>> {
         const indexName = `idx:${sector}`;
         const buf = vectorToBuffer(queryVec);
 
         try {
-            // Bun Redis supports `call` or `send` for raw commands?
-            // Docs said "send" for raw commands.
-            // "const info = await redis.send('INFO', []);"
-
             const blobStr = buf.toString('latin1'); // Binary string
+
+            // Build filter query
+            let query = `*=>[KNN ${topK} @v $blob AS score]`;
+            if (user_id) {
+                // Pre-filter by user_id TAG
+                // Syntax: (@user_id:{uid})=>[KNN ...]
+                // sanitize user_id for TAG field (escape special chars if needed)
+                const safe_uid = user_id.replace(/([,.<>{}\[\]"':;!@#$%^&*()\-+=~])/g, '\\$1');
+                query = `(@user_id:{${safe_uid}})=>[KNN ${topK} @v $blob AS score]`;
+            }
 
             const res = await this.client.send(
                 "FT.SEARCH",
                 [
                     indexName,
-                    `*=>[KNN ${topK} @v $blob AS score]`,
+                    query,
                     "PARAMS",
                     "2",
                     "blob",
@@ -232,5 +270,42 @@ export class ValkeyVectorStore implements VectorStore {
             }
         } while (cursor !== "0");
         return results;
+    }
+
+    async search(queryVec: number[], topK: number, user_id?: string): Promise<Array<{ id: string; score: number }>> {
+         // Valkey search global fallback (scan all vectors)
+         // This is slow but necessary if we don't have a global index or sector
+         const results: Array<{ id: string; score: number }> = [];
+         let cursor = "0";
+         const allVecs: Array<{ id: string; vector: number[] }> = [];
+
+         // We scan for ALL keys starting with vec:
+         do {
+            const res = await this.client.scan(cursor, "MATCH", `vec:*:*`, "COUNT", 100);
+            cursor = res[0];
+            const keys = res[1];
+            if (keys.length) {
+                 const promises = keys.map(k => this.client.hmget(k, ["v", "user_id"]));
+                 const values = await Promise.all(promises);
+
+                 values.forEach((val, idx) => {
+                     if (val && val[0]) {
+                         const uid = val[1] as string;
+                         if (user_id && uid !== user_id) return;
+
+                         const buf = Buffer.from(val[0] as string, 'latin1');
+                         const id = keys[idx].split(":").pop()!;
+                         allVecs.push({ id, vector: bufferToVector(buf) });
+                     }
+                 });
+            }
+        } while (cursor !== "0");
+
+        const sims = allVecs.map(v => ({
+            id: v.id,
+            score: this.cosineSimilarity(queryVec, v.vector)
+        }));
+        sims.sort((a, b) => b.score - a.score);
+        return sims.slice(0, topK);
     }
 }

@@ -5,15 +5,17 @@ import { log } from "../../core/log";
 
 export const req_tracker_plugin = (app: Elysia) => {
     let requests = 0;
-    setInterval(() => {
+    // Buffer requests and flush periodically
+    const timer = setInterval(() => {
         if (requests > 0) {
-            run_async(
-                `insert into ${TABLE_STATS}(type,count,ts) values('request',?,?)`,
-                [requests, Date.now()],
-            ).catch(e => log.error("Request stats logging failed", e));
+            q.log_request_stat.run(requests, Date.now())
+                .catch(e => log.error("Request stats logging failed", { error: e.message }));
             requests = 0;
         }
     }, 60000);
+
+    // Unref to avoid holding process up
+    if (timer.unref) timer.unref();
 
     return app.onRequest(() => {
         requests++;
@@ -29,10 +31,14 @@ export const dash = (app: Elysia) =>
 
                     let dbSize = 0;
                     if (env.metadata_backend === "sqlite") {
-                        const dbp = env.db_path;
-                        const file = Bun.file(dbp);
-                        if (await file.exists()) {
-                            dbSize = file.size;
+                        try {
+                            const dbp = env.db_path;
+                            const file = Bun.file(dbp);
+                            if (await file.exists()) {
+                                dbSize = file.size;
+                            }
+                        } catch (e) {
+                            // ignore FS errors
                         }
                     }
 
@@ -71,6 +77,30 @@ export const dash = (app: Elysia) =>
                 query: t.Object({
                     limit: t.Optional(t.Union([t.String(), t.Numeric()])),
                     offset: t.Optional(t.Union([t.String(), t.Numeric()]))
+                })
+            })
+            .get("/activity", async ({ query, set }) => {
+                try {
+                    const limit = Number(query.limit) || 50;
+                    const activities = await q.get_recent_activity.all(limit);
+                    return {
+                        activities: activities.map((a: any) => ({
+                            id: a.id,
+                            timestamp: a.updated_at,
+                            content: a.content,
+                            sector: a.primary_sector,
+                            salience: a.salience,
+                            type: a.created_at === a.updated_at ? "memory_created" : "memory_updated"
+                        }))
+                    };
+                } catch (e: any) {
+                    log.error("Dashboard activity failed", { error: e.message });
+                    set.status = 500;
+                    return { error: "Failed to fetch activity" };
+                }
+            }, {
+                query: t.Object({
+                    limit: t.Optional(t.Union([t.String(), t.Numeric()]))
                 })
             })
             .get("/config", () => {

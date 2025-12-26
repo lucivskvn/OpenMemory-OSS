@@ -54,6 +54,9 @@ describe('OpenMemory Backend API', () => {
         expect(queryRes.status).toBe(200);
         const queryData = await queryRes.json();
         expect(Array.isArray(queryData.matches)).toBe(true);
+        if (queryData.matches.length > 0) {
+             expect(queryData.matches[0]).toHaveProperty('created_at');
+        }
 
         // Update
         const updateRes = await app.handle(new Request(`http://localhost/api/memory/${memoryId}`, {

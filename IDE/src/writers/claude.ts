@@ -17,11 +17,11 @@ export interface ClaudeConfig {
 
 export function generateClaudeConfig(backendUrl: string, apiKey?: string, useMCP = false, mcpServerPath?: string): ClaudeConfig {
     if (useMCP) {
-        const backendMcpPath = mcpServerPath || path.join(process.cwd(), 'backend', 'dist', 'ai', 'mcp.js');
+        const backendMcpPath = mcpServerPath || path.join(process.cwd(), 'backend', 'dist', 'mcp.js');
         return {
             mcpServers: {
                 openmemory: {
-                    command: 'node',
+                    command: 'bun',
                     args: [backendMcpPath],
                     env: apiKey ? { OM_API_KEY: apiKey } : undefined
                 }

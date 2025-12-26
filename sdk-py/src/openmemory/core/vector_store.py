@@ -16,7 +16,7 @@ class VectorStore(ABC):
         pass
 
     @abstractmethod
-    async def search_similar(self, sector: str, query_vec: List[float], top_k: int) -> List[Dict[str, Any]]:
+    async def search_similar(self, sector: str, query_vec: List[float], top_k: int, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
         pass
 
     @abstractmethod
@@ -33,6 +33,10 @@ class VectorStore(ABC):
 
     @abstractmethod
     async def get_vectors_by_sector(self, sector: str) -> List[Dict[str, Any]]:
+        pass
+
+    @abstractmethod
+    async def search(self, query_vec: List[float], top_k: int, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
         pass
 
 class SQLiteVectorStore(VectorStore):
@@ -78,10 +82,15 @@ class SQLiteVectorStore(VectorStore):
         sql = f"delete from {self.table} where id=?"
         self.db_ops['exec'](sql, (id,))
 
-    async def search_similar(self, sector: str, query_vec: List[float], top_k: int) -> List[Dict[str, Any]]:
+    async def search_similar(self, sector: str, query_vec: List[float], top_k: int, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
         # In-memory search
         sql = f"select id,v,dim from {self.table} where sector=?"
-        rows = self.db_ops['many'](sql, (sector,))
+        params = [sector]
+        if user_id:
+            sql += " and user_id=?"
+            params.append(user_id)
+
+        rows = self.db_ops['many'](sql, tuple(params))
         sims = []
         for row in rows:
             vec = self._blob_to_vec(row['v'])
@@ -115,3 +124,23 @@ class SQLiteVectorStore(VectorStore):
         sql = f"select id,v,dim from {self.table} where sector=?"
         rows = self.db_ops['many'](sql, (sector,))
         return [{"id": r['id'], "vector": self._blob_to_vec(r['v']), "dim": r['dim']} for r in rows]
+
+    async def search(self, query_vec: List[float], top_k: int, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        # In-memory global search
+        sql = f"select id,v from {self.table}"
+        params = []
+        if user_id:
+            sql += " where user_id=?"
+            params.append(user_id)
+
+        sql += " limit 10000"
+
+        rows = self.db_ops['many'](sql, tuple(params))
+        sims = []
+        for row in rows:
+            vec = self._blob_to_vec(row['v'])
+            sim = self._cosine_similarity(query_vec, vec)
+            sims.append({"id": row['id'], "score": sim})
+
+        sims.sort(key=lambda x: x['score'], reverse=True)
+        return sims[:top_k]

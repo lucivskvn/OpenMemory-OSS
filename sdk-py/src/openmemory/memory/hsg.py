@@ -75,9 +75,63 @@ def calc_mean_vec(embeddings, sectors):
         return mean
 
 async def create_single_waypoint(id, mean_vec, now, user_id):
-    # Minimal implementation for Python SDK to maintain graph connectivity
-    # This would ideally use vector search to find nearest neighbors
-    pass
+    from ..core.db import vector_store
+    if not vector_store:
+        return
+
+    # Optimization: Use vector search to find best semantic match
+    candidates = await vector_store.search(mean_vec, 20)
+
+    best = None
+    if candidates:
+        cand_ids = [c['id'] for c in candidates if c['id'] != id]
+        if cand_ids:
+            # Fetch candidates to check user_id if needed
+            # Assuming q.get_mems_by_ids exists or use many_query
+            # In SDK, q is wrapper around db methods.
+            # q.get_mems_by_ids might not exist in Python SDK yet?
+            # Let's check db.py later or rely on vector store if it returned user_id?
+            # vector store doesn't return user_id in search usually.
+            # Fallback to simple SQL for now.
+            from ..core.db import many_query
+            placeholders = ",".join("?" * len(cand_ids))
+            sql = f"select id, user_id from memories where id in ({placeholders})"
+            mems = many_query(sql, tuple(cand_ids))
+            mem_map = {m['id']: m for m in mems}
+
+            for cand in candidates:
+                if cand['id'] == id: continue
+
+                m = mem_map.get(cand['id'])
+                if not m: continue
+                if user_id and m['user_id'] != user_id: continue
+
+                if not best or cand['score'] > best['similarity']:
+                    best = {'id': cand['id'], 'similarity': cand['score']}
+
+    # Fallback to recent if no vector match (cold start)
+    if not best:
+        # Simplified recent fetch
+        from ..core.db import many_query
+        sql = "select id, mean_vec from memories order by created_at desc limit 50"
+        if user_id:
+            sql = f"select id, mean_vec from memories where user_id='{user_id}' order by created_at desc limit 50"
+
+        recent = many_query(sql)
+        for mem in recent:
+            if mem['id'] == id or not mem['mean_vec']: continue
+            vec = buffer_to_vector(mem['mean_vec'])
+            if len(vec) != len(mean_vec): continue
+
+            # Dot product
+            sim = sum(a*b for a,b in zip(vec, mean_vec))
+            if not best or sim > best['similarity']:
+                best = {'id': mem['id'], 'similarity': sim}
+
+    if best:
+        q.ins_waypoint.run(id, best['id'], user_id, best['similarity'], now, now)
+    else:
+        q.ins_waypoint.run(id, id, user_id, 1.0, now, now)
 
 async def create_cross_sector_waypoints(id, primary, additional, user_id):
     if not additional: return

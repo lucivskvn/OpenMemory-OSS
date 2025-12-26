@@ -1,4 +1,4 @@
-// ... imports ...
+#!/usr/bin/env bun
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { JSONRPCMessage, JSONRPCResponse } from "@modelcontextprotocol/sdk/types.js";
@@ -88,6 +88,7 @@ export const create_mcp_srv = () => {
                 sectors: m.sectors,
                 salience: Number(m.salience.toFixed(4)),
                 last_seen_at: m.last_seen_at,
+                created_at: m.created_at,
                 path: m.path,
                 content: m.content,
             }));
@@ -158,8 +159,10 @@ export const create_mcp_srv = () => {
             const u = uid(user_id);
             let rows: mem_row[];
             if (u) {
-                const all = await q.all_mem_by_user.all(u, limit ?? 10, 0);
-                rows = sector ? all.filter((row) => row.primary_sector === sector) : all;
+                // Optimized query: filter by user AND sector at DB level if both present
+                rows = sector
+                    ? await q.all_mem_by_sector_user.all(sector, u, limit ?? 10, 0)
+                    : await q.all_mem_by_user.all(u, limit ?? 10, 0);
             } else {
                 rows = sector ? await q.all_mem_by_sector.all(sector, limit ?? 10, 0) : await q.all_mem.all(limit ?? 10, 0);
             }

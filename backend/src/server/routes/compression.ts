@@ -8,19 +8,13 @@ export const compression = (app: Elysia) => {
     if (!env.compression_enabled) return;
 
     app.group("/api/compression", (app) =>
-        app.post("/compress", async ({ body, set }) => {
+        app.post("/compress", async ({ body }) => {
             const b = body;
-            try {
-                const res = compressionEngine.compress(b.content, "semantic");
-                return {
-                    compressed: res.comp,
-                    metrics: res.metrics
-                };
-            } catch (e: any) {
-                log.error("Compression failed", { error: e.message });
-                set.status = 500;
-                return { err: e.message };
-            }
+            const res = compressionEngine.compress(b.content, "semantic");
+            return {
+                compressed: res.comp,
+                metrics: res.metrics
+            };
         }, {
             body: t.Object({
                 content: t.String()

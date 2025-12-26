@@ -510,9 +510,9 @@ export class OpenMemory {
                 // Checking file list...
                 throw new Error("LangGraph local mode not fully implemented in SDK yet. Use remote mode.");
             },
-            retrieve: async (node: string, options: { query?: string; namespace?: string; graphId?: string; limit?: number } = {}) => {
+            retrieve: async (node: string, options: { query?: string; namespace?: string; graphId?: string; limit?: number; userId?: string } = {}) => {
                 if (this.mode === 'remote') {
-                    const payload = { node, query: options.query, namespace: options.namespace, graph_id: options.graphId, limit: options.limit };
+                    const payload = { node, query: options.query, namespace: options.namespace, graph_id: options.graphId, limit: options.limit, user_id: options.userId };
                     const res = await fetch(`${this.url}/api/lg/retrieve`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', ...(this.apiKey && { 'Authorization': `Bearer ${this.apiKey}` }) },
@@ -523,12 +523,13 @@ export class OpenMemory {
                 }
                 throw new Error("LangGraph local mode not implemented.");
             },
-            context: async (options: { namespace?: string; graphId?: string; limit?: number } = {}) => {
+            context: async (options: { namespace?: string; graphId?: string; limit?: number; userId?: string } = {}) => {
                 if (this.mode === 'remote') {
                     const params = new URLSearchParams();
                     if (options.namespace) params.set('namespace', options.namespace);
                     if (options.graphId) params.set('graph_id', options.graphId);
                     if (options.limit) params.set('limit', options.limit.toString());
+                    if (options.userId) params.set('user_id', options.userId);
                     const res = await fetch(`${this.url}/api/lg/context?${params}`, {
                         headers: { ...(this.apiKey && { 'Authorization': `Bearer ${this.apiKey}` }) }
                     });

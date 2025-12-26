@@ -4,7 +4,7 @@ import { env } from './cfg'
 import pkg from '../../package.json' with { type: "json" };
 import { log } from './log';
 
-const DISABLED = (process.env.OM_TELEMETRY ?? '').toLowerCase() === 'false'
+const ENABLED = (process.env.OM_TELEMETRY ?? '').toLowerCase() === 'true'
 const gatherVersion = (): string => {
     if (process.env.npm_package_version) return process.env.npm_package_version
     return pkg?.version || 'unknown'
@@ -13,7 +13,7 @@ const gatherVersion = (): string => {
 const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 
 export const sendTelemetry = async () => {
-    if (DISABLED) return
+    if (!ENABLED) return
     try {
         const ramMb = Math.round(os.totalmem() / (1024 * 1024))
         const storageMb = ramMb * 4

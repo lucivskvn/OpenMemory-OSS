@@ -26,6 +26,7 @@ type q_type = {
     get_mem: { get: (id: string) => Promise<any> };
     get_mems_by_ids: { all: (ids: string[]) => Promise<any[]> }; // Batch retrieval
     get_mem_by_simhash: { get: (simhash: string) => Promise<any> };
+    search_mem_by_tag: { all: (tag_pattern: string, limit: number, offset: number) => Promise<any[]> };
     all_mem: { all: (limit: number, offset: number) => Promise<any[]> };
     all_mem_by_sector: {
         all: (sector: string, limit: number, offset: number) => Promise<any[]>;
@@ -230,6 +231,13 @@ q = {
             one(
                 `select * from ${TABLE_MEMORIES} where simhash=? order by salience desc limit 1`,
                 [simhash],
+            ),
+    },
+    search_mem_by_tag: {
+        all: (tag_pattern, limit, offset) =>
+            all_async(
+                `select * from ${TABLE_MEMORIES} where tags like ? order by created_at desc limit ? offset ?`,
+                [tag_pattern, limit, offset],
             ),
     },
     all_mem: {

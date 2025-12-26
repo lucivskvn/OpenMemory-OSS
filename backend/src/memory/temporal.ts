@@ -43,6 +43,10 @@ export const create_fact = async (
     confidence: number = 1.0,
     metadata: Record<string, any> = {}
 ) => {
+    if (valid_to !== null && valid_to < valid_from) {
+        throw new Error("valid_to cannot be less than valid_from");
+    }
+
     await transaction.begin();
     try {
         // 1. Check for existing open facts to invalidate (enforce integrity)
@@ -53,6 +57,23 @@ export const create_fact = async (
             ORDER BY valid_from DESC
         `, [subject, predicate]);
 
+        // Check for future facts to cap the new fact's validity (Gap Filling)
+        const future_facts = await all_async(`
+            SELECT valid_from FROM ${TABLE_TF}
+            WHERE subject = ? AND predicate = ? AND valid_from > ?
+            ORDER BY valid_from ASC
+            LIMIT 1
+        `, [subject, predicate, valid_from]);
+
+        if (future_facts.length > 0) {
+            const next_start = future_facts[0].valid_from;
+            const cap_time = next_start - 1;
+            // Cap valid_to to prevent overlap with future fact
+            if (valid_to === null || valid_to > cap_time) {
+                valid_to = cap_time;
+            }
+        }
+
         for (const old of existing) {
             if (old.valid_from < valid_from) {
                 // Close the old fact just before the new one starts
@@ -62,6 +83,16 @@ export const create_fact = async (
                 // Collision: existing fact starts at exact same time.
                 // Bump the new fact's start time by 1ms to maintain strict ordering
                 valid_from += 1;
+
+                // Re-check future facts because valid_from changed
+                if (future_facts.length > 0) {
+                     const next_start = future_facts[0].valid_from;
+                     const cap_time = next_start - 1;
+                     if (valid_to === null || valid_to > cap_time) {
+                         valid_to = cap_time;
+                     }
+                }
+
                 // And now invalidate the old one at valid_from - 1 (which is the original valid_from)
                 // Wait, if old starts at T, and new starts at T+1, we close old at T.
                 // That means old has duration 0.

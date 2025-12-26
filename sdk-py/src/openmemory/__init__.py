@@ -228,9 +228,9 @@ class OpenMemory:
                     return res.json()
                 raise NotImplementedError("LangGraph local mode not fully implemented in SDK yet. Use remote mode.")
 
-            def retrieve(self, node, query=None, namespace=None, graph_id=None, limit=None):
+            def retrieve(self, node, query=None, namespace=None, graph_id=None, limit=None, user_id=None):
                 if self.om.mode == "remote":
-                    payload = {"node": node, "query": query, "namespace": namespace, "graph_id": graph_id, "limit": limit}
+                    payload = {"node": node, "query": query, "namespace": namespace, "graph_id": graph_id, "limit": limit, "user_id": user_id}
                     headers = {"Content-Type": "application/json"}
                     if self.om.api_key: headers["Authorization"] = f"Bearer {self.om.api_key}"
                     res = requests.post(f"{self.om.url}/api/lg/retrieve", json=payload, headers=headers)
@@ -238,12 +238,13 @@ class OpenMemory:
                     return res.json()
                 raise NotImplementedError("LangGraph local mode not implemented.")
 
-            def context(self, namespace=None, graph_id=None, limit=None):
+            def context(self, namespace=None, graph_id=None, limit=None, user_id=None):
                 if self.om.mode == "remote":
                     params = {}
                     if namespace: params["namespace"] = namespace
                     if graph_id: params["graph_id"] = graph_id
                     if limit: params["limit"] = limit
+                    if user_id: params["user_id"] = user_id
                     headers = {}
                     if self.om.api_key: headers["Authorization"] = f"Bearer {self.om.api_key}"
                     res = requests.get(f"{self.om.url}/api/lg/context", params=params, headers=headers)

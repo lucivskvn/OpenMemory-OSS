@@ -57,6 +57,9 @@ def create_fact(
     if metadata is None:
         metadata = {}
 
+    if valid_to is not None and valid_to < valid_from:
+        raise ValueError("valid_to cannot be less than valid_from")
+
     # 1. Integrity check: Invalidate overlapping open facts
     existing = many_query(
         "SELECT id, valid_from FROM temporal_facts WHERE subject = ? AND predicate = ? AND valid_to IS NULL ORDER BY valid_from DESC",

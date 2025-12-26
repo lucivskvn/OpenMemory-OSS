@@ -83,9 +83,7 @@ const mark = async (mems: any[]) => {
         if (m) {
             const meta = JSON.parse(m.meta || "{}");
             meta.consolidated = true;
-            await q.upd_mem.run(
-                m.content,
-                m.tags,
+            await q.upd_meta.run(
                 JSON.stringify(meta),
                 Date.now(),
                 m.id,
@@ -122,38 +120,55 @@ const boost = async (mems: any[]) => {
 export const run_reflection = async () => {
     log.info("[REFLECT] Starting reflection job...");
     const min = env.reflect_min || 20;
-    const mems = await q.all_mem.all(100, 0);
-    log.info(
-        `[REFLECT] Fetched ${mems.length} memories (min required: ${min})`,
-    );
-    if (mems.length < min) {
-        log.info("[REFLECT] Not enough memories, skipping");
-        return { created: 0, reason: "low" };
+    // Increased batch size to capture multiple users' recent context
+    const mems = await q.all_mem.all(500, 0);
+    log.info(`[REFLECT] Fetched ${mems.length} recent memories`);
+
+    if (mems.length === 0) return { created: 0, reason: "empty" };
+
+    // Group by user_id to ensure privacy and relevance
+    const byUser = new Map<string, any[]>();
+    for (const m of mems) {
+        const u = m.user_id || "anonymous";
+        if (!byUser.has(u)) byUser.set(u, []);
+        byUser.get(u)!.push(m);
     }
-    const cls = cluster(mems);
-    log.info(`[REFLECT] Clustered into ${cls.length} groups`);
-    let n = 0;
-    for (const c of cls) {
-        const txt = summ(c);
-        const s = sal(c);
-        const src_ids = c.mem.map((m: any) => m.id);
-        const meta = {
-            type: "auto_reflect",
-            sources: src_ids,
-            freq: c.n,
-            at: new Date().toISOString(),
-        };
-        log.info(
-            `[REFLECT] Creating reflection: ${c.n} memories, salience=${s.toFixed(3)}, sector=${c.mem[0].primary_sector}`,
-        );
-        await add_hsg_memory(txt, j(["reflect:auto"]), meta);
-        await mark(c.mem);
-        await boost(c.mem);
-        n++;
+
+    let totalCreated = 0;
+    let totalClusters = 0;
+
+    for (const [userId, userMems] of byUser.entries()) {
+        if (userMems.length < min) continue;
+
+        const cls = cluster(userMems);
+        totalClusters += cls.length;
+
+        for (const c of cls) {
+            const txt = summ(c);
+            const s = sal(c);
+            const src_ids = c.mem.map((m: any) => m.id);
+            const meta = {
+                type: "auto_reflect",
+                sources: src_ids,
+                freq: c.n,
+                at: new Date().toISOString(),
+            };
+
+            const targetUser = userId === "anonymous" ? undefined : userId;
+
+            log.info(
+                `[REFLECT] Creating reflection for ${userId}: ${c.n} memories, salience=${s.toFixed(3)}, sector=${c.mem[0].primary_sector}`,
+            );
+            await add_hsg_memory(txt, j(["reflect:auto"]), meta, targetUser);
+            await mark(c.mem);
+            await boost(c.mem);
+            totalCreated++;
+        }
     }
-    if (n > 0) await log_maint_op("reflect", n);
-    log.info(`[REFLECT] Job complete: created ${n} reflections`);
-    return { created: n, clusters: cls.length };
+
+    if (totalCreated > 0) await log_maint_op("reflect", totalCreated);
+    log.info(`[REFLECT] Job complete: created ${totalCreated} reflections across ${byUser.size} users`);
+    return { created: totalCreated, clusters: totalClusters };
 };
 
 let timer: NodeJS.Timeout | null = null;

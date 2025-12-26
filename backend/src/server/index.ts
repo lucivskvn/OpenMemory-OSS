@@ -18,6 +18,7 @@ import { lg } from "./routes/langgraph";
 import { usr } from "./routes/users";
 import { temporal } from "./routes/temporal";
 import { vercel } from "./routes/vercel";
+import { settings } from "./routes/settings";
 import { Elysia } from "elysia";
 import { cors } from "@elysiajs/cors";
 import { log } from "../core/log";
@@ -44,11 +45,11 @@ export const app = new Elysia()
             set.status = 404;
             return { err: "not_found" };
         }
-        log.error(`[SERVER] Error: ${code}`, { error: error.message });
+        log.error(`[SERVER] Error: ${code}`, { error: error.message, stack: error.stack });
         set.status = 500;
         return {
             err: "internal_server_error",
-            msg: error.message
+            msg: "Internal Server Error"
         };
     })
     .use(cors({
@@ -74,6 +75,7 @@ app.use(usr);
 app.use(temporal);
 app.use(dash);
 app.use(vercel);
+app.use(settings);
 
 log.info("[SERVER] Registering MCP plugin...");
 if (typeof mcp === 'function') {
@@ -147,10 +149,20 @@ if (import.meta.main) {
     start_user_summary_reflection();
 
     log.info(`[SERVER] Starting on port ${env.port}`);
-    app.listen(env.port, () => {
+    const server = app.listen(env.port, () => {
         log.info(`[SERVER] Running on http://localhost:${env.port}`);
         sendTelemetry().catch(() => {
             // ignore telemetry failures
         });
     });
+
+    const shutdown = () => {
+        log.info("[SERVER] Shutting down...");
+        stop_reflection();
+        stop_user_summary_reflection();
+        server.stop();
+        process.exit(0);
+    };
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
 }

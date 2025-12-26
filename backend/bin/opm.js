@@ -109,7 +109,7 @@ const querymem = async (txt, opts) => {
     console.log(
       `   score: ${m.score?.toFixed(3) || 'n/a'} | sal: ${m.salience?.toFixed(
         3,
-      )}`,
+      )} | created: ${new Date(m.created_at || m.last_seen_at).toLocaleString()}`,
     );
     if (m.tags) console.log(`   tags: ${m.tags}`);
     console.log();
@@ -130,7 +130,11 @@ const listmem = async (opts) => {
   items.forEach((m, i) => {
     console.log(`${i + 1}. [${m.primary_sector}] ${m.content}`);
     console.log(`   id: ${m.id} | user: ${opts.usr || m.user_id || 'system'}`);
-    console.log(`   sal: ${m.salience?.toFixed(3)}`);
+    console.log(
+      `   sal: ${m.salience?.toFixed(3)} | created: ${new Date(
+        m.created_at || m.last_seen_at,
+      ).toLocaleString()}`,
+    );
     if (m.tags) console.log(`   tags: ${m.tags}`);
     console.log();
   });

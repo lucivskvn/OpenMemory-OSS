@@ -10,24 +10,18 @@ import {
 export const temporal = (app: Elysia) =>
     app.group("/api/temporal", (app) =>
         app
-            .post("/fact", async ({ body, set }) => {
+            .post("/fact", async ({ body }) => {
                 const b = body;
-                try {
-                    const id = await create_fact(
-                        b.subject,
-                        b.predicate,
-                        b.object,
-                        b.valid_from,
-                        b.valid_to,
-                        b.confidence,
-                        b.metadata
-                    );
-                    return { ok: true, id };
-                } catch (error: any) {
-                    log.error('Temporal fact creation failed', { error: error.message });
-                    set.status = 500;
-                    return { error: error.message };
-                }
+                const id = await create_fact(
+                    b.subject,
+                    b.predicate,
+                    b.object,
+                    b.valid_from,
+                    b.valid_to,
+                    b.confidence,
+                    b.metadata
+                );
+                return { ok: true, id };
             }, {
                 body: t.Object({
                     subject: t.String({ minLength: 1 }),
@@ -39,21 +33,15 @@ export const temporal = (app: Elysia) =>
                     metadata: t.Optional(t.Any())
                 })
             })
-            .get("/fact", async ({ query, set }) => {
-                try {
-                    const filters = {
-                        subject: query.subject,
-                        predicate: query.predicate,
-                        object: query.object,
-                        valid_at: query.valid_at ? Number(query.valid_at) : undefined
-                    };
-                    const facts = await get_facts(filters);
-                    return { facts };
-                } catch (error: any) {
-                    log.error('Temporal fact query failed', { error: error.message });
-                    set.status = 500;
-                    return { error: error.message };
-                }
+            .get("/fact", async ({ query }) => {
+                const filters = {
+                    subject: query.subject,
+                    predicate: query.predicate,
+                    object: query.object,
+                    valid_at: query.valid_at ? Number(query.valid_at) : undefined
+                };
+                const facts = await get_facts(filters);
+                return { facts };
             }, {
                 query: t.Object({
                     subject: t.Optional(t.String()),
@@ -62,15 +50,9 @@ export const temporal = (app: Elysia) =>
                     valid_at: t.Optional(t.Union([t.String(), t.Numeric()]))
                 })
             })
-            .delete("/fact/:id", async ({ params, query, set }) => {
-                try {
-                    await invalidate_fact(params.id, query.valid_to ? Number(query.valid_to) : undefined);
-                    return { ok: true };
-                } catch (error: any) {
-                    log.error('Temporal fact invalidation failed', { error: error.message });
-                    set.status = 500;
-                    return { error: error.message };
-                }
+            .delete("/fact/:id", async ({ params, query }) => {
+                await invalidate_fact(params.id, query.valid_to ? Number(query.valid_to) : undefined);
+                return { ok: true };
             }, {
                 params: t.Object({
                     id: t.String()
@@ -79,22 +61,16 @@ export const temporal = (app: Elysia) =>
                     valid_to: t.Optional(t.Union([t.String(), t.Numeric()]))
                 })
             })
-            .post("/edge", async ({ body, set }) => {
+            .post("/edge", async ({ body }) => {
                 const b = body;
-                try {
-                    const id = await create_edge(
-                        b.source_id,
-                        b.target_id,
-                        b.relation,
-                        b.weight,
-                        b.metadata
-                    );
-                    return { ok: true, id };
-                } catch (error: any) {
-                    log.error('Temporal edge creation failed', { error: error.message });
-                    set.status = 500;
-                    return { error: error.message };
-                }
+                const id = await create_edge(
+                    b.source_id,
+                    b.target_id,
+                    b.relation,
+                    b.weight,
+                    b.metadata
+                );
+                return { ok: true, id };
             }, {
                 body: t.Object({
                     source_id: t.String(),
@@ -104,32 +80,21 @@ export const temporal = (app: Elysia) =>
                     metadata: t.Optional(t.Any())
                 })
             })
-            .get("/edge", async ({ query, set }) => {
-                try {
-                    const edges = await get_edges(query.source_id);
-                    return { edges };
-                } catch (error: any) {
-                    log.error('Temporal edge query failed', { error: error.message });
-                    set.status = 500;
-                    return { error: error.message };
-                }
+            .get("/edge", async ({ query }) => {
+                const edges = await get_edges(query.source_id);
+                return { edges };
             }, {
                 query: t.Object({
                     source_id: t.String()
                 })
             })
-            .get("/related", async ({ query, set }) => {
-                try {
-                    const related = await get_related_facts(
-                        query.fact_id,
-                        query.relation_type,
-                        query.at ? Number(query.at) : undefined
-                    );
-                    return { related };
-                } catch (error: any) {
-                    set.status = 500;
-                    return { error: error.message };
-                }
+            .get("/related", async ({ query }) => {
+                const related = await get_related_facts(
+                    query.fact_id,
+                    query.relation_type,
+                    query.at ? Number(query.at) : undefined
+                );
+                return { related };
             }, {
                 query: t.Object({
                     fact_id: t.String(),
@@ -137,18 +102,13 @@ export const temporal = (app: Elysia) =>
                     at: t.Optional(t.Union([t.String(), t.Numeric()]))
                 })
             })
-            .get("/search", async ({ query, set }) => {
-                try {
-                    const facts = await search_facts(
-                        query.pattern,
-                        query.field as any,
-                        query.at ? Number(query.at) : undefined
-                    );
-                    return { facts };
-                } catch (error: any) {
-                    set.status = 500;
-                    return { error: error.message };
-                }
+            .get("/search", async ({ query }) => {
+                const facts = await search_facts(
+                    query.pattern,
+                    query.field as any,
+                    query.at ? Number(query.at) : undefined
+                );
+                return { facts };
             }, {
                 query: t.Object({
                     pattern: t.String(),
@@ -156,32 +116,22 @@ export const temporal = (app: Elysia) =>
                     at: t.Optional(t.Union([t.String(), t.Numeric()]))
                 })
             })
-            .get("/timeline", async ({ query, set }) => {
-                try {
-                    const timeline = await get_subject_timeline(query.subject, query.predicate);
-                    return { timeline };
-                } catch (error: any) {
-                    set.status = 500;
-                    return { error: error.message };
-                }
+            .get("/timeline", async ({ query }) => {
+                const timeline = await get_subject_timeline(query.subject, query.predicate);
+                return { timeline };
             }, {
                 query: t.Object({
                     subject: t.String(),
                     predicate: t.Optional(t.String())
                 })
             })
-            .get("/changes", async ({ query, set }) => {
-                try {
-                    const timeline = await get_changes_in_window(
-                        Number(query.start),
-                        Number(query.end),
-                        query.subject
-                    );
-                    return { timeline };
-                } catch (error: any) {
-                    set.status = 500;
-                    return { error: error.message };
-                }
+            .get("/changes", async ({ query }) => {
+                const timeline = await get_changes_in_window(
+                    Number(query.start),
+                    Number(query.end),
+                    query.subject
+                );
+                return { timeline };
             }, {
                 query: t.Object({
                     start: t.Union([t.String(), t.Numeric()]),
@@ -189,18 +139,13 @@ export const temporal = (app: Elysia) =>
                     subject: t.Optional(t.String())
                 })
             })
-            .get("/frequency", async ({ query, set }) => {
-                try {
-                    const result = await get_change_frequency(
-                        query.subject,
-                        query.predicate,
-                        query.window_days ? Number(query.window_days) : undefined
-                    );
-                    return { result };
-                } catch (error: any) {
-                    set.status = 500;
-                    return { error: error.message };
-                }
+            .get("/frequency", async ({ query }) => {
+                const result = await get_change_frequency(
+                    query.subject,
+                    query.predicate,
+                    query.window_days ? Number(query.window_days) : undefined
+                );
+                return { result };
             }, {
                 query: t.Object({
                     subject: t.String(),
@@ -208,18 +153,13 @@ export const temporal = (app: Elysia) =>
                     window_days: t.Optional(t.Union([t.String(), t.Numeric()]))
                 })
             })
-            .get("/compare", async ({ query, set }) => {
-                try {
-                    const result = await compare_time_points(
-                        query.subject,
-                        Number(query.time1),
-                        Number(query.time2)
-                    );
-                    return { result };
-                } catch (error: any) {
-                    set.status = 500;
-                    return { error: error.message };
-                }
+            .get("/compare", async ({ query }) => {
+                const result = await compare_time_points(
+                    query.subject,
+                    Number(query.time1),
+                    Number(query.time2)
+                );
+                return { result };
             }, {
                 query: t.Object({
                     subject: t.String(),
@@ -227,17 +167,12 @@ export const temporal = (app: Elysia) =>
                     time2: t.Union([t.String(), t.Numeric()])
                 })
             })
-            .get("/volatile", async ({ query, set }) => {
-                try {
-                    const result = await get_volatile_facts(
-                        query.subject,
-                        query.limit ? Number(query.limit) : undefined
-                    );
-                    return { result };
-                } catch (error: any) {
-                    set.status = 500;
-                    return { error: error.message };
-                }
+            .get("/volatile", async ({ query }) => {
+                const result = await get_volatile_facts(
+                    query.subject,
+                    query.limit ? Number(query.limit) : undefined
+                );
+                return { result };
             }, {
                 query: t.Object({
                     subject: t.Optional(t.String()),

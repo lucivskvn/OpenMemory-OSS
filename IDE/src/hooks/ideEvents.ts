@@ -6,8 +6,10 @@ const microVectorCache = new Map<string, { vector: number[], timestamp: number, 
 const CACHE_MAX_SIZE = 32;
 
 export function generateEventHash(filePath: string, eventType: string, content: string): string {
-    const snippet = content.slice(0, 128);
-    return crypto.createHash('sha1').update(`${filePath}${eventType}${snippet}`).digest('hex');
+    // Use full content for integrity, or at least include length to detect changes at end of file
+    const len = content.length;
+    const snippet = content.slice(0, 256);
+    return crypto.createHash('sha1').update(`${filePath}${eventType}${len}${snippet}`).digest('hex');
 }
 
 export function shouldSkipEvent(filePath: string, eventType: string, content: string): boolean {

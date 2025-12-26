@@ -17,7 +17,7 @@ export interface CursorConfig {
 
 export function generateCursorConfig(backendUrl: string, apiKey?: string, useMCP = false, mcpServerPath?: string): CursorConfig {
     if (useMCP) {
-        const backendMcpPath = mcpServerPath || path.join(process.cwd(), 'backend', 'dist', 'ai', 'mcp.js');
+        const backendMcpPath = mcpServerPath || path.join(process.cwd(), 'backend', 'dist', 'mcp.js');
         return {
             name: 'OpenMemory',
             type: 'mcp',
