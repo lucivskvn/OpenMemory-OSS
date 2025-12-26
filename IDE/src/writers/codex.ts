@@ -23,11 +23,11 @@ export interface CodexConfig {
 
 export function generateCodexConfig(backendUrl: string, apiKey?: string, useMCP = false, mcpServerPath?: string): CodexConfig {
     if (useMCP) {
-        const backendMcpPath = mcpServerPath || path.join(process.cwd(), 'backend', 'dist', 'ai', 'mcp.js');
+        const backendMcpPath = mcpServerPath || path.join(process.cwd(), 'backend', 'dist', 'mcp.js');
         const config: CodexConfig = {
             mcpServers: {
                 openmemory: {
-                    command: 'node',
+                    command: 'bun',
                     args: [backendMcpPath]
                 }
             }

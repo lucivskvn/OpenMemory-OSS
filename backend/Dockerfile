@@ -19,6 +19,9 @@ FROM oven/bun:1.3.4
 
 WORKDIR /app
 
+# Install system dependencies (ffmpeg for audio/video extraction)
+RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+
 # Create a dedicated non-root user for security (Bun image already has 'bun' user)
 # We use 'bun' user which is ID 1000 usually.
 # But existing setup used 1001. We can stick to 'bun' user.
@@ -43,4 +46,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
   CMD bun -e "fetch('http://localhost:8080/health').then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))"
 
 # Start the application using bun
-ENTRYPOINT ["bun", "dist/server/index.js"]
+ENTRYPOINT ["bun", "run", "start"]

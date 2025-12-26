@@ -7,6 +7,7 @@ const rate_limit_store = new Map<
     string,
     { count: number; reset_time: number }
 >();
+const MAX_RATE_LIMIT_KEYS = 10000;
 
 function is_public_endpoint(path: string): boolean {
     return authConfig.public_endpoints.some(
@@ -41,6 +42,10 @@ function check_rate_limit(client_id: string): {
     const now = Date.now();
     const data = rate_limit_store.get(client_id);
     if (!data || now >= data.reset_time) {
+        if (rate_limit_store.size >= MAX_RATE_LIMIT_KEYS) {
+            const first = rate_limit_store.keys().next().value;
+            if (first) rate_limit_store.delete(first);
+        }
         const new_data = {
             count: 1,
             reset_time: now + authConfig.rate_limit_window_ms,

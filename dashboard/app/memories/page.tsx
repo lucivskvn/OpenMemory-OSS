@@ -98,7 +98,7 @@ export default function memories() {
                     content: m.content,
                     primary_sector: m.primary_sector,
                     tags: [],
-                    created_at: m.last_seen_at || Date.now(),
+                    created_at: m.created_at || m.last_seen_at || Date.now(),
                     salience: m.salience,
                 }))
             )

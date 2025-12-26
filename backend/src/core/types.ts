@@ -75,12 +75,14 @@ export type lgm_retrieve_req = {
     graph_id?: string;
     limit?: number;
     include_metadata?: boolean;
+    user_id?: string;
 };
 
 export type lgm_context_req = {
     graph_id?: string;
     namespace?: string;
     limit?: number;
+    user_id?: string;
 };
 
 export type lgm_reflection_req = {
@@ -89,6 +91,7 @@ export type lgm_reflection_req = {
     namespace?: string;
     content?: string;
     context_ids?: string[];
+    user_id?: string;
 };
 
 export type ide_event_req = {

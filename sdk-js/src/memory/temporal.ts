@@ -43,6 +43,10 @@ export const create_fact = async (
     confidence: number = 1.0,
     metadata: Record<string, any> = {}
 ) => {
+    if (valid_to !== null && valid_to < valid_from) {
+        throw new Error("valid_to cannot be less than valid_from");
+    }
+
     const existing = await all_async(`
         SELECT id, valid_from FROM ${TABLE_TF}
         WHERE subject = ? AND predicate = ? AND valid_to IS NULL

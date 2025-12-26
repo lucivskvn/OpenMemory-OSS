@@ -250,8 +250,9 @@ npm run dev
 * Browse memories per sector
 * See decay curves
 * Explore graph links
-* Visualize timelines
+* Visualize timelines (New!)
 * Chat with memory
+* Manage Settings and API Keys (New!)
 
 ```
 cd dashboard
@@ -546,12 +547,13 @@ Expanded tables preserved.
 
 ---
 
-# Security
+# Security & Integrity
 
-* AES‑GCM encryption
-* API keys
-* user isolation
-* no telemetry unless allowed
+* **Strict User Isolation**: Memories are strictly namespaced by `user_id`. Deduplication and recall are confined to the user scope, ensuring complete data privacy even in multi-tenant deployments.
+* **Temporal Integrity**: The time-aware engine automatically handles fact collisions and strictly enforces valid time ranges, preventing conflicting truths.
+* **AES‑GCM Encryption**: Sensitive data at rest.
+* **API Keys & Role-based Access**: granular control over system interaction.
+* **No Telemetry**: Your data stays yours.
 
 ---
 

@@ -13,7 +13,7 @@ export interface WindsurfConfig {
 
 export function generateWindsurfConfig(backendUrl: string, apiKey?: string, useMCP = false, mcpServerPath?: string): WindsurfConfig {
     if (useMCP) {
-        const backendMcpPath = mcpServerPath || path.join(process.cwd(), 'backend', 'dist', 'ai', 'mcp.js');
+        const backendMcpPath = mcpServerPath || path.join(process.cwd(), 'backend', 'dist', 'mcp.js');
         return {
             contextProvider: 'openmemory-mcp',
             mcp: {

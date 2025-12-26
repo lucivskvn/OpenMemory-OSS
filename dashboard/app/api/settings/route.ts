@@ -4,35 +4,6 @@ import path from 'path'
 
 const ENV_PATH = path.resolve(process.cwd(), '../.env')
 
-function parseEnvFile(content: string): Record<string, string> {
-    const result: Record<string, string> = {}
-    const lines = content.split('\n')
-
-    for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed || trimmed.startsWith('#')) continue
-
-        const equalIndex = trimmed.indexOf('=')
-        if (equalIndex === -1) continue
-
-        const key = trimmed.substring(0, equalIndex).trim()
-        const value = trimmed.substring(equalIndex + 1).trim()
-        result[key] = value
-    }
-
-    return result
-}
-
-function serializeEnvFile(updates: Record<string, string>): string {
-    const lines: string[] = []
-
-    for (const [key, value] of Object.entries(updates)) {
-        lines.push(`${key}=${value}`)
-    }
-
-    return lines.join('\n')
-}
-
 export async function GET() {
     try {
         if (!fs.existsSync(ENV_PATH)) {
@@ -43,17 +14,29 @@ export async function GET() {
         }
 
         const content = fs.readFileSync(ENV_PATH, 'utf-8')
-        const settings = parseEnvFile(content)
+        const settings: Record<string, string> = {}
 
-        const masked = { ...settings }
-        if (masked.OPENAI_API_KEY) masked.OPENAI_API_KEY = '***'
-        if (masked.GEMINI_API_KEY) masked.GEMINI_API_KEY = '***'
-        if (masked.AWS_SECRET_ACCESS_KEY) masked.AWS_SECRET_ACCESS_KEY = "***"
-        if (masked.OM_API_KEY) masked.OM_API_KEY = '***'
+        // Simple parse for display
+        content.split('\n').forEach(line => {
+            const match = line.match(/^([^#=]+)=(.*)$/);
+            if (match) {
+                const k = match[1].trim();
+                const v = match[2].trim();
+                if (k) settings[k] = v;
+            }
+        });
+
+        // Mask sensitive keys
+        const sensitive = ["API_KEY", "SECRET", "PASSWORD", "KEY_ID", "TOKEN"];
+        for (const k of Object.keys(settings)) {
+             if (sensitive.some(s => k.toUpperCase().includes(s))) {
+                 if (settings[k] && settings[k].length > 0) settings[k] = "***";
+             }
+        }
 
         return NextResponse.json({
             exists: true,
-            settings: masked
+            settings
         })
     } catch (e: any) {
         console.error('[Settings API] read error:', e)
@@ -66,7 +49,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
     try {
-        const updates = await request.json()
+        const updates = await request.json() as Record<string, string>;
 
         if (!updates || typeof updates !== 'object') {
             return NextResponse.json(
@@ -76,11 +59,8 @@ export async function POST(request: Request) {
         }
 
         let content = ''
-        let envExists = false
-
         if (fs.existsSync(ENV_PATH)) {
             content = fs.readFileSync(ENV_PATH, 'utf-8')
-            envExists = true
         } else {
             const examplePath = path.resolve(process.cwd(), '../.env.example')
             if (fs.existsSync(examplePath)) {
@@ -88,15 +68,42 @@ export async function POST(request: Request) {
             }
         }
 
-        const existing = content ? parseEnvFile(content) : {}
-        const merged = { ...existing, ...updates }
-        const newContent = serializeEnvFile(merged)
+        const lines = content.split('\n');
+        const newLines: string[] = [];
+        const seenKeys = new Set<string>();
 
-        fs.writeFileSync(ENV_PATH, newContent, 'utf-8')
+        // Update existing lines while preserving comments
+        for (const line of lines) {
+            const match = line.match(/^([^#=]+)=(.*)$/);
+            if (match) {
+                const key = match[1].trim();
+                if (updates[key] !== undefined) {
+                    // Ignore masked values to prevent overwriting with ***
+                    if (updates[key] !== "***" && updates[key] !== "******") {
+                         newLines.push(`${key}=${updates[key]}`);
+                    } else {
+                         newLines.push(line); // Preserve original
+                    }
+                    seenKeys.add(key);
+                } else {
+                    newLines.push(line);
+                }
+            } else {
+                newLines.push(line);
+            }
+        }
+
+        // Append new keys
+        for (const [key, val] of Object.entries(updates)) {
+             if (!seenKeys.has(key) && val !== "***" && val !== "******") {
+                 newLines.push(`${key}=${val}`);
+             }
+        }
+
+        fs.writeFileSync(ENV_PATH, newLines.join('\n'), 'utf-8')
 
         return NextResponse.json({
             ok: true,
-            created: !envExists,
             message: 'Settings saved. Restart the backend to apply changes.'
         })
     } catch (e: any) {

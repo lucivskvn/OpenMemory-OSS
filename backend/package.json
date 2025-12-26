@@ -9,6 +9,7 @@
         "dev": "bun --hot src/server/index.ts",
         "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
         "build": "bun build ./src/server/index.ts --outdir ./dist --target bun",
+        "build:mcp": "bun build ./src/ai/mcp.ts --outfile ./dist/mcp.js --target bun",
         "start": "bun --smol dist/index.js",
         "migrate": "bun src/migrate.ts",
         "test": "bun test"

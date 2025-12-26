@@ -4,11 +4,15 @@ export interface VectorStore {
     storeVector(id: string, sector: string, vector: number[], dim: number, user_id?: string): Promise<void>;
     deleteVector(id: string, sector: string): Promise<void>;
     deleteVectors(id: string): Promise<void>;
-    searchSimilar(sector: string, queryVec: number[], topK: number): Promise<Array<{ id: string; score: number }>>;
+    searchSimilar(sector: string, queryVec: number[], topK: number, user_id?: string): Promise<Array<{ id: string; score: number }>>;
     getVector(id: string, sector: string): Promise<{ vector: number[]; dim: number } | null>;
     getVectorsById(id: string): Promise<Array<{ sector: string; vector: number[]; dim: number }>>;
     getVectorsForMemoryIds(ids: string[]): Promise<Array<{ id: string; sector: string; vector: number[]; dim: number }>>;
     getVectorsBySector(sector: string): Promise<Array<{ id: string; vector: number[]; dim: number }>>;
+    /**
+     * Search for similar vectors globally (across all sectors)
+     */
+    search(queryVec: number[], topK: number, user_id?: string): Promise<Array<{ id: string; score: number }>>;
 }
 
 export interface DbOps {
@@ -40,9 +44,15 @@ export class SQLiteVectorStore implements VectorStore {
         await this.db.run_async(`delete from ${this.table} where id=?`, [id]);
     }
 
-    async searchSimilar(sector: string, queryVec: number[], topK: number): Promise<Array<{ id: string; score: number }>> {
+    async searchSimilar(sector: string, queryVec: number[], topK: number, user_id?: string): Promise<Array<{ id: string; score: number }>> {
         // In-memory cosine similarity for SQLite (since no native vector extension assumed)
-        const rows = await this.db.all_async(`select id,v,dim from ${this.table} where sector=?`, [sector]);
+        let sql = `select id,v,dim from ${this.table} where sector=?`;
+        const params: any[] = [sector];
+        if (user_id) {
+            sql += ` and user_id=?`;
+            params.push(user_id);
+        }
+        const rows = await this.db.all_async(sql, params);
         const sims: Array<{ id: string; score: number }> = [];
         for (const row of rows) {
             const vec = bufferToVector(row.v);
@@ -79,5 +89,26 @@ export class SQLiteVectorStore implements VectorStore {
     async getVectorsBySector(sector: string): Promise<Array<{ id: string; vector: number[]; dim: number }>> {
         const rows = await this.db.all_async(`select id,v,dim from ${this.table} where sector=?`, [sector]);
         return rows.map(row => ({ id: row.id, vector: bufferToVector(row.v), dim: row.dim }));
+    }
+
+    async search(queryVec: number[], topK: number, user_id?: string): Promise<Array<{ id: string; score: number }>> {
+        // SQLite in-memory scan (limit 10000)
+        let sql = `select id,v from ${this.table}`;
+        const params: any[] = [];
+        if (user_id) {
+            sql += ` where user_id=?`;
+            params.push(user_id);
+        }
+        sql += ` limit 10000`;
+
+        const rows = await this.db.all_async(sql, params);
+        const sims: Array<{ id: string; score: number }> = [];
+        for (const row of rows) {
+            const vec = bufferToVector(row.v);
+            const sim = cosineSimilarity(queryVec, vec);
+            sims.push({ id: row.id, score: sim });
+        }
+        sims.sort((a, b) => b.score - a.score);
+        return sims.slice(0, topK);
     }
 }

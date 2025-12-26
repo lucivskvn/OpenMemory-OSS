@@ -8,16 +8,10 @@ export const lg = (app: Elysia) => {
 
     app.group("/api/lg", (app) =>
         app
-            .post("/store", async ({ body, set }) => {
+            .post("/store", async ({ body }) => {
                 const b = body;
-                try {
-                    const res = await store_node_mem(b);
-                    return { ok: true, ...res };
-                } catch (e: any) {
-                    log.error("LangGraph store failed", { error: e.message });
-                    set.status = 500;
-                    return { err: e.message };
-                }
+                const res = await store_node_mem(b);
+                return { ok: true, ...res };
             }, {
                 body: t.Object({
                     node: t.String(),
@@ -30,16 +24,10 @@ export const lg = (app: Elysia) => {
                     user_id: t.Optional(t.String())
                 })
             })
-            .post("/retrieve", async ({ body, set }) => {
+            .post("/retrieve", async ({ body }) => {
                 const b = body;
-                try {
-                    const res = await retrieve_node_mems(b);
-                    return { results: res.items, count: res.count };
-                } catch (e: any) {
-                    log.error("LangGraph retrieve failed", { error: e.message });
-                    set.status = 500;
-                    return { err: e.message };
-                }
+                const res = await retrieve_node_mems(b);
+                return { results: res.items, count: res.count };
             }, {
                 body: t.Object({
                     node: t.String(),
@@ -47,46 +35,38 @@ export const lg = (app: Elysia) => {
                     namespace: t.Optional(t.String()),
                     graph_id: t.Optional(t.String()),
                     limit: t.Optional(t.Numeric()),
-                    include_metadata: t.Optional(t.Boolean())
+                    include_metadata: t.Optional(t.Boolean()),
+                    user_id: t.Optional(t.String())
                 })
             })
-            .get("/context", async ({ query, set }) => {
-                try {
-                    const res = await get_graph_ctx({
-                        namespace: query.namespace,
-                        graph_id: query.graph_id,
-                        limit: query.limit ? Number(query.limit) : undefined
-                    });
-                    return { context: res.nodes, summary: res.summary };
-                } catch (e: any) {
-                    log.error("LangGraph context failed", { error: e.message });
-                    set.status = 500;
-                    return { err: e.message };
-                }
+            .get("/context", async ({ query }) => {
+                const res = await get_graph_ctx({
+                    namespace: query.namespace,
+                    graph_id: query.graph_id,
+                    limit: query.limit ? Number(query.limit) : undefined,
+                    user_id: query.user_id
+                });
+                return { context: res.nodes, summary: res.summary };
             }, {
                 query: t.Object({
                     namespace: t.Optional(t.String()),
                     graph_id: t.Optional(t.String()),
-                    limit: t.Optional(t.Union([t.String(), t.Numeric()]))
+                    limit: t.Optional(t.Union([t.String(), t.Numeric()])),
+                    user_id: t.Optional(t.String())
                 })
             })
-            .post("/reflection", async ({ body, set }) => {
+            .post("/reflection", async ({ body }) => {
                 const b = body;
-                try {
-                    const res = await create_refl(b);
-                    return { reflection: res };
-                } catch (e: any) {
-                    log.error("LangGraph reflection failed", { error: e.message });
-                    set.status = 500;
-                    return { err: e.message };
-                }
+                const res = await create_refl(b);
+                return { reflection: res };
             }, {
                 body: t.Object({
                     node: t.Optional(t.String()),
                     namespace: t.Optional(t.String()),
                     graph_id: t.Optional(t.String()),
                     content: t.Optional(t.String()),
-                    context_ids: t.Optional(t.Array(t.String()))
+                    context_ids: t.Optional(t.Array(t.String())),
+                    user_id: t.Optional(t.String())
                 })
             })
     );

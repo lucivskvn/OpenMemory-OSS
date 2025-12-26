@@ -27,6 +27,15 @@ const getOpenAI = () => {
 
 const turndownService = new TurndownService();
 
+// Helper to check if buffer is binary
+function isBinaryBuffer(buffer: Buffer): boolean {
+    const chunk = buffer.subarray(0, Math.min(buffer.length, 1024));
+    for (let i = 0; i < chunk.length; i++) {
+        if (chunk[i] === 0) return true;
+    }
+    return false;
+}
+
 // Helper to save temp file
 async function saveTempFile(buffer: Buffer, ext: string): Promise<string> {
     const tempDir = path.resolve(process.cwd(), "temp");
@@ -137,6 +146,9 @@ export const processBuffer = async (buffer: Buffer, ext: string): Promise<string
         return await transcribe_audio(audio);
     }
     // Default to treating as text for unknown types, assuming text content
+    if (isBinaryBuffer(buffer)) {
+        throw new Error(`Unsupported binary file type: ${ext || "unknown"}`);
+    }
     return buffer.toString();
 };
 
@@ -207,7 +219,19 @@ export const extractText = async (textOrUrlOrType: string, data?: string | Buffe
 export const extractURL = async (url: string): Promise<ExtractionResult> => {
     try {
         const res = await fetch(url);
-        const html = await res.text();
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const len = res.headers.get("content-length");
+        if (len && parseInt(len) > MAX_FILE_SIZE) {
+            throw new Error(`URL content too large (${len} bytes)`);
+        }
+
+        const blob = await res.blob();
+        if (blob.size > MAX_FILE_SIZE) {
+            throw new Error(`URL content too large (${blob.size} bytes)`);
+        }
+
+        const html = await blob.text();
         const text = extract_text_from_html(html);
         return {
             text,

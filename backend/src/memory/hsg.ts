@@ -4,6 +4,7 @@ import { inc_q, dec_q, on_query_hit } from "../ops/dynamics";
 import { env, tier } from "../core/cfg";
 import { cos_sim, buf_to_vec, vec_to_buf } from "../utils/index";
 import { log } from "../core/log";
+import { q, vector_store } from "../core/db";
 
 export interface sector_cfg {
     model: string;
@@ -46,6 +47,7 @@ export interface hsg_q_result {
     path: string[];
     salience: number;
     last_seen_at: number;
+    created_at?: number;
 }
 
 /**
@@ -502,28 +504,40 @@ export async function create_single_waypoint(
     user_id?: string | null,
 ): Promise<void> {
     const thresh = 0.75;
-    const mems = user_id
-        ? await q.all_mem_by_user.all(user_id, 1000, 0)
-        : await q.all_mem.all(1000, 0);
+
+    // Optimizing candidate selection by using vector search instead of scanning latest 1000
+    // This allows linking to older but semantically relevant memories
+    // CRITICAL: Must filter by user_id to prevent linking to other users' memories
+    const candidates = await vector_store.search(new_mean, 20, user_id || undefined); // Search top 20 similar
+
     let best: { id: string; similarity: number } | null = null;
 
-    // Hoist allocation of Float32Array for new_mean
-    const new_mean_f32 = new Float32Array(new_mean);
-
-    for (const mem of mems) {
-        if (mem.id === new_id || !mem.mean_vec) continue;
-        const ex_mean = buf_to_vec(mem.mean_vec);
-        // ex_mean from buf_to_vec is Float32Array (if updated) or number[]?
-        // buf_to_vec in utils/index returns Float32Array usually.
-        // But cos_sim in utils/index expects Float32Array.
-        // Assuming buf_to_vec returns Float32Array (since we optimized bufferToVector in embed.ts? No, that's different file)
-        // Let's assume buf_to_vec returns Float32Array or compatible.
-
-        const sim = cos_sim(new_mean_f32, ex_mean);
-        if (!best || sim > best.similarity) {
-            best = { id: mem.id, similarity: sim };
+    if (candidates.length > 0) {
+        for (const cand of candidates) {
+            if (cand.id === new_id) continue;
+            if (!best || cand.score > best.similarity) {
+                best = { id: cand.id, similarity: cand.score };
+            }
         }
     }
+
+    // Fallback to recent if no vector match found (cold start or very unique memory)
+    if (!best) {
+         const mems = user_id
+            ? await q.all_mem_by_user.all(user_id, 50, 0)
+            : await q.all_mem.all(50, 0);
+
+         const new_mean_f32 = new Float32Array(new_mean);
+         for (const mem of mems) {
+            if (mem.id === new_id || !mem.mean_vec) continue;
+            const ex_mean = buf_to_vec(mem.mean_vec);
+            const sim = cos_sim(new_mean_f32, ex_mean);
+            if (!best || sim > best.similarity) {
+                best = { id: mem.id, similarity: sim };
+            }
+        }
+    }
+
     if (best) {
         await q.ins_waypoint.run(
             new_id,
@@ -941,6 +955,7 @@ export async function hsg_query(
                 path: em?.path || [mid],
                 salience: sal,
                 last_seen_at: m.last_seen_at,
+                created_at: m.created_at,
             });
         }
         res.sort((a, b) => b.score - a.score);
@@ -1081,7 +1096,11 @@ export async function add_hsg_memory(
 }> {
     const simhash = compute_simhash(content);
     const existing = await q.get_mem_by_simhash.get(simhash);
-    if (existing && hamming_dist(simhash, existing.simhash) <= 3) {
+
+    // Check if existing memory is similar AND belongs to the same user
+    const is_same_user = !user_id || !existing?.user_id || existing.user_id === user_id;
+
+    if (existing && is_same_user && hamming_dist(simhash, existing.simhash) <= 3) {
         const now = Date.now();
         const boosted_sal = Math.min(1, existing.salience + 0.15);
         await q.upd_seen.run(existing.id, now, boosted_sal, now);

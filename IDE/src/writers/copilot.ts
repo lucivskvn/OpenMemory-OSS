@@ -19,12 +19,12 @@ export interface CopilotConfig {
 
 export function generateCopilotConfig(backendUrl: string, apiKey?: string, useMCP = false, mcpServerPath?: string): CopilotConfig {
     if (useMCP) {
-        const backendMcpPath = mcpServerPath || path.join(process.cwd(), 'backend', 'dist', 'ai', 'mcp.js');
+        const backendMcpPath = mcpServerPath || path.join(process.cwd(), 'backend', 'dist', 'mcp.js');
         const config: CopilotConfig = {
             name: 'OpenMemory',
             type: 'mcp',
             mcpServer: {
-                command: 'node',
+                command: 'bun',
                 args: [backendMcpPath]
             }
         };

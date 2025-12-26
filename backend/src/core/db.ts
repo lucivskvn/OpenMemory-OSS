@@ -21,6 +21,7 @@ type QueryRepository = {
     upd_feedback: { run: (...p: any[]) => Promise<void> };
     upd_seen: { run: (...p: any[]) => Promise<void> };
     upd_mem: { run: (...p: any[]) => Promise<void> };
+    upd_meta: { run: (...p: any[]) => Promise<void> };
     upd_mem_with_sector: { run: (...p: any[]) => Promise<void> };
     del_mem: { run: (...p: any[]) => Promise<void> };
     /** Get a single memory by ID */
@@ -28,9 +29,14 @@ type QueryRepository = {
     /** Batch retrieval of memories by ID list */
     get_mems_by_ids: { all: (ids: string[]) => Promise<any[]> };
     get_mem_by_simhash: { get: (simhash: string) => Promise<any> };
+    search_mem_by_tag: { all: (tag_pattern: string, limit: number, offset: number) => Promise<any[]> };
+    search_mem_by_tag_user: { all: (tag_pattern: string, user_id: string, limit: number, offset: number) => Promise<any[]> };
     all_mem: { all: (limit: number, offset: number) => Promise<any[]> };
     all_mem_by_sector: {
         all: (sector: string, limit: number, offset: number) => Promise<any[]>;
+    };
+    all_mem_by_sector_user: {
+        all: (sector: string, user_id: string, limit: number, offset: number) => Promise<any[]>;
     };
     all_mem_by_user: {
         all: (user_id: string, limit: number, offset: number) => Promise<any[]>;
@@ -54,6 +60,9 @@ type QueryRepository = {
     ins_user: { run: (...p: any[]) => Promise<void> };
     get_user: { get: (user_id: string) => Promise<any> };
     get_all_user_ids: { all: () => Promise<any[]> };
+    get_all_users: { all: (limit?: number) => Promise<any[]> };
+    get_recent_activity: { all: (limit: number) => Promise<any[]> };
+    log_request_stat: { run: (count: number, ts: number) => Promise<void> };
     /** Aggregate system statistics for dashboard */
     get_system_stats: { get: () => Promise<any> };
     upd_user_summary: { run: (...p: any[]) => Promise<void> };
@@ -189,12 +198,19 @@ if (is_pg) {
         // Ensure pgvector extension
         await pg`CREATE EXTENSION IF NOT EXISTS vector`;
 
-        await run_migrations_core({
-            run_async: async (s, p) => { await exec(s, p); },
-            get_async: async (s, p) => (await exec(s, p))[0],
-            all_async: async (s, p) => await exec(s, p),
-            is_pg: true
-        });
+        // Acquire advisory lock for migrations (ID: 848204820)
+        await pg.unsafe("SELECT pg_advisory_lock(848204820)");
+
+        try {
+            await run_migrations_core({
+                run_async: async (s, p) => { await exec(s, p); },
+                get_async: async (s, p) => (await exec(s, p))[0],
+                all_async: async (s, p) => await exec(s, p),
+                is_pg: true
+            });
+        } finally {
+            await pg.unsafe("SELECT pg_advisory_unlock(848204820)");
+        }
 
         if (env.vector_backend === "valkey") {
             vector_store = new ValkeyVectorStore();
@@ -203,6 +219,7 @@ if (is_pg) {
             vector_store = new PostgresVectorStore({ run_async, get_async, all_async }, TABLE_VECTORS.replace(/"/g, ""));
             log.info(`[DB] Using Postgres VectorStore with table: ${TABLE_VECTORS}`);
         }
+        await vector_store.init();
     };
 
     dbReadyPromise = internal_init().catch(e => {
@@ -270,6 +287,7 @@ if (is_pg) {
             vector_store = new PostgresVectorStore({ run_async, get_async, all_async }, sqlite_vector_table);
             log.info(`[DB] Using SQLite VectorStore with table: ${sqlite_vector_table}`);
         }
+        await vector_store.init();
     };
 
     dbReadyPromise = internal_init().catch(e => {
@@ -335,6 +353,13 @@ q = {
                 p,
             ),
     },
+    upd_meta: {
+        run: (...p) =>
+            run_async(
+                `update ${TABLE_MEMORIES} set meta=?,updated_at=?,version=version+1 where id=?`,
+                p,
+            ),
+    },
     upd_mean_vec: {
         run: (...p) =>
             run_async(
@@ -396,6 +421,20 @@ q = {
                 [simhash],
             ),
     },
+    search_mem_by_tag: {
+        all: (tag_pattern, limit, offset) =>
+            all_async(
+                `select * from ${TABLE_MEMORIES} where tags like ? order by created_at desc limit ? offset ?`,
+                [tag_pattern, limit, offset],
+            ),
+    },
+    search_mem_by_tag_user: {
+        all: (tag_pattern, user_id, limit, offset) =>
+            all_async(
+                `select * from ${TABLE_MEMORIES} where tags like ? and user_id=? order by created_at desc limit ? offset ?`,
+                [tag_pattern, user_id, limit, offset],
+            ),
+    },
     all_mem: {
         all: (limit, offset) =>
             all_async(
@@ -408,6 +447,13 @@ q = {
             all_async(
                 `select * from ${TABLE_MEMORIES} where primary_sector=? order by created_at desc limit ? offset ?`,
                 [sector, limit, offset],
+            ),
+    },
+    all_mem_by_sector_user: {
+        all: (sector, user_id, limit, offset) =>
+            all_async(
+                `select * from ${TABLE_MEMORIES} where primary_sector=? and user_id=? order by created_at desc limit ? offset ?`,
+                [sector, user_id, limit, offset],
             ),
     },
     get_segment_count: {
@@ -441,8 +487,8 @@ q = {
         run: (...p) => {
             const cols = ["src_id", "dst_id", "user_id", "weight", "created_at", "updated_at"];
             const sql = is_pg
-                 ? gen_upsert(TABLE_WAYPOINTS, cols, "src_id,user_id", ["dst_id", "weight", "updated_at"])
-                 : gen_replace(TABLE_WAYPOINTS, cols);
+                 ? gen_upsert(TABLE_WAYPOINTS, cols, "src_id,dst_id", ["weight", "updated_at"])
+                 : `insert or replace into ${TABLE_WAYPOINTS}(${cols.join(",")}) values(?,?,?,?,?,?)`;
             return run_async(sql, p);
         },
     },
@@ -451,6 +497,14 @@ q = {
             return all_async(
                 `select dst_id,weight from ${TABLE_WAYPOINTS} where src_id=? order by weight desc`,
                 [src],
+            );
+        }
+    },
+    log_request_stat: {
+        run: (count: number, ts: number) => {
+             return run_async(
+                `insert into ${TABLE_STATS}(type,count,ts) values('request',?,?)`,
+                [count, ts],
             );
         }
     },
@@ -544,6 +598,22 @@ q = {
             return get_async(
                 `select * from ${TABLE_USERS} where user_id=?`,
                 [user_id],
+            );
+        }
+    },
+    get_all_users: {
+        all: (limit: number = 100) => {
+            return all_async(
+                `select * from ${TABLE_USERS} order by updated_at desc limit ?`,
+                [limit],
+            );
+        }
+    },
+    get_recent_activity: {
+        all: (limit: number) => {
+            return all_async(
+                `select * from ${TABLE_MEMORIES} order by updated_at desc limit ?`,
+                [limit],
             );
         }
     },

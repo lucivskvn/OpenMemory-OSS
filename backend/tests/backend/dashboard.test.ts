@@ -25,4 +25,16 @@ describe('Dashboard API', () => {
         expect(data).toHaveProperty('memories');
         expect(Array.isArray(data.memories)).toBe(true);
     });
+
+    test('Get Activity', async () => {
+        const res = await app.handle(new Request("http://localhost/api/dashboard/activity?limit=5"));
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(data).toHaveProperty('activities');
+        expect(Array.isArray(data.activities)).toBe(true);
+        if (data.activities.length > 0) {
+            expect(data.activities[0]).toHaveProperty('type');
+            expect(data.activities[0]).toHaveProperty('timestamp');
+        }
+    });
 });
