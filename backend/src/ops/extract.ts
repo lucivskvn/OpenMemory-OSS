@@ -11,19 +11,9 @@ import * as fs from "node:fs";
 import { promises as fsPromises } from "node:fs";
 import { log } from "../core/log";
 
-// Setup OpenAI for Whisper
-// Lazy init to avoid startup crash if key is missing
-let openai: OpenAI | null = null;
-const getOpenAI = () => {
-    if (!openai) {
-        if (!env.openai_key) throw new Error("OpenAI key missing for transcription");
-        openai = new OpenAI({
-            apiKey: env.openai_key,
-            baseURL: env.openai_base_url,
-        });
-    }
-    return openai;
-};
+import { transcribeAudioWithOpenAI } from "../core/openai_adapter";
+
+// Deprecated: we no longer lazy-init OpenAI client directly here. Use adapter.
 
 const turndownService = new TurndownService();
 
@@ -87,14 +77,9 @@ export const extract_text_from_html = (html: string): string => {
 
 export const transcribe_audio = async (buffer: Buffer): Promise<string> => {
     try {
-        // Create a File object directly from buffer (supported in Bun)
         const file = new File([buffer], "audio.mp3", { type: "audio/mp3" });
-        const client = getOpenAI();
-        const response = await client.audio.transcriptions.create({
-            file: file,
-            model: "whisper-1",
-        });
-        return response.text;
+        const text = await transcribeAudioWithOpenAI(file, "whisper-1");
+        return text;
     } catch (e) {
         log.error("Audio transcription failed", { error: e });
         return "";
