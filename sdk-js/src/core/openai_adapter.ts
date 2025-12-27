@@ -4,7 +4,7 @@ export async function transcribeAudioWithOpenAI(buffer: Buffer, apiKey?: string,
     const key = apiKey || process.env.OPENAI_API_KEY || process.env.OM_OPENAI_API_KEY;
     if (!key) throw new Error("OpenAI key missing");
 
-    const file = new File([buffer], "audio.mp3", { type: "audio/mpeg" });
+    const file = new File([new Uint8Array(buffer)], "audio.mp3", { type: "audio/mpeg" });
 
     try {
         const client = new OpenAI({ apiKey: key, baseURL });

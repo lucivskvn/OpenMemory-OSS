@@ -19,12 +19,12 @@ describe("OpenAI adapter", () => {
         try {
             env.openai_key = "test-key";
             // Mock fetch to simulate REST transcription response
-            globalThis.fetch = async (input: any, init?: any) => {
+            (globalThis as any).fetch = async (input: any, init?: any) => {
                 return {
                     ok: true,
                     status: 200,
                     json: async () => ({ text: "mock transcription" }),
-                };
+                } as any;
             };
 
             const res = await transcribeAudioWithOpenAI(Buffer.from("dummy"));

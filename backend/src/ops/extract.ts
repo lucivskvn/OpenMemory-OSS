@@ -3,7 +3,7 @@ import { transcribeAudioWithOpenAI } from "../core/openai_adapter";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
 import * as pdf_parse from "pdf-parse";
-const pdf = pdf_parse.default || pdf_parse;
+const pdf: any = (pdf_parse as any).default || (pdf_parse as any);
 import mammoth from "mammoth";
 import TurndownService from "turndown";
 import ffmpeg from "fluent-ffmpeg";

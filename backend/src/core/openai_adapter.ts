@@ -13,8 +13,8 @@ export async function transcribeAudioWithOpenAI(
 ): Promise<string> {
   if (!env.openai_key) throw new Error("OpenAI key missing");
 
-  // Create a File object from buffer (Bun/browser compatible)
-  const file = new File([buffer], "audio.mp3", { type: "audio/mpeg" });
+  // Create a File object from buffer (Bun/browser compatible) using Uint8Array to satisfy TS BlobPart types
+  const file = new File([new Uint8Array(buffer)], "audio.mp3", { type: "audio/mpeg" });
 
   // Try the official OpenAI client first (supports multiple client shapes)
   try {
