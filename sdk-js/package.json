@@ -36,8 +36,8 @@
         "typescript"
     ],
     "dependencies": {
-        "@aws-sdk/client-bedrock-runtime": "^3.450.0",
-        "@modelcontextprotocol/sdk": "^1.22.0",
+        "@aws-sdk/client-bedrock-runtime": "3.958.0",
+        "@modelcontextprotocol/sdk": "1.25.1",
         "fluent-ffmpeg": "^2.1.2",
         "mammoth": "^1.6.0",
         "openai": "^4.20.0",
