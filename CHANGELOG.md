@@ -2,28 +2,28 @@
 
 ## Unreleased
 
-### Fixed
+### Fixed (Unreleased)
 
 - Add migration v1.7.0 to fix waypoint primary key and add missing indexes to improve multi-tenant isolation and performance. (SQL: `20240105000000_waypoint_pk_fix.sql`)
 - Add migration v1.8.0 to introduce optional `v_vector` pgvector column and index (requires pgvector dimension to be set and manual backfill). (SQL: `20240107000000_pgvector.sql`)
 
 ## 1.2.3 - 2025-12-14
 
-### Added
+### Added (1.2.3)
 
 - **Temporal Filtering**: Enables precise time-based memory retrieval
   - Added `startTime` and `endTime` filters to `query` method across Backend, JS SDK, and Python SDK.
   - Allows filtering memories by creation time range.
   - Fully integrated into `hsg_query` logic.
 
-### Fixed
+### Fixed (1.2.3)
 
 - **JavaScript SDK Types**: Fixed `IngestURLResult` import error and `v.v` property access bug in `VectorStore` integration.
 - **Python SDK Filtering**: Fixed missing implementation of `user_id` and temporal filters in `hsg_query` loop.
 
 ## 1.2.2 - 2025-12-06
 
-### Fixed
+### Fixed (1.2.2)
 
 - **MCP Server Path Resolution**: Fixed ENOENT error in stdio mode (Claude Desktop)
   - Enforced absolute path resolution for SQLite database
@@ -35,13 +35,13 @@
   - Fixed `users.ts`, `memory.ts`, `graph.ts`, `mcp.ts`, and `decay.ts`
   - Removed partial SQL updates in favor of unified vector store methods
 
-### Added
+### Added (1.2.2)
 
 - **Valkey VectorStore Enhancements**: Improved compatibility and performance
   - Refined vector storage implementation for Valkey backend
   - Optimized vector retrieval and storage operations
 
-### Changed
+### Changed (1.2.2)
 
 - **IDE Extension**:
   - Updates to Dashboard UI (`DashboardPanel.ts`) and extension activation logic (`extension.ts`)
@@ -60,7 +60,7 @@
 
 ## 1.2.1 - 2025-11-23
 
-### Added
+### Added (1.2.1)
 
 - **Python SDK (`sdk-py/`)**: SDK Overhaul, it can now perform as a standalone version of OpenMemory
   - Full feature parity with Backend
@@ -114,7 +114,7 @@
 
 ## 1.2
 
-### Added
+### Added (1.2)
 
 - **Multi-Tenant Support with User Isolation**
 

@@ -3,7 +3,7 @@ import { env } from "../core/cfg";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
 import * as pdf_parse from "pdf-parse";
-const pdf = pdf_parse.default || pdf_parse;
+const pdf = (pdf_parse as any).default ?? pdf_parse;
 import mammoth from "mammoth";
 import TurndownService from "turndown";
 import ffmpeg from "fluent-ffmpeg";
@@ -88,7 +88,9 @@ export const extract_text_from_html = (html: string): string => {
 export const transcribe_audio = async (buffer: Buffer): Promise<string> => {
     try {
         // Create a File object directly from buffer (supported in Bun)
-        const file = new File([buffer], "audio.mp3", { type: "audio/mp3" });
+        // Normalize to an ArrayBuffer to satisfy File/Blob typing and avoid SharedArrayBuffer issues
+        const audioArrayBuffer = Uint8Array.from(buffer).buffer;
+        const file = new File([audioArrayBuffer], "audio.mp3", { type: "audio/mp3" });
         const client = getOpenAI();
         const response = await client.audio.transcriptions.create({
             file: file,
