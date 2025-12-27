@@ -1,5 +1,7 @@
 # pgvector Migration Plan
 
+Note: This migration is only relevant for Postgres deployments (Supabase or other providers). If you are using SQLite-only mode (default), you can skip the pgvector migration steps.
+
 Goal: Safely migrate vector storage to use Postgres `pgvector` column (`v_vector`) and leverage DB-side similarity search (ivfflat/HNSW) for performance.
 
 Prerequisites

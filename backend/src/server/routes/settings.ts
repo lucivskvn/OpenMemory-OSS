@@ -28,6 +28,18 @@ export const settings = (app: Elysia) =>
                     const newSettings = body as Record<string, string>;
                     const envPath = path.resolve(process.cwd(), ".env");
 
+                    // Validation: ensure keys are safe and values do not contain newlines
+                    for (const [k, v] of Object.entries(newSettings)) {
+                        if (!/^[A-Z0-9_]+$/.test(k)) {
+                            set.status = 400;
+                            return { error: 'invalid_key', message: `Invalid env key: ${k}` };
+                        }
+                        if (typeof v === 'string' && (v.includes('\n') || v.includes('\r'))) {
+                            set.status = 400;
+                            return { error: 'invalid_value', message: `Env value for ${k} contains prohibited characters` };
+                        }
+                    }
+
                     let envContent = "";
                     if (fs.existsSync(envPath)) {
                         envContent = fs.readFileSync(envPath, "utf-8");
@@ -65,7 +77,11 @@ export const settings = (app: Elysia) =>
                         }
                     }
 
-                    fs.writeFileSync(envPath, newLines.join("\n"));
+                    // Atomic write: write to temp file then rename, set file perms to 600
+                    const tmpPath = envPath + ".tmp";
+                    fs.writeFileSync(tmpPath, newLines.join("\n"), { mode: 0o600 });
+                    fs.renameSync(tmpPath, envPath);
+
                     // Audit log: record which keys changed (do not log values)
                     const updatedKeys = Object.keys(newSettings).filter(k => !seenKeys.has(k) || newLines.some(line => line.startsWith(k + "=")));
                     log.info("Settings updated via API", { updatedKeys });

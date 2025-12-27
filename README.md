@@ -63,7 +63,8 @@ results = om.query("allergies", filters={"user_id": "user123"})
 Run the full cognitive engine directly inside your Node.js or Python application.
 
 *   **Zero Config**: `npm install` and go.
-*   **Local Storage**: Data lives in a local SQLite file.
+*   **Local Storage** (default): Data lives in a local SQLite file. The system is configured to prefer SQLite-only operation to simplify local deployments and avoid cloud dependencies.
+*   **Optional Postgres (pgvector)**: If you need DB-side vector search via `pgvector` or Supabase integration, follow the `docs/PGVECTOR_MIGRATION.md` instructions to migrate—this is optional and requires a Postgres setup with pgvector extension.
 *   **Privacy**: No data leaves your machine.
 
 [**👉 Read the Standalone Guide**](https://openmemory.cavira.app/docs/sdks/python)
