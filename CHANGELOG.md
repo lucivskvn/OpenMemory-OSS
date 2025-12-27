@@ -4,6 +4,12 @@
 
 ### Fixed (Unreleased)
 
+- Enforce SQLite as the default metadata and vector backend and **hide Postgres-specific OM_PG_* environment variables** from the Settings API unless `OM_METADATA_BACKEND=postgres`. (backend/src/core/cfg.ts, backend/src/server/routes/settings.ts, dashboard/app/settings/page.tsx)
+- Harden settings endpoint: atomic .env writes, strict value validation (no newlines), secure file permissions, and test coverage added. (backend/src/server/routes/settings.ts, tests/backend/settings.test.ts)
+- Add an NPM override to force `body-parser@2.2.1` to remediate a moderate security advisory. (backend/package.json)
+- Expand sensitive key masking patterns to include additional generic secret names (password, token, jwt, client_secret, refresh_token, access_key). (backend/src/core/secrets.ts)
+- Add tests and docs clarifying that pgvector and Postgres migration tooling are **Postgres-only** and optional; maintain backward compatibility for Postgres users who opt-in. (docs/PGVECTOR_MIGRATION.md, tools/backfill_pgvector.ts)
+
 - Add migration v1.7.0 to fix waypoint primary key and add missing indexes to improve multi-tenant isolation and performance. (SQL: `20240105000000_waypoint_pk_fix.sql`)
 - Add migration v1.8.0 to introduce optional `v_vector` pgvector column and index (requires pgvector dimension to be set and manual backfill). (SQL: `20240107000000_pgvector.sql`)
 - Restore OpenAI adapter with robust REST fallback for transcription and added `transcribeAudioWithOpenAI` to avoid client-breaking changes across OpenAI SDK versions; unit tests added (tests/backend/openai_adapter.test.ts).

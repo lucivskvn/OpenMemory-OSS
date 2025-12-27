@@ -10,9 +10,17 @@ export const settings = (app: Elysia) =>
             .get("/", () => {
                 // Return current env vars, masking sensitive ones
                 // Dashboard expects raw env var names (OM_PORT, etc.)
-                const rawEnv = { ...process.env };
+                let rawEnv = { ...process.env };
 
                 const { SENSITIVE_PATTERNS } = require("../../core/secrets");
+
+                // If running in SQLite-only mode, do not return Postgres-specific settings to the dashboard API
+                const metadataBackend = (process.env.OM_METADATA_BACKEND || "sqlite").toLowerCase();
+                if (metadataBackend !== 'postgres') {
+                    for (const k of Object.keys(rawEnv)) {
+                        if (k.startsWith('OM_PG_') || k === 'OM_PG_CONNECTION_STRING') delete rawEnv[k];
+                    }
+                }
 
                 // Mask sensitive
                 for (const k of Object.keys(rawEnv)) {

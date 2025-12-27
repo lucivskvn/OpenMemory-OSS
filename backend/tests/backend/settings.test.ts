@@ -70,4 +70,42 @@ describe('Settings API', () => {
             if (orig !== undefined) fs.writeFileSync(envPath, orig); else { if (fs.existsSync(envPath)) fs.unlinkSync(envPath); }
         }
     });
+
+    test('GET Settings hides Postgres OM_PG_* when not using postgres metadata backend', async () => {
+        // Set a bunch of envs for test
+        process.env.OM_METADATA_BACKEND = 'sqlite';
+        process.env.OM_PG_HOST = 'pg.local';
+        process.env.OM_PG_USER = 'pguser';
+
+        const res = await app.handle(new Request('http://localhost/api/settings'));
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(data).toHaveProperty('settings');
+        expect(data.settings).not.toHaveProperty('OM_PG_HOST');
+        expect(data.settings).not.toHaveProperty('OM_PG_USER');
+
+        // Cleanup
+        delete process.env.OM_PG_HOST;
+        delete process.env.OM_PG_USER;
+        delete process.env.OM_METADATA_BACKEND;
+    });
+
+    test('GET Settings includes Postgres OM_PG_* when using postgres metadata backend', async () => {
+        process.env.OM_METADATA_BACKEND = 'postgres';
+        process.env.OM_PG_HOST = 'pg.local';
+        process.env.OM_PG_USER = 'pguser';
+
+        const res = await app.handle(new Request('http://localhost/api/settings'));
+        expect(res.status).toBe(200);
+        const data = await res.json();
+        expect(data).toHaveProperty('settings');
+        // Keys should exist but be masked if sensitive
+        expect(data.settings).toHaveProperty('OM_PG_HOST');
+        expect(data.settings.OM_PG_HOST).toBe('pg.local');
+
+        // Cleanup
+        delete process.env.OM_PG_HOST;
+        delete process.env.OM_PG_USER;
+        delete process.env.OM_METADATA_BACKEND;
+    });
 });
