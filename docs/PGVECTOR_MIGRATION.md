@@ -25,7 +25,10 @@ High-level steps
 
 3. **Backfill existing rows**
    - Use `tools/backfill_pgvector.ts` to convert the existing `bytea` binary vectors stored in `v` into `v_vector` for each row.
-   - The tool connects to Postgres and updates `v_vector` using text array/pgvector literal casting (be careful with memory and time — run in batches).
+   - The tool connects to Postgres and updates `v_vector` using text array/pgvector literal casting.
+   - Run the backfill in batches using `BACKFILL_BATCH` environment variable (default 1000) to avoid long-running transactions and OOMs. The script also supports `OM_VEC_DIM` to validate vector dimension before update and skips rows with mismatched lengths.
+   - Example: `OM_PG_HOST=... OM_PG_USER=... OM_PG_PASSWORD=... OM_VEC_DIM=1536 BACKFILL_BATCH=500 bun run tools/backfill_pgvector.ts`
+   - Be careful with memory and time — run on a staging copy or in small batches against production if necessary; verify results before finalizing the migration.
 
 4. **Create performant index**
    - After backfill, create an IVFFLAT or HNSW index appropriate to your workload. Example:
