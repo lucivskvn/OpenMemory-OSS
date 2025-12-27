@@ -7,7 +7,13 @@ import { vectorToBuffer, bufferToVector } from "../../memory/embed";
 export class ValkeyVectorStore implements VectorStore {
     private client: RedisClient;
 
-    constructor() {
+    // For testability you can provide a pre-initialized Redis client
+    constructor(client?: RedisClient) {
+        if (client) {
+            this.client = client;
+            return;
+        }
+
         // Bun's RedisClient works with URL or options but URL is main
         const url = `redis://${env.valkey_password ? `:${env.valkey_password}@` : ""}${env.valkey_host || "localhost"}:${env.valkey_port || 6379}`;
         this.client = new RedisClient(url, {

@@ -14,7 +14,7 @@ export const emb_dim = () => env.vec_dim;
 
 // Fetch with timeout to prevent hanging requests and enable fallback chain
 const EMBED_TIMEOUT_MS = Number(process.env.OM_EMBED_TIMEOUT_MS) || 30000;
-async function fetchWithTimeout(url: string, options: RequestInit): Promise<Response> {
+export async function fetchWithTimeout(url: string, options: RequestInit): Promise<Response> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), EMBED_TIMEOUT_MS);
     try {

@@ -85,6 +85,23 @@ async function check_table_exists(ops: DbOps, table_name: string): Promise<boole
     }
 }
 
+export function compareSemver(a: string | null, b: string | null): number {
+    // Returns 1 if a>b, -1 if a<b, 0 if equal. Null is considered less than any version
+    if (a === b) return 0;
+    if (a === null) return -1;
+    if (b === null) return 1;
+    const pa = a.split('.').map(x => parseInt(x, 10) || 0);
+    const pb = b.split('.').map(x => parseInt(x, 10) || 0);
+    const n = Math.max(pa.length, pb.length);
+    for (let i = 0; i < n; i++) {
+        const va = pa[i] || 0;
+        const vb = pb[i] || 0;
+        if (va > vb) return 1;
+        if (va < vb) return -1;
+    }
+    return 0;
+}
+
 export async function run_migrations_core(ops: DbOps) {
     log.info("[MIGRATE] Checking schema status...");
 
@@ -134,7 +151,7 @@ export async function run_migrations_core(ops: DbOps) {
     log.info(`[MIGRATE] Current DB version: ${current_version || "legacy"}`);
 
     for (const m of migrations) {
-        if (!current_version || m.version > current_version) {
+        if (compareSemver(m.version, current_version) > 0) {
             log.info(`[MIGRATE] Applying migration ${m.version}: ${m.desc}`);
             try {
                 if (ops.is_pg) {

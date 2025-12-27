@@ -1,5 +1,5 @@
-import OpenAI from "openai";
 import { env } from "../core/cfg";
+import { transcribeAudioWithOpenAI } from "../core/openai_adapter";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
 import * as pdf_parse from "pdf-parse";
@@ -11,19 +11,7 @@ import * as fs from "node:fs";
 import { promises as fsPromises } from "node:fs";
 import { log } from "../core/log";
 
-// Setup OpenAI for Whisper
-// Lazy init to avoid startup crash if key is missing
-let openai: OpenAI | null = null;
-const getOpenAI = () => {
-    if (!openai) {
-        if (!env.openai_key) throw new Error("OpenAI key missing for transcription");
-        openai = new OpenAI({
-            apiKey: env.openai_key,
-            baseURL: env.openai_base_url,
-        });
-    }
-    return openai;
-};
+
 
 const turndownService = new TurndownService();
 
@@ -87,16 +75,7 @@ export const extract_text_from_html = (html: string): string => {
 
 export const transcribe_audio = async (buffer: Buffer): Promise<string> => {
     try {
-        // Create a File object directly from buffer (supported in Bun)
-        // Normalize to an ArrayBuffer to satisfy File/Blob typing and avoid SharedArrayBuffer issues
-        const audioArrayBuffer = Uint8Array.from(buffer).buffer;
-        const file = new File([audioArrayBuffer], "audio.mp3", { type: "audio/mp3" });
-        const client = getOpenAI();
-        const response = await client.audio.transcriptions.create({
-            file: file,
-            model: "whisper-1",
-        });
-        return response.text;
+        return await transcribeAudioWithOpenAI(buffer, "whisper-1");
     } catch (e) {
         log.error("Audio transcription failed", { error: e });
         return "";

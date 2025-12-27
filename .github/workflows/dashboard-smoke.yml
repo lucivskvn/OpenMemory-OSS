@@ -1,0 +1,45 @@
+name: Dashboard Smoke E2E
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+  push:
+    branches:
+      - 'upgrade/*'
+
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        working-directory: ./dashboard
+        run: npm ci
+      - name: Build dashboard
+        working-directory: ./dashboard
+        run: npm run build
+      - name: Start dashboard (background)
+        working-directory: ./dashboard
+        run: |
+          npm run start &
+          echo $! > /tmp/next_pid
+      - name: Wait for server
+        run: |
+          for i in {1..30}; do
+            if curl -sSf http://localhost:3000/api/stats >/dev/null 2>&1; then
+              echo "server up"; break
+            fi
+            sleep 1
+          done
+      - name: Smoke endpoints
+        run: |
+          curl -sSf http://localhost:3000/api/stats | head -n 1
+          curl -sSf http://localhost:3000/api/memories | head -n 1 || true
+      - name: Teardown
+        run: |
+          kill `cat /tmp/next_pid` || true

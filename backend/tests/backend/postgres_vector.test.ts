@@ -35,4 +35,36 @@ describe("PostgresVectorStore search behavior", () => {
         expect(res[0].id).toBe("x");
         expect(res[0].score).toBeGreaterThan(res[1].score);
     });
+
+    it("does not enable pgvector in init if typmod dimension missing", async () => {
+        const db = {
+            run_async: async () => {},
+            // first call: information_schema.columns -> vector
+            // second call: pg_attribute -> tmod 0
+            get_async: async (sql: string, params?: any[]) => {
+                if (sql.includes('information_schema.columns')) return { data_type: 'vector' };
+                if (sql.includes('pg_attribute')) return { tmod: 0 };
+                return null;
+            },
+            all_async: async () => [],
+        };
+        const store = new PostgresVectorStore(db as any, "vectors");
+        await store.init();
+        expect((store as any).pgvectorAvailable).toBe(false);
+    });
+
+    it("enables pgvector in init when dimension present in pg_attribute", async () => {
+        const db = {
+            run_async: async () => {},
+            get_async: async (sql: string, params?: any[]) => {
+                if (sql.includes('information_schema.columns')) return { data_type: 'vector' };
+                if (sql.includes('pg_attribute')) return { tmod: 260 }; // 260 - 4 = 256 dim
+                return null;
+            },
+            all_async: async () => [],
+        };
+        const store = new PostgresVectorStore(db as any, "vectors");
+        await store.init();
+        expect((store as any).pgvectorAvailable).toBe(true);
+    });
 });

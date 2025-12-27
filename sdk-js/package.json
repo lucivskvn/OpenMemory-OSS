@@ -40,7 +40,7 @@
         "@modelcontextprotocol/sdk": "1.25.1",
         "fluent-ffmpeg": "^2.1.2",
         "mammoth": "^1.6.0",
-        "openai": "^4.20.0",
+        "openai": "^6.0.0",
         "pdf-parse": "^1.1.1",
         "sqlite3": "^5.1.7",
         "turndown": "^7.1.2",

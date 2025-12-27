@@ -7,6 +7,11 @@ const rate_limit_store = new Map<
     string,
     { count: number; reset_time: number }
 >();
+
+// Testing helper to reset rate limit store
+export function _resetRateLimitStore() {
+    rate_limit_store.clear();
+}
 const MAX_RATE_LIMIT_KEYS = 10000;
 
 function is_public_endpoint(path: string): boolean {
@@ -124,35 +129,22 @@ export const authPlugin = (app: Elysia) =>
         const ip = get_ip(request, headers as any);
         const provided = extract_api_key(headers);
 
-        // Use IP for rate limiting if Key is missing/invalid, or Key ID if valid?
-        // To protect against brute force, we MUST rate limit by IP if auth fails.
-        // But we don't know if auth fails yet.
-        // Strategy: Rate limit by IP first. If IP is rate limited, block.
-        // Then, if Key is valid, we could apply a separate "Quota" rate limit?
-        // For simplicity/safety: Always check IP-based rate limit first for unauthenticated/invalid attempts.
-        // However, shared IPs (NAT) might get blocked.
-        // Hybrid approach:
-        // If provided key is present, use a cheap hash of it for RL bucket (to allow valid high-traffic users).
-        // If NO key or INVALID format, use IP.
+        // First, apply IP-based rate limiting as a DoS protection layer
+        const ip_client_id = ip ? `ip:${ip}` : "ip:unknown";
+        const ip_rl = check_rate_limit(ip_client_id);
 
-        // For strict security, we'll use IP-based rate limiting as a first defense layer.
-        // But `check_rate_limit` shares the store.
-        // Let's use IP if provided is null.
-
-        const client_id = get_client_id(ip, provided);
-        const rl = check_rate_limit(client_id);
-
+        // Attach IP-based RL headers (global behavior)
         if (authConfig.rate_limit_enabled) {
             set.headers["X-RateLimit-Limit"] = String(authConfig.rate_limit_max_requests);
-            set.headers["X-RateLimit-Remaining"] = String(rl.remaining);
-            set.headers["X-RateLimit-Reset"] = String(Math.floor(rl.reset_time / 1000));
+            set.headers["X-RateLimit-Remaining"] = String(ip_rl.remaining);
+            set.headers["X-RateLimit-Reset"] = String(Math.floor(ip_rl.reset_time / 1000));
         }
 
-        if (!rl.allowed) {
+        if (!ip_rl.allowed) {
             set.status = 429;
             return {
                 error: "rate_limit_exceeded",
-                retry_after: Math.ceil((rl.reset_time - Date.now()) / 1000),
+                retry_after: Math.ceil((ip_rl.reset_time - Date.now()) / 1000),
             };
         }
 
@@ -168,9 +160,26 @@ export const authPlugin = (app: Elysia) =>
             };
         }
 
+        // Validate API key before applying per-key quota
         if (!validate_api_key(provided, authConfig.api_key)) {
+            // Count failed key attempts separately to help detect brute force on keys
+            const badKeyId = `badkey:${crypto.createHash("sha256").update(provided).digest("hex").slice(0,8)}`;
+            check_rate_limit(badKeyId);
             set.status = 403;
             return { error: "invalid_api_key" };
+        }
+
+        // Apply per-key quota for valid keys
+        const key_id = `key:${crypto.createHash("sha256").update(provided).digest("hex").slice(0,12)}`;
+        const key_rl = check_rate_limit(key_id);
+        // Expose key-level remaining quota in headers if available
+        if (authConfig.rate_limit_enabled) {
+            set.headers["X-RateLimit-User-Remaining"] = String(key_rl.remaining);
+            set.headers["X-RateLimit-User-Reset"] = String(Math.floor(key_rl.reset_time / 1000));
+        }
+        if (!key_rl.allowed) {
+            set.status = 429;
+            return { error: "quota_exceeded", retry_after: Math.ceil((key_rl.reset_time - Date.now()) / 1000) };
         }
     });
 
