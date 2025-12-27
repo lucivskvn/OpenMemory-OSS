@@ -13,18 +13,40 @@ export class PostgresVectorStore implements VectorStore {
     private pgvectorAvailable = false;
 
     async init(): Promise<void> {
-        // Check if optional 'v_vector' column exists and is of vector type
+        // Check if optional 'v_vector' column exists and is of vector type and has an explicit dimension
         try {
             const col = await this.db.get_async(
                 `select data_type from information_schema.columns where table_name=$1 and column_name='v_vector'`,
                 [this.table]
             );
             if (col && typeof col.data_type === 'string' && col.data_type.startsWith('vector')) {
-                this.pgvectorAvailable = true;
-                log.info(`[DB] pgvector column detected on ${this.table}; future searches can use DB-side vector ops`);
+                // Try to read the typmod (dimension) from pg_attribute; if present and > 4, enable pgvector
+                try {
+                    const t = await this.db.get_async(
+                        `select atttypmod as tmod from pg_attribute where attrelid = $1::regclass and attname = 'v_vector'`,
+                        [this.table]
+                    );
+                    const tmod = t?.tmod || 0;
+                    const dim = (tmod && typeof tmod === 'number') ? (tmod - 4) : 0;
+                    if (dim > 0) {
+                        this.pgvectorAvailable = true;
+                        log.info(`[DB] pgvector column detected on ${this.table} with dimension=${dim}; future searches can use DB-side vector ops`);
+                    } else {
+                        log.info(`[DB] pgvector column detected on ${this.table} but without explicit dimension; ensure v_vector is backfilled and set to vector(N) before enabling DB-side search`);
+                    }
+                } catch (e) {
+                    // If querying pg_attribute fails (e.g., SQLite or restricted access), try a lightweight operator test
+                    try {
+                        await this.db.get_async(`select (v_vector <-> $1::vector) as dist from ${this.table} limit 1`, ['[0]']);
+                        this.pgvectorAvailable = true;
+                        log.info(`[DB] pgvector operator test succeeded on ${this.table}; enabling DB-side vector ops`);
+                    } catch (e2) {
+                        log.info(`[DB] pgvector detected but operator test failed; falling back to in-memory search`, { error: e2 });
+                    }
+                }
             }
         } catch (e) {
-            // Ignore - information_schema may not be accessible under some permissions
+            // Ignore - information_schema may not be accessible under some permissions (e.g., SQLite)
         }
     }
 

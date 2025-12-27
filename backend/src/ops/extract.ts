@@ -1,5 +1,5 @@
-import OpenAI from "openai";
 import { env } from "../core/cfg";
+import { transcribeAudioWithOpenAI } from "../core/openai_adapter";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
 import * as pdf_parse from "pdf-parse";
@@ -11,9 +11,7 @@ import * as fs from "node:fs";
 import { promises as fsPromises } from "node:fs";
 import { log } from "../core/log";
 
-import { transcribeAudioWithOpenAI } from "../core/openai_adapter";
 
-// Deprecated: we no longer lazy-init OpenAI client directly here. Use adapter.
 
 const turndownService = new TurndownService();
 
@@ -77,9 +75,7 @@ export const extract_text_from_html = (html: string): string => {
 
 export const transcribe_audio = async (buffer: Buffer): Promise<string> => {
     try {
-        const file = new File([buffer], "audio.mp3", { type: "audio/mp3" });
-        const text = await transcribeAudioWithOpenAI(file, "whisper-1");
-        return text;
+        return await transcribeAudioWithOpenAI(buffer, "whisper-1");
     } catch (e) {
         log.error("Audio transcription failed", { error: e });
         return "";

@@ -53,6 +53,15 @@ Notes & Caveats
 - The `tools/backfill_pgvector.ts` script constructs a vector literal string from binary; review the precision and ensure the target `pgvector` type accepts the format used.
 - Testing on a representative dataset is essential before enabling DB-side search in production.
 
+What's changed (automation and safety checks)
+
+- The `20240108000000_pgvector_finalize.sql` migration now performs additional checks and will print NOTICEs to guide operators:
+  - It checks the column typmod (dimension) and warns if no explicit dimension is present.
+  - It checks for rows where `v` (bytea) is present but `v_vector` is NULL and raises a notice recommending running `tools/backfill_pgvector.ts` to populate `v_vector` before finalizing.
+  - The migration will attempt to create the IVFFLAT index but will continue gracefully if the column or index is not yet ready, avoiding hard failures during automated runs.
+
+These improvements aim to make the migration observable, idempotent, and safer to run in automated CI or Supabase migration pipelines.
+
 Rollback plan
 
 - Restore the DB from backup, or

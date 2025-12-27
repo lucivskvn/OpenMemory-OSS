@@ -6,6 +6,9 @@
 
 - Add migration v1.7.0 to fix waypoint primary key and add missing indexes to improve multi-tenant isolation and performance. (SQL: `20240105000000_waypoint_pk_fix.sql`)
 - Add migration v1.8.0 to introduce optional `v_vector` pgvector column and index (requires pgvector dimension to be set and manual backfill). (SQL: `20240107000000_pgvector.sql`)
+- Restore OpenAI adapter with robust REST fallback for transcription and added `transcribeAudioWithOpenAI` to avoid client-breaking changes across OpenAI SDK versions; unit tests added (tests/backend/openai_adapter.test.ts).
+- Improve `20240108000000_pgvector_finalize.sql`: added typmod/dimension checks and backfill advisories to guide safe migration and index creation.
+- Make `ValkeyVectorStore` testable by accepting an optional client in the constructor; added fallback unit tests for FT.SEARCH failures (tests/backend/valkey_fallback.test.ts) and encoding tests for vector (tests/backend/vector_encoding.test.ts).
 
 ## 1.2.3 - 2025-12-14
 

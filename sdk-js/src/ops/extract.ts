@@ -134,17 +134,10 @@ export async function extractAudio(
         // Write buffer to temp file
         fs.writeFileSync(tempFilePath, buffer);
 
-        // Initialize OpenAI client (Lazy)
-        const openai = new OpenAI({ apiKey });
-
-        // Transcribe audio using Whisper
-        const transcription = await openai.audio.transcriptions.create({
-            file: fs.createReadStream(tempFilePath),
-            model: "whisper-1",
-            response_format: "verbose_json",
-        });
-
-        const text = transcription.text;
+// Initialize OpenAI client via adapter (handles client or REST fallback)
+    const { transcribeAudioWithOpenAI } = await import("../core/openai_adapter");
+    const tempBuf = fs.readFileSync(tempFilePath);
+    const text = await transcribeAudioWithOpenAI(tempBuf, apiKey, process.env.OM_OPENAI_BASE_URL);
 
         return {
             text,

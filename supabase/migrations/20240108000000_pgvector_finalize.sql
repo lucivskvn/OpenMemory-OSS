@@ -11,3 +11,14 @@ DO $$ BEGIN
 EXCEPTION WHEN OTHERS THEN
     RAISE NOTICE 'Could not create ivfflat index (finalize): %', SQLERRM;
 END $$;
+
+-- Check if v_vector has explicit typmod (dimension) and if there are rows that need backfill
+DO $$ DECLARE tmod int; BEGIN
+    SELECT atttypmod INTO tmod FROM pg_attribute WHERE attrelid = 'openmemory_vectors'::regclass AND attname = 'v_vector';
+    IF tmod IS NULL OR tmod = 0 THEN
+        RAISE NOTICE 'v_vector column has no explicit dimension (atttypmod=%). Run tools/backfill_pgvector.ts to populate v_vector and then set dimension via ALTER TABLE to vector(N).', tmod;
+    END IF;
+    IF EXISTS (SELECT 1 FROM openmemory_vectors WHERE v IS NOT NULL AND v_vector IS NULL) THEN
+        RAISE NOTICE 'There are rows with bytea "v" that require backfill into "v_vector". Use tools/backfill_pgvector.ts to fill v_vector from v, then re-run finalization to set dimension and create ivfflat index.';
+    END IF;
+END $$;

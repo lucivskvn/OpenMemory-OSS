@@ -1,59 +1,84 @@
+import OpenAI from "openai";
 import { env } from "./cfg";
-import { fetchWithTimeout } from "../memory/embed";
-import fs from "fs";
+import { log } from "./log";
 
-// Minimal adapter to abstract OpenAI client differences between versions.
-// We provide a single function transcribeAudio(file, model) that tries to use
-// an installed OpenAI client if available, else falls back to the REST API.
+/**
+ * Transcribe audio buffer using OpenAI. Tries official client first, then falls back
+ * to a REST multipart POST to /v1/audio/transcriptions. Returns empty string on failure.
+ */
+export async function transcribeAudioWithOpenAI(
+  buffer: Buffer,
+  model = "whisper-1",
+  timeoutMs = 30_000,
+): Promise<string> {
+  if (!env.openai_key) throw new Error("OpenAI key missing");
 
-export const transcribeAudioWithOpenAI = async (file: File | Blob | Buffer, model = "whisper-1") => {
-    // If there's no key, throw to allow callers to gracefully handle fallback
-    if (!env.openai_key) throw new Error("OpenAI key missing for transcription");
+  // Create a File object from buffer (Bun/browser compatible)
+  const file = new File([buffer], "audio.mp3", { type: "audio/mpeg" });
 
-    // Try to require the official client (works for v4/v5/v6) if installed
-    try {
-        // Import dynamically to avoid startup issues
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const OpenAI = require("openai");
-        if (OpenAI) {
-            const client = new OpenAI({ apiKey: env.openai_key, baseURL: env.openai_base_url });
-            // v4 used client.audio.transcriptions.create, v6 might expose different paths.
-            // Try known patterns safely.
-            if (client?.audio?.transcriptions?.create) {
-                const response = await client.audio.transcriptions.create({ file: file as any, model });
-                // Different clients may return string directly or under .text
-                return (response as any).text || (response as any).data?.text || "";
-            }
-            if (client?.speech?.transcriptions?.create) {
-                const response = await client.speech.transcriptions.create({ file: file as any, model });
-                return (response as any).text || (response as any).data?.text || "";
-            }
-        }
-    } catch (e) {
-        // ignore and fall back to REST API
+  // Try the official OpenAI client first (supports multiple client shapes)
+  try {
+    const client = new OpenAI({ apiKey: env.openai_key, baseURL: env.openai_base_url });
+
+    // Many client versions expose audio.transcriptions.create
+    // Try to call it if available
+    // @ts-ignore - client shapes differ across versions
+    if (client?.audio?.transcriptions?.create) {
+      // @ts-ignore
+      const res: any = await client.audio.transcriptions.create({ file, model });
+
+      if (!res) throw new Error("empty response from client.transcriptions.create");
+      if (typeof res === "string") return res;
+      if (res.text) return res.text;
+      if (res.data?.[0]?.text) return res.data[0].text;
+    }
+  } catch (err: any) {
+    log.warn("[OpenAI Adapter] client transcription failed, falling back to REST", { error: err?.message || err });
+  }
+
+  // Fallback to direct REST multipart POST
+  try {
+    const endpoint = (env.openai_base_url || "https://api.openai.com") + "/v1/audio/transcriptions";
+    const fd = new FormData();
+    fd.append("file", file as any);
+    fd.append("model", model);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.openai_key}`,
+      },
+      body: fd as any,
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timer));
+
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`OpenAI transcription failed: ${res.status} ${body}`);
     }
 
-    // REST fallback: send multipart/form-data to /audio/transcriptions endpoint
-    try {
-        const form = new FormData();
-        if (file instanceof Buffer) {
-            const blob = new Blob([file]);
-            form.append("file", blob, "audio.mp3");
-        } else {
-            form.append("file", file as any);
-        }
-        form.append("model", model);
+    const data = await res.json();
 
-        const url = `${env.openai_base_url.replace(/\/$/, "")}/audio/transcriptions`;
-        const res = await fetchWithTimeout(url, {
-            method: "POST",
-            headers: { authorization: `Bearer ${env.openai_key}` },
-            body: form as any,
-        });
-        if (!res.ok) throw new Error(`OpenAI REST transcription failed: ${res.status}`);
-        const json = await res.json();
-        return json.text || json?.data?.text || "";
-    } catch (e: any) {
-        throw e;
+    if (data?.text) return data.text;
+    if (data?.data?.[0]?.text) return data.data[0].text;
+
+    // Attempt to find a string field with the transcription
+    for (const key of Object.keys(data)) {
+      const v = (data as any)[key];
+      if (typeof v === "string") return v;
+      if (Array.isArray(v)) {
+        for (const item of v) {
+          if (item?.text) return item.text;
+        }
+      }
     }
-};
+
+    throw new Error("OpenAI transcription returned unexpected payload");
+  } catch (err: any) {
+    log.error("[OpenAI Adapter] transcription failed", { error: err?.message || err });
+    return "";
+  }
+}

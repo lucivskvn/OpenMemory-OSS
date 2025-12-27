@@ -12,15 +12,11 @@ export const settings = (app: Elysia) =>
                 // Dashboard expects raw env var names (OM_PORT, etc.)
                 const rawEnv = { ...process.env };
 
-                const sensitive = [
-                    "api_key", "openai_key", "gemini_key", "AWS_SECRET_ACCESS_KEY",
-                    "valkey_password", "OM_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
-                    "OM_VALKEY_PASSWORD", "OM_WEAVIATE_API_KEY", "AWS_SECRET_ACCESS_KEY"
-                ];
+                const { SENSITIVE_PATTERNS } = require("../../core/secrets");
 
                 // Mask sensitive
                 for (const k of Object.keys(rawEnv)) {
-                    if (sensitive.some(s => k.toLowerCase().includes(s.toLowerCase()))) {
+                    if (SENSITIVE_PATTERNS.some(s => k.toLowerCase().includes(s.toLowerCase()))) {
                         if (rawEnv[k] && rawEnv[k] !== "") rawEnv[k] = "***";
                     }
                 }
