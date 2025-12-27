@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-### Fixed
+### Fixed (Unreleased)
 
 - Add migration v1.7.0 to fix waypoint primary key and add missing indexes to improve multi-tenant isolation and performance. (SQL: `20240105000000_waypoint_pk_fix.sql`)
 - Add migration v1.8.0 to introduce optional `v_vector` pgvector column and index (requires pgvector dimension to be set and manual backfill). (SQL: `20240107000000_pgvector.sql`)
