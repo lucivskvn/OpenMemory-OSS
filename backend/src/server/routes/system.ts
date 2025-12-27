@@ -9,9 +9,11 @@ export const sys = (app: Elysia) =>
     app.group("/api/system", (app) =>
         app
             .get("/health", async ({ set }) => {
-                const db_ok = await get_async("select 1 as c")
-                    .then(() => true)
-                    .catch(() => false);
+                // Protect health endpoint from blocking DB issues by adding a short timeout
+                const db_ok = await Promise.race([
+                    get_async("select 1 as c").then(() => true).catch(() => false),
+                    new Promise<boolean>((res) => setTimeout(() => res(false), 2000)),
+                ]);
                 const embed_ok = true; // assume synthetic for now or check url
                 const status = db_ok ? "ok" : "degraded";
                 set.status = status === "ok" ? 200 : 503;

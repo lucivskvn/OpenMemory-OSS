@@ -7,7 +7,7 @@ export interface VectorStore {
     getVector(id: string, sector: string): Promise<{ vector: number[]; dim: number } | null>;
     getVectorsById(id: string): Promise<Array<{ sector: string; vector: number[]; dim: number }>>;
     getVectorsForMemoryIds(ids: string[]): Promise<Array<{ id: string; sector: string; vector: number[]; dim: number }>>;
-    getVectorsBySector(sector: string): Promise<Array<{ id: string; vector: number[]; dim: number }>>;
+    getVectorsBySector(sector: string, user_id?: string): Promise<Array<{ id: string; vector: number[]; dim: number }>>;
     /**
      * Search for similar vectors globally (across all sectors)
      * Used for finding candidates for linking

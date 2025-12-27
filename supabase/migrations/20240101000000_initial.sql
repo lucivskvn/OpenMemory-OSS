@@ -1,7 +1,7 @@
 -- Initial Schema (Postgres)
 create table if not exists openmemory_memories(id uuid primary key,user_id text,segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,meta text,created_at bigint,updated_at bigint,last_seen_at bigint,salience double precision,decay_lambda double precision,version integer default 1,mean_dim integer,mean_vec bytea,compressed_vec bytea,feedback_score double precision default 0);
 create table if not exists openmemory_vectors(id uuid,sector text,user_id text,v bytea,dim integer not null,primary key(id,sector));
-create table if not exists openmemory_waypoints(src_id text,dst_id text not null,user_id text,weight double precision not null,created_at bigint,updated_at bigint,primary key(src_id,user_id));
+create table if not exists openmemory_waypoints(src_id text,dst_id text not null,user_id text,weight double precision not null,created_at bigint,updated_at bigint,primary key(src_id,dst_id,user_id));
 create table if not exists openmemory_embed_logs(id text primary key,model text,status text,ts bigint,err text);
 create table if not exists openmemory_users(user_id text primary key,summary text,reflection_count integer default 0,created_at bigint,updated_at bigint);
 create table if not exists stats(id serial primary key,type text not null,count integer default 1,ts bigint not null);

@@ -810,7 +810,7 @@ export async function hsg_query(
         > = {};
         for (const s of ss) {
             const qv = qe[s];
-            const vecs = await vector_store.getVectorsBySector(s);
+            const vecs = await vector_store.getVectorsBySector(s, f?.user_id || undefined);
             const sims: Array<{ id: string; similarity: number }> = [];
             for (const vr of vecs) {
                 // vr is { id, vector, dim }

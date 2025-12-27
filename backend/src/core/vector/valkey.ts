@@ -244,7 +244,7 @@ export class ValkeyVectorStore implements VectorStore {
         return results.flat();
     }
 
-    async getVectorsBySector(sector: string): Promise<Array<{ id: string; vector: number[]; dim: number }>> {
+    async getVectorsBySector(sector: string, user_id?: string): Promise<Array<{ id: string; vector: number[]; dim: number }>> {
         const results: Array<{ id: string; vector: number[]; dim: number }> = [];
         let cursor = "0";
         do {
@@ -252,13 +252,15 @@ export class ValkeyVectorStore implements VectorStore {
             cursor = res[0];
             const keys = res[1];
             if (keys.length) {
-                const promises = keys.map(k => this.client.hmget(k, ["v", "dim"]).then(vals => ({ k, vals })));
+                const promises = keys.map(k => this.client.hmget(k, ["v", "dim", "user_id"]).then(vals => ({ k, vals })));
                 const allRes = await Promise.all(promises);
 
                 allRes.forEach(({ k, vals }) => {
                     if (vals && vals[0]) {
                         const v = vals[0];
                         const dim = vals[1];
+                        const uid = vals[2] || "anonymous";
+                        if (user_id && uid !== user_id) return;
                         const id = k.split(":").pop()!;
                         results.push({
                             id,

@@ -70,7 +70,9 @@ export const settings = (app: Elysia) =>
                     }
 
                     fs.writeFileSync(envPath, newLines.join("\n"));
-                    log.info("Settings updated via API");
+                    // Audit log: record which keys changed (do not log values)
+                    const updatedKeys = Object.keys(newSettings).filter(k => !seenKeys.has(k) || newLines.some(line => line.startsWith(k + "=")));
+                    log.info("Settings updated via API", { updatedKeys });
 
                     return { message: "Settings saved. Please restart the server." };
                 } catch (e: any) {

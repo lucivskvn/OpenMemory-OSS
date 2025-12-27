@@ -32,7 +32,8 @@ def init_db(custom_path=None):
         cur.execute("PRAGMA temp_store=MEMORY")
         cur.execute("PRAGMA cache_size=-8000")
         cur.execute("PRAGMA mmap_size=134217728")
-        cur.execute("PRAGMA foreign_keys=OFF")
+        # Enforce foreign key constraints for data integrity (temporal_edges -> temporal_facts)
+        cur.execute("PRAGMA foreign_keys=ON")
         cur.execute("PRAGMA wal_autocheckpoint=20000")
         cur.execute("PRAGMA locking_mode=NORMAL")
         cur.execute("PRAGMA busy_timeout=5000")
@@ -44,7 +45,7 @@ def init_db(custom_path=None):
             create table if not exists vectors(id text not null,sector text not null,user_id text,v blob not null,dim integer not null,primary key(id,sector))
         """)
         cur.execute("""
-            create table if not exists waypoints(src_id text,dst_id text not null,user_id text,weight real not null,created_at integer,updated_at integer,primary key(src_id,user_id))
+            create table if not exists waypoints(src_id text,dst_id text not null,user_id text,weight real not null,created_at integer,updated_at integer,primary key(src_id,dst_id,user_id))
         """)
         cur.execute("""
             create table if not exists embed_logs(id text primary key,model text,status text,ts integer,err text)

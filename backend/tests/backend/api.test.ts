@@ -7,11 +7,21 @@ import { req_tracker_plugin } from "../../src/server/routes/dashboard";
 describe('OpenMemory Backend API', () => {
     let app: Elysia;
 
-    beforeAll(() => {
+    beforeAll(async () => {
+        // Force synthetic embeddings to keep tests deterministic and fast
+        const cfg = await import('../../src/core/cfg');
+        (cfg as any).env.emb_kind = 'synthetic';
+        (cfg as any).env.embed_mode = 'simple';
+        (cfg as any).env.vec_dim = 256;
+
         app = new Elysia()
             .use(req_tracker_plugin)
             .use(mem)
             .use(sys);
+
+        // Warm up DB/migrations to avoid race on first request
+        const { q } = await import('../../src/core/db');
+        await q.get_system_stats.get();
     });
 
     test('Health Check', async () => {

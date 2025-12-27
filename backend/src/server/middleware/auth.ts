@@ -16,12 +16,18 @@ function is_public_endpoint(path: string): boolean {
 }
 
 function extract_api_key(headers: any): string | null {
-    const x_api_key = headers[authConfig.api_key_header];
-    if (x_api_key) return x_api_key;
-    const auth_header = headers["authorization"];
+    // Support both plain object maps and Fetch Headers-like objects
+    const getHeader = (k: string) => {
+        if (!headers) return undefined;
+        if (typeof headers.get === "function") return headers.get(k);
+        return headers[k] || headers[k.toLowerCase()];
+    };
+    const x_api_key = getHeader(authConfig.api_key_header);
+    if (x_api_key) return x_api_key as string;
+    const auth_header = getHeader("authorization");
     if (auth_header) {
-        if (auth_header.startsWith("Bearer ")) return auth_header.slice(7);
-        if (auth_header.startsWith("ApiKey ")) return auth_header.slice(7);
+        if ((auth_header as string).startsWith("Bearer ")) return (auth_header as string).slice(7);
+        if ((auth_header as string).startsWith("ApiKey ")) return (auth_header as string).slice(7);
     }
     return null;
 }
@@ -84,16 +90,28 @@ function get_client_id(ip: string | null, api_key: string | null): string {
     return "unknown_client";
 }
 
-function get_ip(request: Request, headers: Record<string, string | undefined>): string | null {
-    // 1. Check X-Forwarded-For (standard proxy header)
-    const xff = headers["x-forwarded-for"];
-    if (xff) return xff.split(",")[0].trim();
+function get_ip(request: Request, headers: any): string | null {
+    // Support fetching from standard proxy headers (Headers object or plain map)
+    const getHeader = (k: string) => {
+        if (!headers) return undefined;
+        if (typeof headers.get === "function") return headers.get(k);
+        return headers[k] || headers[k.toLowerCase()];
+    };
+    const candidates = ["x-forwarded-for", "x-real-ip", "cf-connecting-ip", "true-client-ip"];
+    for (const c of candidates) {
+        const v = getHeader(c);
+        if (v) return String(v).split(",")[0].trim();
+    }
 
-    // 2. Check direct connection info if available (Bun specific property)
-    // Elysia request wrappers might obscure this, but request.headers is reliable for proxies.
-    // Note: server.requestIP(request) is ideal but requires passing `app` context which we don't have easily here in the handler structure without refactoring.
+    // Try Request socket / connection info
+    try {
+        const anyReq: any = request as any;
+        if (anyReq.socket && anyReq.socket.remoteAddress) return anyReq.socket.remoteAddress;
+        if (anyReq.ip) return anyReq.ip;
+    } catch (e) {
+        // ignore
+    }
 
-    // Fallback logic
     return null;
 }
 

@@ -46,9 +46,9 @@ type QueryRepository = {
     get_segments: { all: () => Promise<any[]> };
     get_mem_by_segment: { all: (segment: number) => Promise<any[]> };
     ins_waypoint: { run: (...p: any[]) => Promise<void> };
-    get_neighbors: { all: (src: string) => Promise<any[]> };
-    get_waypoints_by_src: { all: (src: string) => Promise<any[]> };
-    get_waypoint: { get: (src: string, dst: string) => Promise<any> };
+    get_neighbors: { all: (src: string, user_id?: string) => Promise<any[]> };
+    get_waypoints_by_src: { all: (src: string, user_id?: string) => Promise<any[]> };
+    get_waypoint: { get: (src: string, dst: string, user_id?: string) => Promise<any> };
     upd_waypoint: { run: (...p: any[]) => Promise<void> };
     del_waypoints: { run: (...p: any[]) => Promise<void> };
     prune_waypoints: { run: (threshold: number) => Promise<void> };
@@ -224,7 +224,8 @@ if (is_pg) {
 
     dbReadyPromise = internal_init().catch(e => {
         log.error("[DB] Init failed:", { error: e });
-        process.exit(1);
+        // In test environments prefer throwing rather than exiting process so the test harness can capture failures
+        throw e;
     });
 
     const safe_exec = async (s: string, p: any[]) => {
@@ -233,9 +234,24 @@ if (is_pg) {
         return c.unsafe(convertPlaceholders(s), p);
     };
 
-    run_async = async (s, p = []) => { await safe_exec(s, p); };
-    get_async = async (s, p = []) => (await safe_exec(s, p))[0];
-    all_async = async (s, p = []) => await safe_exec(s, p);
+    // Wrap DB accessors with simple timing to detect slow queries during tests
+    const wrap = (fn: (...args: any[]) => Promise<any>, name: string) => async (s: string, p: any[] = []) => {
+        const start = Date.now();
+        try {
+            const res = await fn(s, p);
+            const dur = Date.now() - start;
+            if (dur > 500) log.warn(`[DB] Slow query detected (${name}): ${dur}ms`, { sql: s });
+            return res;
+        } catch (e) {
+            const dur = Date.now() - start;
+            log.error(`[DB] Query error (${name}) after ${dur}ms`, { sql: s, error: e });
+            throw e;
+        }
+    };
+
+    run_async = wrap(async (s, p) => { await safe_exec(s, p); }, 'run_async');
+    get_async = wrap(async (s, p) => (await safe_exec(s, p))[0], 'get_async');
+    all_async = wrap(async (s, p) => await safe_exec(s, p), 'all_async');
 
 } else {
     // SQLite
@@ -254,10 +270,14 @@ if (is_pg) {
     db.run("PRAGMA temp_store=MEMORY");
     db.run("PRAGMA cache_size=-8000");
     db.run("PRAGMA mmap_size=134217728");
-    db.run("PRAGMA foreign_keys=OFF");
+    // Enforce foreign key constraints in SQLite to ensure referential integrity (temporal_edges -> temporal_facts)
+    db.run("PRAGMA foreign_keys=ON");
     db.run("PRAGMA wal_autocheckpoint=20000");
     db.run("PRAGMA locking_mode=NORMAL");
-    db.run("PRAGMA busy_timeout=5000");
+    db.run("PRAGMA busy_timeout=1000");
+    // Reduce busy timeout during tests to fail fast on DB locks and surface useful logs
+    // This helps tests detect locking conditions quickly instead of hanging.
+    log.info("[DB] PRAGMA busy_timeout set to 1000ms for SQLite (tests will fail fast on locks)");
 
     // Raw execution wrapper for migrations
     const exec = async (sql: string, p: any[] = []) => {
@@ -292,7 +312,8 @@ if (is_pg) {
 
     dbReadyPromise = internal_init().catch(e => {
         log.error("[DB] SQLite Init failed:", { error: e });
-        process.exit(1);
+        // Throw error to allow test harness to handle initialization failures
+        throw e;
     });
 
     const safe_exec = async (fn: () => any) => {
@@ -300,18 +321,28 @@ if (is_pg) {
         return fn();
     };
 
-    run_async = async (sql: string, p: any[] = []) => {
-        await dbReadyPromise;
-        db.run(sql, p);
+    // Wrap DB accessors with simple timing to detect slow queries during tests
+    const wrap = (fn: (...args: any[]) => Promise<any>, name: string) => async (s: string, p: any[] = []) => {
+        const start = Date.now();
+        try {
+            const res = await fn(s, p);
+            const dur = Date.now() - start;
+            if (dur > 500) log.warn(`[DB] Slow query detected (${name}): ${dur}ms`, { sql: s });
+            return res;
+        } catch (e: any) {
+            const dur = Date.now() - start;
+            if (e && (e.message?.includes("database is locked") || e.code === "SQLITE_BUSY")) {
+                log.error(`[DB] DB locked (${name}) after ${dur}ms`, { sql: s, error: e });
+                throw new Error(`DB_LOCKED: ${e.message}`);
+            }
+            log.error(`[DB] Query error (${name}) after ${dur}ms`, { sql: s, error: e });
+            throw e;
+        }
     };
-    get_async = async (sql: string, p: any[] = []) => {
-        await dbReadyPromise;
-        return db.query(sql).get(p as any) as any;
-    };
-    all_async = async (sql: string, p: any[] = []) => {
-        await dbReadyPromise;
-        return db.query(sql).all(p as any) as any[];
-    };
+
+    run_async = wrap(async (s: string, p: any[] = []) => { db.run(s, p); }, 'run_async');
+    get_async = wrap(async (s: string, p: any[] = []) => db.query(s).get(p as any) as any, 'get_async');
+    all_async = wrap(async (s: string, p: any[] = []) => db.query(s).all(p as any) as any[], 'all_async');
 
     let txDepth = 0;
     transaction = {
@@ -487,13 +518,19 @@ q = {
         run: (...p) => {
             const cols = ["src_id", "dst_id", "user_id", "weight", "created_at", "updated_at"];
             const sql = is_pg
-                 ? gen_upsert(TABLE_WAYPOINTS, cols, "src_id,dst_id", ["weight", "updated_at"])
+                 ? gen_upsert(TABLE_WAYPOINTS, cols, "src_id,dst_id,user_id", ["weight", "updated_at"])
                  : `insert or replace into ${TABLE_WAYPOINTS}(${cols.join(",")}) values(?,?,?,?,?,?)`;
             return run_async(sql, p);
         },
     },
     get_neighbors: {
-        all: (src) => {
+        all: (src: string, user_id?: string) => {
+            if (user_id) {
+                return all_async(
+                    `select dst_id,weight from ${TABLE_WAYPOINTS} where src_id=? and user_id=? order by weight desc`,
+                    [src, user_id],
+                );
+            }
             return all_async(
                 `select dst_id,weight from ${TABLE_WAYPOINTS} where src_id=? order by weight desc`,
                 [src],
@@ -509,7 +546,13 @@ q = {
         }
     },
     get_waypoints_by_src: {
-        all: (src) => {
+        all: (src: string, user_id?: string) => {
+            if (user_id) {
+                return all_async(
+                    `select src_id,dst_id,weight,created_at,updated_at from ${TABLE_WAYPOINTS} where src_id=? and user_id=?`,
+                    [src, user_id],
+                );
+            }
             return all_async(
                 `select src_id,dst_id,weight,created_at,updated_at from ${TABLE_WAYPOINTS} where src_id=?`,
                 [src],
@@ -517,7 +560,13 @@ q = {
         }
     },
     get_waypoint: {
-        get: (src, dst) => {
+        get: (src: string, dst: string, user_id?: string) => {
+            if (user_id) {
+                return get_async(
+                    `select weight from ${TABLE_WAYPOINTS} where src_id=? and dst_id=? and user_id=?`,
+                    [src, dst, user_id],
+                );
+            }
             return get_async(
                 `select weight from ${TABLE_WAYPOINTS} where src_id=? and dst_id=?`,
                 [src, dst],

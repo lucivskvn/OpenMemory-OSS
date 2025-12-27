@@ -24,7 +24,7 @@ const tier_max_active = { fast: 32, smart: 64, deep: 128, hybrid: 64 };
 
 const envSchema = z.object({
     port: toNum(8080),
-    db_path: z.string().optional().transform(v => v || path.resolve(process.cwd(), "data/openmemory.sqlite")),
+    db_path: z.string().optional().transform(v => v || (process.env.BUN_TEST ? ":memory:" : path.resolve(process.cwd(), "data/openmemory.sqlite"))),
     api_key: z.string().optional(),
     rate_limit_enabled: toBool(),
     rate_limit_window_ms: toNum(60000),
@@ -150,7 +150,8 @@ try {
     parsed = envSchema.parse(rawEnv);
 } catch (e: any) {
     log.error("[CONFIG] Invalid configuration:", { error: e.errors });
-    process.exit(1);
+    // Throw to let callers/tests handle invalid configuration more gracefully
+    throw new Error(`Invalid configuration: ${JSON.stringify(e.errors)}`);
 }
 
 export const env = parsed;

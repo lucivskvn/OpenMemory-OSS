@@ -53,13 +53,14 @@ const cluster = (mems: any[]): any[] => {
 const sal = (c: any): number => {
     const now = Date.now();
     const p = c.n / 10;
-    const r =
-        c.mem.reduce(
-            (s: number, m: any) =>
-                s +
-                Math.exp(-(now - new Date(m.created_at).getTime()) / 43200000),
-            0,
-        ) / c.n;
+    // Guard against invalid created_at and ensure finite calculations
+    const r = c.mem.reduce((s: number, m: any) => {
+        const ca = Number(m.created_at) || 0;
+        if (!ca || !isFinite(ca)) return s + 0;
+        const age = now - ca;
+        const contrib = Math.exp(-age / 43200000);
+        return s + contrib;
+    }, 0) / c.n;
     const e = c.mem.some(
         (m: any) =>
             m.sectors &&
@@ -68,7 +69,8 @@ const sal = (c: any): number => {
     )
         ? 1
         : 0;
-    return Math.min(1, 0.6 * p + 0.3 * r + 0.1 * e);
+    const val = 0.6 * p + 0.3 * r + 0.1 * e;
+    return Math.min(1, isFinite(val) ? val : 0);
 };
 
 const summ = (c: any): string => {
@@ -81,39 +83,30 @@ const summ = (c: any): string => {
 const mark = async (mems: any[]) => {
     for (const m of mems) {
         if (m) {
-            const meta = JSON.parse(m.meta || "{}");
-            meta.consolidated = true;
-            await q.upd_meta.run(
-                JSON.stringify(meta),
-                Date.now(),
-                m.id,
-            );
+            try {
+                const meta = JSON.parse(m.meta || "{}");
+                meta.consolidated = true;
+                await q.upd_meta.run(JSON.stringify(meta), Date.now(), m.id);
+            } catch (e) {
+                log.error("[REFLECT] Failed to mark memory as consolidated", { id: m?.id, error: e });
+            }
         }
     }
 };
 
 const boost = async (mems: any[]) => {
     for (const m of mems) {
-        // We only need to update salience/last_seen, not full content unless intended
-        // Original logic: await q.upd_mem.run(...) then q.upd_seen.run(...)
-        // Why upd_mem? It was updating updated_at.
-        // Let's keep behavior but optimize retrieval.
-
-        // Actually, if we just want to boost salience, upd_seen is enough?
-        // Original code called upd_mem AND upd_seen.
-        // upd_mem call was: q.upd_mem.run(m.content, m.tags, m.meta, Date.now(), id);
-        // This just updates timestamp.
-
-        // We can optimize by NOT calling upd_mem if only timestamp changes, upd_seen does that too?
-        // upd_seen SQL: update memories set last_seen_at=?,salience=?,updated_at=? where id=?
-        // So upd_seen updates `updated_at`. Redundant upd_mem call removed.
-
-        await q.upd_seen.run(
-            m.last_seen_at,
-            Math.min(1, m.salience * 1.1),
-            Date.now(),
-            m.id
-        );
+        try {
+            // Update last_seen_at to now to reflect recent reinforcement
+            await q.upd_seen.run(
+                Date.now(),
+                Math.min(1, (m?.salience || 0) * 1.1),
+                Date.now(),
+                m.id,
+            );
+        } catch (e) {
+            log.error("[REFLECT] Failed to boost memory", { id: m?.id, error: e });
+        }
     }
 };
 
@@ -144,25 +137,30 @@ export const run_reflection = async () => {
         totalClusters += cls.length;
 
         for (const c of cls) {
-            const txt = summ(c);
-            const s = sal(c);
-            const src_ids = c.mem.map((m: any) => m.id);
-            const meta = {
-                type: "auto_reflect",
-                sources: src_ids,
-                freq: c.n,
-                at: new Date().toISOString(),
-            };
+            try {
+                const txt = summ(c);
+                const s = sal(c);
+                const src_ids = c.mem.map((m: any) => m.id);
+                const meta = {
+                    type: "auto_reflect",
+                    sources: src_ids,
+                    freq: c.n,
+                    at: new Date().toISOString(),
+                };
 
-            const targetUser = userId === "anonymous" ? undefined : userId;
+                const targetUser = userId === "anonymous" ? undefined : userId;
 
-            log.info(
-                `[REFLECT] Creating reflection for ${userId}: ${c.n} memories, salience=${s.toFixed(3)}, sector=${c.mem[0].primary_sector}`,
-            );
-            await add_hsg_memory(txt, j(["reflect:auto"]), meta, targetUser);
-            await mark(c.mem);
-            await boost(c.mem);
-            totalCreated++;
+                log.info(
+                    `[REFLECT] Creating reflection for ${userId}: ${c.n} memories, salience=${s.toFixed(3)}, sector=${c.mem[0].primary_sector}`,
+                );
+                await add_hsg_memory(txt, j(["reflect:auto"]), meta, targetUser);
+                await mark(c.mem);
+                await boost(c.mem);
+                totalCreated++;
+            } catch (e) {
+                log.error("[REFLECT] Failed to create reflection for cluster", { user: userId, clusterSize: c.n, error: e });
+                continue;
+            }
         }
     }
 

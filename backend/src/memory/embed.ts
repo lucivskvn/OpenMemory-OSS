@@ -30,7 +30,7 @@ export interface EmbeddingResult {
     dim: number;
 }
 
-const compress_vec = (v: number[], td: number): number[] => {
+export const compress_vec = (v: number[], td: number): number[] => {
     if (v.length <= td) return v;
     const c = new Float32Array(td),
         bs = v.length / td;
@@ -52,7 +52,7 @@ const compress_vec = (v: number[], td: number): number[] => {
     return Array.from(c);
 };
 
-const fuse_vecs = (syn: number[], sem: number[]): number[] => {
+export const fuse_vecs = (syn: number[], sem: number[]): number[] => {
     const synLength = syn.length;
     const semLength = sem.length;
     const totalLength = synLength + semLength;
@@ -148,7 +148,7 @@ async function embed_with_provider(
 }
 
 // Get semantic embedding with configurable fallback chain
-async function get_sem_emb(t: string, s: string): Promise<number[]> {
+export async function get_sem_emb(t: string, s: string): Promise<number[]> {
     // Deduplicate providers to avoid wasteful retries (e.g., gemini,gemini,synthetic)
     const providers = [...new Set([env.emb_kind, ...env.embedding_fallback])];
 
@@ -184,7 +184,7 @@ async function get_sem_emb(t: string, s: string): Promise<number[]> {
 
 
 // Batch embedding with fallback chain support (for simple mode)
-async function emb_batch_with_fallback(
+export async function emb_batch_with_fallback(
     txts: Record<string, string>,
 ): Promise<Record<string, number[]>> {
     const providers = [...new Set([env.emb_kind, ...env.embedding_fallback])];
@@ -678,8 +678,15 @@ export const getEmbeddingInfo = () => {
     const i: Record<string, any> = {
         provider: env.emb_kind,
         fallback_chain: env.embedding_fallback,
+        // 'dimensions' reflects the base semantic vector dim, but note that some tiers
+        // (e.g., 'smart') may produce fused vectors whose length differs (semantic + compressed)
         dimensions: env.vec_dim,
         mode: env.embed_mode,
+        // Describe expected output dimensions depending on tier
+        output_dimensions:
+            tier === "smart"
+                ? { semantic: env.vec_dim, compressed: 128, fused: env.vec_dim + 128 }
+                : { fused: env.vec_dim },
         batch_support:
             env.embed_mode === "simple" &&
             (env.emb_kind === "gemini" || env.emb_kind === "openai"),

@@ -1,12 +1,7 @@
 import { VectorStore } from "../vector_store";
 import { log } from "../log";
 import { cosineSimilarity, bufferToVector, vectorToBuffer } from "../../memory/embed";
-
-export interface DbOps {
-    run_async: (sql: string, params?: any[]) => Promise<void>;
-    get_async: (sql: string, params?: any[]) => Promise<any>;
-    all_async: (sql: string, params?: any[]) => Promise<any[]>;
-}
+import { DbOps } from "../schema/initial";
 
 export class PostgresVectorStore implements VectorStore {
     private table: string;
@@ -15,8 +10,22 @@ export class PostgresVectorStore implements VectorStore {
         this.table = tableName;
     }
 
+    private pgvectorAvailable = false;
+
     async init(): Promise<void> {
-        // No-op: Tables created via migrations in db.ts
+        // Check if optional 'v_vector' column exists and is of vector type
+        try {
+            const col = await this.db.get_async(
+                `select data_type from information_schema.columns where table_name=$1 and column_name='v_vector'`,
+                [this.table]
+            );
+            if (col && typeof col.data_type === 'string' && col.data_type.startsWith('vector')) {
+                this.pgvectorAvailable = true;
+                log.info(`[DB] pgvector column detected on ${this.table}; future searches can use DB-side vector ops`);
+            }
+        } catch (e) {
+            // Ignore - information_schema may not be accessible under some permissions
+        }
     }
 
     async storeVector(id: string, sector: string, vector: number[], dim: number, user_id?: string): Promise<void> {
@@ -34,35 +43,46 @@ export class PostgresVectorStore implements VectorStore {
     }
 
     async searchSimilar(sector: string, queryVec: number[], topK: number, user_id?: string): Promise<Array<{ id: string; score: number }>> {
-        try {
-            // Optimization attempt for pgvector:
-            // Since our schema uses 'bytea' for 'v', we fall back to in-memory cosine similarity
-            // unless the column is migrated to proper 'vector' type.
-            throw new Error("pgvector not fully integrated with bytea column");
-
-        } catch (e) {
-            // Postgres implementation (in-memory cosine sim)
-            let sql = `select id,v,dim from ${this.table} where sector=$1`;
-            const params: any[] = [sector];
-            if (user_id) {
-                sql += ` and user_id=$${params.length + 1}`;
-                params.push(user_id);
+        // If pgvector is available, prefer DB-side search for performance
+        if (this.pgvectorAvailable) {
+            try {
+                const vecParam = '[' + queryVec.map((x) => x.toString()).join(',') + ']';
+                let sql = `select id, (v_vector <-> $2::vector) as dist from ${this.table} where sector=$1`;
+                const params: any[] = [sector, vecParam];
+                if (user_id) {
+                    sql += ` and user_id=$3`;
+                    params.push(user_id);
+                }
+                sql += ` order by v_vector <-> $2::vector limit ${topK}`;
+                const rows = await this.db.all_async(sql, params);
+                return rows.map((r: any) => ({ id: r.id, score: 1 / (1 + parseFloat(r.dist)) }));
+            } catch (e) {
+                log.warn("[DB] pgvector search failed, falling back to in-memory search", { error: e });
+                // fallthrough to in-memory
             }
-            const rows = await this.db.all_async(sql, params);
-
-            if (rows.length > 10000) {
-                log.warn(`[DB] Postgres vector scan is slow with ${rows.length} rows. Consider migrating to pgvector or Valkey.`);
-            }
-
-            const sims: Array<{ id: string; score: number }> = [];
-            for (const row of rows) {
-                const vec = bufferToVector(row.v);
-                const sim = cosineSimilarity(queryVec, vec);
-                sims.push({ id: row.id, score: sim });
-            }
-            sims.sort((a, b) => b.score - a.score);
-            return sims.slice(0, topK);
         }
+
+        // Fallback: in-memory cosine similarity (works on bytea 'v' column)
+        let sql = `select id,v,dim from ${this.table} where sector=$1`;
+        const params: any[] = [sector];
+        if (user_id) {
+            sql += ` and user_id=$${params.length + 1}`;
+            params.push(user_id);
+        }
+        const rows = await this.db.all_async(sql, params);
+
+        if (rows.length > 10000) {
+            log.warn(`[DB] Postgres vector scan is slow with ${rows.length} rows. Consider migrating to pgvector or Valkey.`);
+        }
+
+        const sims: Array<{ id: string; score: number }> = [];
+        for (const row of rows) {
+            const vec = bufferToVector(row.v);
+            const sim = cosineSimilarity(queryVec, vec);
+            sims.push({ id: row.id, score: sim });
+        }
+        sims.sort((a, b) => b.score - a.score);
+        return sims.slice(0, topK);
     }
 
     async getVector(id: string, sector: string): Promise<{ vector: number[]; dim: number } | null> {
@@ -89,8 +109,14 @@ export class PostgresVectorStore implements VectorStore {
         }));
     }
 
-    async getVectorsBySector(sector: string): Promise<Array<{ id: string; vector: number[]; dim: number }>> {
-        const rows = await this.db.all_async(`select id,v,dim from ${this.table} where sector=$1`, [sector]);
+    async getVectorsBySector(sector: string, user_id?: string): Promise<Array<{ id: string; vector: number[]; dim: number }>> {
+        let sql = `select id,v,dim from ${this.table} where sector=$1`;
+        const params: any[] = [sector];
+        if (user_id) {
+            sql += ` and user_id=$2`;
+            params.push(user_id);
+        }
+        const rows = await this.db.all_async(sql, params);
         return rows.map(row => ({ id: row.id, vector: bufferToVector(row.v), dim: row.dim }));
     }
 

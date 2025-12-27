@@ -560,7 +560,7 @@ export async function create_inter_mem_waypoints(
 ): Promise<void> {
     const thresh = 0.75;
     const wt = 0.5;
-    const vecs = await vector_store.getVectorsBySector(prim_sec);
+    const vecs = await vector_store.getVectorsBySector(prim_sec, user_id || undefined);
     for (const vr of vecs) {
         if (vr.id === new_id) continue;
         const ex_vec = vr.vector;
@@ -594,7 +594,7 @@ export async function create_contextual_waypoints(
     const now = Date.now();
     for (const rel_id of rel_ids) {
         if (mem_id === rel_id) continue;
-        const existing = await q.get_waypoint.get(mem_id, rel_id);
+        const existing = await q.get_waypoint.get(mem_id, rel_id, user_id || "anonymous");
         if (existing) {
             const new_wt = Math.min(1.0, existing.weight + 0.1);
             await q.upd_waypoint.run(new_wt, now, mem_id, rel_id);
@@ -624,7 +624,8 @@ export async function expand_via_waypoints(
     let exp_cnt = 0;
     while (q_arr.length > 0 && exp_cnt < max_exp) {
         const cur = q_arr.shift()!;
-        const neighs = await q.get_neighbors.all(cur.id);
+        const curMem = await q.get_mem.get(cur.id);
+        const neighs = await q.get_neighbors.all(cur.id, curMem?.user_id || undefined);
         for (const neigh of neighs) {
             if (vis.has(neigh.dst_id)) continue;
             // Clamp neighbor weight to valid range - protect against corrupted data
@@ -649,7 +650,8 @@ export async function reinforce_waypoints(trav_path: string[]): Promise<void> {
     for (let i = 0; i < trav_path.length - 1; i++) {
         const src_id = trav_path[i];
         const dst_id = trav_path[i + 1];
-        const wp = await q.get_waypoint.get(src_id, dst_id);
+        const srcMem = await q.get_mem.get(src_id);
+        const wp = await q.get_waypoint.get(src_id, dst_id, srcMem?.user_id || undefined);
         if (wp) {
             const new_wt = Math.min(
                 reinforcement.max_waypoint_weight,
@@ -749,13 +751,13 @@ setInterval(async () => {
             if (!memA || !memB) continue;
             const time_diff = Math.abs(memA.last_seen_at - memB.last_seen_at);
             const temp_fact = Math.exp(-time_diff / tau_ms);
-            const wp = await q.get_waypoint.get(a, b);
+            const user_id = memA?.user_id || memB?.user_id || "anonymous";
+            const wp = await q.get_waypoint.get(a, b, user_id);
             const cur_wt = wp?.weight || 0;
             const new_wt = Math.min(
                 1,
                 cur_wt + hybrid_params.eta * (1 - cur_wt) * temp_fact,
             );
-            const user_id = wp?.user_id || memA?.user_id || memB?.user_id || "anonymous";
             await q.ins_waypoint.run(a, b, user_id, new_wt, wp?.created_at || now, now);
         } catch (e) { }
     }
@@ -993,10 +995,12 @@ export async function hsg_query(
                 r.id,
                 r.salience,
             );
-            await q.upd_seen.run(r.id, Date.now(), rsal, Date.now());
+            // upd_seen: last_seen_at=?, salience=?, updated_at=? where id=?
+            await q.upd_seen.run(Date.now(), rsal, Date.now(), r.id);
             if (r.path.length > 1) {
                 await reinforce_waypoints(r.path);
-                const wps = await q.get_waypoints_by_src.all(r.id);
+                const rmem = await q.get_mem.get(r.id);
+                const wps = await q.get_waypoints_by_src.all(r.id, rmem?.user_id || undefined);
                 const lns = wps.map((wp: any) => ({
                     target_id: wp.dst_id,
                     weight: wp.weight,
@@ -1021,11 +1025,12 @@ export async function hsg_query(
                             0,
                             Math.min(1, linked_mem.salience + ctx_boost),
                         );
+                        // upd_seen: last_seen_at=?, salience=?, updated_at=? where id=?
                         await q.upd_seen.run(
-                            u.node_id,
                             Date.now(),
                             new_sal,
                             Date.now(),
+                            u.node_id,
                         );
                     }
                 }
@@ -1103,7 +1108,8 @@ export async function add_hsg_memory(
     if (existing && is_same_user && hamming_dist(simhash, existing.simhash) <= 3) {
         const now = Date.now();
         const boosted_sal = Math.min(1, existing.salience + 0.15);
-        await q.upd_seen.run(existing.id, now, boosted_sal, now);
+        // upd_seen: last_seen_at=?, salience=?, updated_at=? where id=?
+        await q.upd_seen.run(now, boosted_sal, now, existing.id);
         return {
             id: existing.id,
             primary_sector: existing.primary_sector,
@@ -1263,7 +1269,8 @@ export async function update_memory(
             }
             const mean_vec = calc_mean_vec(emb_res, all_sectors);
             const mean_vec_buf = vectorToBuffer(mean_vec);
-            await q.upd_mean_vec.run(id, mean_vec.length, mean_vec_buf);
+            // Correct parameter order: mean_dim, mean_vec, id
+            await q.upd_mean_vec.run(mean_vec.length, mean_vec_buf, id);
             await q.upd_mem_with_sector.run(
                 new_content,
                 classification.primary,

@@ -5,8 +5,12 @@ ALTER TABLE openmemory_vectors ADD COLUMN IF NOT EXISTS user_id TEXT;
 CREATE INDEX IF NOT EXISTS openmemory_vectors_user_idx ON openmemory_vectors(user_id);
 ALTER TABLE openmemory_waypoints ADD COLUMN IF NOT EXISTS user_id TEXT;
 ALTER TABLE openmemory_waypoints DROP CONSTRAINT IF EXISTS waypoints_pkey;
-ALTER TABLE openmemory_waypoints ADD PRIMARY KEY (src_id, user_id);
+ALTER TABLE openmemory_waypoints DROP CONSTRAINT IF EXISTS openmemory_waypoints_pkey;
+-- Ensure composite primary key includes destination to uniquely identify edges per user
+ALTER TABLE openmemory_waypoints ADD PRIMARY KEY (src_id, dst_id, user_id);
 CREATE INDEX IF NOT EXISTS openmemory_waypoints_user_idx ON openmemory_waypoints(user_id);
+CREATE INDEX IF NOT EXISTS openmemory_waypoints_dst_idx ON openmemory_waypoints(dst_id);
+CREATE INDEX IF NOT EXISTS openmemory_waypoints_src_user_idx ON openmemory_waypoints(src_id, user_id);
 CREATE TABLE IF NOT EXISTS openmemory_users (
     user_id TEXT PRIMARY KEY, summary TEXT,
     reflection_count INTEGER DEFAULT 0,

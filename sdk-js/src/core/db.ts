@@ -46,9 +46,9 @@ type q_type = {
     // del_vec: { run: (...p: any[]) => Promise<void> };
     del_vec_sector: { run: (...p: any[]) => Promise<void> };
     ins_waypoint: { run: (...p: any[]) => Promise<void> };
-    get_neighbors: { all: (src: string) => Promise<any[]> };
-    get_waypoints_by_src: { all: (src: string) => Promise<any[]> };
-    get_waypoint: { get: (src: string, dst: string) => Promise<any> };
+    get_neighbors: { all: (src: string, user_id?: string) => Promise<any[]> };
+    get_waypoints_by_src: { all: (src: string, user_id?: string) => Promise<any[]> };
+    get_waypoint: { get: (src: string, dst: string, user_id?: string) => Promise<any> };
     upd_waypoint: { run: (...p: any[]) => Promise<void> };
     del_waypoints: { run: (...p: any[]) => Promise<void> };
     prune_waypoints: { run: (threshold: number) => Promise<void> };
@@ -98,7 +98,8 @@ export const init_db = (customPath?: string) => {
         db.run("PRAGMA temp_store=MEMORY");
         db.run("PRAGMA cache_size=-8000");
         db.run("PRAGMA mmap_size=134217728");
-        db.run("PRAGMA foreign_keys=OFF");
+        // Enforce foreign key constraints for data integrity (temporal_edges -> temporal_facts)
+        db.run("PRAGMA foreign_keys=ON");
         db.run("PRAGMA wal_autocheckpoint=20000");
         db.run("PRAGMA locking_mode=NORMAL");
         db.run("PRAGMA busy_timeout=5000");
@@ -109,7 +110,7 @@ export const init_db = (customPath?: string) => {
             `create table if not exists ${TABLE_VECTORS}(id text not null,sector text not null,user_id text,v blob not null,dim integer not null,primary key(id,sector))`,
         );
         db.run(
-            `create table if not exists ${TABLE_WAYPOINTS}(src_id text,dst_id text not null,user_id text,weight real not null,created_at integer,updated_at integer,primary key(src_id,user_id))`,
+            `create table if not exists ${TABLE_WAYPOINTS}(src_id text,dst_id text not null,user_id text,weight real not null,created_at integer,updated_at integer,primary key(src_id,dst_id,user_id))`,
         );
         db.run(
             `create table if not exists ${TABLE_LOGS}(id text primary key,model text,status text,ts integer,err text)`,
