@@ -512,7 +512,16 @@ export default function settings() {
     }
 
     const categorizedSettings: Record<string, Array<[string, string]>> = {}
-    Object.entries(settings).forEach(([key, value]) => {
+
+    // Hide Postgres-related settings when using SQLite-only mode for clearer UX
+    const showPostgres = String(settings.OM_METADATA_BACKEND || 'sqlite').toLowerCase() === 'postgres'
+
+    const entriesToShow = Object.entries(settings).filter(([key]) => {
+        if (!showPostgres && key.startsWith('OM_PG_')) return false
+        return true
+    })
+
+    entriesToShow.forEach(([key, value]) => {
         const category = SETTING_METADATA[key]?.category || 'Other'
         if (!categorizedSettings[category]) {
             categorizedSettings[category] = []
