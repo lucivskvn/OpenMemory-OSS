@@ -22,3 +22,22 @@ exports
 __pycache__
 test
 package-lock.json
+
+# Python virtualenvs
+.venv/
+venv/
+env/
+
+# Supabase local artifacts (not used in SQLite-only mode)
+supabase/.temp/
+supabase/.cache/
+.supa/
+
+# Local ssdb / db artifacts
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Editor/IDE
+.idea/
+*.sublime-workspace

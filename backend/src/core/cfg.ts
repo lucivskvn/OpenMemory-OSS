@@ -56,7 +56,8 @@ const envSchema = z.object({
     lg_max_context: toNum(50),
     lg_reflective: toBool(true),
     metadata_backend: toStr("sqlite").transform(v => v.toLowerCase()),
-    vector_backend: toStr("postgres").transform(v => v.toLowerCase()),
+    // Default to SQLite-only vector backend to avoid relying on Postgres/Supabase setup
+    vector_backend: toStr("sqlite").transform(v => v.toLowerCase()),
     valkey_host: toStr("localhost"),
     valkey_port: toNum(6379),
     valkey_password: z.string().optional(),
@@ -152,6 +153,17 @@ try {
     log.error("[CONFIG] Invalid configuration:", { error: e.errors });
     // Throw to let callers/tests handle invalid configuration more gracefully
     throw new Error(`Invalid configuration: ${JSON.stringify(e.errors)}`);
+}
+
+// Enforce SQLite-only operation when explicitly requested by the user (or to comply with policy)
+if (String(process.env.OM_METADATA_BACKEND || parsed.metadata_backend).toLowerCase() === "postgres") {
+    log.warn("[CFG] OM_METADATA_BACKEND=postgres is disabled in this build; forcing 'sqlite' to ensure SQLite-only operation.");
+    // Mutate parsed so consumers get consistent 'sqlite' behavior
+    (parsed as any).metadata_backend = "sqlite";
+}
+if (String(process.env.OM_VECTOR_BACKEND || parsed.vector_backend).toLowerCase() === "pgvector" || String(process.env.OM_VECTOR_BACKEND || parsed.vector_backend).toLowerCase() === "postgres") {
+    log.warn("[CFG] OM_VECTOR_BACKEND=pgvector/postgres is disabled in this build; forcing 'sqlite' vector backend.");
+    (parsed as any).vector_backend = "sqlite";
 }
 
 export const env = parsed;

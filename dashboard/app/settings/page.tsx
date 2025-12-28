@@ -64,9 +64,9 @@ const SETTING_METADATA: Record<string, SettingInfo> = {
     OM_METADATA_BACKEND: {
         category: 'Database',
         label: 'Metadata Backend',
-        description: 'Storage backend for memory metadata',
+        description: 'Storage backend for memory metadata (SQLite only)',
         type: 'select',
-        options: ['sqlite', 'postgres']
+        options: ['sqlite']
     },
     OM_DB_PATH: {
         category: 'Database',
@@ -133,9 +133,9 @@ const SETTING_METADATA: Record<string, SettingInfo> = {
     OM_VECTOR_BACKEND: {
         category: 'Vectors',
         label: 'Vector Store Backend',
-        description: 'Storage backend for vector embeddings',
+        description: 'Storage backend for vector embeddings (postgres/pgvector disabled in SQLite-only mode)',
         type: 'select',
-        options: ['sqlite', 'pgvector', 'weaviate']
+        options: ['sqlite', 'weaviate']
     },
     OM_VECTOR_TABLE: {
         category: 'Vectors',
@@ -512,7 +512,16 @@ export default function settings() {
     }
 
     const categorizedSettings: Record<string, Array<[string, string]>> = {}
-    Object.entries(settings).forEach(([key, value]) => {
+
+    // Hide Postgres-related settings when using SQLite-only mode for clearer UX
+    const showPostgres = String(settings.OM_METADATA_BACKEND || 'sqlite').toLowerCase() === 'postgres'
+
+    const entriesToShow = Object.entries(settings).filter(([key]) => {
+        if (!showPostgres && key.startsWith('OM_PG_')) return false
+        return true
+    })
+
+    entriesToShow.forEach(([key, value]) => {
         const category = SETTING_METADATA[key]?.category || 'Other'
         if (!categorizedSettings[category]) {
             categorizedSettings[category] = []
