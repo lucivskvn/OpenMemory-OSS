@@ -1,19 +1,19 @@
 import { NextResponse } from 'next/server'
-import fs from 'fs'
 import path from 'path'
 
 const ENV_PATH = path.resolve(process.cwd(), '../.env')
 
 export async function GET() {
     try {
-        if (!fs.existsSync(ENV_PATH)) {
+        const file = Bun.file(ENV_PATH);
+        if (!(await file.exists())) {
             return NextResponse.json({
                 exists: false,
                 settings: {}
             })
         }
 
-        const content = fs.readFileSync(ENV_PATH, 'utf-8')
+        const content = await file.text();
         const settings: Record<string, string> = {}
 
         // Simple parse for display
@@ -59,12 +59,14 @@ export async function POST(request: Request) {
         }
 
         let content = ''
-        if (fs.existsSync(ENV_PATH)) {
-            content = fs.readFileSync(ENV_PATH, 'utf-8')
+        const envFile = Bun.file(ENV_PATH);
+        if (await envFile.exists()) {
+            content = await envFile.text();
         } else {
             const examplePath = path.resolve(process.cwd(), '../.env.example')
-            if (fs.existsSync(examplePath)) {
-                content = fs.readFileSync(examplePath, 'utf-8')
+            const exampleFile = Bun.file(examplePath);
+            if (await exampleFile.exists()) {
+                content = await exampleFile.text();
             }
         }
 
@@ -100,7 +102,7 @@ export async function POST(request: Request) {
              }
         }
 
-        fs.writeFileSync(ENV_PATH, newLines.join('\n'), 'utf-8')
+        await Bun.write(ENV_PATH, newLines.join('\n'));
 
         return NextResponse.json({
             ok: true,

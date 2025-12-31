@@ -39,7 +39,8 @@ class VectorStore(ABC):
     async def search(self, query_vec: List[float], top_k: int, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
         pass
 
-class SQLiteVectorStore(VectorStore):
+# Renamed to SqlVectorStore for parity with JS/Backend, though essentially SQLite logic in Python SDK
+class SqlVectorStore(VectorStore):
     def __init__(self, db_ops: Dict[str, Any], table_name: str = "vectors"):
         self.db_ops = db_ops
         self.table = table_name
@@ -61,16 +62,7 @@ class SQLiteVectorStore(VectorStore):
 
     async def store_vector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None):
         blob = self._vec_to_blob(vector)
-        # Assuming db_ops['exec'] is synchronous wrapper or async?
-        # In db.py, exec_query is synchronous (it uses `with db_lock`).
-        # But SDK might wrap it or caller might expect async.
-        # However, the SDK seems to use synchronous sqlite3 calls in db.py?
-        # Let's check db.py again. `exec_query` is def, not async def.
-        # But `VectorStore` interface methods are `async def`?
-        # In JS SDK everything is async.
-        # In Python SDK, if `db.py` functions are sync, `VectorStore` implementation should probably be wrapper.
-        # But for 'syncing' with backend/JS, maybe I should make it async compatible?
-        # If I make store_vector async, I can just call the sync function.
+        # Using insert or replace for SQLite
         sql = f"insert or replace into {self.table}(id,sector,user_id,v,dim) values(?,?,?,?,?)"
         self.db_ops['exec'](sql, (id, sector, user_id, blob, dim))
 

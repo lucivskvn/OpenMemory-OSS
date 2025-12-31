@@ -21,7 +21,8 @@ export interface DbOps {
     all_async: (sql: string, params?: any[]) => Promise<any[]>;
 }
 
-export class SQLiteVectorStore implements VectorStore {
+// Renamed from SQLiteVectorStore to SqlVectorStore for parity with backend
+export class SqlVectorStore implements VectorStore {
     private table: string;
 
     constructor(private db: DbOps, tableName: string = "vectors") {
@@ -31,7 +32,7 @@ export class SQLiteVectorStore implements VectorStore {
     async storeVector(id: string, sector: string, vector: number[], dim: number, user_id?: string): Promise<void> {
         const v = vectorToBuffer(vector);
         // SQLite: insert or replace. 
-        // Logic mirrors backend PostgresVectorStore but explicitly compatible with SQLite syntax
+        // Parity with backend SqlVectorStore
         const sql = `insert or replace into ${this.table}(id,sector,user_id,v,dim) values(?,?,?,?,?)`;
         await this.db.run_async(sql, [id, sector, user_id || "anonymous", v, dim]);
     }
@@ -45,7 +46,7 @@ export class SQLiteVectorStore implements VectorStore {
     }
 
     async searchSimilar(sector: string, queryVec: number[], topK: number, user_id?: string): Promise<Array<{ id: string; score: number }>> {
-        // In-memory cosine similarity for SQLite (since no native vector extension assumed)
+        // In-memory cosine similarity for SQLite (local mode)
         let sql = `select id,v,dim from ${this.table} where sector=?`;
         const params: any[] = [sector];
         if (user_id) {

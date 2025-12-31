@@ -6,12 +6,10 @@ import * as pdf_parse from "pdf-parse";
 const pdf = (pdf_parse as any).default ?? pdf_parse;
 import mammoth from "mammoth";
 import TurndownService from "turndown";
-import ffmpeg from "fluent-ffmpeg";
-import * as fs from "node:fs";
+// fluent-ffmpeg removed in favor of Bun.spawn
+import * as fs from "node:fs"; // Keep strictly for things Bun.file doesn't cover well (like temp dir creation logic if needed) or legacy compat
 import { promises as fsPromises } from "node:fs";
 import { log } from "../core/log";
-
-
 
 const turndownService = new TurndownService();
 
@@ -27,6 +25,7 @@ function isBinaryBuffer(buffer: Buffer): boolean {
 // Helper to save temp file
 async function saveTempFile(buffer: Buffer, ext: string): Promise<string> {
     const tempDir = path.resolve(process.cwd(), "temp");
+    // Bun doesn't have native mkdir yet, sticking to node:fs for directory creation
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
     const tempFilePath = path.join(tempDir, `${uuidv4()}.${ext}`);
@@ -41,8 +40,9 @@ async function saveTempFile(buffer: Buffer, ext: string): Promise<string> {
 
 async function removeFile(path: string) {
     try {
-        if (fs.existsSync(path)) {
-            await fsPromises.unlink(path);
+        const file = Bun.file(path);
+        if (await file.exists()) {
+            await fsPromises.unlink(path); // Bun.file doesn't have delete/unlink yet
         }
     } catch (e) {
         log.warn("Failed to delete temp file", { path, error: e });
@@ -83,37 +83,37 @@ export const transcribe_audio = async (buffer: Buffer): Promise<string> => {
 };
 
 export const extract_audio_from_video = async (buffer: Buffer): Promise<Buffer> => {
-    return new Promise(async (resolve, reject) => {
-        let videoPath = "";
-        let audioPath = "";
-        try {
-            videoPath = await saveTempFile(buffer, "mp4");
-            audioPath = videoPath.replace(".mp4", ".mp3");
+    let videoPath = "";
+    let audioPath = "";
+    try {
+        videoPath = await saveTempFile(buffer, "mp4");
+        audioPath = videoPath.replace(".mp4", ".mp3");
 
-            ffmpeg(videoPath)
-                .toFormat("mp3")
-                .on("end", async () => {
-                    try {
-                        const audioBuffer = await Bun.file(audioPath).arrayBuffer();
-                        await removeFile(videoPath);
-                        await removeFile(audioPath);
-                        resolve(Buffer.from(audioBuffer));
-                    } catch (e) {
-                        reject(e);
-                    }
-                })
-                .on("error", async (err) => {
-                    await removeFile(videoPath);
-                    if (fs.existsSync(audioPath)) await removeFile(audioPath);
-                    reject(err);
-                })
-                .save(audioPath);
-        } catch (e) {
-            // Cleanup in case of setup failure
-            if (videoPath) await removeFile(videoPath);
-            reject(e);
+        // Use Bun.spawn to call ffmpeg directly
+        // ffmpeg -i input.mp4 -vn -acodec libmp3lame output.mp3
+        const proc = Bun.spawn(["ffmpeg", "-y", "-i", videoPath, "-vn", "-acodec", "libmp3lame", audioPath], {
+            stderr: "pipe", // Capture stderr to debug if needed
+            stdout: "ignore"
+        });
+
+        const exitCode = await proc.exited;
+        if (exitCode !== 0) {
+            const stderr = await new Response(proc.stderr).text();
+            throw new Error(`ffmpeg exited with code ${exitCode}: ${stderr}`);
         }
-    });
+
+        const audioFile = Bun.file(audioPath);
+        const audioBuffer = await audioFile.arrayBuffer();
+
+        await removeFile(videoPath);
+        await removeFile(audioPath);
+
+        return Buffer.from(audioBuffer);
+    } catch (e) {
+        if (videoPath) await removeFile(videoPath);
+        if (audioPath) await removeFile(audioPath);
+        throw e;
+    }
 };
 
 export const processBuffer = async (buffer: Buffer, ext: string): Promise<string> => {

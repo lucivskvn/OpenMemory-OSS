@@ -5,7 +5,8 @@ import { v1_5_0 } from "./v1.5.0";
 import { v1_6_0 } from "./v1.6.0";
 import { v1_7_0 } from "./v1.7.0";
 import { v1_8_0 } from "./v1.8.0";
+import { v1_9_0 } from "./v1.9.0";
 
-export const migrations = [v1_2_0, v1_3_0, v1_4_0, v1_5_0, v1_6_0, v1_7_0, v1_8_0];
+export const migrations = [v1_2_0, v1_3_0, v1_4_0, v1_5_0, v1_6_0, v1_7_0, v1_8_0, v1_9_0];
 export * from "./initial";
 export * from "./migration_types";

@@ -1,106 +1,131 @@
+import { env } from "../../core/cfg";
+import path from "path";
 import { Elysia, t } from "elysia";
 import { log } from "../../core/log";
-import { env } from "../../core/cfg";
-import fs from "node:fs";
-import path from "node:path";
 
-export const settings = (app: Elysia) =>
-    app.group("/api/settings", (app) =>
-        app
-            .get("/", () => {
-                // Return current env vars, masking sensitive ones
-                // Dashboard expects raw env var names (OM_PORT, etc.)
-                let rawEnv = { ...process.env };
+const ENV_PATH = path.resolve(process.cwd(), ".env");
 
-                const { SENSITIVE_PATTERNS } = require("../../core/secrets");
+export const settings = new Elysia({ prefix: "/api/settings" })
+    .get("/", async ({ error }) => {
+        try {
+            const file = Bun.file(ENV_PATH);
+            const exists = await file.exists();
+            let settings: Record<string, string> = {};
 
-                // If running in SQLite-only mode, do not return Postgres-specific settings to the dashboard API
-                const metadataBackend = (process.env.OM_METADATA_BACKEND || "sqlite").toLowerCase();
-                if (metadataBackend !== 'postgres') {
-                    for (const k of Object.keys(rawEnv)) {
-                        if (k.startsWith('OM_PG_') || k === 'OM_PG_CONNECTION_STRING') delete rawEnv[k];
+            if (exists) {
+                const content = await file.text();
+                content.split("\n").forEach((line) => {
+                    const match = line.match(/^\s*([^#=]+)\s*=(.*)$/);
+                    if (match) {
+                        const k = match[1].trim();
+                        const v = match[2].trim();
+                        if (k) settings[k] = v;
+                    }
+                });
+            }
+
+            // Merge process.env for relevant keys that might be set in environment (e.g. via Docker or test)
+            // ensuring dashboard sees effective config even if not in .env file
+            const keysToInclude = ["OM_PG_HOST", "OM_PG_USER", "OM_PG_PORT", "OM_PG_DB", "OM_METADATA_BACKEND"];
+            for (const k of keysToInclude) {
+                if (process.env[k] && !settings[k]) {
+                    settings[k] = process.env[k]!;
+                }
+            }
+
+            // Filter Postgres settings if not in Postgres mode
+            const metaBackend = process.env.OM_METADATA_BACKEND || "sqlite";
+            if (metaBackend !== "postgres") {
+                 for (const k of Object.keys(settings)) {
+                     if (k.startsWith("OM_PG_")) {
+                         delete settings[k];
+                     }
+                 }
+            }
+
+            // Mask sensitive
+            const sensitive = ["API_KEY", "SECRET", "PASSWORD", "KEY_ID", "TOKEN"];
+            for (const k of Object.keys(settings)) {
+                if (sensitive.some((s) => k.toUpperCase().includes(s))) {
+                    if (settings[k] && settings[k].length > 0) settings[k] = "***";
+                }
+            }
+
+            return { exists, settings };
+        } catch (e: any) {
+            log.error("[SETTINGS] Read error:", { error: e });
+            return error(500, { error: "internal", message: e.message });
+        }
+    })
+    .post(
+        "/",
+        async ({ body, set }) => {
+            try {
+                const updates = body as Record<string, string>;
+
+                // Validate no newlines
+                for (const [k, v] of Object.entries(updates)) {
+                    if (v.includes("\n") || v.includes("\r")) {
+                        set.status = 400;
+                        return { error: "invalid_value", message: "Values cannot contain newlines" };
                     }
                 }
 
-                // Mask sensitive
-                for (const k of Object.keys(rawEnv)) {
-                    if (SENSITIVE_PATTERNS.some(s => k.toLowerCase().includes(s.toLowerCase()))) {
-                        if (rawEnv[k] && rawEnv[k] !== "") rawEnv[k] = "***";
+                let content = "";
+                const envFile = Bun.file(ENV_PATH);
+
+                if (await envFile.exists()) {
+                    content = await envFile.text();
+                } else {
+                    const examplePath = path.resolve(process.cwd(), ".env.example");
+                    const exampleFile = Bun.file(examplePath);
+                    if (await exampleFile.exists()) {
+                        content = await exampleFile.text();
                     }
                 }
 
-                return { settings: rawEnv };
-            })
-            .post("/", async ({ body, set }) => {
-                try {
-                    const newSettings = body as Record<string, string>;
-                    const envPath = path.resolve(process.cwd(), ".env");
+                const lines = content.split("\n");
+                const newLines: string[] = [];
+                const seenKeys = new Set<string>();
 
-                    // Validation: ensure keys are safe and values do not contain newlines
-                    for (const [k, v] of Object.entries(newSettings)) {
-                        if (!/^[A-Z0-9_]+$/.test(k)) {
-                            set.status = 400;
-                            return { error: 'invalid_key', message: `Invalid env key: ${k}` };
-                        }
-                        if (typeof v === 'string' && (v.includes('\n') || v.includes('\r'))) {
-                            set.status = 400;
-                            return { error: 'invalid_value', message: `Env value for ${k} contains prohibited characters` };
-                        }
-                    }
-
-                    let envContent = "";
-                    if (fs.existsSync(envPath)) {
-                        envContent = fs.readFileSync(envPath, "utf-8");
-                    }
-
-                    const lines = envContent.split("\n");
-                    const newLines = [];
-                    const seenKeys = new Set();
-
-                    // Update existing lines
-                    for (const line of lines) {
-                        const match = line.match(/^([^=]+)=(.*)$/);
-                        if (match) {
-                            const key = match[1].trim();
-                            if (newSettings[key] !== undefined) {
-                                // If value is masked, skip update
-                                if (newSettings[key] !== "***" && newSettings[key] !== "******") {
-                                    newLines.push(`${key}=${newSettings[key]}`);
-                                } else {
-                                    newLines.push(line); // Keep original
-                                }
-                                seenKeys.add(key);
+                for (const line of lines) {
+                    const match = line.match(/^\s*([^#=]+)\s*=(.*)$/);
+                    if (match) {
+                        const key = match[1].trim();
+                        if (updates[key] !== undefined) {
+                            if (updates[key] !== "***" && updates[key] !== "******") {
+                                newLines.push(`${key}=${updates[key]}`);
                             } else {
                                 newLines.push(line);
                             }
+                            seenKeys.add(key);
                         } else {
                             newLines.push(line);
                         }
+                    } else {
+                        newLines.push(line);
                     }
-
-                    // Append new keys
-                    for (const [key, val] of Object.entries(newSettings)) {
-                        if (!seenKeys.has(key) && val !== "***" && val !== "******") {
-                            newLines.push(`${key}=${val}`);
-                        }
-                    }
-
-                    // Atomic write: write to temp file then rename, set file perms to 600
-                    const tmpPath = envPath + ".tmp";
-                    fs.writeFileSync(tmpPath, newLines.join("\n"), { mode: 0o600 });
-                    fs.renameSync(tmpPath, envPath);
-
-                    // Audit log: record which keys changed (do not log values)
-                    const updatedKeys = Object.keys(newSettings).filter(k => !seenKeys.has(k) || newLines.some(line => line.startsWith(k + "=")));
-                    log.info("Settings updated via API", { updatedKeys });
-
-                    return { message: "Settings saved. Please restart the server." };
-                } catch (e: any) {
-                    log.error("Failed to save settings", { error: e.message });
-                    set.status = 500;
-                    return { error: "Failed to save settings" };
                 }
-            }, {
-                body: t.Record(t.String(), t.String())
-            })
+
+                for (const [key, val] of Object.entries(updates)) {
+                    if (!seenKeys.has(key) && val !== "***" && val !== "******") {
+                        newLines.push(`${key}=${val}`);
+                    }
+                }
+
+                await Bun.write(ENV_PATH, newLines.join("\n"));
+
+                return {
+                    ok: true,
+                    message: "Settings saved. Restart the backend to apply changes.",
+                };
+            } catch (e: any) {
+                log.error("[SETTINGS] Write error:", { error: e });
+                set.status = 500;
+                return { error: "internal", message: e.message };
+            }
+        },
+        {
+            body: t.Record(t.String(), t.String()),
+        },
     );

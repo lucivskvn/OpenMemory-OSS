@@ -5,9 +5,10 @@ import { log } from "./log";
 import path from "node:path";
 import fs from "node:fs";
 import { VectorStore } from "./vector_store";
-import { PostgresVectorStore } from "./vector/postgres";
+import { SqlVectorStore } from "./vector/sql";
 import { ValkeyVectorStore } from "./vector/valkey";
 import { run_migrations_core } from "./migrations";
+import { DbOps } from "./schema/initial";
 
 /**
  * Repository interface for all database queries.
@@ -216,8 +217,8 @@ if (is_pg) {
             vector_store = new ValkeyVectorStore();
             log.info("[DB] Using Valkey VectorStore");
         } else {
-            vector_store = new PostgresVectorStore({ run_async, get_async, all_async }, TABLE_VECTORS.replace(/"/g, ""));
-            log.info(`[DB] Using Postgres VectorStore with table: ${TABLE_VECTORS}`);
+            vector_store = new SqlVectorStore({ run_async, get_async, all_async, is_pg: true }, TABLE_VECTORS.replace(/"/g, ""));
+            log.info(`[DB] Using SQL VectorStore (Postgres) with table: ${TABLE_VECTORS}`);
         }
         await vector_store.init();
     };
@@ -304,8 +305,14 @@ if (is_pg) {
             vector_store = new ValkeyVectorStore();
             log.info("[DB] Using Valkey VectorStore");
         } else {
-            vector_store = new PostgresVectorStore({ run_async, get_async, all_async }, sqlite_vector_table);
-            log.info(`[DB] Using SQLite VectorStore with table: ${sqlite_vector_table}`);
+            // Note: SQLite binding supports ? placeholders natively.
+            vector_store = new SqlVectorStore({
+                run_async: exec,
+                get_async: async (s, p) => db.query(s).get(p as any) as any,
+                all_async: async (s, p) => db.query(s).all(p as any) as any[],
+                is_pg: false
+            }, sqlite_vector_table);
+            log.info(`[DB] Using SQL VectorStore (SQLite) with table: ${sqlite_vector_table}`);
         }
         await vector_store.init();
     };
