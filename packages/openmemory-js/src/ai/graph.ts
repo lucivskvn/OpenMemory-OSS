@@ -228,9 +228,10 @@ export async function retrieve_node_mems(p: lgm_retrieve_req) {
     if (p.query) {
         const matches = await hsg_query(p.query, Math.max(lim * 2, lim), {
             sectors: [sec],
+            user_id: p.user_id,
         });
         for (const match of matches) {
-            const row = (await q.get_mem.get(match.id)) as mem_row | undefined;
+            const row = (await q.get_mem.get(match.id, p.user_id)) as mem_row | undefined;
             if (!row) continue;
             const meta = safe_parse<Record<string, unknown>>(row.meta, {});
             if (!matches_ns(meta, ns, gid)) continue;
@@ -249,7 +250,7 @@ export async function retrieve_node_mems(p: lgm_retrieve_req) {
             sec,
             lim * 4,
             0,
-        )) as mem_row[];
+            p.user_id,)) as mem_row[];
         for (const row of raw_rows) {
             const meta = safe_parse<Record<string, unknown>>(row.meta, {});
             if (!matches_ns(meta, ns, gid)) continue;
@@ -305,6 +306,50 @@ export async function get_graph_ctx(p: lgm_context_req) {
         limit: lim,
         nodes: node_ctxs,
         summary: summ,
+    };
+}
+
+/**
+ * Get linear history of a graph execution thread.
+ * Useful for LangGraph checkpointers to replay state.
+ */
+export async function get_thread_history(p: lgm_retrieve_req) {
+    // Determine sort based on user preference or defaulting to created_at
+    const ns = resolve_ns(p.namespace);
+    // Fetch all memories for this graph_id
+    if (!p.graph_id) throw new Error("graph_id required for history");
+
+    // We search across all sectors for this graph
+    // Since we don't have a "get all by graph_id" index easily exposed in query.ts without sector,
+    // we might need to iterate or add a query.
+    // For now, we assume standard sectors.
+    const nodes = Object.keys(node_sector_map);
+    const all_items: hydrated_mem[] = [];
+
+    for (const node of nodes) {
+        const res = await retrieve_node_mems({
+            node,
+            namespace: ns,
+            graph_id: p.graph_id,
+            limit: 100 // Reasonable history limit per node
+        });
+        all_items.push(...res.items);
+    }
+
+    // Sort by created_at ascending to reconstruct timeline
+    all_items.sort((a, b) => a.created_at - b.created_at);
+
+    return {
+        namespace: ns,
+        graph_id: p.graph_id,
+        count: all_items.length,
+        history: all_items.map(i => ({
+            id: i.id,
+            node: i.node,
+            content: i.content,
+            timestamp: new Date(i.created_at).toISOString(),
+            metadata: i.metadata
+        }))
     };
 }
 

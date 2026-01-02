@@ -21,18 +21,18 @@ your model stays stateless. **your app stops being amnesiac.**
 ## quick start
 
 ```bash
-pip install openmemory-py
+pip install openmemory-py --upgrade
 ```
 
 ```python
-from openmemory.client import Memory
+from openmemory.client import OpenMemory
 
-mem = Memory()
-mem.add("user prefers dark mode", user_id="u1")
-results = mem.search("preferences", user_id="u1")
+mem = OpenMemory()
+await mem.add("user prefers dark mode", user_id="u1")
+results = await mem.search("preferences", user_id="u1")
 ```
 
-> note: `add`, `search`, `get`, `delete` are async. use `await` in async contexts.
+> note: `add`, `search`, `get`, `getAll`, `getBySector`, `delete`, `update`, `reinforce` are async. use `await`.
 
 **that's it.** you're now running a fully local cognitive memory engine 🎉
 
@@ -221,7 +221,7 @@ results = mem.search("user preferences", limit=10, minScore=0.7)
 retrieve all memories.
 
 ```python
-all_memories = mem.getAll(limit=100, offset=0)
+all_memories = await mem.getAll(limit=100, offset=0)
 ```
 
 ### `getBySector(sector, **options)`
@@ -229,8 +229,8 @@ all_memories = mem.getAll(limit=100, offset=0)
 get memories from a specific cognitive sector.
 
 ```python
-episodic = mem.getBySector('episodic', limit=20)
-semantic = mem.getBySector('semantic')
+episodic = await mem.getBySector('episodic', limit=20)
+semantic = await mem.getBySector('semantic')
 ```
 
 ### `delete(id)`
@@ -246,7 +246,7 @@ mem.delete(memory_id)
 close the database connection.
 
 ```python
-mem.close()
+await mem.close()
 ```
 
 ---

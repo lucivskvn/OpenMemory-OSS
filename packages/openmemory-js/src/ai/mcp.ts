@@ -11,12 +11,17 @@ import {
     sector_configs,
 } from "../memory/hsg";
 import { q, all_async, memories_table, vector_store } from "../core/db";
+import { type hsg_q_result, type MemoryRow } from "../core/types";
 import { getEmbeddingInfo } from "../memory/embed";
 import { j, p } from "../utils";
-import type { sector_type, mem_row, rpc_err_code } from "../core/types";
+import type { sector_type, rpc_err_code, MemoryItem, mem_row } from "../core/types";
+import { parse_mem } from "../core/memory";
 import { update_user_summary } from "../memory/user_summary";
+import { insert_fact, invalidate_fact, insert_edge } from "../temporal_graph/store";
+import { query_facts_at_time, query_edges, search_facts } from "../temporal_graph/query";
+import { get_subject_timeline } from "../temporal_graph/timeline";
 
-const sec_enum = z.enum([
+export const sec_enum = z.enum([
     "episodic",
     "semantic",
     "procedural",
@@ -27,18 +32,18 @@ const sec_enum = z.enum([
 const trunc = (val: string, max = 200) =>
     val.length <= max ? val : `${val.slice(0, max).trimEnd()}...`;
 
-const build_mem_snap = (row: mem_row) => ({
+const build_mem_snap = (row: MemoryItem) => ({
     id: row.id,
     primary_sector: row.primary_sector,
-    salience: Number(row.salience.toFixed(3)),
-    last_seen_at: row.last_seen_at,
+    salience: row.salience ? Number(row.salience.toFixed(3)) : 0,
+    last_seen_at: row.last_seen_at || 0,
     user_id: row.user_id,
     content_preview: trunc(row.content, 240),
 });
 
-const fmt_matches = (matches: Awaited<ReturnType<typeof hsg_query>>) =>
+const fmt_matches = (matches: hsg_q_result[]) =>
     matches
-        .map((m: any, idx: any) => {
+        .map((m: hsg_q_result, idx: number) => {
             const prev = trunc(m.content.replace(/\s+/g, " ").trim(), 200);
             return `${idx + 1}. [${m.primary_sector}] score=${m.score.toFixed(3)} salience=${m.salience.toFixed(3)} id=${m.id}\n${prev}`;
         })
@@ -87,7 +92,6 @@ export const create_mcp_srv = () => {
 
     srv.tool(
         "openmemory_query",
-        "Run a semantic retrieval against OpenMemory",
         {
             query: z
                 .string()
@@ -115,8 +119,9 @@ export const create_mcp_srv = () => {
                 .min(1)
                 .optional()
                 .describe("Isolate results to a specific user identifier"),
-        },
-        async ({ query, k, sector, min_salience, user_id }) => {
+        } as any,
+        async (args: any) => {
+            const { query, k, sector, min_salience, user_id } = args;
             const u = uid(user_id);
             const flt =
                 sector || min_salience !== undefined || u
@@ -134,7 +139,7 @@ export const create_mcp_srv = () => {
             const summ = matches.length
                 ? fmt_matches(matches)
                 : "No memories matched the supplied query.";
-            const pay = matches.map((m: any) => ({
+            const pay = matches.map((m: hsg_q_result) => ({
                 id: m.id,
                 score: Number(m.score.toFixed(4)),
                 primary_sector: m.primary_sector,
@@ -146,9 +151,9 @@ export const create_mcp_srv = () => {
             }));
             return {
                 content: [
-                    { type: "text", text: summ },
+                    { type: "text" as const, text: summ },
                     {
-                        type: "text",
+                        type: "text" as const,
                         text: JSON.stringify({ query, matches: pay }, null, 2),
                     },
                 ],
@@ -158,12 +163,11 @@ export const create_mcp_srv = () => {
 
     srv.tool(
         "openmemory_store",
-        "Persist new content into OpenMemory",
         {
             content: z.string().min(1).describe("Raw memory text to store"),
             tags: z.array(z.string()).optional().describe("Optional tag list"),
             metadata: z
-                .record(z.any())
+                .record(z.string(), z.any())
                 .optional()
                 .describe("Arbitrary metadata blob"),
             user_id: z
@@ -174,8 +178,9 @@ export const create_mcp_srv = () => {
                 .describe(
                     "Associate the memory with a specific user identifier",
                 ),
-        },
-        async ({ content, tags, metadata, user_id }) => {
+        } as any,
+        async (args: any) => {
+            const { content, tags, metadata, user_id } = args;
             const u = uid(user_id);
             const res = await add_hsg_memory(
                 content,
@@ -196,8 +201,8 @@ export const create_mcp_srv = () => {
             };
             return {
                 content: [
-                    { type: "text", text: txt },
-                    { type: "text", text: JSON.stringify(payload, null, 2) },
+                    { type: "text" as const, text: txt },
+                    { type: "text" as const, text: JSON.stringify(payload, null, 2) },
                 ],
             };
         },
@@ -205,7 +210,6 @@ export const create_mcp_srv = () => {
 
     srv.tool(
         "openmemory_reinforce",
-        "Boost salience for an existing memory",
         {
             id: z.string().min(1).describe("Memory identifier to reinforce"),
             boost: z
@@ -214,13 +218,16 @@ export const create_mcp_srv = () => {
                 .max(1)
                 .default(0.1)
                 .describe("Salience boost amount (default 0.1)"),
-        },
-        async ({ id, boost }) => {
-            await reinforce_memory(id, boost);
+            user_id: z.string().optional().describe("Optional user context for authorization"),
+        } as any,
+        async (args: any) => {
+            const { id, boost, user_id } = args;
+            const u = uid(user_id);
+            await reinforce_memory(id, boost, u);
             return {
                 content: [
                     {
-                        type: "text",
+                        type: "text" as const,
                         text: `Reinforced memory ${id} by ${boost}`,
                     },
                 ],
@@ -230,7 +237,6 @@ export const create_mcp_srv = () => {
 
     srv.tool(
         "openmemory_list",
-        "List recent memories for quick inspection",
         {
             limit: z
                 .number()
@@ -248,10 +254,11 @@ export const create_mcp_srv = () => {
                 .min(1)
                 .optional()
                 .describe("Restrict results to a specific user identifier"),
-        },
-        async ({ limit, sector, user_id }) => {
+        } as any,
+        async (args: any) => {
+            const { limit, sector, user_id } = args;
             const u = uid(user_id);
-            let rows: mem_row[];
+            let rows: MemoryRow[];
             if (u) {
                 const all = await q.all_mem_by_user.all(u, limit ?? 10, 0);
                 rows = sector
@@ -262,22 +269,18 @@ export const create_mcp_srv = () => {
                     ? await q.all_mem_by_sector.all(sector, limit ?? 10, 0)
                     : await q.all_mem.all(limit ?? 10, 0);
             }
-            const items = rows.map((row) => ({
-                ...build_mem_snap(row),
-                tags: p(row.tags || "[]") as string[],
-                metadata: p(row.meta || "{}") as Record<string, unknown>,
-            }));
+            const items = await Promise.all(rows.map(r => parse_mem(r as unknown as mem_row)));
             const lns = items.map(
                 (item, idx) =>
-                    `${idx + 1}. [${item.primary_sector}] salience=${item.salience} id=${item.id}${item.tags.length ? ` tags=${item.tags.join(", ")}` : ""}${item.user_id ? ` user=${item.user_id}` : ""}\n${item.content_preview}`,
+                    `${idx + 1}. [${item.primary_sector}] salience=${item.salience} id=${item.id}${item.tags.length ? ` tags=${item.tags.join(", ")}` : ""}${item.user_id ? ` user=${item.user_id}` : ""}\n${trunc(item.content, 200)}`,
             );
             return {
                 content: [
                     {
-                        type: "text",
+                        type: "text" as const,
                         text: lns.join("\n\n") || "No memories stored yet.",
                     },
-                    { type: "text", text: JSON.stringify({ items }, null, 2) },
+                    { type: "text" as const, text: JSON.stringify({ items }, null, 2) },
                 ],
             };
         },
@@ -285,7 +288,6 @@ export const create_mcp_srv = () => {
 
     srv.tool(
         "openmemory_get",
-        "Fetch a single memory by identifier",
         {
             id: z.string().min(1).describe("Memory identifier to load"),
             include_vectors: z
@@ -300,21 +302,22 @@ export const create_mcp_srv = () => {
                 .describe(
                     "Validate ownership against a specific user identifier",
                 ),
-        },
-        async ({ id, include_vectors, user_id }) => {
+        } as any,
+        async (args: any) => {
+            const { id, include_vectors, user_id } = args;
             const u = uid(user_id);
             const mem = await q.get_mem.get(id);
             if (!mem)
                 return {
                     content: [
-                        { type: "text", text: `Memory ${id} not found.` },
+                        { type: "text" as const, text: `Memory ${id} not found.` },
                     ],
                 };
             if (u && mem.user_id !== u)
                 return {
                     content: [
                         {
-                            type: "text",
+                            type: "text" as const,
                             text: `Memory ${id} not found for user ${u}.`,
                         },
                     ],
@@ -322,26 +325,141 @@ export const create_mcp_srv = () => {
             const vecs = include_vectors
                 ? await vector_store.getVectorsById(id)
                 : [];
-            const pay = {
-                id: mem.id,
-                content: mem.content,
-                primary_sector: mem.primary_sector,
-                salience: mem.salience,
-                decay_lambda: mem.decay_lambda,
-                created_at: mem.created_at,
-                updated_at: mem.updated_at,
-                last_seen_at: mem.last_seen_at,
-                user_id: mem.user_id,
-                tags: p(mem.tags || "[]"),
-                metadata: p(mem.meta || "{}"),
+            const m_item = await parse_mem(mem as unknown as mem_row);
+            const pay: Partial<MemoryItem> & { sectors?: string[] } = {
+                ...m_item,
                 sectors: include_vectors
                     ? vecs.map((v) => v.sector)
                     : undefined,
             };
             return {
-                content: [{ type: "text", text: JSON.stringify(pay, null, 2) }],
+                content: [{ type: "text" as const, text: JSON.stringify(pay, null, 2) }],
             };
         },
+    );
+
+    srv.tool(
+        "openmemory_temporal_fact_create",
+        {
+            subject: z.string().describe("The subject of the fact (e.g., 'Company A')"),
+            predicate: z.string().describe("The relationship (e.g., 'headquarters_in')"),
+            object: z.string().describe("The object of the fact (e.g., 'San Francisco')"),
+            valid_from: z.string().optional().describe("ISO date string for when the fact became true"),
+            confidence: z.number().min(0).max(1).default(1.0).describe("Confidence score (0.0 to 1.0)"),
+            user_id: z.string().optional().describe("Owner of this fact"),
+            metadata: z.record(z.string(), z.any()).optional().describe("Additional structured data"),
+        } as any,
+        async (args: any) => {
+            const { subject, predicate, object, valid_from, confidence, user_id, metadata } = args;
+            const u = uid(user_id);
+            const from = valid_from ? new Date(valid_from) : new Date();
+            const id = await insert_fact(subject, predicate, object, from, confidence, metadata, u);
+            return {
+                content: [{ type: "text" as const, text: `Created temporal fact ${id}: ${subject} ${predicate} ${object} (confidence: ${confidence})` }]
+            };
+        }
+    );
+
+    srv.tool(
+        "openmemory_temporal_fact_query",
+        {
+            subject: z.string().optional(),
+            predicate: z.string().optional(),
+            object: z.string().optional(),
+            at: z.string().optional().describe("Query state at this ISO date-time"),
+            user_id: z.string().optional(),
+        } as any,
+        async (args: any) => {
+            const { subject, predicate, object, at, user_id } = args;
+            const u = uid(user_id);
+            const at_date = at ? new Date(at) : new Date();
+            const facts = await query_facts_at_time(subject, predicate, object, at_date, 0.1, u);
+            return {
+                content: [
+                    { type: "text" as const, text: facts.length ? `Found ${facts.length} facts:` : "No facts found matching criteria." },
+                    { type: "text" as const, text: JSON.stringify(facts, null, 2) }
+                ]
+            };
+        }
+    );
+
+    srv.tool(
+        "openmemory_temporal_timeline",
+        {
+            subject: z.string().min(1).describe("Subject to get timeline for"),
+            user_id: z.string().optional(),
+        } as any,
+        async (args: any) => {
+            const { subject, user_id } = args;
+            const u = uid(user_id);
+            const timeline = await get_subject_timeline(subject, u);
+            return {
+                content: [
+                    { type: "text" as const, text: `Timeline for ${subject}:` },
+                    { type: "text" as const, text: JSON.stringify(timeline, null, 2) }
+                ]
+            };
+        }
+    );
+
+    srv.tool(
+        "openmemory_temporal_edge_create",
+        {
+            source_id: z.string().describe("ID of the source temporal fact"),
+            target_id: z.string().describe("ID of the target temporal fact"),
+            relation_type: z.string().describe("Type of relation (e.g., 'causal', 'temporal_before')"),
+            weight: z.number().min(0).max(1).default(1.0),
+            user_id: z.string().optional(),
+        } as any,
+        async (args: any) => {
+            const { source_id, target_id, relation_type, weight, user_id } = args;
+            const u = uid(user_id);
+            const id = await insert_edge(source_id, target_id, relation_type, new Date(), weight, undefined, u);
+            return {
+                content: [{ type: "text" as const, text: `Created temporal edge ${id}: ${source_id} --[${relation_type}]--> ${target_id} (weight: ${weight})` }]
+            };
+        }
+    );
+
+    srv.tool(
+        "openmemory_temporal_edge_query",
+        {
+            source_id: z.string().optional(),
+            target_id: z.string().optional(),
+            relation_type: z.string().optional(),
+            user_id: z.string().optional(),
+        } as any,
+        async (args: any) => {
+            const { source_id, target_id, relation_type, user_id } = args;
+            const u = uid(user_id);
+            const edges = await query_edges(source_id, target_id, relation_type, new Date(), u);
+            return {
+                content: [
+                    { type: "text" as const, text: `Found ${edges.length} edges:` },
+                    { type: "text" as const, text: JSON.stringify(edges, null, 2) }
+                ]
+            };
+        }
+    );
+
+    srv.tool(
+        "openmemory_temporal_fact_search",
+        {
+            query: z.string().min(1).describe("Keyword to search for in facts"),
+            limit: z.number().int().min(1).default(10),
+            user_id: z.string().optional(),
+        } as any,
+        async (args: any) => {
+            const { query, limit, user_id } = args;
+            const u = uid(user_id);
+            const facts = await search_facts(query, "all", undefined, limit, u);
+            return {
+                content: [
+                    { type: "text" as const, text: `Found ${facts.length} facts matching "${query}":` },
+                    { type: "text" as const, text: JSON.stringify(facts, null, 2) }
+                ]
+            };
+        }
     );
 
     srv.resource(
@@ -368,6 +486,12 @@ export const create_mcp_srv = () => {
                     "openmemory_reinforce",
                     "openmemory_list",
                     "openmemory_get",
+                    "openmemory_temporal_fact_create",
+                    "openmemory_temporal_fact_query",
+                    "openmemory_temporal_fact_search",
+                    "openmemory_temporal_timeline",
+                    "openmemory_temporal_edge_create",
+                    "openmemory_temporal_edge_query",
                 ],
             };
             return {
@@ -428,7 +552,7 @@ export const mcp = (app: any) => {
             throw error;
         });
 
-    const handle_req = async (req: any, res: any) => {
+    const handle_req = async (req: IncomingMessage, res: ServerResponse) => {
         try {
             await srv_ready;
             const pay = await extract_pay(req);
@@ -456,10 +580,10 @@ export const mcp = (app: any) => {
         }
     };
 
-    app.post("/mcp", (req: any, res: any) => {
+    app.post("/mcp", (req: IncomingMessage, res: ServerResponse) => {
         void handle_req(req, res);
     });
-    app.options("/mcp", (_req: any, res: any) => {
+    app.options("/mcp", (_req: IncomingMessage, res: ServerResponse) => {
         res.statusCode = 204;
         set_hdrs(res);
         res.end();
@@ -486,7 +610,7 @@ export const start_mcp_stdio = async () => {
     // console.error("[MCP] STDIO transport connected"); // Use stderr for debug output, not stdout
 };
 
-if (typeof require !== "undefined" && require.main === module) {
+if (import.meta.main) {
     void start_mcp_stdio().catch((error) => {
         console.error("[MCP] STDIO startup failed:", error);
         process.exitCode = 1;

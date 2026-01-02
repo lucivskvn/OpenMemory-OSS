@@ -2,7 +2,7 @@
 
 ## System Overview
 
-OpenMemory is a self-hosted AI memory engine implementing **Hierarchical Memory Decomposition (HMD) v2** architecture. It provides persistent, structured, and semantic memory for LLM applications through multi-sector embeddings and single-waypoint graph linking.
+OpenMemory is a self-hosted AI memory engine implementing **Hierarchical Memory Decomposition (HMD) v2.1** architecture. It provides persistent, structured, and semantic memory for LLM applications through multi-sector embeddings, single-waypoint graph linking, and robust multi-tenant isolation.
 
 ---
 
@@ -213,6 +213,7 @@ Memory A ──0.85──> Memory B
 | **Ollama**    | `nomic-embed-text`, `bge-small`, `bge-large`       | ❌            | Free (local)     |
 | **Local**     | Custom models                                      | ❌            | Free (local)     |
 | **Synthetic** | Hash-based                                         | ❌            | Free             |
+| **Antigravity**| Supported via VSCode Extension                    | ✅            | Premium          |
 
 #### 3.2 Embedding Modes
 
@@ -661,7 +662,8 @@ OM_LG_REFLECTIVE=true
 - 100% local storage (no vendor lock-in)
 - Optional content encryption at rest
 - PII scrubbing hooks available
-- Tenant isolation support
+- **Native Multi-tenancy**: Robust user-level isolation via `user_id` across all storage and query layers.
+- **SSRF Protection**: Built-in URL validation to prevent Server-Side Request Forgery during ingestion.
 
 ### Best Practices
 

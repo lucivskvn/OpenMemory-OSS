@@ -5,37 +5,48 @@
  */
 
 import { base_source, source_config_error, source_item, source_content } from './base';
+import type { Octokit } from '@octokit/rest';
+import { env } from '../core/cfg';
 
+/**
+ * GitHub Source Connector.
+ * Ingests files and issues from GitHub repositories.
+ * Supports:
+ * - Filtering by path
+ * - Including issues/comments
+ * - Auto-detecting encoding
+ */
 export class github_source extends base_source {
-    name = 'github';
-    private octokit: any = null;
+    override name = 'github';
+    private octokit: Octokit | null = null;
 
     async _connect(creds: Record<string, any>): Promise<boolean> {
-        let Octokit: any;
+        let OctokitConstructor: typeof Octokit;
         try {
-            Octokit = await import('@octokit/rest').then(m => m.Octokit);
+            OctokitConstructor = await import('@octokit/rest').then(m => m.Octokit);
         } catch {
             throw new source_config_error('missing deps: npm install @octokit/rest', this.name);
         }
 
-        const token = creds.token || process.env.GITHUB_TOKEN;
+        const token = (creds.token as string) || process.env.GITHUB_TOKEN;
 
         if (!token) {
             throw new source_config_error('no credentials: set GITHUB_TOKEN', this.name);
         }
 
-        this.octokit = new Octokit({ auth: token });
+        this.octokit = new OctokitConstructor({ auth: token });
         return true;
     }
 
     async _list_items(filters: Record<string, any>): Promise<source_item[]> {
+        if (!this.octokit) throw new source_config_error('not connected', this.name);
         if (!filters.repo) {
             throw new source_config_error('repo is required (format: owner/repo)', this.name);
         }
 
-        const [owner, repo] = filters.repo.split('/');
-        const path = filters.path?.replace(/^\//, '') || '';
-        const include_issues = filters.include_issues || false;
+        const [owner, repo] = (filters.repo as string).split('/');
+        const path = (filters.path as string)?.replace(/^\//, '') || '';
+        const include_issues = (filters.include_issues as boolean) || false;
 
         const results: source_item[] = [];
 
@@ -45,17 +56,20 @@ export class github_source extends base_source {
             const contents = Array.isArray(resp.data) ? resp.data : [resp.data];
 
             for (const content of contents) {
-                results.push({
-                    id: `${filters.repo}:${content.path}`,
-                    name: content.name,
-                    type: content.type === 'dir' ? 'dir' : content.encoding || 'file',
-                    path: content.path,
-                    size: content.size || 0,
-                    sha: content.sha
-                });
+                if ('type' in content) {
+                    results.push({
+                        id: `${filters.repo}:${content.path}`,
+                        name: content.name,
+                        type: content.type === 'dir' ? 'dir' : (content as any).encoding || 'file',
+                        path: content.path,
+                        size: content.size || 0,
+                        sha: content.sha
+                    });
+                }
             }
-        } catch (e: any) {
-            console.warn(`[github] failed to list ${path}: ${e.message}`);
+        } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e);
+            if (env.verbose) console.warn(`[github] failed to list ${path}: ${msg}`);
         }
 
         // list issues if requested
@@ -70,11 +84,12 @@ export class github_source extends base_source {
                         type: 'issue',
                         number: issue.number,
                         state: issue.state,
-                        labels: issue.labels.map((l: any) => l.name)
+                        labels: issue.labels.map((l: any) => typeof l === 'string' ? l : l.name)
                     });
                 }
-            } catch (e: any) {
-                console.warn(`[github] failed to list issues: ${e.message}`);
+            } catch (e: unknown) {
+                const msg = e instanceof Error ? e.message : String(e);
+                if (env.verbose) console.warn(`[github] failed to list issues: ${msg}`);
             }
         }
 
@@ -82,6 +97,8 @@ export class github_source extends base_source {
     }
 
     async _fetch_item(item_id: string): Promise<source_content> {
+        if (!this.octokit) throw new source_config_error('not connected', this.name);
+
         const parts = item_id.split(':');
         const repo_full = parts[0];
         const [owner, repo] = repo_full.split('/');
@@ -96,7 +113,7 @@ export class github_source extends base_source {
             const text_parts = [
                 `# ${issue.data.title}`,
                 `**State:** ${issue.data.state}`,
-                `**Labels:** ${issue.data.labels.map((l: any) => l.name).join(', ')}`,
+                `**Labels:** ${issue.data.labels.map((l: any) => typeof l === 'string' ? l : l.name).join(', ')}`,
                 '',
                 issue.data.body || ''
             ];
@@ -122,7 +139,7 @@ export class github_source extends base_source {
         const resp = await this.octokit.repos.getContent({ owner, repo, path });
 
         if (Array.isArray(resp.data)) {
-            const text = resp.data.map((c: any) => `- ${c.path}`).join('\n');
+            const text = resp.data.map((c) => `- ${c.path}`).join('\n');
             return {
                 id: item_id,
                 name: path || repo_full,
@@ -134,6 +151,10 @@ export class github_source extends base_source {
         }
 
         const content = resp.data;
+        if (!('content' in content)) {
+            throw new Error('Not a file');
+        }
+
         let text = '';
         let data: string | Buffer = '';
 
@@ -147,7 +168,7 @@ export class github_source extends base_source {
         return {
             id: item_id,
             name: content.name,
-            type: content.encoding || 'file',
+            type: (content as any).encoding || 'file',
             text,
             data,
             meta: { source: 'github', repo: repo_full, path: content.path, sha: content.sha, size: content.size }

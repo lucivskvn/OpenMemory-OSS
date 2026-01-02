@@ -1,94 +1,141 @@
-#!/usr/bin/env node
-import { run_async, all_async } from "./core/db";
+#!/usr/bin/env bun
+/**
+ * openmemory (opm) CLI - production-grade management tool
+ * 
+ * commands:
+ * - migrate: run database migrations
+ * - add <text>: add a new memory
+ * - search <query>: search memories
+ * - ingest <source> <filters...>: ingest from external source
+ * - wipe: clear all data
+ */
 
-const SCHEMA_DEFINITIONS = {
-    memories: `create table if not exists memories(id text primary key,user_id text,segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,meta text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0)`,
-    vectors: `create table if not exists vectors(id text not null,sector text not null,user_id text,v blob not null,dim integer not null,primary key(id,sector))`,
-    waypoints: `create table if not exists waypoints(src_id text,dst_id text not null,user_id text,weight real not null,created_at integer,updated_at integer,primary key(src_id,user_id))`,
-    embed_logs: `create table if not exists embed_logs(id text primary key,model text,status text,ts integer,err text)`,
-    users: `create table if not exists users(user_id text primary key,summary text,reflection_count integer default 0,created_at integer,updated_at integer)`,
-    stats: `create table if not exists stats(id integer primary key autoincrement,type text not null,count integer default 1,ts integer not null)`,
-    temporal_facts: `create table if not exists temporal_facts(id text primary key,subject text not null,predicate text not null,object text not null,valid_from integer not null,valid_to integer,confidence real not null check(confidence >= 0 and confidence <= 1),last_updated integer not null,metadata text,unique(subject,predicate,object,valid_from))`,
-    temporal_edges: `create table if not exists temporal_edges(id text primary key,source_id text not null,target_id text not null,relation_type text not null,valid_from integer not null,valid_to integer,weight real not null,metadata text,foreign key(source_id) references temporal_facts(id),foreign key(target_id) references temporal_facts(id))`,
-};
+import { run_async, all_async, q, close_db } from "./core/db";
+import { Memory } from "./core/memory";
+import { run_migrations } from "./core/migrate";
 
-const INDEX_DEFINITIONS = [
-    "create index if not exists idx_memories_sector on memories(primary_sector)",
-    "create index if not exists idx_memories_segment on memories(segment)",
-    "create index if not exists idx_memories_simhash on memories(simhash)",
-    "create index if not exists idx_memories_ts on memories(last_seen_at)",
-    "create index if not exists idx_memories_user on memories(user_id)",
-    "create index if not exists idx_vectors_user on vectors(user_id)",
-    "create index if not exists idx_waypoints_src on waypoints(src_id)",
-    "create index if not exists idx_waypoints_dst on waypoints(dst_id)",
-    "create index if not exists idx_waypoints_user on waypoints(user_id)",
-    "create index if not exists idx_stats_ts on stats(ts)",
-    "create index if not exists idx_stats_type on stats(type)",
-    "create index if not exists idx_temporal_subject on temporal_facts(subject)",
-    "create index if not exists idx_temporal_predicate on temporal_facts(predicate)",
-    "create index if not exists idx_temporal_validity on temporal_facts(valid_from,valid_to)",
-    "create index if not exists idx_temporal_composite on temporal_facts(subject,predicate,valid_from,valid_to)",
-    "create index if not exists idx_edges_source on temporal_edges(source_id)",
-    "create index if not exists idx_edges_target on temporal_edges(target_id)",
-    "create index if not exists idx_edges_validity on temporal_edges(valid_from,valid_to)",
-];
-
+// Helper to check table existence (now DB-agnostic)
 async function get_existing_tables(): Promise<Set<string>> {
-    const tables = await all_async(
-        `SELECT name FROM sqlite_master WHERE type='table'`,
-    );
-    return new Set(tables.map((t) => t.name));
+    try {
+        const tables = await q.get_tables.all();
+        return new Set(tables.map((t) => t.name));
+    } catch {
+        return new Set();
+    }
 }
 
-async function get_existing_indexes(): Promise<Set<string>> {
-    const indexes = await all_async(
-        `SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'`,
-    );
-    return new Set(indexes.map((i) => i.name));
-}
+async function main() {
+    const args = process.argv.slice(2);
+    const command = args[0];
 
-async function run_migrations() {
-    console.log("[MIGRATE] Starting automatic migration...");
+    if (!command || command === "--help" || command === "-h") {
+        console.log(`
+\x1b[1;35mOpenMemory (opm) CLI\x1b[0m
+Usage: opm <command> [args]
 
-    const existing_tables = await get_existing_tables();
-    const existing_indexes = await get_existing_indexes();
+Commands:
+  \x1b[33mmigrate\x1b[0m             Run database migrations
+  \x1b[33madd\x1b[0m <text>          Add a new memory record
+  \x1b[33msearch\x1b[0m <query>      Search memories using hybrid retrieval
+  \x1b[33mingest\x1b[0m <source>     Ingest from: github, notion, google_drive, etc.
+  \x1b[33mstats\x1b[0m               View database statistics
+  \x1b[33mwipe\x1b[0m                Clear all data (\x1b[31mdestructive\x1b[0m)
 
-    let created_tables = 0;
-    let created_indexes = 0;
+Options:
+  --user_id <id>      Target user identity (default: anonymous)
+  --limit <n>         Search result limit (default: 10)
+        `);
+        return;
+    }
 
-    for (const [table_name, schema] of Object.entries(SCHEMA_DEFINITIONS)) {
-        if (!existing_tables.has(table_name)) {
-            console.log(`[MIGRATE] Creating table: ${table_name}`);
-            const statements = schema.split(";").filter((s) => s.trim());
-            for (const stmt of statements) {
-                if (stmt.trim()) {
-                    await run_async(stmt.trim());
-                }
-            }
-            created_tables++;
+    const mem = new Memory();
+    const flags: Record<string, string> = {};
+    const positional: string[] = [];
+
+    // simple parser
+    for (let i = 1; i < args.length; i++) {
+        if (args[i].startsWith("--")) {
+            flags[args[i].slice(2)] = args[i + 1];
+            i++;
+        } else {
+            positional.push(args[i]);
         }
     }
 
-    for (const index_sql of INDEX_DEFINITIONS) {
-        const match = index_sql.match(/create index if not exists (\w+)/);
-        const index_name = match ? match[1] : null;
-        if (index_name && !existing_indexes.has(index_name)) {
-            console.log(`[MIGRATE] Creating index: ${index_name}`);
-            await run_async(index_sql);
-            created_indexes++;
+    const user_id = flags.user_id || "anonymous";
+
+    try {
+        switch (command) {
+            case "migrate":
+                await run_migrations();
+                break;
+
+            case "add":
+                if (!positional[0]) throw new Error("Content required: opm add \"text here\"");
+                const res = await mem.add(positional[0], { user_id, ...flags });
+                console.log(`\x1b[32mAdded memory:\x1b[0m ${res.id}`);
+                break;
+
+            case "search":
+                if (!positional[0]) throw new Error("Query required: opm search \"query here\"");
+                const hits = await mem.search(positional[0], {
+                    user_id,
+                    limit: parseInt(flags.limit || "10")
+                });
+                console.log(`\x1b[36mFound ${hits.length} matches:\x1b[0m\n`);
+                hits.forEach((h: any, idx: number) => {
+                    console.log(`\x1b[1m${idx + 1}.\x1b[0m [${h.primary_sector}] ${h.content.slice(0, 100)}${h.content.length > 100 ? '...' : ''}`);
+                    console.log(`   \x1b[90mID: ${h.id} | Salience: ${h.salience?.toFixed(4)}\x1b[0m\n`);
+                });
+                break;
+
+            case "ingest":
+                const source_name = positional[0];
+                if (!source_name) throw new Error("Source required: opm ingest <github|notion|etc>");
+                const filters: Record<string, any> = {};
+                positional.slice(1).forEach(p => {
+                    const [k, v] = p.split("=");
+                    if (k && v) filters[k] = v;
+                });
+                console.log(`\x1b[35m[INGEST]\x1b[0m Starting ${source_name} ingestion...`);
+                const source = await mem.source(source_name);
+                await source.connect();
+                const ids = await source.ingest_all(filters);
+                console.log(`\x1b[32m[INGEST] Success:\x1b[0m Ingested ${ids.length} items`);
+                break;
+
+            case "stats":
+                const counts = await all_async(`
+                    SELECT 
+                        (SELECT count(*) FROM memories) as memories,
+                        (SELECT count(*) FROM vectors) as vectors,
+                        (SELECT count(*) FROM waypoints) as relations
+                `);
+                console.table(counts[0]);
+                break;
+
+            case "wipe":
+                console.log("\x1b[31;1m%s\x1b[0m", "WARNING: This will delete EVERYTHING in the database.");
+                console.log("Press Enter to continue, or Ctrl+C to abort...");
+                await new Promise(resolve => process.stdin.once('data', resolve));
+                await mem.wipe();
+                console.log("\x1b[32mDatabase wiped.\x1b[0m");
+                process.exit(0);
+                break;
+
+            default:
+                console.error(`Unknown command: ${command}`);
+                process.exit(1);
         }
+    } catch (err: any) {
+        console.error(`\x1b[31mError:\x1b[0m ${err.message}`);
+        await close_db(); // Ensure DB is closed
+        process.exit(1);
+    } finally {
+        await close_db();
+        process.exit(0);
     }
-
-    console.log(
-        `[MIGRATE] Migration complete: ${created_tables} tables, ${created_indexes} indexes created`,
-    );
-
-    const final_tables = await get_existing_tables();
-    console.log(`[MIGRATE] Total tables: ${final_tables.size}`);
-    console.log(`[MIGRATE] Tables: ${Array.from(final_tables).join(", ")}`);
 }
 
-run_migrations().catch((err) => {
-    console.error("[MIGRATE] Error:", err);
-    process.exit(1);
-});
+main();
+

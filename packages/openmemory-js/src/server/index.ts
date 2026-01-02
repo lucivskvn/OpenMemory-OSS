@@ -1,4 +1,4 @@
-const server = require("./server.js");
+import server from "./server";
 import { env, tier } from "../core/cfg";
 import { run_decay_process, prune_weak_waypoints } from "../memory/hsg";
 import { mcp } from "../ai/mcp";
@@ -11,6 +11,12 @@ import { start_reflection } from "../memory/reflect";
 import { start_user_summary_reflection } from "../memory/user_summary";
 import { sendTelemetry } from "../core/telemetry";
 import { req_tracker_mw } from "./routes/dashboard";
+import { close_db } from "../core/db";
+import { maintenanceRetrainAll } from "../ops/maintenance";
+
+export * from "./server";
+// Explicitly import for local usage
+import { AdvancedRequest, AdvancedResponse } from "./server";
 
 const ASC = `   ____                   __  __                                 
   / __ \\                 |  \\/  |                                
@@ -24,9 +30,11 @@ const ASC = `   ____                   __  __
 const app = server({ max_payload_size: env.max_payload_size });
 
 console.log(ASC);
-console.log(`[CONFIG] Vector Dimension: ${env.vec_dim}`);
-console.log(`[CONFIG] Cache Segments: ${env.cache_segments}`);
-console.log(`[CONFIG] Max Active Queries: ${env.max_active}`);
+if (env.verbose) {
+    console.log(`[CONFIG] Vector Dimension: ${env.vec_dim}`);
+    console.log(`[CONFIG] Cache Segments: ${env.cache_segments}`);
+    console.log(`[CONFIG] Max Active Queries: ${env.max_active}`);
+}
 
 // Warn about configuration mismatch that causes embedding incompatibility
 if (env.emb_kind !== "synthetic" && (tier === "hybrid" || tier === "fast")) {
@@ -38,9 +46,20 @@ if (env.emb_kind !== "synthetic" && (tier === "hybrid" || tier === "fast")) {
     );
 }
 
+// Security Hardening: Ensure API Key is set
+if (!env.api_key || env.api_key.trim() === "") {
+    console.warn(
+        `\n[SECURITY] ⚠️  WARNING: NO API KEY CONFIGURED! (OM_API_KEY)\n` +
+        `           The server is running in OPEN mode. Anyone can access your memories.\n` +
+        `           Please set OM_API_KEY in your .env file for production usage.\n`
+    );
+    // In strict mode or production, we might want to process.exit(1) here.
+    // For now, let's just make it VERY obvious.
+}
+
 app.use(req_tracker_mw());
 
-app.use((req: any, res: any, next: any) => {
+app.use((req: AdvancedRequest, res: AdvancedResponse, next: () => void) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader(
         "Access-Control-Allow-Methods",
@@ -76,22 +95,24 @@ console.log(
 );
 
 setInterval(async () => {
-    console.log("[DECAY] Running HSG decay process...");
+    if (env.verbose) console.log("[DECAY] Running HSG decay process...");
     try {
         const result = await run_decay_process();
-        console.log(
-            `[DECAY] Completed: ${result.decayed}/${result.processed} memories updated`,
-        );
+        if (env.verbose) {
+            console.log(
+                `[DECAY] Completed: ${result.decayed}/${result.processed} memories updated`,
+            );
+        }
     } catch (error) {
         console.error("[DECAY] Process failed:", error);
     }
 }, decayIntervalMs);
 setInterval(
     async () => {
-        console.log("[PRUNE] Pruning weak waypoints...");
+        if (env.verbose) console.log("[PRUNE] Pruning weak waypoints...");
         try {
             const pruned = await prune_weak_waypoints();
-            console.log(`[PRUNE] Completed: ${pruned} waypoints removed`);
+            if (env.verbose) console.log(`[PRUNE] Completed: ${pruned} waypoints removed`);
         } catch (error) {
             console.error("[PRUNE] Failed:", error);
         }
@@ -100,13 +121,32 @@ setInterval(
 );
 setTimeout(() => {
     run_decay_process()
-        .then((result: any) => {
-            console.log(
-                `[INIT] Initial decay: ${result.decayed}/${result.processed} memories updated`,
-            );
+        .then((result: { decayed: number; processed: number }) => {
+            if (env.verbose) {
+                console.log(
+                    `[INIT] Initial decay: ${result.decayed}/${result.processed} memories updated`,
+                );
+            }
+        })
+        .catch(console.error);
+    maintenanceRetrainAll()
+        .then(() => {
+            if (env.verbose) console.log("[INIT] Initial classifier training completed");
         })
         .catch(console.error);
 }, 3000);
+
+const trainIntervalMs = env.classifier_train_interval * 60 * 1000;
+console.log(`[TRAIN] Classifier interval: ${env.classifier_train_interval} minutes`);
+
+setInterval(async () => {
+    if (env.verbose) console.log("[TRAIN] Running auto-training process...");
+    try {
+        await maintenanceRetrainAll();
+    } catch (error) {
+        console.error("[TRAIN] Process failed:", error);
+    }
+}, trainIntervalMs);
 
 start_reflection();
 start_user_summary_reflection();
@@ -117,4 +157,19 @@ app.listen(env.port, () => {
     sendTelemetry().catch(() => {
         // ignore telemetry failures
     });
+
+    const shutdown = async (signal: string) => {
+        console.log(`\n[SERVER] ${signal} received. Shutting down gracefully...`);
+        try {
+            await close_db(); // Close DB connections
+            console.log("[SERVER] Database connections closed.");
+            process.exit(0);
+        } catch (err) {
+            console.error("[SERVER] Error during shutdown:", err);
+            process.exit(1);
+        }
+    };
+
+    process.on("SIGTERM", () => shutdown("SIGTERM"));
+    process.on("SIGINT", () => shutdown("SIGINT"));
 });

@@ -5,33 +5,46 @@
  */
 
 import { base_source, source_config_error, source_item, source_content } from './base';
+import type { Client } from '@notionhq/client';
+
+interface NotionPage {
+    id: string;
+    url: string;
+    last_edited_time: string;
+    properties: Record<string, any>;
+}
+
+interface NotionBlock {
+    type: string;
+    [key: string]: any;
+}
 
 export class notion_source extends base_source {
-    name = 'notion';
-    private client: any = null;
+    override name = 'notion';
+    private client: Client | null = null;
 
     async _connect(creds: Record<string, any>): Promise<boolean> {
-        let Client: any;
+        let ClientConstructor: typeof Client;
         try {
-            Client = await import('@notionhq/client').then(m => m.Client);
+            ClientConstructor = await import('@notionhq/client').then(m => m.Client);
         } catch {
             throw new source_config_error('missing deps: npm install @notionhq/client', this.name);
         }
 
-        const api_key = creds.api_key || process.env.NOTION_API_KEY;
+        const api_key = (creds.api_key as string) || process.env.NOTION_API_KEY;
 
         if (!api_key) {
             throw new source_config_error('no credentials: set NOTION_API_KEY', this.name);
         }
 
-        this.client = new Client({ auth: api_key });
+        this.client = new ClientConstructor({ auth: api_key });
         return true;
     }
 
-    private extract_title(page: any): string {
+    private extract_title(page: NotionPage): string {
         const props = page.properties || {};
         for (const prop of Object.values(props) as any[]) {
-            if (prop.type === 'title' && prop.title?.[0]) {
+            if (prop && typeof prop === 'object' && prop.type === 'title' && Array.isArray(prop.title) && prop.title[0]) {
                 return prop.title[0].plain_text || '';
             }
         }
@@ -39,6 +52,8 @@ export class notion_source extends base_source {
     }
 
     async _list_items(filters: Record<string, any>): Promise<source_item[]> {
+        if (!this.client) throw new source_config_error('not connected', this.name);
+
         const results: source_item[] = [];
 
         if (filters.database_id) {
@@ -46,12 +61,12 @@ export class notion_source extends base_source {
             let start_cursor: string | undefined;
 
             while (has_more) {
-                const resp = await this.client.databases.query({
-                    database_id: filters.database_id,
+                const resp: any = await this.client.databases.query({
+                    database_id: filters.database_id as string,
                     start_cursor
                 });
 
-                for (const page of resp.results) {
+                for (const page of resp.results as NotionPage[]) {
                     results.push({
                         id: page.id,
                         name: this.extract_title(page) || 'Untitled',
@@ -62,12 +77,12 @@ export class notion_source extends base_source {
                 }
 
                 has_more = resp.has_more;
-                start_cursor = resp.next_cursor;
+                start_cursor = resp.next_cursor || undefined;
             }
         } else {
-            const resp = await this.client.search({ filter: { property: 'object', value: 'page' } });
+            const resp: any = await this.client.search({ filter: { property: 'object', value: 'page' } });
 
-            for (const page of resp.results) {
+            for (const page of resp.results as NotionPage[]) {
                 results.push({
                     id: page.id,
                     name: this.extract_title(page) || 'Untitled',
@@ -81,7 +96,7 @@ export class notion_source extends base_source {
         return results;
     }
 
-    private block_to_text(block: any): string {
+    private block_to_text(block: NotionBlock): string {
         const texts: string[] = [];
         const type = block.type;
 
@@ -89,7 +104,7 @@ export class notion_source extends base_source {
             'bulleted_list_item', 'numbered_list_item', 'quote', 'callout'];
 
         if (text_blocks.includes(type)) {
-            const rich_text = block[type]?.rich_text || [];
+            const rich_text = (block[type] as any)?.rich_text || [];
             for (const rt of rich_text) {
                 texts.push(rt.plain_text || '');
             }
@@ -109,22 +124,24 @@ export class notion_source extends base_source {
     }
 
     async _fetch_item(item_id: string): Promise<source_content> {
-        const page = await this.client.pages.retrieve({ page_id: item_id });
+        if (!this.client) throw new source_config_error('not connected', this.name);
+
+        const page: NotionPage = await (this.client.pages.retrieve({ page_id: item_id }) as Promise<any>);
         const title = this.extract_title(page);
 
         // get all blocks
-        const blocks: any[] = [];
+        const blocks: NotionBlock[] = [];
         let has_more = true;
         let start_cursor: string | undefined;
 
         while (has_more) {
-            const resp = await this.client.blocks.children.list({
+            const resp: any = await this.client.blocks.children.list({
                 block_id: item_id,
                 start_cursor
             });
-            blocks.push(...resp.results);
+            blocks.push(...(resp.results as NotionBlock[]));
             has_more = resp.has_more;
-            start_cursor = resp.next_cursor;
+            start_cursor = resp.next_cursor || undefined;
         }
 
         const text_parts = title ? [`# ${title}`] : [];

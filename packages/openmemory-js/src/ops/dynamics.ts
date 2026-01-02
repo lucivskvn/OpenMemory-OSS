@@ -1,6 +1,7 @@
-import { all_async, run_async, get_async, q, memories_table } from "../core/db";
+import { all_async, run_async, get_async, q, memories_table, Memory } from "../core/db";
 import { now } from "../utils";
 import { cosineSimilarity } from "../memory/embed";
+import { env } from "../core/cfg";
 
 export const ALPHA_LEARNING_RATE_FOR_RECALL_REINFORCEMENT = 0.15;
 export const BETA_LEARNING_RATE_FOR_EMOTIONAL_FREQUENCY = 0.2;
@@ -19,7 +20,7 @@ export const SECTORAL_INTERDEPENDENCE_MATRIX_FOR_COGNITIVE_RESONANCE = [
     [0.6, 0.8, 0.2, 0.8, 1.0],
 ];
 
-export const SECTOR_INDEX_MAPPING_FOR_MATRIX_LOOKUP = {
+export const SECTOR_INDEX_MAPPING_FOR_MATRIX_LOOKUP: Record<string, number> = {
     episodic: 0,
     semantic: 1,
     procedural: 2,
@@ -82,21 +83,22 @@ export async function calculateAssociativeWaypointLinkWeight(
 }
 
 export async function calculateSpreadingActivationEnergyForNode(
-    nid: string,
-    an: Map<string, number>,
-    gr: Map<string, AssociativeWaypointGraphNode>,
+    node_id: string,
+    activation_map: Map<string, number>,
+    graph: Map<string, AssociativeWaypointGraphNode>,
 ): Promise<number> {
-    const nd = gr.get(nid);
-    if (!nd) return 0;
-    let tot = 0;
-    for (const e of nd.connected_waypoint_edges) {
-        const na = an.get(e.target_node_id) || 0;
-        const att = Math.exp(
+    const node = graph.get(node_id);
+    if (!node) return 0;
+    let total_energy = 0;
+    for (const edge of node.connected_waypoint_edges) {
+        const neighbor_activation = activation_map.get(edge.target_node_id) || 0;
+        // Apply attenuation based on graph distance (1 hop here)
+        const attenuation = Math.exp(
             -GAMMA_ATTENUATION_CONSTANT_FOR_GRAPH_DISTANCE * 1,
         );
-        tot += e.link_weight_value * na * att;
+        total_energy += edge.link_weight_value * neighbor_activation * attenuation;
     }
-    return tot;
+    return total_energy;
 }
 
 export async function applyRetrievalTraceReinforcementToMemory(
@@ -110,26 +112,27 @@ export async function applyRetrievalTraceReinforcementToMemory(
 }
 
 export async function propagateAssociativeReinforcementToLinkedNodes(
-    sid: string,
-    ssal: number,
-    wps: Array<{ target_id: string; weight: number }>,
+    source_id: string,
+    source_salience: number,
+    waypoints: Array<{ target_id: string; weight: number }>,
+    user_id?: string | null,
 ): Promise<Array<{ node_id: string; new_salience: number }>> {
-    const ups: Array<{ node_id: string; new_salience: number }> = [];
-    for (const wp of wps) {
-        const ld = (await get_async(
-            "select salience from memories where id=?",
-            [wp.target_id],
-        )) as any;
-        if (ld) {
-            const pr =
-                ETA_REINFORCEMENT_FACTOR_FOR_TRACE_LEARNING * wp.weight * ssal;
-            ups.push({
+    const updates: Array<{ node_id: string; new_salience: number }> = [];
+    for (const wp of waypoints) {
+        const memory = await get_async<{ salience: number }>(
+            "select salience from memories where id=? and (user_id=? or (user_id IS NULL and ? IS NULL))",
+            [wp.target_id, user_id ?? null, user_id ?? null],
+        );
+        if (memory) {
+            const propagation_amount =
+                ETA_REINFORCEMENT_FACTOR_FOR_TRACE_LEARNING * wp.weight * source_salience;
+            updates.push({
                 node_id: wp.target_id,
-                new_salience: Math.min(1, ld.salience + pr),
+                new_salience: Math.min(1, memory.salience + propagation_amount),
             });
         }
     }
-    return ups;
+    return updates;
 }
 
 export async function calculateCrossSectorResonanceScore(
@@ -137,8 +140,8 @@ export async function calculateCrossSectorResonanceScore(
     qs: string,
     bs: number,
 ): Promise<number> {
-    const si = (SECTOR_INDEX_MAPPING_FOR_MATRIX_LOOKUP as any)[ms] ?? 1;
-    const ti = (SECTOR_INDEX_MAPPING_FOR_MATRIX_LOOKUP as any)[qs] ?? 1;
+    const si = SECTOR_INDEX_MAPPING_FOR_MATRIX_LOOKUP[ms] ?? 1;
+    const ti = SECTOR_INDEX_MAPPING_FOR_MATRIX_LOOKUP[qs] ?? 1;
     return bs * SECTORAL_INTERDEPENDENCE_MATRIX_FOR_COGNITIVE_RESONANCE[si][ti];
 }
 
@@ -150,32 +153,40 @@ export async function determineEnergyBasedRetrievalThreshold(
     return Math.max(0.1, Math.min(0.9, tau * (1 + Math.log(nrm + 1))));
 }
 
-export async function applyDualPhaseDecayToAllMemories(): Promise<void> {
-    const mems = await all_async(
-        "select id,salience,decay_lambda,last_seen_at,updated_at,created_at from memories",
+export async function applyDualPhaseDecayToAllMemories(user_id?: string | null): Promise<void> {
+    const qry = user_id
+        ? "select id,salience,decay_lambda,last_seen_at,updated_at,created_at from memories where user_id=?"
+        : "select id,salience,decay_lambda,last_seen_at,updated_at,created_at from memories";
+    const params = user_id ? [user_id] : [];
+    const mems = await all_async<Pick<Memory, 'id' | 'salience' | 'decay_lambda' | 'last_seen_at' | 'updated_at' | 'created_at'>>(
+        qry, params
     );
     const ts = now();
-    const ops = mems.map(async (m: any) => {
-        const tms = Math.max(0, ts - (m.last_seen_at || m.updated_at));
+    const ops = mems.map(async (m) => {
+        const tms = Math.max(0, ts - (m.last_seen_at || m.updated_at || 0));
         const td = tms / 86400000;
         const rt = await calculateDualPhaseDecayMemoryRetention(td);
-        const nsal = m.salience * rt;
+        const nsal = (m.salience || 0) * rt;
         await run_async(
             `update ${memories_table} set salience=?,updated_at=? where id=?`,
             [Math.max(0, nsal), ts, m.id],
         );
     });
     await Promise.all(ops);
-    console.log(`[DECAY] Applied to ${mems.length} memories`);
+    if (env.verbose) console.log(`[DECAY] Applied to ${mems.length} memories`);
 }
 
-export async function buildAssociativeWaypointGraphFromMemories(): Promise<
-    Map<string, AssociativeWaypointGraphNode>
-> {
+export async function buildAssociativeWaypointGraphFromMemories(
+    user_id?: string | null,
+): Promise<Map<string, AssociativeWaypointGraphNode>> {
     const gr = new Map<string, AssociativeWaypointGraphNode>();
-    const wps = (await all_async(
-        "select src_id,dst_id,weight,created_at from waypoints",
-    )) as any[];
+    const qry = user_id
+        ? "select src_id,dst_id,weight,created_at from waypoints where user_id=?"
+        : "select src_id,dst_id,weight,created_at from waypoints";
+    const params = user_id ? [user_id] : [];
+    const wps = await all_async<{ src_id: string; dst_id: string; weight: number; created_at: number }>(
+        qry, params
+    );
     const ids = new Set<string>();
     for (const wp of wps) {
         ids.add(wp.src_id);
@@ -204,8 +215,9 @@ export async function buildAssociativeWaypointGraphFromMemories(): Promise<
 export async function performSpreadingActivationRetrieval(
     init: string[],
     max: number,
+    user_id?: string | null,
 ): Promise<Map<string, number>> {
-    const gr = await buildAssociativeWaypointGraphFromMemories();
+    const gr = await buildAssociativeWaypointGraphFromMemories(user_id);
     const act = new Map<string, number>();
     for (const id of init) act.set(id, 1.0);
     for (let i = 0; i < max; i++) {
@@ -235,10 +247,13 @@ export async function retrieveMemoriesWithEnergyThresholding(
     qv: number[],
     qs: string,
     me: number,
-): Promise<any[]> {
-    const mems = (await all_async(
-        "select id,content,primary_sector,salience,mean_vec from memories where salience>0.01",
-    )) as any[];
+    user_id?: string | null,
+): Promise<(Memory & { activation_energy: number })[]> {
+    const qry = user_id
+        ? "select id,content,primary_sector,salience,mean_vec from memories where salience>0.01 and user_id=?"
+        : "select id,content,primary_sector,salience,mean_vec from memories where salience>0.01";
+    const params = user_id ? [user_id] : [];
+    const mems = await all_async<Memory>(qry, params);
     const sc = new Map<string, number>();
     for (const m of mems) {
         if (!m.mean_vec) continue;
@@ -253,11 +268,12 @@ export async function retrieveMemoriesWithEnergyThresholding(
             qs,
             bs,
         );
-        sc.set(m.id, cs * m.salience);
+        sc.set(m.id, cs * (m.salience || 0));
     }
     const sp = await performSpreadingActivationRetrieval(
         Array.from(sc.keys()).slice(0, 5),
         3,
+        user_id,
     );
     const cmb = new Map<string, number>();
     for (const m of mems)
@@ -265,8 +281,8 @@ export async function retrieveMemoriesWithEnergyThresholding(
     const te = Array.from(cmb.values()).reduce((s, v) => s + v, 0);
     const thr = await determineEnergyBasedRetrievalThreshold(te, me);
     return mems
-        .filter((m: any) => (cmb.get(m.id) || 0) > thr)
-        .map((m: any) => ({ ...m, activation_energy: cmb.get(m.id) }));
+        .filter((m) => (cmb.get(m.id) || 0) > thr)
+        .map((m) => ({ ...m, activation_energy: cmb.get(m.id)! }));
 }
 
 export const apply_decay = applyDualPhaseDecayToAllMemories;

@@ -2,6 +2,38 @@ import { q, all_async, run_async } from "../../core/db";
 import { env } from "../../core/cfg";
 import * as fs from "fs";
 import * as path from "path";
+import { AdvancedRequest, AdvancedResponse } from "../index";
+import { sendError, AppError } from "../errors";
+import { z } from "zod";
+
+interface DBCount { count: number; }
+interface DBSize { size: number; }
+interface SectorCount { primary_sector: string; count: number; }
+interface AvgSalience { avg: number; }
+interface DecayStats { total: number; avg_lambda: number; min_salience: number; max_salience: number; }
+interface StatEntry { count: number; ts: number; }
+interface StatTotal { total: number; }
+interface MaintOp { type: string; hour: string; cnt: number; }
+interface MaintTotal { type: string; total: number; }
+interface TopMem { id: string; content: string; primary_sector: string; salience: number; last_seen_at: number; }
+interface TimelineEntry { primary_sector: string; label: string; sort_key: string; count: number; }
+interface ActivityEntry { id: string; content: string; primary_sector: string; salience: number; created_at: number; updated_at: number; last_seen_at: number; }
+interface MaintenanceStats { hour: string; decay: number; reflection: number; consolidation: number; }
+
+const StatsQuerySchema = z.object({});
+const ActivityQuerySchema = z.object({
+    limit: z.string().optional().transform(val => parseInt(val || "50")).pipe(z.number().min(1).max(100))
+});
+const TimelineQuerySchema = z.object({
+    hours: z.string().optional().transform(val => parseInt(val || "24")).pipe(z.number().min(1).max(720)) // Max 30 days
+});
+const TopMemoriesQuerySchema = z.object({
+    limit: z.string().optional().transform(val => parseInt(val || "10")).pipe(z.number().min(1).max(50))
+});
+const MaintenanceQuerySchema = z.object({
+    hours: z.string().optional().transform(val => parseInt(val || "24")).pipe(z.number().min(1).max(168))
+});
+
 
 const is_pg = env.metadata_backend === "postgres";
 
@@ -51,25 +83,13 @@ export function track_req(success: boolean) {
     }
 }
 
-export function req_tracker_mw() {
-    return (req: any, res: any, next: any) => {
-        if (req.url.startsWith("/dashboard") || req.url.startsWith("/health")) {
-            return next();
-        }
-        const orig = res.json.bind(res);
-        res.json = (data: any) => {
-            track_req(res.statusCode < 400);
-            return orig(data);
-        };
-        next();
-    };
-}
+
 
 const get_db_sz = async (): Promise<number> => {
     try {
         if (is_pg) {
             const db_name = process.env.OM_PG_DB || "openmemory";
-            const result = await all_async(
+            const result = await all_async<DBSize>(
                 `SELECT pg_database_size('${db_name}') as size`,
             );
             return result[0]?.size
@@ -90,48 +110,83 @@ const get_db_sz = async (): Promise<number> => {
     }
 };
 
+export function req_tracker_mw() {
+    return (req: AdvancedRequest, res: AdvancedResponse, next: () => void) => {
+        if (req.url?.startsWith("/dashboard") || req.url?.startsWith("/health")) {
+            return next();
+        }
+        const orig = res.json.bind(res);
+        res.json = (data: any) => {
+            track_req(res.statusCode < 400);
+            return orig(data);
+        };
+        next();
+    };
+}
+
 export function dash(app: any) {
-    app.get("/dashboard/stats", async (_req: any, res: any) => {
+    /**
+     * Get aggregated system stats including total memories, sector counts, and QPS.
+     * @route GET /dashboard/stats
+     */
+    app.get("/dashboard/stats", async (req: AdvancedRequest, res: AdvancedResponse) => {
         try {
+            const user_id = req.user?.id;
             const mem_table = get_mem_table();
-            const totmem = await all_async(
-                `SELECT COUNT(*) as count FROM ${mem_table}`,
+
+            // User-scoped memory stats
+            const user_clause = user_id ? (is_pg ? "WHERE user_id = $1" : "WHERE user_id = ?") : (is_pg ? "WHERE user_id IS NULL" : "WHERE user_id IS NULL");
+            const p = user_id ? [user_id] : [];
+
+            const totmem = await all_async<DBCount>(
+                `SELECT COUNT(*) as count FROM ${mem_table} ${user_clause}`,
+                p
             );
-            const sectcnt = await all_async(`
-                SELECT primary_sector, COUNT(*) as count
-                FROM ${mem_table}
-                GROUP BY primary_sector
-            `);
+
+            const sect_sql = is_pg
+                ? `SELECT primary_sector, COUNT(*) as count FROM ${mem_table} ${user_clause} GROUP BY primary_sector`
+                : `SELECT primary_sector, COUNT(*) as count FROM ${mem_table} ${user_clause} GROUP BY primary_sector`;
+
+            const sectcnt = await all_async<SectorCount>(sect_sql, p);
+
             const dayago = Date.now() - 24 * 60 * 60 * 1000;
-            const recmem = await all_async(
-                is_pg
-                    ? `SELECT COUNT(*) as count FROM ${mem_table} WHERE created_at > $1`
-                    : `SELECT COUNT(*) as count FROM ${mem_table} WHERE created_at > ?`,
-                [dayago],
+            const rec_clause = is_pg
+                ? (user_id ? "WHERE created_at > $1 AND user_id = $2" : "WHERE created_at > $1 AND user_id IS NULL")
+                : (user_id ? "WHERE created_at > ? AND user_id = ?" : "WHERE created_at > ? AND user_id IS NULL");
+            const rec_p = is_pg
+                ? (user_id ? [dayago, user_id] : [dayago])
+                : (user_id ? [dayago, user_id] : [dayago]);
+
+            const recmem = await all_async<DBCount>(
+                `SELECT COUNT(*) as count FROM ${mem_table} ${rec_clause}`,
+                rec_p,
             );
-            const avgsal = await all_async(
-                `SELECT AVG(salience) as avg FROM ${mem_table}`,
+
+            const avgsal = await all_async<AvgSalience>(
+                `SELECT AVG(salience) as avg FROM ${mem_table} ${user_clause}`,
+                p
             );
-            const decst = await all_async(`
+
+            const decst = await all_async<DecayStats>(`
                 SELECT
                     COUNT(*) as total,
                     AVG(decay_lambda) as avg_lambda,
                     MIN(salience) as min_salience,
                     MAX(salience) as max_salience
-                FROM ${mem_table}
-            `);
+                FROM ${mem_table} ${user_clause}
+            `, p);
             const upt = process.uptime();
 
             // Calculate QPS stats from database (last hour)
             const hour_ago = Date.now() - 60 * 60 * 1000;
             const sc = process.env.OM_PG_SCHEMA || "public";
-            const qps_data = await all_async(
+            const qps_data = await all_async<StatEntry>(
                 is_pg
                     ? `SELECT count, ts FROM "${sc}"."stats" WHERE type=$1 AND ts > $2 ORDER BY ts DESC`
                     : "SELECT count, ts FROM stats WHERE type=? AND ts > ? ORDER BY ts DESC",
                 ["qps", hour_ago],
             );
-            const err_data = await all_async(
+            const err_data = await all_async<StatTotal>(
                 is_pg
                     ? `SELECT COUNT(*) as total FROM "${sc}"."stats" WHERE type=$1 AND ts > $2`
                     : "SELECT COUNT(*) as total FROM stats WHERE type=? AND ts > ?",
@@ -140,18 +195,18 @@ export function dash(app: any) {
 
             const peak_qps =
                 qps_data.length > 0
-                    ? Math.max(...qps_data.map((d: any) => d.count))
+                    ? Math.max(...qps_data.map((d) => d.count))
                     : 0;
             const avg_qps =
                 reqz.qps_hist.length > 0
                     ? Math.round(
-                          (reqz.qps_hist.reduce((a, b) => a + b, 0) /
-                              reqz.qps_hist.length) *
-                              100,
-                      ) / 100
+                        (reqz.qps_hist.reduce((a, b) => a + b, 0) /
+                            reqz.qps_hist.length) *
+                        100,
+                    ) / 100
                     : 0;
             const total_reqs = qps_data.reduce(
-                (sum: number, d: any) => sum + d.count,
+                (sum, d) => sum + d.count,
                 0,
             );
             const total_errs = err_data[0]?.total || 0;
@@ -166,19 +221,19 @@ export function dash(app: any) {
             const cachit =
                 totmem[0]?.count > 0
                     ? Math.round(
-                          (totmem[0].count /
-                              (totmem[0].count + total_errs * 2)) *
-                              100,
-                      )
+                        (totmem[0].count /
+                            (totmem[0].count + total_errs * 2)) *
+                        100,
+                    )
                     : 0;
 
             res.json({
                 totalMemories: totmem[0]?.count || 0,
                 recentMemories: recmem[0]?.count || 0,
-                sectorCounts: sectcnt.reduce((acc: any, row: any) => {
+                sectorCounts: sectcnt.reduce((acc, row) => {
                     acc[row.primary_sector] = row.count;
                     return acc;
-                }, {}),
+                }, {} as Record<string, number>),
                 avgSalience: Number(avgsal[0]?.avg || 0).toFixed(3),
                 decayStats: {
                     total: decst[0]?.total || 0,
@@ -213,12 +268,11 @@ export function dash(app: any) {
                 },
             });
         } catch (e: any) {
-            console.error("[dash] stats err:", e);
-            res.status(500).json({ err: "internal", message: e.message });
+            sendError(res, e);
         }
     });
 
-    app.get("/dashboard/health", async (_req: any, res: any) => {
+    app.get("/dashboard/health", async (_req: AdvancedRequest, res: AdvancedResponse) => {
         try {
             const memusg = process.memoryUsage();
             const upt = process.uptime();
@@ -240,25 +294,44 @@ export function dash(app: any) {
                     platform: process.platform,
                 },
             });
-        } catch (e: any) {
-            res.status(500).json({ err: "internal", message: e.message });
+        } catch (e: unknown) {
+            sendError(res, e);
         }
     });
 
-    app.get("/dashboard/activity", async (req: any, res: any) => {
+    /**
+     * Get recent activity feed (memory updates/creations).
+     * @route GET /dashboard/activity
+     */
+    app.get("/dashboard/activity", async (req: AdvancedRequest, res: AdvancedResponse) => {
         try {
+            const validated = ActivityQuerySchema.safeParse(req.query);
+            if (!validated.success) {
+                return sendError(res, new AppError(400, "VALIDATION_ERROR", "Invalid query parameters", validated.error.format()));
+            }
+
+            const user_id = req.user?.id;
             const mem_table = get_mem_table();
-            const lim = parseInt(req.query.limit || "50");
-            const recmem = await all_async(
+            const { limit } = validated.data;
+
+            const clause = is_pg
+                ? (user_id ? "WHERE user_id = $2" : "WHERE user_id IS NULL")
+                : (user_id ? "WHERE user_id = ?" : "WHERE user_id IS NULL");
+
+            const p = is_pg
+                ? (user_id ? [limit, user_id] : [limit])
+                : (user_id ? [limit, user_id] : [limit]);
+
+            const recmem = await all_async<ActivityEntry>(
                 is_pg
                     ? `SELECT id, content, primary_sector, salience, created_at, updated_at, last_seen_at
-                       FROM ${mem_table} ORDER BY updated_at DESC LIMIT $1`
+                       FROM ${mem_table} ${clause} ORDER BY updated_at DESC LIMIT $1`
                     : `SELECT id, content, primary_sector, salience, created_at, updated_at, last_seen_at
-                       FROM ${mem_table} ORDER BY updated_at DESC LIMIT ?`,
-                [lim],
+                       FROM ${mem_table} ${clause} ORDER BY updated_at DESC LIMIT ?`,
+                p,
             );
             res.json({
-                activities: recmem.map((m: any) => ({
+                activities: recmem.map((m) => ({
                     id: m.id,
                     type: "memory_updated",
                     sector: m.primary_sector,
@@ -267,22 +340,31 @@ export function dash(app: any) {
                     timestamp: m.updated_at || m.created_at,
                 })),
             });
-        } catch (e: any) {
-            res.status(500).json({ err: "internal", message: e.message });
+        } catch (e: unknown) {
+            sendError(res, e);
         }
     });
 
-    app.get("/dashboard/sectors/timeline", async (req: any, res: any) => {
+    /**
+     * Get memory creation timeline grouped by hour/day.
+     * @route GET /dashboard/sectors/timeline
+     */
+    app.get("/dashboard/sectors/timeline", async (req: AdvancedRequest, res: AdvancedResponse) => {
         try {
+            const validated = TimelineQuerySchema.safeParse(req.query);
+            if (!validated.success) {
+                return sendError(res, new AppError(400, "VALIDATION_ERROR", "Invalid query parameters", validated.error.format()));
+            }
+
             const mem_table = get_mem_table();
-            const hrs = parseInt(req.query.hours || "24");
-            const strt = Date.now() - hrs * 60 * 60 * 1000;
+            const { hours } = validated.data;
+            const strt = Date.now() - hours * 60 * 60 * 1000;
 
             // Use different grouping based on time range
             let displayFormat: string;
             let sortFormat: string;
             let timeKey: string;
-            if (hrs <= 24) {
+            if (hours <= 24) {
                 // For 24 hours or less, group by date+hour for sorting, display only hour
                 displayFormat = is_pg
                     ? "to_char(to_timestamp(created_at/1000), 'HH24:00')"
@@ -291,7 +373,7 @@ export function dash(app: any) {
                     ? "to_char(to_timestamp(created_at/1000), 'YYYY-MM-DD HH24:00')"
                     : "strftime('%Y-%m-%d %H:00', datetime(created_at/1000, 'unixepoch', 'localtime'))";
                 timeKey = "hour";
-            } else if (hrs <= 168) {
+            } else if (hours <= 168) {
                 // For up to 7 days, group by day
                 displayFormat = is_pg
                     ? "to_char(to_timestamp(created_at/1000), 'MM-DD')"
@@ -311,37 +393,55 @@ export function dash(app: any) {
                 timeKey = "day";
             }
 
-            const tl = await all_async(
+            const tl = await all_async<TimelineEntry>(
                 is_pg
                     ? `SELECT primary_sector, ${displayFormat} as label, ${sortFormat} as sort_key, COUNT(*) as count
-                       FROM ${mem_table} WHERE created_at > $1 GROUP BY primary_sector, ${sortFormat} ORDER BY sort_key`
+                       FROM ${mem_table} WHERE created_at > $1 ${req.user?.id ? "AND user_id = $2" : "AND user_id IS NULL"} GROUP BY primary_sector, ${sortFormat} ORDER BY sort_key`
                     : `SELECT primary_sector, ${displayFormat} as label, ${sortFormat} as sort_key, COUNT(*) as count
-                       FROM ${mem_table} WHERE created_at > ? GROUP BY primary_sector, ${sortFormat} ORDER BY sort_key`,
-                [strt],
+                       FROM ${mem_table} WHERE created_at > ? ${req.user?.id ? "AND user_id = ?" : "AND user_id IS NULL"} GROUP BY primary_sector, ${sortFormat} ORDER BY sort_key`,
+                req.user?.id ? [strt, req.user.id] : [strt],
             );
             res.json({
-                timeline: tl.map((row: any) => ({ ...row, hour: row.label })),
+                timeline: tl.map((row) => ({ ...row, hour: row.label })),
                 grouping: timeKey,
             });
-        } catch (e: any) {
-            res.status(500).json({ err: "internal", message: e.message });
+        } catch (e: unknown) {
+            sendError(res, e);
         }
     });
 
-    app.get("/dashboard/top-memories", async (req: any, res: any) => {
+    /**
+     * Get memories with highest salience scores.
+     * @route GET /dashboard/top-memories
+     */
+    app.get("/dashboard/top-memories", async (req: AdvancedRequest, res: AdvancedResponse) => {
         try {
+            const validated = TopMemoriesQuerySchema.safeParse(req.query);
+            if (!validated.success) {
+                return sendError(res, new AppError(400, "VALIDATION_ERROR", "Invalid query parameters", validated.error.format()));
+            }
+
+            const user_id = req.user?.id;
             const mem_table = get_mem_table();
-            const lim = parseInt(req.query.limit || "10");
-            const topm = await all_async(
+            const { limit } = validated.data;
+
+            const clause = is_pg
+                ? (user_id ? "WHERE user_id = $2" : "WHERE user_id IS NULL")
+                : (user_id ? "WHERE user_id = ?" : "WHERE user_id IS NULL");
+            const p = is_pg
+                ? (user_id ? [limit, user_id] : [limit])
+                : (user_id ? [limit, user_id] : [limit]);
+
+            const topm = await all_async<TopMem>(
                 is_pg
                     ? `SELECT id, content, primary_sector, salience, last_seen_at
-                       FROM ${mem_table} ORDER BY salience DESC LIMIT $1`
+                       FROM ${mem_table} ${clause} ORDER BY salience DESC LIMIT $1`
                     : `SELECT id, content, primary_sector, salience, last_seen_at
-                       FROM ${mem_table} ORDER BY salience DESC LIMIT ?`,
-                [lim],
+                       FROM ${mem_table} ${clause} ORDER BY salience DESC LIMIT ?`,
+                p,
             );
             res.json({
-                memories: topm.map((m: any) => ({
+                memories: topm.map((m) => ({
                     id: m.id,
                     content: m.content,
                     sector: m.primary_sector,
@@ -349,18 +449,27 @@ export function dash(app: any) {
                     lastSeen: m.last_seen_at,
                 })),
             });
-        } catch (e: any) {
-            res.status(500).json({ err: "internal", message: e.message });
+        } catch (e: unknown) {
+            sendError(res, e);
         }
     });
 
-    app.get("/dashboard/maintenance", async (req: any, res: any) => {
+    /**
+     * Get maintenance operation stats (decay, reflection, consolidation).
+     * @route GET /dashboard/maintenance
+     */
+    app.get("/dashboard/maintenance", async (req: AdvancedRequest, res: AdvancedResponse) => {
         try {
-            const hrs = parseInt(req.query.hours || "24");
-            const strt = Date.now() - hrs * 60 * 60 * 1000;
+            const validated = MaintenanceQuerySchema.safeParse(req.query);
+            if (!validated.success) {
+                return sendError(res, new AppError(400, "VALIDATION_ERROR", "Invalid query parameters", validated.error.format()));
+            }
+
+            const { hours } = validated.data;
+            const strt = Date.now() - hours * 60 * 60 * 1000;
             const sc = process.env.OM_PG_SCHEMA || "public";
 
-            const ops = await all_async(
+            const ops = await all_async<MaintOp>(
                 is_pg
                     ? `SELECT type, to_char(to_timestamp(ts/1000), 'HH24:00') as hour, SUM(count) as cnt
                        FROM "${sc}"."stats" WHERE ts > $1 GROUP BY type, hour ORDER BY hour`
@@ -369,14 +478,14 @@ export function dash(app: any) {
                 [strt],
             );
 
-            const totals = await all_async(
+            const totals = await all_async<MaintTotal>(
                 is_pg
                     ? `SELECT type, SUM(count) as total FROM "${sc}"."stats" WHERE ts > $1 GROUP BY type`
                     : `SELECT type, SUM(count) as total FROM stats WHERE ts > ? GROUP BY type`,
                 [strt],
             );
 
-            const by_hr: Record<string, any> = {};
+            const by_hr: Record<string, MaintenanceStats> = {};
             for (const op of ops) {
                 if (!by_hr[op.hour])
                     by_hr[op.hour] = {
@@ -393,11 +502,11 @@ export function dash(app: any) {
             }
 
             const tot_decay =
-                totals.find((t: any) => t.type === "decay")?.total || 0;
+                totals.find((t) => t.type === "decay")?.total || 0;
             const tot_reflect =
-                totals.find((t: any) => t.type === "reflect")?.total || 0;
+                totals.find((t) => t.type === "reflect")?.total || 0;
             const tot_consol =
-                totals.find((t: any) => t.type === "consolidate")?.total || 0;
+                totals.find((t) => t.type === "consolidate")?.total || 0;
             const tot_ops = tot_decay + tot_reflect + tot_consol;
             const efficiency =
                 tot_ops > 0
@@ -413,8 +522,8 @@ export function dash(app: any) {
                     efficiency,
                 },
             });
-        } catch (e: any) {
-            res.status(500).json({ err: "internal", message: e.message });
+        } catch (e: unknown) {
+            sendError(res, e);
         }
     });
 }

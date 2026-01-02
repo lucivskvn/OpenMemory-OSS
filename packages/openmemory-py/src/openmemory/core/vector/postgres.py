@@ -41,7 +41,7 @@ class PostgresVectorStore(VectorStore):
         # pgvector expects a list of floats, asyncpg handles it if registered or passed as array string? 
         # Actually asyncpg needs manual casting or use of pgvector-python type if registered.
         # Simplest way: pass as string list format '[1.1,2.2,...]'
-        vec_str = str(vector)
+        vec_str = json.dumps(vector) # use json.dumps for standard formatting
         
         sql = f"""
             INSERT INTO {self.table} (id, sector, user_id, v, dim)
@@ -54,11 +54,16 @@ class PostgresVectorStore(VectorStore):
         async with pool.acquire() as conn:
             await conn.execute(sql, id, sector, user_id, vec_str, dim)
 
-    async def getVectorsById(self, id: str) -> List[VectorRow]:
+    async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]:
         pool = await self._get_pool()
         sql = f"SELECT id, sector, v::text as v_txt, dim FROM {self.table} WHERE id=$1"
+        args = [id]
+        if user_id:
+            sql += " AND user_id=$2"
+            args.append(user_id)
+            
         async with pool.acquire() as conn:
-            rows = await conn.fetch(sql, id)
+            rows = await conn.fetch(sql, *args)
         
         res = []
         for r in rows:
@@ -67,11 +72,16 @@ class PostgresVectorStore(VectorStore):
             res.append(VectorRow(r["id"], r["sector"], vec, r["dim"]))
         return res
 
-    async def getVector(self, id: str, sector: str) -> Optional[VectorRow]:
+    async def getVector(self, id: str, sector: str, user_id: Optional[str] = None) -> Optional[VectorRow]:
         pool = await self._get_pool()
         sql = f"SELECT id, sector, v::text as v_txt, dim FROM {self.table} WHERE id=$1 AND sector=$2"
+        args = [id, sector]
+        if user_id:
+            sql += " AND user_id=$3"
+            args.append(user_id)
+            
         async with pool.acquire() as conn:
-            r = await conn.fetchrow(sql, id, sector)
+            r = await conn.fetchrow(sql, *args)
         
         if not r: return None
         vec = json.loads(r["v_txt"])
@@ -107,4 +117,9 @@ class PostgresVectorStore(VectorStore):
         async with pool.acquire() as conn:
             rows = await conn.fetch(sql, *args)
             
-        return [{"id": r["id"], "similarity": float(r["similarity"])} for r in rows]
+        return [{"id": r["id"], "score": float(r["similarity"])} for r in rows]
+
+    async def disconnect(self):
+        if self.pool:
+            await self.pool.close()
+            self.pool = None

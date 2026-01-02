@@ -6,33 +6,34 @@ import struct
 from .db import db, DB
 from .types import MemRow
 import logging
+from dataclasses import dataclass
 
 # Ported from backend/src/core/vector_store.ts (implied) and db.ts logic
 
 logger = logging.getLogger("vector_store")
 
+@dataclass
 class VectorRow:
-    def __init__(self, id: str, sector: str, vector: List[float], dim: int):
-        self.id = id
-        self.sector = sector
-        self.vector = vector
-        self.dim = dim
+    id: str
+    sector: str
+    vector: List[float]
+    dim: int
 
 class VectorStore(ABC):
     @abstractmethod
     async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None): pass
     
     @abstractmethod
-    async def getVectorsById(self, id: str) -> List[VectorRow]: pass
+    async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]: pass
     
     @abstractmethod
-    async def getVector(self, id: str, sector: str) -> Optional[VectorRow]: pass
+    async def getVector(self, id: str, sector: str, user_id: Optional[str] = None) -> Optional[VectorRow]: pass
     
     @abstractmethod
     async def deleteVectors(self, id: str): pass
     
     @abstractmethod
-    async def search(self, vector: List[float], sector: str, k: int, filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]: pass
+    async def disconnect(self): pass
 
 class SQLiteVectorStore(VectorStore):
     def __init__(self, table_name: str = "vectors"):
@@ -42,12 +43,16 @@ class SQLiteVectorStore(VectorStore):
         # sqlite blob
         blob = struct.pack(f"{len(vector)}f", *vector)
         sql = f"INSERT OR REPLACE INTO {self.table}(id, sector, user_id, v, dim) VALUES (?, ?, ?, ?, ?)"
-        db.conn.execute(sql, (id, sector, user_id, blob, dim))
-        db.commit()
+        await db.async_execute(sql, (id, sector, user_id, blob, dim))
         
-    async def getVectorsById(self, id: str) -> List[VectorRow]:
+    async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]:
         sql = f"SELECT * FROM {self.table} WHERE id=?"
-        rows = db.conn.execute(sql, (id,)).fetchall()
+        params = [id]
+        if user_id:
+            sql += " AND user_id=?"
+            params.append(user_id)
+            
+        rows = await db.async_fetchall(sql, tuple(params))
         res = []
         for r in rows:
             cnt = len(r["v"]) // 4
@@ -55,31 +60,26 @@ class SQLiteVectorStore(VectorStore):
             res.append(VectorRow(r["id"], r["sector"], vec, r["dim"]))
         return res
 
-    async def getVector(self, id: str, sector: str) -> Optional[VectorRow]:
+    async def getVector(self, id: str, sector: str, user_id: Optional[str] = None) -> Optional[VectorRow]:
         sql = f"SELECT * FROM {self.table} WHERE id=? AND sector=?"
-        r = db.conn.execute(sql, (id, sector)).fetchone()
+        params = [id, sector]
+        if user_id:
+            sql += " AND user_id=?"
+            params.append(user_id)
+            
+        r = await db.async_fetchone(sql, tuple(params))
         if not r: return None
         cnt = len(r["v"]) // 4
         vec = list(struct.unpack(f"{cnt}f", r["v"]))
         return VectorRow(r["id"], r["sector"], vec, r["dim"])
     
     async def deleteVectors(self, id: str):
-        db.conn.execute(f"DELETE FROM {self.table} WHERE id=?", (id,))
-        db.commit()
+        await db.async_execute(f"DELETE FROM {self.table} WHERE id=?", (id,))
         
     async def search(self, vector: List[float], sector: str, k: int, filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        # Brute force cosine sim for SQLite (parity with naive local impl)
-        # Optimized approaches exist (sqlite-vss) but user wants 1:1 of backend logic which might rely on PG/extension or naive loop for fallback.
-        # The backend db.ts for sqlite doesn't show vector search logic inside db.ts, it uses `vector_store`. 
-        # `PostgresVectorStore` uses pgvector. 
-        # `SQLiteVectorStore` (implied fallback in backend) likely does naive scan or user didn't implement it fully in backend?
-        # Wait, backend line 547: `new PostgresVectorStore(...)` even for SQLite?? 
-        # Line 533: "SQLite fallback uses PostgresVectorStore logic but with SQLite db ops".
-        # This implies the SQL is compatible. BUT standard SQLite lacks `<=>` operator for cosine sim.
-        # Unless they loaded an extension.
-        # Given "Python Port", I will implement a Python-side brute force or `numpy` scan for SQLite to ensure it works without extensions.
-        # This is strictly better/safer than assuming extension.
-        
+        # Optimized numpy implementation
+        import numpy as np
+
         # 1. Fetch all vectors for sector (filtered by user if needed)
         filter_sql = ""
         params = [sector]
@@ -88,25 +88,54 @@ class SQLiteVectorStore(VectorStore):
             params.append(filter["user_id"])
             
         sql = f"SELECT id, v FROM {self.table} WHERE sector=? {filter_sql}"
-        rows = db.conn.execute(sql, tuple(params)).fetchall()
+        rows = await db.async_fetchall(sql, tuple(params))
         
-        # 2. Compute similarity
-        results = []
-        import numpy as np
-        query_vec = np.array(vector, dtype=np.float32)
-        q_norm = np.linalg.norm(query_vec)
+        if not rows:
+            return []
+
+        # 2. Build Matrices
+        # Query Matrix: (1, Dim)
+        # Target Matrix: (N, Dim) -> but we stack them
+        ids = []
+        vectors = []
         
         for r in rows:
+            ids.append(r["id"])
             cnt = len(r["v"]) // 4
-            v = np.array(struct.unpack(f"{cnt}f", r["v"]), dtype=np.float32)
-            dot = np.dot(query_vec, v)
-            norm = np.linalg.norm(v)
-            sim = dot / (q_norm * norm) if (q_norm * norm) > 0 else 0
-            results.append({"id": r["id"], "similarity": float(sim)})
+            v = struct.unpack(f"{cnt}f", r["v"])
+            vectors.append(v)
             
-        # 3. Sort and limit
-        results.sort(key=lambda x: x["similarity"], reverse=True)
+        if not vectors:
+            return []
+            
+        target_matrix = np.array(vectors, dtype=np.float32) # (N, Dim)
+        query_vec = np.array(vector, dtype=np.float32) # (Dim,)
+        
+        # 3. Norms
+        q_norm = np.linalg.norm(query_vec)
+        t_norms = np.linalg.norm(target_matrix, axis=1) # (N,)
+        
+        # 4. Dot Product
+        # (N, Dim) dot (Dim,) -> (N,)
+        dots = np.dot(target_matrix, query_vec)
+        
+        # 5. Cosine Similarity
+        # Avoid division by zero
+        denominators = q_norm * t_norms
+        similarities = np.divide(dots, denominators, out=np.zeros_like(dots), where=denominators > 1e-9)
+        
+        # 6. Format Results
+        results = []
+        for i, score in enumerate(similarities):
+            results.append({"id": ids[i], "score": float(score)})
+            
+        # 7. Sort and limit
+        results.sort(key=lambda x: x["score"], reverse=True)
         return results[:k]
+
+    async def disconnect(self):
+        # No-op for SQLite (shared connection managed by db module)
+        pass
 
 
 # Global store instance factory

@@ -1,5 +1,5 @@
 import { env } from "../../core/cfg";
-import crypto from "crypto";
+import { timingSafeEqual } from "node:crypto";
 
 const rate_limit_store = new Map<
     string,
@@ -39,7 +39,7 @@ function extract_api_key(req: any): string | null {
 function validate_api_key(provided: string, expected: string): boolean {
     if (!provided || !expected || provided.length !== expected.length)
         return false;
-    return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+    return timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
 }
 
 function check_rate_limit(client_id: string): {
@@ -73,55 +73,64 @@ function check_rate_limit(client_id: string): {
     };
 }
 
-function get_client_id(req: any, api_key: string | null): string {
-    if (api_key)
-        return crypto
-            .createHash("sha256")
-            .update(api_key)
-            .digest("hex")
-            .slice(0, 16);
+async function get_client_id(req: any, api_key: string | null): Promise<string> {
+    if (api_key) {
+        const hash = await crypto.subtle.digest("SHA-256", Buffer.from(api_key));
+        return Buffer.from(hash).toString("hex").slice(0, 16);
+    }
     return req.ip || req.connection.remoteAddress || "unknown";
 }
 
-export function authenticate_api_request(req: any, res: any, next: any) {
-    const path = req.path || req.url;
-    if (is_public_endpoint(path)) return next();
-    if (!auth_config.api_key || auth_config.api_key === "") {
-        console.warn("[AUTH] No API key configured");
-        return next();
-    }
-    const provided = extract_api_key(req);
-    if (!provided)
-        return res
-            .status(401)
-            .json({
-                error: "authentication_required",
-                message: "API key required",
+export async function authenticate_api_request(req: any, res: any, next: any) {
+    try {
+        const path = req.path || req.url;
+        if (is_public_endpoint(path)) return next();
+        if (!auth_config.api_key || auth_config.api_key === "") {
+            return next();
+        }
+        const provided = extract_api_key(req);
+        if (!provided)
+            return res
+                .status(401)
+                .json({
+                    error: "authentication_required",
+                    message: "This server requires an API key for access. Please provide it in the 'x-api-key' header or as a Bearer token.",
+                });
+        if (!validate_api_key(provided, auth_config.api_key))
+            return res.status(403).json({ error: "invalid_api_key", message: "The provided API key is incorrect." });
+        const client_id = await get_client_id(req, provided);
+        req.user = { id: client_id };
+
+        const rl = check_rate_limit(client_id);
+        if (auth_config.rate_limit_enabled) {
+            res.setHeader("X-RateLimit-Limit", auth_config.rate_limit_max_requests);
+            res.setHeader("X-RateLimit-Remaining", rl.remaining);
+            res.setHeader("X-RateLimit-Reset", Math.floor(rl.reset_time / 1000));
+        }
+        if (!rl.allowed)
+            return res.status(429).json({
+                error: "rate_limit_exceeded",
+                retry_after: Math.ceil((rl.reset_time - Date.now()) / 1000),
             });
-    if (!validate_api_key(provided, auth_config.api_key))
-        return res.status(403).json({ error: "invalid_api_key" });
-    const client_id = get_client_id(req, provided);
-    const rl = check_rate_limit(client_id);
-    if (auth_config.rate_limit_enabled) {
-        res.setHeader("X-RateLimit-Limit", auth_config.rate_limit_max_requests);
-        res.setHeader("X-RateLimit-Remaining", rl.remaining);
-        res.setHeader("X-RateLimit-Reset", Math.floor(rl.reset_time / 1000));
+        next();
+    } catch (e) {
+        next(e);
     }
-    if (!rl.allowed)
-        return res.status(429).json({
-            error: "rate_limit_exceeded",
-            retry_after: Math.ceil((rl.reset_time - Date.now()) / 1000),
-        });
-    next();
 }
 
-export function log_authenticated_request(req: any, res: any, next: any) {
-    const key = extract_api_key(req);
-    if (key)
-        console.log(
-            `[AUTH] ${req.method} ${req.path} [${crypto.createHash("sha256").update(key).digest("hex").slice(0, 8)}...]`,
-        );
-    next();
+export async function log_authenticated_request(req: any, res: any, next: any) {
+    try {
+        const key = extract_api_key(req);
+        if (key) {
+            const hash = await crypto.subtle.digest("SHA-256", Buffer.from(key));
+            const hex = Buffer.from(hash).toString("hex").slice(0, 8);
+            console.log(`[AUTH] ${req.method} ${req.path} [${hex}...]`);
+        }
+        next();
+    } catch (e) {
+        console.error("[AUTH] Logging failed:", e);
+        next();
+    }
 }
 
 setInterval(

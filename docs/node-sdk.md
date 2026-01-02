@@ -47,6 +47,26 @@ console.log(results[0].content);
 // "User likes spicy food"
 ```
 
+#### `mem.get(id)`
+
+Retrieve a memory by its unique ID. Returns a `Memory` object or `undefined`.
+
+#### `mem.delete(id)`
+
+Permanently deletes a memory by its ID.
+
+#### `mem.list(limit?, offset?)`
+
+List all memories for the current user (if `user_id` was set in constructor) or all memories in the system.
+
+#### `mem.list_users()`
+
+Returns an array of all unique user IDs present in the memory store.
+
+#### `mem.delete_all(user_id?)`
+
+Deletes ALL memories for a specific user. Use with caution.
+
 ## Server Mode
 
 The Node package also contains the API server.

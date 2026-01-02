@@ -1,14 +1,14 @@
-import { createHash } from "crypto";
+
 
 export interface CompressionMetrics {
-    ogTok: number;
-    compTok: number;
+    originalTokens: number;
+    compressedTokens: number;
     ratio: number;
     saved: number;
     pct: number;
     latency: number;
-    algo: string;
-    ts: number;
+    algorithm: string;
+    timestamp: number;
 }
 
 export interface CompressionResult {
@@ -20,24 +20,24 @@ export interface CompressionResult {
 
 export interface CompressionStats {
     total: number;
-    ogTok: number;
-    compTok: number;
+    originalTokens: number;
+    compressedTokens: number;
     saved: number;
     avgRatio: number;
     latency: number;
-    algos: Record<string, number>;
+    algorithms: Record<string, number>;
     updated: number;
 }
 
 class MemoryCompressionEngine {
     private stats: CompressionStats = {
         total: 0,
-        ogTok: 0,
-        compTok: 0,
+        originalTokens: 0,
+        compressedTokens: 0,
         saved: 0,
         avgRatio: 0,
         latency: 0,
-        algos: {},
+        algorithms: {},
         updated: Date.now(),
     };
 
@@ -45,11 +45,14 @@ class MemoryCompressionEngine {
     private readonly MAX = 500;
     private readonly MS = 0.05;
 
-    private tok(t: string): number {
-        if (!t) return 0;
-        const w = t.split(/\s+/).length;
-        const c = t.length;
-        return Math.ceil(c / 4 + w / 2);
+    /**
+     * Estimates the number of tokens in a string.
+     */
+    private countTokens(text: string): number {
+        if (!text) return 0;
+        const words = text.split(/\s+/).length;
+        const chars = text.length;
+        return Math.ceil(chars / 4 + words / 2);
     }
 
     private sem(t: string): string {
@@ -142,65 +145,68 @@ class MemoryCompressionEngine {
         return c.trim();
     }
 
+    /**
+     * Compresses a text string using the specified algorithm.
+     */
     compress(
-        t: string,
-        a: "semantic" | "syntactic" | "aggressive" = "semantic",
+        text: string,
+        algorithm: "semantic" | "syntactic" | "aggressive" = "semantic",
     ): CompressionResult {
-        if (!t) {
+        if (!text) {
             return {
-                og: t,
-                comp: t,
-                metrics: this.empty(a),
-                hash: this.hash(t),
+                og: text,
+                comp: text,
+                metrics: this.empty(algorithm),
+                hash: this.hash(text),
             };
         }
 
-        const k = `${a}:${this.hash(t)}`;
-        if (this.cache.has(k)) return this.cache.get(k)!;
+        const cacheKey = `${algorithm}:${this.hash(text)}`;
+        if (this.cache.has(cacheKey)) return this.cache.get(cacheKey)!;
 
-        const ot = this.tok(t);
-        let c: string;
+        const originalTokenCount = this.countTokens(text);
+        let compressedText: string;
 
-        switch (a) {
+        switch (algorithm) {
             case "semantic":
-                c = this.sem(t);
+                compressedText = this.sem(text);
                 break;
             case "syntactic":
-                c = this.syn(t);
+                compressedText = this.syn(text);
                 break;
             case "aggressive":
-                c = this.agg(t);
+                compressedText = this.agg(text);
                 break;
             default:
-                c = t;
+                compressedText = text;
         }
 
-        const ct = this.tok(c);
-        const sv = ot - ct;
-        const r = ct / ot;
-        const p = (sv / ot) * 100;
-        const l = sv * this.MS;
+        const compressedTokenCount = this.countTokens(compressedText);
+        const tokensSaved = originalTokenCount - compressedTokenCount;
+        const compressionRatio = compressedTokenCount / originalTokenCount;
+        const savingsPercentage = (tokensSaved / originalTokenCount) * 100;
+        const estimatedLatency = tokensSaved * this.MS;
 
-        const m: CompressionMetrics = {
-            ogTok: ot,
-            compTok: ct,
-            ratio: r,
-            saved: sv,
-            pct: p,
-            latency: l,
-            algo: a,
-            ts: Date.now(),
+        const metrics: CompressionMetrics = {
+            originalTokens: originalTokenCount,
+            compressedTokens: compressedTokenCount,
+            ratio: compressionRatio,
+            saved: tokensSaved,
+            pct: savingsPercentage,
+            latency: estimatedLatency,
+            algorithm: algorithm,
+            timestamp: Date.now(),
         };
 
-        const res: CompressionResult = {
-            og: t,
-            comp: c,
-            metrics: m,
-            hash: this.hash(t),
+        const result: CompressionResult = {
+            og: text,
+            comp: compressedText,
+            metrics: metrics,
+            hash: this.hash(text),
         };
-        this.up(m);
-        this.store(k, res);
-        return res;
+        this.updateStats(metrics);
+        this.store(cacheKey, result);
+        return result;
     }
 
     batch(
@@ -239,12 +245,12 @@ class MemoryCompressionEngine {
     reset(): void {
         this.stats = {
             total: 0,
-            ogTok: 0,
-            compTok: 0,
+            originalTokens: 0,
+            compressedTokens: 0,
             saved: 0,
             avgRatio: 0,
             latency: 0,
-            algos: {},
+            algorithms: {},
             updated: Date.now(),
         };
     }
@@ -253,33 +259,32 @@ class MemoryCompressionEngine {
         this.cache.clear();
     }
 
-    private empty(a: string): CompressionMetrics {
+    private empty(algorithm: string): CompressionMetrics {
         return {
-            ogTok: 0,
-            compTok: 0,
+            originalTokens: 0,
+            compressedTokens: 0,
             ratio: 1,
             saved: 0,
             pct: 0,
             latency: 0,
-            algo: a,
-            ts: Date.now(),
+            algorithm: algorithm,
+            timestamp: Date.now(),
         };
     }
 
     private hash(t: string): string {
-        return createHash("md5").update(t).digest("hex").substring(0, 16);
+        return Bun.hash(t).toString();
     }
 
-    private up(m: CompressionMetrics): void {
+    private updateStats(metrics: CompressionMetrics): void {
         this.stats.total++;
-        this.stats.ogTok += m.ogTok;
-        this.stats.compTok += m.compTok;
-        this.stats.saved += m.saved;
-        this.stats.latency += m.latency;
-        if (this.stats.ogTok > 0)
-            this.stats.avgRatio = this.stats.compTok / this.stats.ogTok;
-        if (!this.stats.algos[m.algo]) this.stats.algos[m.algo] = 0;
-        this.stats.algos[m.algo]++;
+        this.stats.originalTokens += metrics.originalTokens;
+        this.stats.compressedTokens += metrics.compressedTokens;
+        this.stats.saved += metrics.saved;
+        this.stats.latency += metrics.latency;
+        this.stats.avgRatio = this.stats.compressedTokens / this.stats.originalTokens;
+        this.stats.algorithms[metrics.algorithm] =
+            (this.stats.algorithms[metrics.algorithm] || 0) + 1;
         this.stats.updated = Date.now();
     }
 

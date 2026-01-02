@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 
 const fs = require('fs');
 const path = require('path');
@@ -243,17 +243,17 @@ for (let i = 1; i < argv.length; i++) {
       case 'mcp':
         // Start MCP server (requires build)
         try {
-            const mcp = require('../dist/ai/mcp.js');
-            if (mcp && mcp.start_mcp_stdio) {
-                await mcp.start_mcp_stdio();
-            } else {
-                console.error('[error] mcp module missing start_mcp_stdio export');
-                process.exit(1);
-            }
-        } catch (e) {
-            console.error('[error] failed to start mcp server. ensure project is built (npm run build).');
-            console.error(e.message);
+          const mcp = require('../dist/ai/mcp.js');
+          if (mcp && mcp.start_mcp_stdio) {
+            await mcp.start_mcp_stdio();
+          } else {
+            console.error('[error] mcp module missing start_mcp_stdio export');
             process.exit(1);
+          }
+        } catch (e) {
+          console.error('[error] failed to start mcp server. ensure project is built (npm run build).');
+          console.error(e.message);
+          process.exit(1);
         }
         break;
       default:

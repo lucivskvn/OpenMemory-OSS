@@ -1,18 +1,20 @@
 import path from "path";
-import dotenv from "dotenv";
 
-dotenv.config({ path: path.resolve(__dirname, "../../../.env") });
-const num = (v: string | undefined, d: number) => Number(v) || d;
-const str = (v: string | undefined, d: string) => v || d;
-const bool = (v: string | undefined) => v === "true";
+// Bun natively loads .env files - no dotenv needed
+const num = (v: string | undefined, d: number): number => {
+    if (v === undefined || v === "") return d;
+    const n = Number(v);
+    return isNaN(n) ? d : n;
+};
+const str = (v: string | undefined, d: string): string => (v === undefined || v === "" ? d : v);
+const bool = (v: string | undefined): boolean => v?.toLowerCase() === "true" || v === "1";
 type tier = "fast" | "smart" | "deep" | "hybrid";
 
 const get_tier = (): tier => {
-    const man = process.env.OM_TIER as tier;
-    if (man && ["fast", "smart", "deep", "hybrid"].includes(man)) return man;
-    console.warn(
-        "[OpenMemory] OM_TIER not set! Please set OM_TIER=hybrid|fast|smart|deep in .env",
-    );
+    const man = process.env.OM_TIER;
+    if (man && ["fast", "smart", "deep", "hybrid"].includes(man)) return man as tier;
+    if (man) console.warn(`[OpenMemory] Invalid OM_TIER "${man}". Defaulting to "hybrid".`);
+    else console.warn("[OpenMemory] OM_TIER not set! Please set OM_TIER=hybrid|fast|smart|deep in .env");
     return "hybrid";
 };
 export const tier = get_tier();
@@ -54,6 +56,7 @@ export const env = {
     openai_model: process.env.OM_OPENAI_MODEL,
     gemini_key:
         process.env.GEMINI_API_KEY || process.env.OM_GEMINI_API_KEY || "",
+    gemini_model: process.env.OM_GEMINI_MODEL,
     AWS_REGION: process.env.AWS_REGION || "",
     AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID || "",
     AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY || "",
@@ -107,4 +110,11 @@ export const env = {
     summary_layers: num(process.env.OM_SUMMARY_LAYERS, 3),
     keyword_boost: num(process.env.OM_KEYWORD_BOOST, 2.5),
     keyword_min_length: num(process.env.OM_KEYWORD_MIN_LENGTH, 3),
+    verbose: bool(process.env.OM_VERBOSE),
+    classifier_train_interval: num(process.env.OM_CLASSIFIER_TRAIN_INTERVAL, 360), // Default 6 hours
+    telemetry_enabled: (process.env.OM_TELEMETRY ?? "true") !== "false",
+    ollama_model: process.env.OM_OLLAMA_MODEL,
+    encryption_enabled: (process.env.OM_ENCRYPTION_ENABLED ?? "false") === "true",
+    encryption_key: process.env.OM_ENCRYPTION_KEY,
+    tier: tier,
 };

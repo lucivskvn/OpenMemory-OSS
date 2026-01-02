@@ -24,3 +24,7 @@ test
 *.db
 hits.json
 debug_*.log
+final_test_output.txt
+omnibus_debug.txt
+tsc_final.txt
+tsc_real.txt

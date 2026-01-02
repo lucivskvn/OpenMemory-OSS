@@ -241,9 +241,9 @@ export const apply_decay = async () => {
     for (const seg of segments) {
         const segment = seg.segment;
         const rows = await all_async(
-            "select id,content,summary,salience,decay_lambda,last_seen_at,updated_at,primary_sector,coactivations from memories where segment=?",
+            `select id,content,summary,salience,decay_lambda,last_seen_at,updated_at,primary_sector,coactivations,user_id from memories where segment=?`,
             [segment],
-        );
+        ) as any[];
 
         const decay_ratio = env.decay_ratio;
         const batch_sz = Math.max(1, Math.floor(rows.length * decay_ratio));
@@ -322,10 +322,7 @@ export const apply_decay = async () => {
                                 }
 
                                 if (new_summary !== (m.summary || "")) {
-                                    await run_async(
-                                        "update memories set summary=? where id=?",
-                                        [new_summary, m.id],
-                                    );
+                                    await q.upd_summary.run(m.id, new_summary, m.user_id);
                                 }
                             }
                         }
@@ -340,20 +337,21 @@ export const apply_decay = async () => {
                             sector,
                             fp.vector,
                             fp.vector.length,
+                            m.user_id,
                         );
-                        await run_async(
-                            "update memories set summary=? where id=?",
-                            [fp.summary, m.id],
-                        );
+                        await q.upd_summary.run(m.id, fp.summary, m.user_id);
                         fingerprinted = true;
                         tot_fp++;
                         changed = true;
                     }
 
                     if (changed) {
-                        await run_async(
-                            `update ${memories_table} set salience=?,updated_at=? where id=?`,
-                            [new_sal, now(), m.id],
+                        await q.upd_seen.run(
+                            m.id,
+                            m.last_seen_at || now_ts,
+                            new_sal,
+                            now_ts,
+                            m.user_id,
                         );
                         tot_chg++;
                     }
@@ -379,11 +377,12 @@ export const apply_decay = async () => {
 export const on_query_hit = async (
     mem_id: string,
     sector: string,
+    user_id?: string,
     reembed?: (text: string) => Promise<number[]>,
 ) => {
     if (!cfg.regeneration_enabled && !cfg.reinforce_on_query) return;
 
-    const m = await q.get_mem.get(mem_id);
+    const m = await q.get_mem.get(mem_id, user_id);
     if (!m) return;
 
     let updated = false;
@@ -397,7 +396,7 @@ export const on_query_hit = async (
                     : vec_row.vector;
             if (Array.isArray(vec) && vec.length <= 64) {
                 try {
-                    const base = m.summary || m.content || "";
+                    const base = m.content || "";
                     const new_vec = await reembed(base);
                     await vector_store.storeVector(
                         mem_id,
@@ -413,14 +412,17 @@ export const on_query_hit = async (
 
     if (cfg.reinforce_on_query) {
         const new_sal = clamp_f((m.salience || 0.5) + 0.5, 0, 1);
-        await run_async(
-            `update ${memories_table} set salience=?,last_seen_at=? where id=?`,
-            [new_sal, now(), mem_id],
+        await q.upd_seen.run(
+            mem_id,
+            Date.now(),
+            new_sal,
+            Date.now(),
+            m.user_id,
         );
         updated = true;
     }
 
-    if (updated) {
+    if (updated && env.verbose) {
         // Use stderr for debug output to avoid breaking MCP JSON-RPC protocol
         console.error(`[decay-2.0] regenerated/reinforced memory ${mem_id}`);
     }

@@ -1,11 +1,14 @@
 """
 github connector for openmemory
-requires: PyGithub or httpx
+requires: PyGithub
 env vars: GITHUB_TOKEN
 """
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 import os
-from .base import base_connector
+import logging
+from .base import base_connector, SourceItem, SourceContent, SourceAuthError
+
+logger = logging.getLogger("openmemory.connectors.github")
 
 class github_connector(base_connector):
     """connector for github repositories"""
@@ -17,18 +20,10 @@ class github_connector(base_connector):
         self.github = None
         self.token = None
     
-    async def connect(self, **creds) -> bool:
-        """
-        authenticate with github api
-        
-        env vars:
-            GITHUB_TOKEN: personal access token
-        
-        or pass:
-            token: github pat
-        """
+    async def _connect(self, **creds) -> bool:
+        """authenticate with github api"""
         try:
-            from github import Github
+            from github import Github, Auth
         except ImportError:
             raise ImportError("pip install PyGithub")
         
@@ -37,144 +32,195 @@ class github_connector(base_connector):
         if not self.token:
             raise ValueError("no github token provided")
         
-        self.github = Github(self.token)
-        self._connected = True
+        # Verify synchronously in thread to avoid block
+        def _verify():
+            g = Github(auth=Auth.Token(self.token))
+            # Just accessing a property to check connection
+            _ = g.get_user().login
+            return g
+            
+        self.github = await self._run_blocking(_verify)
         return True
     
-    async def list_items(self, repo: str = None, path: str = "/", include_issues: bool = False, **filters) -> List[Dict]:
+    async def _list_items(self, **filters) -> List[SourceItem]:
         """
-        list files and optionally issues from a repo
+        List files and optionally issues from a repository.
         
-        args:
-            repo: repository in "owner/repo" format
-            path: path within repo to list
-            include_issues: whether to include issues
+        Args:
+            filters: 
+                repo: Repository name (owner/repo).
+                path: Root path to list (default: "/").
+                recursive: Whether to list files recursively (default: False).
+                include_issues: Whether to include issues (default: False).
+                max_issues: Maximum issues to fetch (default: 50).
+                
+        Returns:
+            List of SourceItem objects.
         """
-        if not self._connected:
-            await self.connect()
+        repo_name = filters.get("repo")
+        path = filters.get("path", "/")
+        recursive = filters.get("recursive", False)
+        include_issues = filters.get("include_issues", False)
+        max_issues = filters.get("max_issues", 50)
         
-        if not repo:
+        if not repo_name:
             raise ValueError("repo is required (format: owner/repo)")
         
-        repository = self.github.get_repo(repo)
-        results = []
-        
-        # list files
-        try:
-            contents = repository.get_contents(path.lstrip("/") if path != "/" else "")
+        def _fetch_list():
+            if not self.github:
+                 raise SourceAuthError("Not connected", self.name)
+                 
+            repository = self.github.get_repo(repo_name)
+            res = []
             
-            if not isinstance(contents, list):
-                contents = [contents]
-            
-            for content in contents:
-                results.append({
-                    "id": f"{repo}:{content.path}",
-                    "name": content.name,
-                    "type": "dir" if content.type == "dir" else content.encoding or "file",
-                    "path": content.path,
-                    "size": content.size,
-                    "sha": content.sha
-                })
-        except Exception as e:
-            print(f"[github] failed to list {path}: {e}")
-        
-        # list issues if requested
-        if include_issues:
-            issues = repository.get_issues(state="all")
-            for issue in issues[:50]:  # limit to 50
-                results.append({
-                    "id": f"{repo}:issue:{issue.number}",
-                    "name": issue.title,
-                    "type": "issue",
-                    "number": issue.number,
-                    "state": issue.state,
-                    "labels": [l.name for l in issue.labels]
-                })
-        
-        return results
-    
-    async def fetch_item(self, item_id: str) -> Dict:
-        """
-        fetch file or issue content
-        
-        item_id format: "owner/repo:path" or "owner/repo:issue:number"
-        """
-        if not self._connected:
-            await self.connect()
-        
-        parts = item_id.split(":")
-        repo = parts[0]
-        
-        repository = self.github.get_repo(repo)
-        
-        # issue
-        if len(parts) >= 3 and parts[1] == "issue":
-            issue_num = int(parts[2])
-            issue = repository.get_issue(number=issue_num)
-            
-            # build text with comments
-            text_parts = [
-                f"# {issue.title}",
-                f"State: {issue.state}",
-                f"Labels: {', '.join([l.name for l in issue.labels])}",
-                "",
-                issue.body or ""
-            ]
-            
-            # add comments
-            for comment in issue.get_comments():
-                text_parts.append(f"\n---\n**{comment.user.login}:** {comment.body}")
-            
-            text = "\n".join(text_parts)
-            
-            return {
-                "id": item_id,
-                "name": issue.title,
-                "type": "issue",
-                "text": text,
-                "data": text,
-                "meta": {
-                    "source": "github",
-                    "repo": repo,
-                    "issue_number": issue_num,
-                    "state": issue.state
-                }
-            }
-        
-        # file
-        else:
-            path = ":".join(parts[1:]) if len(parts) > 1 else ""
-            content = repository.get_contents(path)
-            
-            # handle directory
-            if isinstance(content, list):
-                text = "\n".join([f"- {c.path}" for c in content])
-                return {
-                    "id": item_id,
-                    "name": path or repo,
-                    "type": "directory",
-                    "text": text,
-                    "data": text,
-                    "meta": {"source": "github", "repo": repo, "path": path}
-                }
-            
-            # file content
+            # 1. Files
+            clean_path = path.lstrip("/") if path != "/" else ""
             try:
-                text = content.decoded_content.decode("utf-8")
-            except:
-                text = ""
+                if recursive:
+                    # Recursive listing using git tree API
+                    tree = repository.get_git_tree(repository.default_branch, recursive=True)
+                    for element in tree.tree:
+                        # Filter by path if provided
+                        if clean_path and not element.path.startswith(clean_path):
+                            continue
+                            
+                        res.append(SourceItem(
+                            id=f"{repo_name}:{element.path}",
+                            name=os.path.basename(element.path),
+                            type="dir" if element.type == "tree" else "file",
+                            path=element.path,
+                            size=element.size or 0,
+                            sha=element.sha,
+                            metadata={"type": "git_tree", "mode": element.mode}
+                        ))
+                else:
+                    contents = repository.get_contents(clean_path)
+                    if not isinstance(contents, list):
+                        contents = [contents]
+                    
+                    for c in contents:
+                        res.append(SourceItem(
+                            id=f"{repo_name}:{c.path}",
+                            name=c.name,
+                            type="dir" if c.type == "dir" else (c.encoding or "file"),
+                            path=c.path,
+                            size=c.size,
+                            sha=c.sha,
+                            metadata={"type": "contents"}
+                        ))
+            except Exception as e:
+                logger.warning(f"failed to list paths for {repo_name}/{clean_path}: {e}")
             
-            return {
-                "id": item_id,
-                "name": content.name,
-                "type": content.encoding or "file",
-                "text": text,
-                "data": content.decoded_content,
-                "meta": {
-                    "source": "github",
-                    "repo": repo,
-                    "path": content.path,
-                    "sha": content.sha,
-                    "size": content.size
-                }
-            }
+            # 2. Issues
+            if include_issues:
+                try:
+                    issues = repository.get_issues(state="all", sort="updated", direction="desc")
+                    count = 0
+                    for issue in issues:
+                        if count >= max_issues: break
+                        res.append(SourceItem(
+                            id=f"{repo_name}:issue:{issue.number}",
+                            name=issue.title,
+                            type="issue",
+                            path=f"issue/{issue.number}",
+                            metadata={
+                                "number": issue.number,
+                                "state": issue.state,
+                                "labels": [l.name for l in issue.labels],
+                                "last_updated": issue.updated_at.isoformat() if issue.updated_at else None
+                            }
+                        ))
+                        count += 1
+                except Exception as e:
+                    logger.warning(f"failed to fetch issues for {repo_name}: {e}")
+            return res
+
+        return await self._run_blocking(_fetch_list)
+    
+    async def _fetch_item(self, item_id: str) -> SourceContent:
+        """fetch file or issue content"""
+        parts = item_id.split(":")
+        repo_name = parts[0]
+        
+        def _fetch_one():
+            if not self.github:
+                 raise SourceAuthError("Not connected", self.name)
+            
+            repository = self.github.get_repo(repo_name)
+            
+            # Is Issue?
+            if len(parts) >= 3 and parts[1] == "issue":
+                issue_num = int(parts[2])
+                issue = repository.get_issue(number=issue_num)
+                
+                text_parts = [
+                    f"# {issue.title}",
+                    f"State: {issue.state}",
+                    f"Labels: {', '.join([l.name for l in issue.labels])}",
+                    "",
+                    issue.body or ""
+                ]
+                
+                
+                # Fetch comments with a safety limit
+                comments = issue.get_comments()
+                for i, comment in enumerate(comments):
+                    if i >= 100: 
+                        text_parts.append("\n---\n*Truncated: too many comments*")
+                        break
+                    text_parts.append(f"\n---\n**{comment.user.login}:** {comment.body}")
+                
+                text = "\n".join(text_parts)
+                return SourceContent(
+                    id=item_id,
+                    name=issue.title,
+                    type="issue",
+                    text=text,
+                    data=text,
+                    meta={
+                        "source": "github",
+                        "repo": repo_name,
+                        "issue_number": issue_num,
+                        "state": issue.state
+                    }
+                )
+            
+            # Is File/Dir
+            else:
+                fpath = ":".join(parts[1:]) if len(parts) > 1 else ""
+                content = repository.get_contents(fpath)
+                
+                # Directory
+                if isinstance(content, list):
+                    text = "\n".join([f"- {c.path}" for c in content])
+                    return SourceContent(
+                        id=item_id,
+                        name=fpath or repo_name,
+                        type="directory",
+                        text=text,
+                        data=text,
+                        meta={"source": "github", "repo": repo_name, "path": fpath}
+                    )
+                
+                # File
+                try:
+                    text = content.decoded_content.decode("utf-8")
+                except:
+                    text = ""
+                
+                return SourceContent(
+                    id=item_id,
+                    name=content.name,
+                    type=content.encoding or "file",
+                    text=text,
+                    data=content.decoded_content,  # keeps bytes if binary
+                    meta={
+                        "source": "github",
+                        "repo": repo_name,
+                        "path": content.path,
+                        "sha": content.sha,
+                        "size": content.size
+                    }
+                )
+                
+        return await self._run_blocking(_fetch_one)

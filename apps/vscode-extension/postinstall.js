@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 const { detectBackend } = require('./out/detectors/openmemory');
 const { writeMCPConfig } = require('./out/mcp/generator');
 const { writeCursorConfig } = require('./out/writers/cursor');

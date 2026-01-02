@@ -33,7 +33,21 @@ def calculate_score(
     # Backend v1 was: (sim * 0.7) + (recency * 0.3) * salience?
     # Let's standardize on a V2 formula:
     
-    final = (relevance * 0.6) + (recency * 0.2) + (min(salience, 1.0) * 0.2)
+    from ..ops.dynamics import SCORING_WEIGHTS
+
+    # Use standardized weights
+    w_sim = SCORING_WEIGHTS.get("similarity", 0.35)
+    w_rec = SCORING_WEIGHTS.get("recency", 0.10)
+    w_imp = SCORING_WEIGHTS.get("salience_boost", 0.2) # fallback/approx
+    
+    # Normalize weights sum approx to 1.0 for score
+    # Formula: sim * w_sim + rec * w_rec + sal * w_imp
+    # Note: SCORING_WEIGHTS has overlap/waypoint/tag_match which are not inputs here.
+    # We rescale for the inputs we have (relevance/recency/salience).
+    
+    total_w = w_sim + w_rec + w_imp
+    
+    final = (relevance * w_sim + recency * w_rec + min(salience, 1.0) * w_imp) / total_w
     
     if debug:
         return {
@@ -42,7 +56,8 @@ def calculate_score(
                 "relevance": relevance,
                 "recency": recency,
                 "salience": salience,
-                "age_hours": hours_ago
+                "age_hours": hours_ago,
+                "weights": {"sim": w_sim, "rec": w_rec, "imp": w_imp}
             }
         }
     return final

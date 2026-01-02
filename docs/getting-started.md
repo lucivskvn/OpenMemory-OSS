@@ -53,7 +53,7 @@ main();
 ```
 
 ## Configuration
-OpenMemory defaults to `sqlite:///openmemory.db` in the current directory. You can configure this via environment variables:
-
-- `OPENMEMORY_DB_URL`: Database connection string (e.g., `postgresql://...`)
-- `OPENMEMORY_DEBUG`: Set to `true` for verbose logging.
+- `OM_DB_URL`: (Python) Database connection string (e.g., `postgresql://user:pass@host:port/db`)
+- `OM_DB_PATH`: (Node.js) Path to SQLite database file.
+- `OM_METADATA_BACKEND`: (Node.js) Set to `postgres` to use PostgreSQL for metadata.
+- `OM_VERBOSE`: Set to `true` for verbose logging.

@@ -1,53 +1,21 @@
-import crypto from "node:crypto";
+
 import { canonical_token_set } from "../utils/text";
 import { inc_q, dec_q, on_query_hit } from "./decay";
 import { env, tier } from "../core/cfg";
-import { cos_sim, buf_to_vec, vec_to_buf } from "../utils/index";
-export interface sector_cfg {
-    model: string;
-    decay_lambda: number;
-    weight: number;
-    patterns: RegExp[];
-}
-export interface sector_class {
-    primary: string;
-    additional: string[];
-    confidence: number;
-}
-export interface hsg_mem {
-    id: string;
-    content: string;
-    primary_sector: string;
-    sectors: string[];
-    tags?: string;
-    meta?: any;
-    created_at: number;
-    updated_at: number;
-    last_seen_at: number;
-    salience: number;
-    decay_lambda: number;
-    version: number;
-}
-export interface waypoint {
-    src_id: string;
-    dst_id: string;
-    weight: number;
-    created_at: number;
-    updated_at: number;
-}
-export interface hsg_q_result {
-    id: string;
-    content: string;
-    score: number;
-    sectors: string[];
-    primary_sector: string;
-    path: string[];
-    salience: number;
-    last_seen_at: number;
-    tags?: string[];
-    meta?: any;
-}
-export const sector_configs: Record<string, sector_cfg> = {
+import { LearnedClassifier, ClassifierModel } from "../core/learned_classifier";
+import { get_encryption } from "../core/security";
+
+import {
+    SectorConfig,
+    SectorClassification,
+    HsgQueryResult,
+    MultiVecFusionWeights,
+    Waypoint,
+    MemoryRow,
+    SectorType
+} from "../core/types";
+
+export const sector_configs: Record<SectorType | string, SectorConfig> = {
     episodic: {
         model: "episodic-optimized",
         decay_lambda: 0.015,
@@ -83,7 +51,7 @@ export const sector_configs: Record<string, sector_cfg> = {
             /\b(first|second|then|next|finally|afterwards|lastly)\b/i,
             /\b(install|run|execute|compile|build|deploy|configure|setup)\b/i,
             /\b(click|press|type|enter|select|drag|drop|scroll)\b/i,
-            /\b(method|function|class|algorithm|routine|recipie)\b/i,
+            /\b(method|function|class|algorithm|routine|recipe)\b/i,
             /\b(to\s+do|to\s+make|to\s+build|to\s+create)\b/i,
         ],
     },
@@ -166,12 +134,18 @@ function has_temporal_markers(text: string): boolean {
 }
 
 // Calculate tag match score between query tokens and memory tags
-async function compute_tag_match_score(memory_id: string, query_tokens: Set<string>): Promise<number> {
-    const mem = await q.get_mem.get(memory_id);
+async function compute_tag_match_score(memory_id: string, query_tokens: Set<string>, user_id?: string): Promise<number> {
+    const mem = await q.get_mem.get(memory_id, user_id);
     if (!mem?.tags) return 0;
 
     try {
-        const tags = JSON.parse(mem.tags);
+        let tags: any[] = [];
+        if (typeof mem.tags === 'string') {
+            tags = JSON.parse(mem.tags);
+        } else if (Array.isArray(mem.tags)) {
+            tags = mem.tags;
+        }
+
         if (!Array.isArray(tags)) return 0;
 
         let matches = 0;
@@ -222,9 +196,9 @@ const compress_vec_for_storage = (
 
 export function classify_content(
     content: string,
-    metadata?: any,
-): sector_class {
-    if (metadata?.sector && sectors.includes(metadata.sector)) {
+    metadata?: Record<string, unknown>,
+): SectorClassification {
+    if (metadata && typeof metadata.sector === "string" && sectors.includes(metadata.sector)) {
         return {
             primary: metadata.sector,
             additional: [],
@@ -457,7 +431,7 @@ export async function create_cross_sector_waypoints(
         await q.ins_waypoint.run(
             prim_id,
             `${prim_id}:${sec}`,
-            user_id || "anonymous",
+            user_id ?? null,
             wt,
             now,
             now,
@@ -465,7 +439,7 @@ export async function create_cross_sector_waypoints(
         await q.ins_waypoint.run(
             `${prim_id}:${sec}`,
             prim_id,
-            user_id || "anonymous",
+            user_id ?? null,
             wt,
             now,
             now,
@@ -505,30 +479,30 @@ export async function create_single_waypoint(
     ts: number,
     user_id?: string | null,
 ): Promise<void> {
-    const thresh = 0.75;
     const mems = user_id
         ? await q.all_mem_by_user.all(user_id, 1000, 0)
-        : await q.all_mem.all(1000, 0);
+        : await all_async(`select * from memories where user_id IS NULL order by created_at desc limit 1000`);
     let best: { id: string; similarity: number } | null = null;
     for (const mem of mems) {
         if (mem.id === new_id || !mem.mean_vec) continue;
-        const ex_mean = buf_to_vec(mem.mean_vec);
-        const sim = cos_sim(new Float32Array(new_mean), ex_mean);
+        const ex_mean = bufferToVector(Buffer.from(mem.mean_vec));
+        const sim = cosineSimilarity(new_mean, ex_mean);
         if (!best || sim > best.similarity) {
             best = { id: mem.id, similarity: sim };
         }
     }
+
     if (best) {
         await q.ins_waypoint.run(
             new_id,
             best.id,
-            user_id || "anonymous",
+            user_id ?? null,
             best.similarity,
             ts,
             ts,
         );
     } else {
-        await q.ins_waypoint.run(new_id, new_id, user_id || "anonymous", 1.0, ts, ts);
+        await q.ins_waypoint.run(new_id, new_id, user_id ?? null, 1.0, ts, ts);
     }
 }
 export async function create_inter_mem_waypoints(
@@ -540,16 +514,16 @@ export async function create_inter_mem_waypoints(
 ): Promise<void> {
     const thresh = 0.75;
     const wt = 0.5;
-    const vecs = await vector_store.getVectorsBySector(prim_sec);
+    const vecs = await vector_store.getVectorsBySector(prim_sec, user_id || undefined);
     for (const vr of vecs) {
         if (vr.id === new_id) continue;
         const ex_vec = vr.vector;
-        const sim = cos_sim(new Float32Array(new_vec), new Float32Array(ex_vec));
+        const sim = cosineSimilarity(new_vec, Array.from(ex_vec));
         if (sim >= thresh) {
             await q.ins_waypoint.run(
                 new_id,
                 vr.id,
-                user_id || "anonymous",
+                user_id ?? null,
                 wt,
                 ts,
                 ts,
@@ -557,7 +531,7 @@ export async function create_inter_mem_waypoints(
             await q.ins_waypoint.run(
                 vr.id,
                 new_id,
-                user_id || "anonymous",
+                user_id ?? null,
                 wt,
                 ts,
                 ts,
@@ -574,15 +548,15 @@ export async function create_contextual_waypoints(
     const now = Date.now();
     for (const rel_id of rel_ids) {
         if (mem_id === rel_id) continue;
-        const existing = await q.get_waypoint.get(mem_id, rel_id);
+        const existing = await q.get_waypoint.get(mem_id, rel_id, user_id ?? undefined);
         if (existing) {
             const new_wt = Math.min(1.0, existing.weight + 0.1);
-            await q.upd_waypoint.run(mem_id, new_wt, now, rel_id);
+            await q.upd_waypoint.run(mem_id, new_wt, now, rel_id, user_id ?? null);
         } else {
             await q.ins_waypoint.run(
                 mem_id,
                 rel_id,
-                user_id || "anonymous",
+                user_id ?? null,
                 base_wt,
                 now,
                 now,
@@ -592,6 +566,7 @@ export async function create_contextual_waypoints(
 }
 export async function expand_via_waypoints(
     init_res: string[],
+    user_id?: string | null,
     max_exp: number = 10,
 ): Promise<Array<{ id: string; weight: number; path: string[] }>> {
     const exp: Array<{ id: string; weight: number; path: string[] }> = [];
@@ -604,10 +579,9 @@ export async function expand_via_waypoints(
     let exp_cnt = 0;
     while (q_arr.length > 0 && exp_cnt < max_exp) {
         const cur = q_arr.shift()!;
-        const neighs = await q.get_neighbors.all(cur.id);
+        const neighs = await q.get_neighbors.all(cur.id, user_id ?? undefined);
         for (const neigh of neighs) {
             if (vis.has(neigh.dst_id)) continue;
-            // Clamp neighbor weight to valid range - protect against corrupted data
             const neigh_wt = Math.min(1.0, Math.max(0, neigh.weight || 0));
             const exp_wt = cur.weight * neigh_wt * 0.8;
             if (exp_wt < 0.1) continue;
@@ -624,18 +598,22 @@ export async function expand_via_waypoints(
     }
     return exp;
 }
-export async function reinforce_waypoints(trav_path: string[]): Promise<void> {
+
+export async function reinforce_waypoints(
+    trav_path: string[],
+    user_id?: string | null,
+): Promise<void> {
     const now = Date.now();
     for (let i = 0; i < trav_path.length - 1; i++) {
         const src_id = trav_path[i];
         const dst_id = trav_path[i + 1];
-        const wp = await q.get_waypoint.get(src_id, dst_id);
+        const wp = await q.get_waypoint.get(src_id, dst_id, user_id ?? undefined);
         if (wp) {
             const new_wt = Math.min(
                 reinforcement.max_waypoint_weight,
                 wp.weight + reinforcement.waypoint_boost,
             );
-            await q.upd_waypoint.run(src_id, new_wt, now, dst_id);
+            await q.upd_waypoint.run(src_id, new_wt, now, dst_id, user_id ?? null);
         }
     }
 }
@@ -672,9 +650,10 @@ export interface multi_vec_fusion_weights {
 export async function calc_multi_vec_fusion_score(
     mid: string,
     qe: Record<string, number[]>,
-    w: multi_vec_fusion_weights,
+    w: MultiVecFusionWeights,
+    user_id?: string,
 ): Promise<number> {
-    const vecs = await vector_store.getVectorsById(mid);
+    const vecs = await vector_store.getVectorsById(mid, user_id);
     let sum = 0,
         tot = 0;
     const wm: Record<string, number> = {
@@ -695,67 +674,88 @@ export async function calc_multi_vec_fusion_score(
     }
     return tot > 0 ? sum / tot : 0;
 }
-const cache = new Map<string, { r: hsg_q_result[]; t: number }>();
+const cache = new Map<string, { r: HsgQueryResult[]; t: number }>();
 const sal_cache = new Map<string, { s: number; t: number }>();
-// vec_cache removed
-const seg_cache = new Map<number, any[]>();
-const coact_buf: Array<[string, string]> = [];
+const seg_cache = new Map<number, MemoryRow[]>();
+const CACHE_MAX_SIZE = 500;
+const coact_buf: Array<[string | undefined, string, string]> = [];
 const TTL = 60000;
 const VEC_CACHE_MAX = 1000;
 let active_queries = 0;
 // get_vec removed
-const get_segment = async (seg: number): Promise<any[]> => {
+const get_segment = async (seg: number): Promise<MemoryRow[]> => {
     if (seg_cache.has(seg)) return seg_cache.get(seg)!;
     const rows = await q.get_mem_by_segment.all(seg);
     seg_cache.set(seg, rows);
-    if (seg_cache.size > env.cache_segments) {
+    if (seg_cache.size > CACHE_MAX_SIZE) {
         const first = seg_cache.keys().next().value;
         if (first !== undefined) seg_cache.delete(first);
     }
     return rows;
 };
-setInterval(async () => {
-    if (!coact_buf.length) return;
-    const pairs = coact_buf.splice(0, 50);
-    const now = Date.now();
-    const tau_ms = hybrid_params.tau_hours * 3600000;
-    for (const [a, b] of pairs) {
-        try {
-            const [memA, memB] = await Promise.all([
-                q.get_mem.get(a),
-                q.get_mem.get(b),
-            ]);
-            if (!memA || !memB) continue;
-            const time_diff = Math.abs(memA.last_seen_at - memB.last_seen_at);
-            const temp_fact = Math.exp(-time_diff / tau_ms);
-            const wp = await q.get_waypoint.get(a, b);
-            const cur_wt = wp?.weight || 0;
-            const new_wt = Math.min(
-                1,
-                cur_wt + hybrid_params.eta * (1 - cur_wt) * temp_fact,
-            );
-            const user_id = wp?.user_id || memA?.user_id || memB?.user_id || "anonymous";
-            await q.ins_waypoint.run(a, b, user_id, new_wt, wp?.created_at || now, now);
-        } catch (e) { }
+let hsg_interval: ReturnType<typeof setInterval> | undefined;
+
+export const start_hsg_maintenance = () => {
+    if (hsg_interval) return;
+    hsg_interval = setInterval(async () => {
+        if (!coact_buf.length) return;
+        const pairs = coact_buf.splice(0, 50);
+        const now = Date.now();
+        const tau_ms = hybrid_params.tau_hours * 3600000;
+        for (const [uid, a, b] of pairs) {
+            try {
+                const [memA, memB] = await Promise.all([
+                    q.get_mem.get(a, uid),
+                    q.get_mem.get(b, uid),
+                ]);
+                if (!memA || !memB || memA.user_id !== memB.user_id) {
+                    // Skip cross-user or missing memories
+                    continue;
+                }
+                const time_diff = Math.abs((memA.last_seen_at ?? 0) - (memB.last_seen_at ?? 0));
+                const temp_fact = Math.exp(-time_diff / tau_ms);
+                const wp = await q.get_waypoint.get(a, b, memA.user_id ?? undefined);
+                const cur_wt = wp?.weight || 0;
+                const new_wt = Math.min(
+                    1,
+                    cur_wt + hybrid_params.eta * (1 - cur_wt) * temp_fact,
+                );
+                const user_id = memA.user_id;
+                await q.ins_waypoint.run(a, b, user_id, new_wt, wp?.created_at || now, now);
+            } catch (e) { }
+        }
+    }, 1000);
+}
+
+// Auto-start unless in test mode (or let server start it explicitly? For now auto-start to preserve behavior)
+if (typeof process === 'undefined' || process.env.NODE_ENV !== 'test') {
+    start_hsg_maintenance();
+}
+
+export const stop_hsg_maintenance = () => {
+    if (hsg_interval) {
+        clearInterval(hsg_interval);
+        hsg_interval = undefined;
     }
-}, 1000);
-const get_sal = async (id: string, def_sal: number): Promise<number> => {
+}
+const get_sal = async (id: string, def_sal: number, user_id?: string): Promise<number> => {
     const c = sal_cache.get(id);
     if (c && Date.now() - c.t < TTL) return c.s;
-    const m = await q.get_mem.get(id);
+    const m = await q.get_mem.get(id, user_id);
     const s = m?.salience ?? def_sal;
     sal_cache.set(id, { s, t: Date.now() });
+    if (sal_cache.size > CACHE_MAX_SIZE) {
+        const first = sal_cache.keys().next().value;
+        if (first !== undefined) sal_cache.delete(first);
+    }
     return s;
 };
 export async function hsg_query(
     qt: string,
     k = 10,
     f?: { sectors?: string[]; minSalience?: number; user_id?: string; startTime?: number; endTime?: number },
-): Promise<hsg_q_result[]> {
-    // ... (omitted lines to keep context correct, targeting start of function signature change)
-    // Actually I'll target the signature and the logic inside the loop.
-    // Split into two edits or use multi_replace.
-    // Let's use multi_replace.
+): Promise<HsgQueryResult[]> {
+
     if (active_queries >= env.max_active) {
         throw new Error(
             `Rate limit: ${active_queries} active queries (max ${env.max_active})`,
@@ -779,12 +779,39 @@ export async function hsg_query(
             ss = f.sectors;
         } else {
             // IMPORTANT: Search ALL sectors to enable cross-sector retrieval
-            // The sector relationship penalty will down-weight less relevant sectors
             ss = [...sectors];
         }
         if (!ss.length) ss.push("semantic");
-        // Batch embed all sectors in one API call for faster queries
+
+        // Batch embed all sectors in one API call
         const qe = await embedQueryForAllSectors(qt, ss);
+
+        // Refine query classification using Learned Classifier if available
+        if (f?.user_id) {
+            try {
+                const model_data = await q.get_classifier_model.get(f.user_id);
+                if (model_data) {
+                    const model: ClassifierModel = {
+                        ...model_data,
+                        weights: JSON.parse(model_data.weights),
+                        biases: JSON.parse(model_data.biases),
+                    };
+                    const emb_res_for_mean: EmbeddingResult[] = Object.entries(qe).map(([sector, vector]) => ({
+                        sector,
+                        vector,
+                        dim: vector.length
+                    }));
+                    const q_mean = calc_mean_vec(emb_res_for_mean, ss);
+                    const learned_qc = LearnedClassifier.predict(q_mean, model);
+                    if (learned_qc.confidence > 0.5) {
+                        if (env.verbose) console.log(`[HSG] Query classification refined for ${f.user_id}: ${qc.primary} -> ${learned_qc.primary}`);
+                        qc.primary = learned_qc.primary;
+                        qc.additional = Array.from(new Set([...qc.additional, ...learned_qc.additional]));
+                    }
+                }
+            } catch (e) { /* ignore */ }
+        }
+
         const w: multi_vec_fusion_weights = {
             semantic_dimension_weight: qc.primary === "semantic" ? 1.2 : 0.8,
             emotional_dimension_weight: qc.primary === "emotional" ? 1.5 : 0.6,
@@ -800,7 +827,7 @@ export async function hsg_query(
         > = {};
         for (const s of ss) {
             const qv = qe[s];
-            const results = await vector_store.searchSimilar(s, qv, k * 3);
+            const results = await vector_store.searchSimilar(s, qv, k * 3, f?.user_id);
             sr[s] = results.map(r => ({ id: r.id, similarity: r.score }));
         }
         const all_sims = Object.values(sr).flatMap((r) =>
@@ -816,14 +843,14 @@ export async function hsg_query(
         for (const r of Object.values(sr)) for (const x of r) ids.add(x.id);
         const exp = high_conf
             ? []
-            : await expand_via_waypoints(Array.from(ids), k * 2);
+            : await expand_via_waypoints(Array.from(ids), f?.user_id, k * 2);
         for (const e of exp) ids.add(e.id);
 
         let keyword_scores = new Map<string, number>();
         if (tier === "hybrid") {
             const all_mems = await Promise.all(
                 Array.from(ids).map(async (id) => {
-                    const m = await q.get_mem.get(id);
+                    const m = await q.get_mem.get(id, f?.user_id);
                     return m ? { id, content: m.content } : null;
                 }),
             );
@@ -838,14 +865,18 @@ export async function hsg_query(
             );
         }
 
-        const res: hsg_q_result[] = [];
+        const res: HsgQueryResult[] = [];
         for (const mid of Array.from(ids)) {
-            const m = await q.get_mem.get(mid);
-            if (!m || (f?.minSalience && m.salience < f.minSalience)) continue;
+            const m = await q.get_mem.get(mid, f?.user_id);
+            if (!m || (f?.minSalience && (m.salience ?? 0) < f.minSalience)) continue;
+
+            // Decrypt content for processing and return
+            m.content = await get_encryption().decrypt(m.content);
+
             if (f?.user_id && m.user_id !== f.user_id) continue;
-            if (f?.startTime && m.created_at < f.startTime) continue;
-            if (f?.endTime && m.created_at > f.endTime) continue;
-            const mvf = await calc_multi_vec_fusion_score(mid, qe, w);
+            if (f?.startTime && (m.created_at ?? 0) < f.startTime) continue;
+            if (f?.endTime && (m.created_at ?? 0) > f.endTime) continue;
+            const mvf = await calc_multi_vec_fusion_score(mid, qe, w, f?.user_id);
             const csr = await calculateCrossSectorResonanceScore(
                 m.primary_sector,
                 qc.primary,
@@ -874,14 +905,15 @@ export async function hsg_query(
             const em = exp.find((e: { id: string }) => e.id === mid);
             // Clamp waypoint weight to valid range [0, 1] - protect against corrupted data
             const ww = Math.min(1.0, Math.max(0, em?.weight || 0));
-            const ds = (Date.now() - m.last_seen_at) / 86400000;
-            const sal = calc_decay(m.primary_sector, m.salience, ds);
+            const last_seen = m.last_seen_at ?? 0;
+            const ds = (Date.now() - last_seen) / 86400000;
+            const sal = calc_decay(m.primary_sector, m.salience ?? 0.5, ds);
             const mtk = canonical_token_set(m.content);
             const tok_ov = compute_token_overlap(qtk, mtk);
-            const rec_sc = calc_recency_score(m.last_seen_at);
+            const rec_sc = calc_recency_score(last_seen);
 
             // Calculate tag match score
-            const tag_match = await compute_tag_match_score(mid, qtk);
+            const tag_match = await compute_tag_match_score(mid, qtk, f?.user_id);
 
             const keyword_boost =
                 tier === "hybrid"
@@ -895,7 +927,7 @@ export async function hsg_query(
                 keyword_boost,
                 tag_match,
             );
-            const msec = await vector_store.getVectorsById(mid);
+            const msec = await vector_store.getVectorsById(mid, f?.user_id);
             const sl = msec.map((v) => v.sector);
             res.push({
                 id: mid,
@@ -905,9 +937,9 @@ export async function hsg_query(
                 primary_sector: m.primary_sector,
                 path: em?.path || [mid],
                 salience: sal,
-                last_seen_at: m.last_seen_at,
-                tags: typeof m.tags === 'string' ? JSON.parse(m.tags) : (m.tags || []),
-                meta: typeof m.meta === 'string' ? JSON.parse(m.meta) : (m.meta || {}),
+                last_seen_at: m.last_seen_at ?? 0,
+                tags: typeof m.tags === 'string' ? (m.tags.startsWith('[') || m.tags.startsWith('{') ? JSON.parse(m.tags) : [m.tags]) : (m.tags || []),
+                meta: typeof m.meta === 'string' ? (m.meta.startsWith('{') ? JSON.parse(m.meta) : { content: m.meta }) : (m.meta || {}),
             });
         }
         res.sort((a, b) => b.score - a.score);
@@ -929,15 +961,15 @@ export async function hsg_query(
 
         // Update feedback scores for returned memories (simple learning)
         for (const r of top) {
-            const cur_fb = (await q.get_mem.get(r.id))?.feedback_score || 0;
+            const cur_fb = (await q.get_mem.get(r.id, f?.user_id))?.feedback_score || 0;
             const new_fb = cur_fb * 0.9 + r.score * 0.1; // Exponential moving average
-            await q.upd_feedback.run(r.id, new_fb);
+            await q.upd_feedback.run(r.id, new_fb, f?.user_id);
         }
 
         for (let i = 0; i < tids.length; i++) {
             for (let j = i + 1; j < tids.length; j++) {
                 const [a, b] = [tids[i], tids[j]].sort();
-                coact_buf.push([a, b]);
+                coact_buf.push([f?.user_id, a, b]);
             }
         }
         for (const r of top) {
@@ -945,10 +977,10 @@ export async function hsg_query(
                 r.id,
                 r.salience,
             );
-            await q.upd_seen.run(r.id, Date.now(), rsal, Date.now());
+            await q.upd_seen.run(r.id, Date.now(), rsal, Date.now(), f?.user_id);
             if (r.path.length > 1) {
-                await reinforce_waypoints(r.path);
-                const wps = await q.get_waypoints_by_src.all(r.id);
+                await reinforce_waypoints(r.path, f?.user_id);
+                const wps = await q.get_waypoints_by_src.all(r.id, f?.user_id);
                 const lns = wps.map((wp: any) => ({
                     target_id: wp.dst_id,
                     weight: wp.weight,
@@ -960,38 +992,40 @@ export async function hsg_query(
                         lns,
                     );
                 for (const u of pru) {
-                    const linked_mem = await q.get_mem.get(u.node_id);
-                    if (linked_mem) {
-                        const time_diff =
-                            (Date.now() - linked_mem.last_seen_at) / 86400000;
-                        const decay_fact = Math.exp(-0.02 * time_diff);
-                        const ctx_boost =
-                            hybrid_params.gamma *
-                            (rsal - linked_mem.salience) *
-                            decay_fact;
-                        const new_sal = Math.max(
-                            0,
-                            Math.min(1, linked_mem.salience + ctx_boost),
-                        );
-                        await q.upd_seen.run(
-                            u.node_id,
-                            Date.now(),
-                            new_sal,
-                            Date.now(),
-                        );
-                    }
+                    const now = Date.now();
+                    const decay_fact = Math.exp(-0.02 * ((now - (r.last_seen_at ?? now)) / 86400000));
+                    const ctx_boost =
+                        hybrid_params.gamma *
+                        (rsal - (r.salience ?? 0.5)) *
+                        decay_fact;
+                    const new_sal = Math.max(
+                        0,
+                        Math.min(1, (r.salience ?? 0.5) + ctx_boost),
+                    );
+
+                    await q.upd_seen.run(
+                        u.node_id,
+                        now,
+                        new_sal,
+                        now,
+                        f?.user_id,
+                    );
                 }
             }
         }
 
-        for (const r of top) {
-            on_query_hit(r.id, r.primary_sector, (text) =>
+        for (const r of top_cands) {
+            on_query_hit(r.id, r.primary_sector, f?.user_id, (text) =>
                 embedForSector(text, r.primary_sector),
             ).catch(() => { });
         }
 
-        cache.set(h, { r: top, t: Date.now() });
-        return top;
+        cache.set(h, { r: top_cands, t: Date.now() });
+        if (cache.size > CACHE_MAX_SIZE) {
+            const first = cache.keys().next().value;
+            if (first !== undefined) cache.delete(first);
+        }
+        return top_cands;
     } finally {
         active_queries--;
         dec_q();
@@ -1005,10 +1039,12 @@ export async function run_decay_process(): Promise<{
     let p = 0,
         d = 0;
     for (const m of mems) {
-        const ds = (Date.now() - m.last_seen_at) / 86400000;
-        const ns = calc_decay(m.primary_sector, m.salience, ds);
-        if (ns !== m.salience) {
-            await q.upd_seen.run(m.id, m.last_seen_at, ns, Date.now());
+        const last_seen = m.last_seen_at ?? m.created_at ?? Date.now();
+        const ds = (Date.now() - last_seen) / 86400000;
+        const sal = m.salience ?? 0.5;
+        const ns = calc_decay(m.primary_sector, sal, ds);
+        if (ns !== sal) {
+            await q.upd_seen.run(m.id, last_seen, ns, Date.now());
             d++;
         }
         p++;
@@ -1049,10 +1085,11 @@ export async function add_hsg_memory(
     deduplicated?: boolean;
 }> {
     const simhash = compute_simhash(content);
-    const existing = await q.get_mem_by_simhash.get(simhash);
-    if (existing && hamming_dist(simhash, existing.simhash) <= 3) {
+    const existing = await q.get_mem_by_simhash.get(simhash, user_id);
+    if (existing?.simhash && hamming_dist(simhash, existing.simhash) <= 3) {
         const now = Date.now();
-        const boosted_sal = Math.min(1, existing.salience + 0.15);
+        const existing_sal = existing.salience ?? 0.5;
+        const boosted_sal = Math.min(1, existing_sal + 0.15);
         await q.upd_seen.run(existing.id, now, boosted_sal, now);
         return {
             id: existing.id,
@@ -1061,7 +1098,7 @@ export async function add_hsg_memory(
             deduplicated: true,
         };
     }
-    const id = crypto.randomUUID();
+    const id = globalThis.crypto.randomUUID();
     const now = Date.now();
 
     // Ensure user exists in the users table
@@ -1073,6 +1110,58 @@ export async function add_hsg_memory(
     const use_chunking = chunks.length > 1;
     const classification = classify_content(content, metadata);
     const all_sectors = [classification.primary, ...classification.additional];
+
+    // Pre-calculate embeddings outside the transaction to avoid holding locks during network calls
+    const emb_res = await embedMultiSector(
+        id,
+        content,
+        all_sectors,
+        use_chunking ? chunks : undefined,
+        user_id,
+    );
+    const mean_vec = calc_mean_vec(emb_res, all_sectors);
+
+    // Refine classification using Learned Classifier if available
+    if (user_id) {
+        try {
+            const model_data = await q.get_classifier_model.get(user_id);
+            if (model_data) {
+                const model: ClassifierModel = {
+                    ...model_data,
+                    weights: JSON.parse(model_data.weights),
+                    biases: JSON.parse(model_data.biases),
+                };
+                const learned_class = LearnedClassifier.predict(mean_vec, model);
+                if (learned_class.confidence > 0.6 && learned_class.primary !== classification.primary) {
+                    if (env.verbose) {
+                        console.log(`[HSG] Overriding classification for ${user_id}: ${classification.primary} -> ${learned_class.primary} (conf: ${learned_class.confidence.toFixed(2)})`);
+                    }
+                    classification.primary = learned_class.primary;
+                    classification.confidence = learned_class.confidence;
+                    // If the new primary sector hasn't been embedded yet, we should probably do it
+                    if (!all_sectors.includes(classification.primary)) {
+                        all_sectors.push(classification.primary);
+                        const new_emb = await embedMultiSector(id, content, [classification.primary], use_chunking ? chunks : undefined, user_id);
+                        emb_res.push(...new_emb);
+                        // Recalculate mean_vec with the new primary sector
+                        const updated_mean = calc_mean_vec(emb_res, all_sectors);
+                        mean_vec.splice(0, mean_vec.length, ...updated_mean);
+                    }
+                }
+            }
+        } catch (e) {
+            if (env.verbose) console.error(`[HSG] Error using learned classifier:`, e);
+        }
+    }
+
+    const mean_vec_buf = vectorToBuffer(mean_vec);
+
+    let comp_buf: Buffer | null = null;
+    if (tier === "smart" && mean_vec.length > 128) {
+        const comp = compress_vec_for_storage(mean_vec, 128);
+        comp_buf = vectorToBuffer(comp);
+    }
+
     await transaction.begin();
     try {
         const max_seg_res = await q.get_max_segment.get();
@@ -1081,7 +1170,6 @@ export async function add_hsg_memory(
         const seg_cnt = seg_cnt_res?.c ?? 0;
         if (seg_cnt >= env.seg_size) {
             cur_seg++;
-            // Use stderr for debug output to avoid breaking MCP JSON-RPC protocol
             console.error(
                 `[HSG] Rotated to segment ${cur_seg} (previous segment full: ${seg_cnt} memories)`,
             );
@@ -1096,14 +1184,19 @@ export async function add_hsg_memory(
             0,
             Math.min(1, 0.4 + 0.1 * classification.additional.length),
         );
+
+        // Encrypt content before storage
+        const encrypted_content = await get_encryption().encrypt(stored_content);
+
+        // Use the full INSERT with all pre-calculated data
         await q.ins_mem.run(
             id,
             user_id || "anonymous",
             cur_seg,
-            stored_content,
+            encrypted_content,
             simhash,
             classification.primary,
-            tags || null,
+            tags || "",
             JSON.stringify(metadata || {}),
             now,
             now,
@@ -1111,17 +1204,12 @@ export async function add_hsg_memory(
             init_sal,
             sec_cfg.decay_lambda,
             1,
-            null,
-            null,
-            null, // compressed_vec
+            mean_vec.length,
+            mean_vec_buf,
+            comp_buf,
             0, // feedback_score
         );
-        const emb_res = await embedMultiSector(
-            id,
-            content,
-            all_sectors,
-            use_chunking ? chunks : undefined,
-        );
+
         for (const result of emb_res) {
             await vector_store.storeVector(
                 id,
@@ -1130,16 +1218,6 @@ export async function add_hsg_memory(
                 result.dim,
                 user_id || "anonymous",
             );
-        }
-        const mean_vec = calc_mean_vec(emb_res, all_sectors);
-        const mean_vec_buf = vectorToBuffer(mean_vec);
-        await q.upd_mean_vec.run(id, mean_vec.length, mean_vec_buf);
-
-        // Store compressed vector for smart tier (for future query optimization)
-        if (tier === "smart" && mean_vec.length > 128) {
-            const comp = compress_vec_for_storage(mean_vec, 128);
-            const comp_buf = vectorToBuffer(comp);
-            await q.upd_compressed_vec.run(comp_buf, id);
         }
 
         await create_single_waypoint(id, mean_vec, now, user_id);
@@ -1158,11 +1236,13 @@ export async function add_hsg_memory(
 export async function reinforce_memory(
     id: string,
     boost: number = 0.1,
+    user_id?: string,
 ): Promise<void> {
-    const mem = await q.get_mem.get(id);
+    const mem = await q.get_mem.get(id, user_id);
     if (!mem) throw new Error(`Memory ${id} not found`);
-    const new_sal = Math.min(reinforcement.max_salience, mem.salience + boost);
-    await q.upd_seen.run(id, Date.now(), new_sal, Date.now());
+    const mem_sal = mem.salience ?? 0.5;
+    const new_sal = Math.min(reinforcement.max_salience, mem_sal + boost);
+    await q.upd_seen.run(id, Date.now(), new_sal, Date.now(), user_id);
     if (new_sal > 0.8) await log_maint_op("consolidate", 1);
 }
 export async function update_memory(
@@ -1170,56 +1250,83 @@ export async function update_memory(
     content?: string,
     tags?: string[],
     metadata?: any,
+    user_id?: string,
 ): Promise<{ id: string; updated: boolean }> {
-    const mem = await q.get_mem.get(id);
+    const mem = await q.get_mem.get(id, user_id);
     if (!mem) throw new Error(`Memory ${id} not found`);
-    const new_content = content !== undefined ? content : mem.content;
+
+    // Decrypt current content to compare with new content
+    const current_plaintext = await get_encryption().decrypt(mem.content);
+
+    const new_content = content !== undefined ? content : current_plaintext;
     const new_tags = tags !== undefined ? j(tags) : mem.tags || "[]";
     const new_meta = metadata !== undefined ? j(metadata) : mem.meta || "{}";
+
+    let emb_res: EmbeddingResult[] | undefined;
+    let classification: SectorClassification | undefined;
+    let all_sectors: string[] | undefined;
+    let chunks: any[] | undefined;
+
+    // Pre-calculate embeddings if content changed
+    if (content !== undefined && content !== mem.content) {
+        chunks = chunk_text(new_content);
+        const use_chunking = chunks.length > 1;
+        classification = classify_content(new_content, metadata);
+        all_sectors = [classification.primary, ...classification.additional];
+        emb_res = await embedMultiSector(
+            id,
+            new_content,
+            all_sectors,
+            use_chunking ? chunks : undefined,
+            user_id,
+        );
+    }
+
     await transaction.begin();
     try {
-        if (content !== undefined && content !== mem.content) {
-            const chunks = chunk_text(new_content);
-            const use_chunking = chunks.length > 1;
-            const classification = classify_content(new_content, metadata);
-            const all_sectors = [
-                classification.primary,
-                ...classification.additional,
-            ];
+        if (content !== undefined && content !== mem.content && emb_res && classification && all_sectors) {
             await vector_store.deleteVectors(id);
-            const emb_res = await embedMultiSector(
-                id,
-                new_content,
-                all_sectors,
-                use_chunking ? chunks : undefined,
-            );
             for (const result of emb_res) {
                 await vector_store.storeVector(
                     id,
                     result.sector,
                     result.vector,
                     result.dim,
-                    mem.user_id || "anonymous",
+                    user_id || mem.user_id || "anonymous",
                 );
             }
             const mean_vec = calc_mean_vec(emb_res, all_sectors);
             const mean_vec_buf = vectorToBuffer(mean_vec);
-            await q.upd_mean_vec.run(id, mean_vec.length, mean_vec_buf);
+            await q.upd_mean_vec.run(id, mean_vec.length, mean_vec_buf, user_id || undefined);
+
+            const encrypted_new_content = await get_encryption().encrypt(new_content);
             await q.upd_mem_with_sector.run(
-                new_content,
+                encrypted_new_content,
                 classification.primary,
                 new_tags,
                 new_meta,
                 Date.now(),
                 id,
+                user_id || undefined,
             );
         } else {
+            // Check if we need to re-encrypt (e.g. if we are using original encrypted content or new encrypted content)
+            // If content didn't change, we use mem.content (which is ALREADY encrypted in DB query result)
+            // If we re-encrypt, we get a new IV, which is safer but not strictly required if plaintext is same.
+            // However, `mem.content` is the RAW DB value (encrypted).
+            // `new_content` matches `current_plaintext` here.
+
+            const content_to_store = (content !== undefined)
+                ? await get_encryption().encrypt(new_content)
+                : mem.content;
+
             await q.upd_mem.run(
-                new_content,
+                content_to_store,
                 new_tags,
                 new_meta,
                 Date.now(),
                 id,
+                user_id || undefined,
             );
         }
         await transaction.commit();

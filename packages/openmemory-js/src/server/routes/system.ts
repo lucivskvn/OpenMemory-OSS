@@ -1,7 +1,9 @@
-import { all_async } from "../../core/db";
+import { q } from "../../core/db";
 import { sector_configs } from "../../memory/hsg";
 import { getEmbeddingInfo } from "../../memory/embed";
 import { tier, env } from "../../core/cfg";
+import { sendError } from "../errors";
+import { AdvancedRequest, AdvancedResponse } from "../index";
 
 const TIER_BENEFITS = {
     hybrid: {
@@ -30,39 +32,35 @@ const TIER_BENEFITS = {
     },
 };
 
-export function sys(app: any) {
-    app.get(
-        "/health",
-        async (incoming_http_request: any, outgoing_http_response: any) => {
-            outgoing_http_response.json({
-                ok: true,
-                version: "2.0-hsg-tiered",
-                embedding: getEmbeddingInfo(),
-                tier,
-                dim: env.vec_dim,
-                cache: env.cache_segments,
-                expected: TIER_BENEFITS[tier],
-            });
-        },
-    );
+export const get_health = async (req: AdvancedRequest, res: AdvancedResponse) => {
+    res.json({
+        ok: true,
+        version: "2.1.0",
+        embedding: getEmbeddingInfo(),
+        tier,
+        dim: env.vec_dim,
+        cache: env.cache_segments,
+        expected: (TIER_BENEFITS as any)[tier],
+    });
+};
 
-    app.get(
-        "/sectors",
-        async (incoming_http_request: any, outgoing_http_response: any) => {
-            try {
-                const database_sector_statistics_rows = await all_async(`
-                select primary_sector as sector, count(*) as count, avg(salience) as avg_salience 
-                from memories 
-                group by primary_sector
-            `);
-                outgoing_http_response.json({
-                    sectors: Object.keys(sector_configs),
-                    configs: sector_configs,
-                    stats: database_sector_statistics_rows,
-                });
-            } catch (unexpected_error_fetching_sectors) {
-                outgoing_http_response.status(500).json({ err: "internal" });
-            }
-        },
-    );
+export const get_sectors = async (req: AdvancedRequest, res: AdvancedResponse) => {
+    try {
+        const user_id = req.user?.id;
+        const stats = await q.get_sector_stats.all(user_id);
+        res.json({
+            sectors: Object.keys(sector_configs),
+            configs: sector_configs,
+            stats,
+        });
+    } catch (err: unknown) {
+        sendError(res, err);
+    }
+};
+
+export function sys(app: any) {
+    app.get("/health", get_health);
+    app.get("/api/system/health", get_health);
+    app.get("/api/system/sectors", get_sectors);
+    app.get("/sectors", get_sectors);
 }

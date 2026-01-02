@@ -5,8 +5,10 @@ import { writeClaudeConfig } from './writers/claude';
 import { writeWindsurfConfig } from './writers/windsurf';
 import { writeCopilotConfig } from './writers/copilot';
 import { writeCodexConfig } from './writers/codex';
+import { writeAntigravityConfig } from './writers/antigravity';
 import { DashboardPanel } from './panels/DashboardPanel';
 import { generateDiff } from './utils/diff';
+import { Memory, Pattern, EventData } from './types';
 
 let session_id: string | null = null;
 let backend_url = 'http://localhost:8080';
@@ -106,17 +108,28 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     const note_cmd = vscode.commands.registerCommand('openmemory.quickNote', async () => {
-        const input = await vscode.window.showInputBox({ prompt: 'Enter a quick note to remember', placeHolder: 'e.g. Refactored the auth logic to use JWT' });
+        const input = await vscode.window.showInputBox({
+            prompt: 'Enter a quick note to remember',
+            placeHolder: 'e.g. Refactored the auth logic to use JWT'
+        });
+
         if (!input) return;
 
-        try {
-            const editor = vscode.window.activeTextEditor;
-            const file = editor ? editor.document.uri.fsPath : 'manual-note';
-            await add_memory(input, file);
-            vscode.window.showInformationMessage('Note added to OpenMemory');
-        } catch (error) {
-            vscode.window.showErrorMessage(`Failed to add note: ${error}`);
-        }
+        await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: "OpenMemory: Saving Note...",
+            cancellable: false
+        }, async () => {
+            try {
+                await ingest_data(input, 'quick_note', {
+                    timestamp: Date.now(),
+                    type: 'quick_note'
+                });
+                vscode.window.showInformationMessage('Note saved to OpenMemory');
+            } catch (error) {
+                vscode.window.showErrorMessage(`Failed to save note: ${error}`);
+            }
+        });
     });
 
     const patterns_cmd = vscode.commands.registerCommand('openmemory.viewPatterns', async () => {
@@ -187,19 +200,36 @@ export function activate(context: vscode.ExtensionContext) {
 
 async function auto_link_all() {
     auto_linked = false;
-    try {
-        const configs: string[] = [];
-        configs.push(await writeCursorConfig(backend_url, api_key, use_mcp, mcp_server_path));
-        configs.push(await writeClaudeConfig(backend_url, api_key, use_mcp, mcp_server_path));
-        configs.push(await writeWindsurfConfig(backend_url, api_key, use_mcp, mcp_server_path));
-        configs.push(await writeCopilotConfig(backend_url, api_key, use_mcp, mcp_server_path));
-        configs.push(await writeCodexConfig(backend_url, api_key, use_mcp, mcp_server_path));
+    const results: { name: string; success: boolean; error?: string }[] = [];
 
-        const mode = use_mcp ? 'MCP protocol' : 'Direct HTTP';
-        vscode.window.showInformationMessage(`✅ Auto-linked OpenMemory to AI tools (${mode})`);
+    const try_link = async (name: string, fn: () => Promise<string>) => {
+        try {
+            await fn();
+            results.push({ name, success: true });
+        } catch (e: any) {
+            results.push({ name, success: false, error: e.message || String(e) });
+        }
+    };
+
+    await try_link('Cursor', () => writeCursorConfig(backend_url, api_key, use_mcp, mcp_server_path));
+    await try_link('Claude Desktop', () => writeClaudeConfig(backend_url, api_key, use_mcp, mcp_server_path));
+    await try_link('Windsurf', () => writeWindsurfConfig(backend_url, api_key, use_mcp, mcp_server_path));
+    await try_link('Copilot', () => writeCopilotConfig(backend_url, api_key, use_mcp, mcp_server_path));
+    await try_link('Codex', () => writeCodexConfig(backend_url, api_key, use_mcp, mcp_server_path));
+    await try_link('Antigravity', () => writeAntigravityConfig(backend_url, api_key, use_mcp, mcp_server_path));
+
+    const failures = results.filter(r => !r.success);
+    const mode = use_mcp ? 'MCP protocol' : 'Direct HTTP';
+
+    if (failures.length === 0) {
+        vscode.window.showInformationMessage(`✅ Auto-linked OpenMemory to all AI tools (${mode})`);
         auto_linked = true;
-    } catch (error) {
-        console.error('Auto-link failed:', error);
+    } else if (failures.length === results.length) {
+        vscode.window.showErrorMessage(`❌ Auto-link failed for all tools! Check permissions and logs.`);
+    } else {
+        const failedNames = failures.map(r => r.name).join(', ');
+        vscode.window.showWarningMessage(`⚠️ OpenMemory auto-linked but failed for: ${failedNames}`);
+        auto_linked = true; // Partial success is still marked as linked 
     }
 }
 
@@ -379,19 +409,64 @@ function getUserId(context: vscode.ExtensionContext, config: vscode.WorkspaceCon
     return persistedUserId;
 }
 
+// Helper to get standard headers
+function get_headers(): Record<string, string> {
+    const headers: Record<string, string> = {
+        'Content-Type': 'application/json'
+    };
+    if (api_key) {
+        headers['x-api-key'] = api_key;
+    }
+    return headers;
+}
+
+// Helper for standardized error handling
+async function safe_fetch(url: string, options: RequestInit): Promise<any> {
+    let res: Response;
+    try {
+        res = await fetch(url, options);
+    } catch (e: any) {
+        throw new Error(`Network failure: ${e.message}`);
+    }
+
+    if (res.ok) {
+        if (res.status === 204) return {};
+        try {
+            return await res.json();
+        } catch {
+            return {};
+        }
+    }
+
+    // Handle error response
+    let errorMsg = `HTTP ${res.status}`;
+    try {
+        const json = await res.json();
+        if (json.error) {
+            // Standard format: { error: { code, message, details } }
+            if (typeof json.error === 'object' && json.error.message) {
+                errorMsg = `${json.error.message} (${json.error.code || res.status})`;
+            } else if (typeof json.error === 'string') {
+                errorMsg = json.error;
+            }
+        }
+    } catch {
+        errorMsg = `${res.status} ${res.statusText}`;
+    }
+    throw new Error(errorMsg);
+}
+
+// ... (retain existing exports and activation)
+
+// Refactored methods using safe_fetch
+
 async function check_connection(): Promise<boolean> {
     try {
-        const response = await fetch(`${backend_url}/health`, { method: 'GET', headers: get_headers() });
-        return response.ok;
+        await safe_fetch(`${backend_url}/health`, { method: 'GET', headers: get_headers() });
+        return true;
     } catch {
         return false;
     }
-}
-
-function get_headers(): Record<string, string> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (api_key) headers['x-api-key'] = api_key;
-    return headers;
 }
 
 async function start_session() {
@@ -399,9 +474,11 @@ async function start_session() {
         const config = vscode.workspace.getConfiguration('openmemory');
         const configuredProject = config.get<string>('projectName');
         const project = configuredProject || vscode.workspace.workspaceFolders?.[0]?.name || 'unknown';
-        const response = await fetch(`${backend_url}/api/ide/session/start`, { method: 'POST', headers: get_headers(), body: JSON.stringify({ user_id: user_id, project_name: project, ide_name: 'vscode' }) });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = await response.json();
+        const data = await safe_fetch(`${backend_url}/api/ide/session/start`, {
+            method: 'POST',
+            headers: get_headers(),
+            body: JSON.stringify({ user_id: user_id, project_name: project, ide_name: 'vscode' })
+        });
         session_id = data.session_id;
         is_tracking = true;
         update_status_bar('active');
@@ -415,26 +492,47 @@ async function start_session() {
 async function end_session() {
     if (!session_id) return;
     try {
-        await fetch(`${backend_url}/api/ide/session/end`, { method: 'POST', headers: get_headers(), body: JSON.stringify({ session_id, user_id }) });
+        await safe_fetch(`${backend_url}/api/ide/session/end`, {
+            method: 'POST',
+            headers: get_headers(),
+            body: JSON.stringify({ session_id, user_id })
+        });
         session_id = null;
     } catch { }
 }
 
-async function send_event(event_data: { event_type: string; file_path: string; language: string; content?: string; metadata?: any; }) {
+
+async function send_event(event_data: EventData) {
     if (!session_id || !is_tracking) return;
     try {
-        await fetch(`${backend_url}/api/ide/events`, { method: 'POST', headers: get_headers(), body: JSON.stringify({ session_id, user_id, event_type: event_data.event_type, file_path: event_data.file_path, language: event_data.language, content: event_data.content, metadata: event_data.metadata, timestamp: new Date().toISOString() }) });
+        await safe_fetch(`${backend_url}/api/ide/events`, {
+            method: 'POST',
+            headers: get_headers(),
+            body: JSON.stringify({
+                session_id,
+                user_id,
+                event_type: event_data.event_type,
+                file_path: event_data.file_path,
+                language: event_data.language,
+                content: event_data.content,
+                metadata: event_data.metadata,
+                timestamp: new Date().toISOString()
+            })
+        });
     } catch { }
 }
 
-async function query_context(query: string, file: string) {
-    const response = await fetch(`${backend_url}/api/ide/context`, { method: 'POST', headers: get_headers(), body: JSON.stringify({ query, session_id, file_path: file, limit: 10 }) });
-    const data = await response.json();
-    return data.memories || [];
+async function query_context(query: string, file: string): Promise<Memory[]> {
+    const data = await safe_fetch(`${backend_url}/api/ide/context`, {
+        method: 'POST',
+        headers: get_headers(),
+        body: JSON.stringify({ query, session_id, file_path: file, limit: 10 })
+    });
+    return (data.memories || []) as Memory[];
 }
 
 async function add_memory(content: string, file: string) {
-    const response = await fetch(`${backend_url}/memory/add`, {
+    return await safe_fetch(`${backend_url}/memory/add`, {
         method: 'POST',
         headers: get_headers(),
         body: JSON.stringify({
@@ -444,30 +542,57 @@ async function add_memory(content: string, file: string) {
             metadata: { source: 'vscode', file }
         })
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return await response.json();
 }
 
-async function get_patterns(sid: string) {
-    const response = await fetch(`${backend_url}/api/ide/patterns/${sid}`, { method: 'GET', headers: get_headers() });
-    const data = await response.json();
-    return data.patterns || [];
+async function get_patterns(sid: string): Promise<Pattern[]> {
+    const data = await safe_fetch(`${backend_url}/api/ide/patterns/${sid}`, {
+        method: 'GET',
+        headers: get_headers()
+    });
+    return (data.patterns || []) as Pattern[];
 }
 
-function format_memories(memories: any[]): string {
+// ... (rest of the formatting functions)
+
+function format_memories(memories: Memory[]): string {
     let out = '# OpenMemory Context Results\n\n';
     if (memories.length === 0) return out + 'No relevant memories found.\n';
     for (const m of memories) {
-        out += `## Memory ID: ${m.id}\n**Score:** ${m.score?.toFixed(3) || 'N/A'}\n**Sector:** ${m.sector}\n**Content:**\n\`\`\`\n${m.content}\n\`\`\`\n\n`;
+        // Handle standardized API fields
+        const salience = m.salience ? m.salience.toFixed(3) : 'N/A';
+        out += `## Memory ID: ${m.id}\n**Salience:** ${salience}\n**Sector:** ${m.primary_sector}\n**Content:**\n\`\`\`\n${m.content}\n\`\`\`\n\n`;
     }
     return out;
 }
 
-function format_patterns(patterns: any[]): string {
+function format_patterns(patterns: Pattern[]): string {
     let out = '# Detected Coding Patterns\n\n';
     if (patterns.length === 0) return out + 'No patterns detected.\n';
     for (const p of patterns) {
         out += `## Pattern: ${p.description || 'Unknown'}\n**Frequency:** ${p.frequency || 'N/A'}\n**Context:**\n\`\`\`\n${p.context || 'No context'}\n\`\`\`\n\n`;
     }
     return out;
+}
+
+// Helper to ingest data
+async function ingest_data(content: string, type: string, extra_meta: any = {}) {
+    if (!backend_url) return;
+
+    // Construct standard ingest request
+    const body = {
+        source: "connector",
+        content_type: "txt",
+        data: content,
+        user_id: user_id, // Top-level for correct ownership
+        metadata: {
+            ...extra_meta,
+            origin: "vscode-quick-note"
+        }
+    };
+
+    await safe_fetch(`${backend_url}/api/ingest`, {
+        method: 'POST',
+        headers: get_headers(),
+        body: JSON.stringify(body)
+    });
 }

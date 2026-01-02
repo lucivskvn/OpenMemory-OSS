@@ -4,7 +4,10 @@
  * no auth required for public urls
  */
 
-import { base_source, source_config_error, source_item, source_content, source_config } from './base';
+import { base_source, source_config_error, source_item, source_content, source_config, source_fetch_error } from './base';
+import { validate_url } from '../utils/security';
+// We use dynamic import for cheerio, but we can import types
+import type { CheerioAPI } from 'cheerio';
 
 export interface web_crawler_config extends source_config {
     max_pages?: number;
@@ -13,7 +16,7 @@ export interface web_crawler_config extends source_config {
 }
 
 export class web_crawler_source extends base_source {
-    name = 'web_crawler';
+    override name = 'web_crawler';
     private max_pages: number;
     private max_depth: number;
     private timeout: number;
@@ -39,9 +42,9 @@ export class web_crawler_source extends base_source {
             throw new source_config_error('start_url is required', this.name);
         }
 
-        let cheerio: any;
+        let cheerio_mod: typeof import('cheerio');
         try {
-            cheerio = await import('cheerio');
+            cheerio_mod = await import('cheerio');
         } catch {
             throw new source_config_error('missing deps: npm install cheerio', this.name);
         }
@@ -55,7 +58,9 @@ export class web_crawler_source extends base_source {
         const follow_links = filters.follow_links !== false;
 
         while (to_visit.length > 0 && this.crawled.length < this.max_pages) {
-            const { url, depth } = to_visit.shift()!;
+            const next_visit = to_visit.shift();
+            if (!next_visit) break;
+            const { url, depth } = next_visit;
 
             if (this.visited.has(url) || depth > this.max_depth) continue;
             this.visited.add(url);
@@ -64,6 +69,7 @@ export class web_crawler_source extends base_source {
                 const controller = new AbortController();
                 const timeout_id = setTimeout(() => controller.abort(), this.timeout);
 
+                await validate_url(url);
                 const resp = await fetch(url, {
                     headers: { 'User-Agent': 'OpenMemory-Crawler/1.0 (compatible)' },
                     signal: controller.signal
@@ -77,7 +83,7 @@ export class web_crawler_source extends base_source {
                 if (!content_type.includes('text/html')) continue;
 
                 const html = await resp.text();
-                const $ = cheerio.load(html);
+                const $: CheerioAPI = cheerio_mod.load(html);
 
                 const title = $('title').text() || url;
 
@@ -91,7 +97,7 @@ export class web_crawler_source extends base_source {
 
                 // find and queue links
                 if (follow_links && depth < this.max_depth) {
-                    $('a[href]').each((_: any, el: any) => {
+                    $('a[href]').each((_idx: number, el: any) => {
                         try {
                             const href = $(el).attr('href');
                             if (!href) return;
@@ -106,8 +112,9 @@ export class web_crawler_source extends base_source {
                         } catch { }
                     });
                 }
-            } catch (e: any) {
-                console.warn(`[web_crawler] failed to fetch ${url}: ${e.message}`);
+            } catch (e: unknown) {
+                const msg = e instanceof Error ? e.message : String(e);
+                console.warn(`[web_crawler] failed to fetch ${url}: ${msg}`);
             }
         }
 
@@ -115,9 +122,9 @@ export class web_crawler_source extends base_source {
     }
 
     async _fetch_item(item_id: string): Promise<source_content> {
-        let cheerio: any;
+        let cheerio_mod: typeof import('cheerio');
         try {
-            cheerio = await import('cheerio');
+            cheerio_mod = await import('cheerio');
         } catch {
             throw new source_config_error('missing deps: npm install cheerio', this.name);
         }
@@ -125,37 +132,43 @@ export class web_crawler_source extends base_source {
         const controller = new AbortController();
         const timeout_id = setTimeout(() => controller.abort(), this.timeout);
 
-        const resp = await fetch(item_id, {
-            headers: { 'User-Agent': 'OpenMemory-Crawler/1.0 (compatible)' },
-            signal: controller.signal
-        });
+        try {
+            await validate_url(item_id);
+            const resp = await fetch(item_id, {
+                headers: { 'User-Agent': 'OpenMemory-Crawler/1.0 (compatible)' },
+                signal: controller.signal
+            });
 
-        clearTimeout(timeout_id);
+            clearTimeout(timeout_id);
 
-        if (!resp.ok) throw new Error(`http ${resp.status}: ${resp.statusText}`);
+            if (!resp.ok) throw new Error(`http ${resp.status}: ${resp.statusText}`);
 
-        const html = await resp.text();
-        const $ = cheerio.load(html);
+            const html = await resp.text();
+            const $: CheerioAPI = cheerio_mod.load(html);
 
-        // remove noise
-        $('script, style, nav, footer, header, aside').remove();
+            // remove noise
+            $('script, style, nav, footer, header, aside').remove();
 
-        const title = $('title').text() || item_id;
+            const title = $('title').text() || item_id;
 
-        // get main content
-        const main = $('main').length ? $('main') : $('article').length ? $('article') : $('body');
-        let text = main.text();
+            // get main content
+            const main = $('main').length ? $('main') : $('article').length ? $('article') : $('body');
+            let text = main.text();
 
-        // clean up whitespace
-        text = text.split('\n').map((l: string) => l.trim()).filter(Boolean).join('\n');
+            // clean up whitespace
+            text = text.split('\n').map((l: string) => l.trim()).filter(Boolean).join('\n');
 
-        return {
-            id: item_id,
-            name: title.trim(),
-            type: 'webpage',
-            text,
-            data: text,
-            meta: { source: 'web_crawler', url: item_id, char_count: text.length }
-        };
+            return {
+                id: item_id,
+                name: title.trim(),
+                type: 'webpage',
+                text,
+                data: text,
+                meta: { source: 'web_crawler', url: item_id, char_count: text.length }
+            };
+        } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e);
+            throw new source_fetch_error(msg, this.name, e instanceof Error ? e : undefined);
+        }
     }
 }

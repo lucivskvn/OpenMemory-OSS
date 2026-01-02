@@ -49,7 +49,7 @@ People _love_ thorough bug reports. I'm not even kidding.
 
 ### Prerequisites
 
-- Node.js 21+ and npm
+- Bun 1.1+
 - Python 3.8+ (for Python SDK development)
 - Git
 - Docker (optional, for containerized development)
@@ -59,17 +59,17 @@ People _love_ thorough bug reports. I'm not even kidding.
 ```bash
 # Clone the repository
 git clone https://github.com/CaviraOSS/OpenMemory.git
-cd openmemory
+cd OpenMemory
 
 # Install dependencies
 cd packages/openmemory-js
-npm install
+bun install
 
 # Start development server
-npm run dev
+bun run dev
 
 # Run Omnibus Test (Comprehensive Parity Check)
-npx tsx tests/test_omnibus.ts
+bun tests/test_omnibus.ts
 ```
 
 ### Python SDK Development
@@ -155,14 +155,14 @@ docs(api): update HSG endpoint documentation
 
 ```bash
 cd packages/openmemory-js
-npx tsx tests/test_omnibus.ts   # Run Omnibus Test
+bun test   # Run Full Test Suite
 ```
 
 #### Python SDK Tests
 
 ```bash
 cd packages/openmemory-py
-python -m pytest tests/test_omnibus.py  # Run Omnibus Test
+python -m pytest tests/   # Run Full Test Suite
 ```
 
 ### Architecture Guidelines

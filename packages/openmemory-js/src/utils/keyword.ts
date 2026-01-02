@@ -9,7 +9,7 @@ export interface keyword_match {
 
 export function extract_keywords(
     text: string,
-    min_length: number = 3,
+    min_length: number = env.keyword_min_length,
 ): Set<string> {
     const tokens = canonical_tokens_from_text(text);
     const keywords = new Set<string>();

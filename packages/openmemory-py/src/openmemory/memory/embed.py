@@ -21,16 +21,20 @@ from ..ai.aws import AwsAdapter
 from ..ai.synthetic import SyntheticAdapter
 
 async def emb_dispatch(provider: str, t: str, s: str) -> List[float]:
-    if provider == "synthetic": 
-        return await SyntheticAdapter(env.vec_dim or 768).embed(t, model=s)
-    if provider == "openai": 
-        return await OpenAIAdapter().embed(t, model=env.openai_model)
-    if provider == "ollama":
-        return await OllamaAdapter().embed(t, model=env.ollama_embedding_model)
-    if provider == "gemini":
-        return await GeminiAdapter().embed(t, model=env.gemini_embedding_model) 
-    if provider == "aws":
-        return await AwsAdapter().embed(t, model=env.aws_embedding_model)
+    try:
+        if provider == "synthetic": 
+            return await SyntheticAdapter(env.vec_dim or 768).embed(t, model=s)
+        if provider == "openai": 
+            return await OpenAIAdapter().embed(t, model=env.openai_model)
+        if provider == "ollama":
+            return await OllamaAdapter().embed(t, model=env.ollama_embedding_model)
+        if provider == "gemini":
+            return await GeminiAdapter().embed(t, model=env.gemini_embedding_model) 
+        if provider == "aws":
+            return await AwsAdapter().embed(t, model=env.aws_embedding_model)
+    except Exception as e:
+        print(f"[EMBED] Provider {provider} failed: {e}")
+        raise e
         
     return await SyntheticAdapter(env.vec_dim or 768).embed(t, model=s)
 
@@ -38,43 +42,68 @@ async def emb_dispatch(provider: str, t: str, s: str) -> List[float]:
 
 async def embed_for_sector(t: str, s: str) -> List[float]:
     if s not in SECTOR_CONFIGS: raise Exception(f"Unknown sector: {s}")
-    # tier logic
-    # if tier == fast/hybrid -> synthetic
-    # simplistic port for now:
-    # TS line 81: if tier==hybrid return gen_syn(t, s)
-    # I assume Tier is available in env? No, env.tier is implied in config.
-    # config.py didn't load tier explicitly. I should fix config.
     
-    # Assuming config loaded 'OM_TIER' to hybrid default
-    # Let's check config.py... I didn't verify `tier` in config.py.
-    # I'll defaulting to synthetic to test fast.
+    # Try primary provider
+    providers = [env.emb_kind] + [p for p in env.embedding_fallback if p != env.emb_kind]
     
-    return await emb_dispatch(env.emb_kind or "synthetic", t, s) # actually env.emb_kind defaults to synthetic in config.py
+    last_err = None
+    for p in providers:
+        try:
+            return await emb_dispatch(p, t, s)
+        except Exception as e:
+            last_err = e
+            continue
+            
+    # Ultimate fallback to synthetic if not already tried and failed
+    if "synthetic" not in providers:
+        try:
+            return await emb_dispatch("synthetic", t, s)
+        except:
+            pass
+            
+    raise last_err or Exception(f"All embedding providers failed for sector {s}")
 
 async def embed_multi_sector(id: str, txt: str, secs: List[str], chunks: Optional[List[dict]] = None) -> List[Dict[str, Any]]:
     # log pending
-    q.ins_log(id=id, model="multi-sector", status="pending", ts=int(time.time()*1000), err=None)
+    await q.ins_log(id=id, model="multi-sector", status="pending", ts=int(time.time()*1000), err=None)
     
-    res = []
     try:
-        for s in secs:
-            # simple loop, parralelism omitted for brevity but should use asyncio.gather
-            v = await embed_for_sector(txt, s)
+        # Parallelize embedding calls
+        tasks = [embed_for_sector(txt, s) for s in secs]
+        vectors = await asyncio.gather(*tasks)
+        
+        res = []
+        for s, v in zip(secs, vectors):
             res.append({"sector": s, "vector": v, "dim": len(v)})
             
-        q.upd_log(id=id, status="completed", err=None)
+        await q.upd_log(id=id, status="completed", err=None)
         return res
     except Exception as e:
-        q.upd_log(id=id, status="failed", err=str(e))
+        await q.upd_log(id=id, status="failed", err=str(e))
         raise e
 
 # Agg helpers
 def calc_mean_vec(emb_res: List[Dict[str, Any]], all_sectors: List[str]) -> List[float]:
-    # average all vectors
     if not emb_res: return []
-    d = emb_res[0]["dim"]
-    mean = np.zeros(d, dtype=np.float32)
+    dim = emb_res[0]["dim"]
+    # beta=2.0 from HYBRID_PARAMS
+    beta = 2.0
+    epsilon = 1e-8
+    
+    # Calculate weights based on sector importance (softmax-like)
+    exp_sum = 0
+    weighted_vectors = []
+    
     for r in emb_res:
-         mean += np.array(r["vector"], dtype=np.float32)
-    mean /= len(emb_res)
-    return mean.tolist()
+        sec_wt = SECTOR_CONFIGS.get(r["sector"], {}).get("weight", 1.0)
+        ew = math.exp(beta * sec_wt)
+        exp_sum += ew
+        weighted_vectors.append((r["vector"], ew))
+        
+    wsum = np.zeros(dim, dtype=np.float32)
+    for vec, ew in weighted_vectors:
+        sm_wt = ew / exp_sum
+        wsum += np.array(vec, dtype=np.float32) * sm_wt
+        
+    norm = np.linalg.norm(wsum) + epsilon
+    return (wsum / norm).tolist()

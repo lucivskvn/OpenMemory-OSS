@@ -131,7 +131,7 @@ services:
   # Dashboard: Web UI for visualizing and managing memories
   dashboard:
     build:
-      context: ./dashboard
+      context: ./apps/dashboard
       dockerfile: Dockerfile
     ports:
       - '3000:3000'

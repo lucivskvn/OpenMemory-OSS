@@ -3,10 +3,13 @@ import { get_model } from "../core/models";
 import { sector_configs } from "./hsg";
 import { q } from "../core/db";
 import { canonical_tokens_from_text, add_synonym_tokens } from "../utils/text";
+import { cosineSimilarity, vectorToBuffer, bufferToVector } from "../utils/vectors";
+export { cosineSimilarity, vectorToBuffer, bufferToVector };
 import {
     BedrockRuntimeClient,
     InvokeModelCommand,
 } from "@aws-sdk/client-bedrock-runtime";
+import OpenAI from "openai";
 
 let gem_q: Promise<any> = Promise.resolve();
 export const emb_dim = () => env.vec_dim;
@@ -77,7 +80,7 @@ const fuse_vecs = (syn: number[], sem: number[]): number[] => {
 };
 
 export async function embedForSector(t: string, s: string): Promise<number[]> {
-    console.error(`[EMBED] Provider: ${env.emb_kind}, Tier: ${tier}, Sector: ${s}`);
+    if (env.verbose) console.error(`[EMBED] Provider: ${env.emb_kind}, Tier: ${tier}, Sector: ${s}`);
     if (!sector_configs[s]) throw new Error(`Unknown sector: ${s}`);
     if (tier === "hybrid") return gen_syn_emb(t, s);
     if (tier === "smart" && env.emb_kind !== "synthetic") {
@@ -242,53 +245,61 @@ async function emb_batch_with_fallback(
     return result;
 }
 
+
+
+interface GeminiEmbeddingResponse {
+    embeddings: Array<{ values: number[] }>;
+}
+
+interface OllamaEmbeddingResponse {
+    embedding: number[];
+}
+
+
+
 async function emb_openai(t: string, s: string): Promise<number[]> {
     if (!env.openai_key) throw new Error("OpenAI key missing");
     const m = get_model(s, "openai");
-    const r = await fetchWithTimeout(
-        `${env.openai_base_url.replace(/\/$/, "")}/embeddings`,
-        {
-            method: "POST",
-            headers: {
-                "content-type": "application/json",
-                authorization: `Bearer ${env.openai_key}`,
-            },
-            body: JSON.stringify({
-                input: t,
-                model: env.openai_model || m,
-                dimensions: env.vec_dim,
-            }),
-        },
-    );
-    if (!r.ok) throw new Error(`OpenAI: ${r.status}`);
-    return ((await r.json()) as any).data[0].embedding;
+    const openai = new OpenAI({
+        apiKey: env.openai_key,
+        baseURL: env.openai_base_url || undefined,
+        timeout: EMBED_TIMEOUT_MS,
+    });
+
+    // Check if model supports dimensions (v3 only)
+    const isV3 = (env.openai_model || m).includes("text-embedding-3");
+    const params: any = {
+        input: t,
+        model: env.openai_model || m,
+    };
+    if (isV3 && env.vec_dim) params.dimensions = env.vec_dim;
+
+    const response = await openai.embeddings.create(params);
+    return response.data[0].embedding;
 }
 
 async function emb_batch_openai(
     txts: Record<string, string>,
 ): Promise<Record<string, number[]>> {
     if (!env.openai_key) throw new Error("OpenAI key missing");
-    const secs = Object.keys(txts),
-        m = get_model("semantic", "openai");
-    const r = await fetchWithTimeout(
-        `${env.openai_base_url.replace(/\/$/, "")}/embeddings`,
-        {
-            method: "POST",
-            headers: {
-                "content-type": "application/json",
-                authorization: `Bearer ${env.openai_key}`,
-            },
-            body: JSON.stringify({
-                input: Object.values(txts),
-                model: env.openai_model || m,
-                dimensions: env.vec_dim,
-            }),
-        },
-    );
-    if (!r.ok) throw new Error(`OpenAI batch: ${r.status}`);
-    const d = (await r.json()) as any,
-        out: Record<string, number[]> = {};
-    secs.forEach((s, i) => (out[s] = d.data[i].embedding));
+    const secs = Object.keys(txts);
+    const m = get_model("semantic", "openai");
+    const openai = new OpenAI({
+        apiKey: env.openai_key,
+        baseURL: env.openai_base_url || undefined,
+        timeout: EMBED_TIMEOUT_MS,
+    });
+
+    const isV3 = (env.openai_model || m).includes("text-embedding-3");
+    const params: any = {
+        input: Object.values(txts),
+        model: env.openai_model || m,
+    };
+    if (isV3 && env.vec_dim) params.dimensions = env.vec_dim;
+
+    const response = await openai.embeddings.create(params);
+    const out: Record<string, number[]> = {};
+    secs.forEach((s, i) => (out[s] = response.data[i].embedding));
     return out;
 }
 
@@ -308,11 +319,14 @@ async function emb_gemini(
         const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents?key=${env.gemini_key}`;
         for (let a = 0; a < 3; a++) {
             try {
-                const reqs = Object.entries(txts).map(([s, t]) => ({
-                    model: "models/text-embedding-004",
-                    content: { parts: [{ text: t }] },
-                    taskType: task_map[s] || task_map.semantic,
-                }));
+                const reqs = Object.entries(txts).map(([s, t]) => {
+                    const m = get_model(s, "gemini");
+                    return {
+                        model: m.startsWith("models/") ? m : `models/${m}`,
+                        content: { parts: [{ text: t }] },
+                        taskType: task_map[s] || task_map.semantic,
+                    };
+                });
                 const r = await fetchWithTimeout(url, {
                     method: "POST",
                     headers: { "content-type": "application/json" },
@@ -333,8 +347,8 @@ async function emb_gemini(
                     }
                     throw new Error(`Gemini: ${r.status}`);
                 }
-                const data = (await r.json()) as any,
-                    out: Record<string, number[]> = {};
+                const data = (await r.json()) as GeminiEmbeddingResponse;
+                const out: Record<string, number[]> = {};
                 let i = 0;
                 for (const s of Object.keys(txts))
                     out[s] = resize_vec(
@@ -368,7 +382,8 @@ async function emb_ollama(t: string, s: string): Promise<number[]> {
         body: JSON.stringify({ model: m, prompt: t }),
     });
     if (!r.ok) throw new Error(`Ollama: ${r.status}`);
-    return resize_vec(((await r.json()) as any).embedding, env.vec_dim);
+    const data = (await r.json()) as OllamaEmbeddingResponse;
+    return resize_vec(data.embedding, env.vec_dim);
 }
 async function emb_aws(t: string, s: string): Promise<number[]> {
     if (!env.AWS_REGION) throw new Error("AWS_REGION missing");
@@ -406,11 +421,11 @@ async function emb_local(t: string, s: string): Promise<number[]> {
         return gen_syn_emb(t, s);
     }
     try {
-        const { createHash } = await import("crypto");
-        const h = createHash("sha256")
-            .update(t + s)
-            .digest(),
-            e: number[] = [];
+        const encoder = new TextEncoder();
+        const data = encoder.encode(t + s);
+        const hashBuffer = await globalThis.crypto.subtle.digest("SHA-256", data);
+        const h = new Uint8Array(hashBuffer);
+        const e: number[] = [];
         for (let i = 0; i < env.vec_dim; i++) {
             const b1 = h[i % h.length],
                 b2 = h[(i + 1) % h.length];
@@ -546,9 +561,10 @@ export async function embedMultiSector(
     txt: string,
     secs: string[],
     chunks?: Array<{ text: string }>,
+    user_id?: string,
 ): Promise<EmbeddingResult[]> {
     const r: EmbeddingResult[] = [];
-    await q.ins_log.run(id, "multi-sector", "pending", Date.now(), null);
+    await q.ins_log.run(id, user_id || null, "multi-sector", "pending", Date.now(), null);
     for (let a = 0; a < 3; a++) {
         try {
             const simp = env.embed_mode === "simple";
@@ -556,9 +572,11 @@ export async function embedMultiSector(
                 simp &&
                 (env.emb_kind === "gemini" || env.emb_kind === "openai")
             ) {
-                console.error(
-                    `[EMBED] Simple mode (1 batch for ${secs.length} sectors)`,
-                );
+                if (env.verbose) {
+                    console.error(
+                        `[EMBED] Simple mode (1 batch for ${secs.length} sectors)`,
+                    );
+                }
                 const tb: Record<string, string> = {};
                 secs.forEach((s) => (tb[s] = txt));
                 // Use batch embedding with fallback support
@@ -567,7 +585,7 @@ export async function embedMultiSector(
                     r.push({ sector: s, vector: v, dim: v.length }),
                 );
             } else {
-                console.error(`[EMBED] Advanced mode (${secs.length} calls)`);
+                if (env.verbose) console.error(`[EMBED] Advanced mode (${secs.length} calls)`);
                 const par = env.adv_embed_parallel && env.emb_kind !== "gemini";
                 if (par) {
                     const p = secs.map(async (s) => {
@@ -625,29 +643,6 @@ const agg_chunks = (vecs: number[][]): number[] => {
     return r.map((x) => x / vecs.length);
 };
 
-export const cosineSimilarity = (a: number[], b: number[]) => {
-    if (a.length !== b.length) return 0;
-    let dot = 0,
-        na = 0,
-        nb = 0;
-    for (let i = 0; i < a.length; i++) {
-        dot += a[i] * b[i];
-        na += a[i] * a[i];
-        nb += b[i] * b[i];
-    }
-    return na && nb ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0;
-};
-
-export const vectorToBuffer = (v: number[]) => {
-    const b = Buffer.allocUnsafe(v.length * 4);
-    for (let i = 0; i < v.length; i++) b.writeFloatLE(v[i], i * 4);
-    return b;
-};
-export const bufferToVector = (b: Buffer) => {
-    const v: number[] = [];
-    for (let i = 0; i < b.length; i += 4) v.push(b.readFloatLE(i));
-    return v;
-};
 export const embed = (t: string) => embedForSector(t, "semantic");
 export const getEmbeddingProvider = () => env.emb_kind;
 
@@ -678,7 +673,14 @@ export const getEmbeddingInfo = () => {
     } else if (env.emb_kind === "gemini") {
         i.configured = !!env.gemini_key;
         i.batch_api = env.embed_mode === "simple";
-        i.model = "embedding-001";
+        i.model = env.gemini_model || "models/text-embedding-004";
+        i.models = {
+            episodic: get_model("episodic", "gemini"),
+            semantic: get_model("semantic", "gemini"),
+            procedural: get_model("procedural", "gemini"),
+            emotional: get_model("emotional", "gemini"),
+            reflective: get_model("reflective", "gemini"),
+        };
     } else if (env.emb_kind === "aws") {
         i.configured =
             !!env.AWS_REGION &&

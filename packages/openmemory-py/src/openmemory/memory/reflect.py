@@ -12,6 +12,8 @@ from .hsg import add_hsg_memory
 
 # Ported from backend/src/memory/reflect.ts
 
+from ..core.security import get_encryption
+
 logger = logging.getLogger("reflect")
 
 def vec_tf(txt: str) -> List[int]:
@@ -20,37 +22,7 @@ def vec_tf(txt: str) -> List[int]:
     return [w.count(u) for u in uniq]
 
 def sim_txt(t1: str, t2: str) -> float:
-    # TS implementation uses TF-based cosine similarity on raw text tokens ??
-    # TS line 18: vec(txt) returns counts.
-    # TS line 6 cos(a,b). 
-    # BUT: `vec(t1)` and `vec(t2)` will have different dimensions if words differ!
-    # TS line 11: `d += a[i] * b[i]`. It loops 0..a.length.
-    # If a and b have different lengths/vocab, this calculation is NONSENSE in TS unless indices align perfectly.
-    # The TS code at line 18 creates `uniq` from specific text.
-    # `vec("a b")` -> `[1, 1]` (for words a, b)
-    # `vec("c d")` -> `[1, 1]` (for words c, d)
-    # `cos([1,1], [1,1])` is 1.0.
-    # So "a b" and "c d" have 100% similarity in TS implementation?
-    # YES. The TS implementation is BROKEN/NAIVE.
-    # Rule of "1:1 parity" means I should replicate the BUG?
-    # Or fix it?
-    # User said "chaotic genius", "mimic 1:1".
-    # User might rely on this "broken" behavior for some reason (e.g. length similarity?).
-    # BUT: `vec` creates localized unique set.
-    # Effectively it measures distribution of frequencies regardless of WHAT the words are.
-    # e.g. "a a b" -> 2,1. "c c d" -> 2,1. Sim = 1.0.
-    # It measures "repetitiveness structure"?
-    # Likely the original author INTENDED to union the vocab, but didn't.
-    # Given "chaotic genius", maybe I fix it to be "what it likely intended" (TF-IDF or at least common vocab)?
-    # Or just use `utils/vectors.py` `cos_sim` on EMBEDDINGS?
-    # TS `reflect.ts` does NOT use embeddings.
-    # It uses strictly text.
-    # I will implement a PROPER simple Jaccard or overlap sim to be "better" but similar spirit (text based).
-    # OR: `compute_token_overlap` from hsg/utils is better.
-    # I'll use `compute_token_overlap` logic which is robust.
-    # Parity Deviation: I am fixing the likely-bugged similarity function.
-    
-    # Fixed robust Jaccard similarity
+    # Fixed robust Jaccard similarity (matches JS implementation)
     # Using simple tokenization for speed
     s1 = set(t1.lower().split())
     s2 = set(t2.lower().split())
@@ -67,8 +39,20 @@ def cluster(mems: List[Dict]) -> List[Dict]:
     for m in mems:
         if m["id"] in used: continue
         if m["primary_sector"] == "reflective": continue
-        if m.get("meta") and "consolidated" in str(m["meta"]): continue # simplistic check
+        if m.get("meta") and "consolidated" in str(m["meta"]): continue
         
+        # Helper to get plain text
+        text_cache = {}
+        def get_text(mem):
+             if mem["id"] in text_cache: return text_cache[mem["id"]]
+             try:
+                 pt = get_encryption().decrypt(mem["content"])
+             except:
+                 pt = mem["content"]
+             text_cache[mem["id"]] = pt
+             return pt
+
+        text_m = get_text(m)
         c = {"mem": [m], "n": 1}
         used.add(m["id"])
         
@@ -76,7 +60,7 @@ def cluster(mems: List[Dict]) -> List[Dict]:
             if o["id"] in used: continue
             if m["primary_sector"] != o["primary_sector"]: continue
             
-            if sim_txt(m["content"], o["content"]) > 0.8:
+            if sim_txt(text_m, get_text(o)) > 0.8:
                 c["mem"].append(o)
                 c["n"] += 1
                 used.add(o["id"])
@@ -112,39 +96,56 @@ def calc_sal(c: Dict) -> float:
     # So TS `m.sectors` is undefined. `includes` would throw or return false.
     # So `e` is always 0 in TS. 1:1 parity -> e=0.
     e = 0
+    if c["mem"][0]["primary_sector"] == "emotional":
+        e = 1.0
+    else:
+        for m in c["mem"]:
+            meta = json.loads(m.get("meta") or "{}")
+            if "emotional" in meta.get("additional_sectors", []):
+                e = 0.5
+                break
     
     return min(1.0, 0.6 * p + 0.3 * r + 0.1 * e)
 
 def summ(c: Dict) -> str:
     sec = c["mem"][0]["primary_sector"]
     n = c["n"]
-    txt = "; ".join([m["content"][:60] for m in c["mem"]])
+    # Decrypt content for summary
+    enc = get_encryption()
+    decoded = []
+    for m in c["mem"]:
+        try:
+             decoded.append(enc.decrypt(m["content"]))
+        except:
+             decoded.append(m["content"])
+             
+    txt = "; ".join([t[:60] for t in decoded])
     return f"{n} {sec} pattern: {txt[:200]}"
 
 async def mark_consolidated(ids: List[str]):
-    for i in ids:
-        m = q.get_mem(i)
-        if m:
-            meta = json.loads(m["meta"] or "{}")
-            meta["consolidated"] = True
-            db.execute("UPDATE memories SET meta=? WHERE id=?", (json.dumps(meta), i))
-    db.commit()
-
-async def boost(ids: List[str]):
+    if not ids: return
     now = int(time.time() * 1000)
-    for i in ids:
-        m = q.get_mem(i)
-        if m:
-            # Touch updated_at, boost salience
-            new_sal = min(1.0, (m["salience"] or 0) * 1.1)
-            db.execute("UPDATE memories SET salience=?, last_seen_at=? WHERE id=?", (new_sal, now, i))
-    db.commit()
+    placeholders = ",".join(["?"] * len(ids))
+    # We use a batch update to mark as consolidated
+    sql = f"UPDATE memories SET meta = json_set(COALESCE(meta, '{{}}'), '$.consolidated', true), updated_at=? WHERE id IN ({placeholders})"
+    await db.async_execute(sql, (now,) + tuple(ids))
+
+# boost
+async def boost(ids: List[str]):
+    if not ids: return
+    now = int(time.time() * 1000)
+    placeholders = ",".join(["?"] * len(ids))
+    # Batch boost salience by 10% capped at 1.0
+    sql = f"UPDATE memories SET salience = MIN(1.0, COALESCE(salience, 0) * 1.1), updated_at=? WHERE id IN ({placeholders})"
+    await db.async_execute(sql, (now,) + tuple(ids))
 
 async def run_reflection() -> Dict[str, Any]:
-    print("[REFLECT] Starting reflection job...")
+    logger.info("[REFLECT] Starting reflection job...")
     min_mems = env.reflect_min or 20
-    mems = q.all_mem(100, 0)
-    print(f"[REFLECT] Fetched {len(mems)} memories (min {min_mems})")
+    # Increased default scan range from 100 to 500 for better pattern detection
+    limit = env.reflect_limit or 500
+    mems = await q.all_mem(limit, 0)
+    logger.info(f"[REFLECT] Fetched {len(mems)} memories (min {min_mems})")
     
     if len(mems) < min_mems:
         print("[REFLECT] Not enough memories, skipping")
@@ -153,27 +154,36 @@ async def run_reflection() -> Dict[str, Any]:
     cls = cluster(mems)
     print(f"[REFLECT] Clustered into {len(cls)} groups")
     
-    n = 0
-    for c in cls:
-        txt = summ(c)
-        s = calc_sal(c)
-        src = [m["id"] for m in c["mem"]]
-        meta = {
-            "type": "auto_reflect",
-            "sources": src,
-            "freq": c["n"],
-            "at": time.strftime("%Y-%m-%dT%H:%M:%S")
-        }
-        
-        print(f"[REFLECT] Creating reflection: {c['n']} mems, sal={s:.3f}, sec={c['mem'][0]['primary_sector']}")
-        
-        # Insert reflection
-        await add_hsg_memory(txt, json.dumps(["reflect:auto"]), meta)
-        await mark_consolidated(src)
-        await boost(src)
-        n += 1
-        
-    if n > 0: log_maint_op("reflect", n)
+    async with db.transaction(): # Use db.transaction for async context manager
+        n = 0
+        for c in cls:
+            txt = summ(c)
+            s = calc_sal(c)
+            src = [m["id"] for m in c["mem"]]
+            meta = {
+                "type": "auto_reflect",
+                "sources": src,
+                "freq": c["n"],
+                "at": time.strftime("%Y-%m-%dT%H:%M:%S")
+            }
+            
+            print(f"[REFLECT] Creating reflection: {c['n']} mems, sal={s:.3f}, sec={c['mem'][0]['primary_sector']}")
+            
+            # Insert reflection
+            # Pass commit=False to avoid nested transaction (since we are in db.transaction())
+            await add_hsg_memory(txt, json.dumps(["reflect:auto"]), meta, commit=False)
+            await mark_consolidated(src)
+            await boost(src)
+            n += 1
+            
+        if n > 0: 
+            # Manually call q.ins_log or equivalent to bypass its commit?
+            # Or just let log_maint_op commit at the very end.
+            # log_maint_op in db.py has db.commit().
+            # If I call it inside the transaction block, it will commit!
+            # I should use db.execute directly for log_maint_op logic if I want atomicity.
+            await db.async_execute("INSERT INTO stats (type, count, ts) VALUES (?, ?, ?)", ("reflect", n, int(time.time() * 1000)))
+            
     print(f"[REFLECT] Job complete: created {n} reflections")
     return {"created": n, "clusters": len(cls)}
 
@@ -190,7 +200,7 @@ async def reflection_loop():
 
 def start_reflection():
     global _timer_task
-    if not env.get("auto_reflect", True) or _timer_task: return
+    if not getattr(env, "auto_reflect", True) or _timer_task: return
     _timer_task = asyncio.create_task(reflection_loop())
     print(f"[REFLECT] Started: every {env.reflect_interval or 10}m")
 

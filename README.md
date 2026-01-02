@@ -2,6 +2,7 @@
 
 > **Real long-term memory for AI agents. Not RAG. Not a vector DB. Self-hosted, Python + Node.**
 
+[![Status](https://img.shields.io/badge/Status-v1.0.0--Gold-gold)]()
 [![VS Code Extension](https://img.shields.io/badge/VS%20Code-Extension-007ACC?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=Nullure.openmemory-vscode)
 [![Discord](https://img.shields.io/discord/1300368230320697404?label=Discord)](https://discord.gg/P7HaRayqTh)
 [![PyPI](https://img.shields.io/pypi/v/openmemory-py.svg)](https://pypi.org/project/openmemory-py/)
@@ -174,9 +175,9 @@ git clone https://github.com/CaviraOSS/OpenMemory.git
 cd OpenMemory
 cp .env.example .env
 
-cd backend
-npm install
-npm run dev   # default :8080
+cd packages/openmemory-js
+bun install
+bun run dev   # default :8080
 ```
 
 Or with Docker:
@@ -389,8 +390,8 @@ The `opm` CLI talks directly to the engine / server.
 
 ```bash
 cd backend
-npm install
-npm link   # adds `opm` to your PATH
+bun install
+bun link   # adds `opm` to your PATH
 ```
 
 ### Commands
@@ -512,11 +513,12 @@ python -m migrate --from zep --api-key ZEP_KEY --verify
 
 ## 11. Roadmap
 
-- 🧬 Learned sector classifier (trainable on your data)
+- [x] Learned sector classifier (trainable on your data)
 - 🕸 Federated / clustered memory nodes
 - 🤝 Deeper LangGraph / CrewAI / AutoGen integrations
-- 🔭 Memory visualizer 2.0
-- 🔐 Pluggable encryption at rest
+- [x] Memory visualizer 2.0 (Live Graph)
+- [x] Pluggable encryption at rest (AES-GCM)
+- [x] Temporal Knowledge Graph & Compression
 
 Star the repo to follow along.
 

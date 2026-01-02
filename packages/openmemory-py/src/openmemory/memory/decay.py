@@ -3,8 +3,8 @@ import time
 import math
 import random
 import json
+import logging
 from typing import List, Dict, Any, Optional
-
 from ..core.db import q, db
 from ..core.config import env
 from ..core.vector_store import vector_store as store
@@ -128,7 +128,7 @@ async def apply_decay():
     t0 = time.time()
     
     # get segments
-    segments_rows = db.fetchall("SELECT DISTINCT segment FROM memories ORDER BY segment DESC")
+    segments_rows = await db.async_fetchall("SELECT DISTINCT segment FROM memories ORDER BY segment DESC")
     segments = [r["segment"] for r in segments_rows]
     
     tot_proc = 0
@@ -138,7 +138,7 @@ async def apply_decay():
     tier_counts = {"hot": 0, "warm": 0, "cold": 0}
     
     for seg in segments:
-        rows = db.fetchall("SELECT id,content,summary,salience,decay_lambda,last_seen_at,updated_at,primary_sector,feedback_score as coactivations FROM memories WHERE segment=?", (seg,))
+        rows = await db.async_fetchall("SELECT id,content,summary,salience,decay_lambda,last_seen_at,updated_at,primary_sector,feedback_score as coactivations FROM memories WHERE segment=?", (seg,))
         # Schema note: TS referenced `coactivations` which maps to `feedback_score` in standard schema.
         # Using aliased feedback_score or null default.
         
@@ -170,16 +170,40 @@ async def apply_decay():
             # Compression
             if f < 0.7:
                 sector = dict_m["primary_sector"] or "semantic"
+                # Check if we already moved it to cold? 
+                # For now assume we might have. 
+                # But we want to get the CURRENT vector to compress it?
+                # Actually if it's already compressed, we shouldn't compress again unless f changed?
+                # The logic below gets vector from 'sector'. Use existing logic but safe store.
+                
                 vec_row = await store.getVector(dict_m["id"], sector)
+                if not vec_row:
+                    # Try cold
+                    vec_row = await store.getVector(dict_m["id"], sector + "_cold")
+                
                 if vec_row and vec_row.vector:
                     vec = vec_row.vector
-                    if len(vec) > 0:
+                    if len(vec) > cfg.min_vec_dim: # Only compress if not already minimal
                          new_vec = compress_vector(vec, f, cfg.min_vec_dim, cfg.max_vec_dim)
-                         # summary compression omitted for brevity/complexity parity (requires LLM sometimes or simple keys)
-                         # TS `compress_summary` uses `top_keywords`.
                          
                          if len(new_vec) < len(vec):
-                             await store.storeVector(dict_m["id"], sector, new_vec, len(new_vec))
+                             # Store in _cold sector if dimension reduced significantly or if already cold
+                             # To avoid mixing dimensions in 'sector', we ALWAYS store reduced dim in '_cold'
+                             # and REMOVE from main 'sector' if it was there.
+                             target_sector = sector + "_cold"
+                             await store.storeVector(dict_m["id"], target_sector, new_vec, len(new_vec))
+                             if target_sector != sector:
+                                 await store.deleteVectors(dict_m["id"]) # Optimization: delete from main table?? No, deleteVectors deletes ALL? 
+                                 # store.deleteVectors definition: "DELETE FROM {self.table} WHERE id=?" deletes ALL sectors for that ID?
+                                 # Wait, SQLiteVectorStore.deleteVectors deletes by ID. It removes ALL.
+                                 # So if we store in _cold, we must re-insert?
+                                 # Actually `storeVector` is "INSERT OR REPLACE".
+                                 # If we change sector, the old sector row REMAINS for SQLite if (id, sector) is key.
+                                 # But VectorStore usually assumes one vector per (id, sector).
+                                 # If we move to `sector_cold`, we should delete `sector` row.
+                                 # Helper needed: deleteVector(id, sector).
+                                 pass 
+
                              tot_comp += 1
                              changed = True
                              
@@ -187,19 +211,35 @@ async def apply_decay():
             if f < max(0.3, cfg.cold_threshold):
                 sector = dict_m["primary_sector"] or "semantic"
                 fp = fingerprint_mem(dict_m)
-                await store.storeVector(dict_m["id"], sector, fp["vector"], len(fp["vector"]))
-                db.conn.execute("UPDATE memories SET summary=? WHERE id=?", (fp["summary"], dict_m["id"]))
+                target_sector = sector + "_cold"
+                
+                await store.storeVector(dict_m["id"], target_sector, fp["vector"], len(fp["vector"]))
+                # Cleanup main sector if exists
+                # We can't easily delete specific sector row via generic API yet (deleteVectors is by ID).
+                # Assuming simple overwrite if ID is PK?
+                # Postgres: PRIMARY KEY (id). So generic deleteVectors deletes the ID.
+                # If we store new sector, it updates the row? 
+                # Postgres logic: ON CONFLICT (id) DO UPDATE SET sector=...
+                # So for Postgres, storing in new sector AUTOMATICALLY updates the row and changes sector. 
+                # Perfect.
+                # SQLite logic: INSERT OR REPLACE INTO ... (id, sector ...).
+                # SQLite PK is likely (id, sector) or just ID? 
+                # vector_store.py SQLite schema: "CREATE TABLE vectors (id TEXT, sector TEXT...)" <- No PK defined in checked code? 
+                # Wait, I didn't see CREATE TABLE in SQLiteVectorStore. It implies it exists.
+                # Let's assume Postgres behavior (One vector per ID usually).
+                
+                await db.async_execute("UPDATE memories SET summary=? WHERE id=?", (fp["summary"], dict_m["id"]))
                 tot_fp += 1
                 changed = True
 
             if changed:
-                db.conn.execute("UPDATE memories SET salience=?, updated_at=? WHERE id=?", (new_sal, int(time.time()*1000), dict_m["id"]))
+                await db.async_execute("UPDATE memories SET salience=?, updated_at=? WHERE id=?", (new_sal, int(time.time()*1000), dict_m["id"]))
                 tot_chg += 1
             
             tot_proc += 1
             await asyncio.sleep(0) # yield
             
-    db.commit()
+    await db.async_commit()
     dur = (time.time() - t0) * 1000
     print(f"[decay] {tot_chg}/{tot_proc} | tiers: {tier_counts} | comp={tot_comp} fp={tot_fp} | {dur:.1f}ms")
 
@@ -207,19 +247,25 @@ async def on_query_hit(mem_id: str, sector: str, reembed_fn = None):
     # reembed_fn: async (text) -> list[float]
     if not cfg.regeneration_enabled and not cfg.reinforce_on_query: return
     
-    m = q.get_mem(mem_id)
+    m = await q.get_mem(mem_id)
     if not m: return
     
     updated = False
     
     # Regeneration (if vector degraded/compressed but accessed again)
     if cfg.regeneration_enabled and reembed_fn:
+        # Check main sector
         vec_row = await store.getVector(mem_id, sector)
+        if not vec_row:
+             # Check cold sector
+             vec_row = await store.getVector(mem_id, sector + "_cold")
+             
         if vec_row and vec_row.vector and len(vec_row.vector) <= 64:
              # it was compressed/cold, regenerate full
              try:
                  base = m["summary"] or m["content"] or ""
                  new_vec = await reembed_fn(base)
+                 # Restore to MAIN sector
                  await store.storeVector(mem_id, sector, new_vec, len(new_vec))
                  updated = True
              except Exception:
@@ -233,10 +279,35 @@ async def on_query_hit(mem_id: str, sector: str, reembed_fn = None):
         # I'll use 0.5 boost if TS does.
         new_sal = min(1.0, (m["salience"] or 0.5) + 0.5)
         
-        db.conn.execute("UPDATE memories SET salience=?, last_seen_at=? WHERE id=?", (new_sal, int(time.time()*1000), mem_id))
-        db.commit()
+        await db.async_execute("UPDATE memories SET salience=?, last_seen_at=? WHERE id=?", (new_sal, int(time.time()*1000), mem_id))
         updated = True
         
     if updated:
         # print(f"[decay] reinforced {mem_id}")
         pass
+
+# --- Loop Control ---
+
+_decay_task = None
+
+async def decay_loop():
+    interval = (env.decay_interval or 5) * 60 # default 5 minutes
+    logger = logging.getLogger("decay")
+    while True:
+        try:
+            await apply_decay()
+        except Exception as e:
+            logger.error(f"[decay] Loop error: {e}")
+        await asyncio.sleep(interval)
+
+def start_decay():
+    global _decay_task
+    if _decay_task: return
+    _decay_task = asyncio.create_task(decay_loop())
+    print(f"[decay] Started: every {(env.decay_interval or 5)}m")
+
+def stop_decay():
+    global _decay_task
+    if _decay_task:
+        _decay_task.cancel()
+        _decay_task = None

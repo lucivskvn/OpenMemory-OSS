@@ -1,14 +1,27 @@
-import { exec } from "child_process";
-import { promisify } from "util";
 import mammoth from "mammoth";
-import * as fs from "fs";
+import * as fs from "node:fs";
 import * as path from "path";
 import * as os from "os";
+import { validate_url } from "../utils/security";
 import ffmpeg from "fluent-ffmpeg";
 import OpenAI from "openai";
+import { env } from "../core/cfg";
 const TurndownService = require("turndown");
 
-const execAsync = promisify(exec);
+// Bun native file helpers
+const bunWrite = async (path: string, data: Buffer | string) => {
+    await Bun.write(path, data);
+};
+const bunRead = async (path: string) => {
+    return Buffer.from(await Bun.file(path).arrayBuffer());
+};
+const bunExists = async (path: string) => {
+    return await Bun.file(path).exists();
+};
+const bunUnlink = async (path: string) => {
+    try { await Bun.file(path).writer().end(); } catch { } // unlink via fs for now
+    if (fs.existsSync(path)) fs.unlinkSync(path);
+};
 
 export interface ExtractionResult {
     text: string;
@@ -17,7 +30,7 @@ export interface ExtractionResult {
         char_count: number;
         estimated_tokens: number;
         extraction_method: string;
-        [key: string]: any;
+        [key: string]: string | number | boolean | null | undefined | object;
     };
 }
 
@@ -80,6 +93,7 @@ export async function extractHTML(html: string): Promise<ExtractionResult> {
 }
 
 export async function extractURL(url: string): Promise<ExtractionResult> {
+    await validate_url(url);
     const response = await fetch(url);
     if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -111,7 +125,7 @@ export async function extractAudio(
     buffer: Buffer,
     mimeType: string,
 ): Promise<ExtractionResult> {
-    const apiKey = process.env.OPENAI_API_KEY || process.env.OM_OPENAI_API_KEY;
+    const apiKey = env.openai_key;
     if (!apiKey) {
         throw new Error(
             "OpenAI API key required for audio transcription. Set OPENAI_API_KEY in .env",
@@ -133,7 +147,7 @@ export async function extractAudio(
 
     try {
         // Write buffer to temp file
-        fs.writeFileSync(tempFilePath, buffer);
+        await Bun.write(tempFilePath, buffer);
 
         // Initialize OpenAI client
         const openai = new OpenAI({ apiKey });
@@ -161,9 +175,10 @@ export async function extractAudio(
                 language: (transcription as any).language || null,
             },
         };
-    } catch (error: any) {
-        console.error("[EXTRACT] Audio transcription failed:", error);
-        throw new Error(`Audio transcription failed: ${error.message}`);
+    } catch (error: unknown) {
+        if (env.verbose) console.error("[EXTRACT] Audio transcription failed:", error);
+        const msg = error instanceof Error ? error.message : String(error);
+        throw new Error(`Audio transcription failed: ${msg}`);
     } finally {
         // Clean up temp file
         try {
@@ -171,7 +186,7 @@ export async function extractAudio(
                 fs.unlinkSync(tempFilePath);
             }
         } catch (e) {
-            console.warn("[EXTRACT] Failed to clean up temp file:", e);
+            if (env.verbose) console.warn("[EXTRACT] Failed to clean up temp file:", e);
         }
     }
 }
@@ -192,7 +207,7 @@ export async function extractVideo(
 
     try {
         // Write video buffer to temp file
-        fs.writeFileSync(videoPath, buffer);
+        await Bun.write(videoPath, buffer);
 
         // Extract audio using ffmpeg
         await new Promise<void>((resolve, reject) => {
@@ -206,7 +221,7 @@ export async function extractVideo(
         });
 
         // Read extracted audio
-        const audioBuffer = fs.readFileSync(audioPath);
+        const audioBuffer = Buffer.from(await Bun.file(audioPath).arrayBuffer());
 
         // Transcribe extracted audio
         const result = await extractAudio(audioBuffer, "audio/mpeg");
@@ -222,21 +237,22 @@ export async function extractVideo(
         ).toFixed(2);
 
         return result;
-    } catch (error: any) {
-        if (error.message?.includes("ffmpeg")) {
+    } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (msg.includes("ffmpeg")) {
             throw new Error(
                 "FFmpeg not found. Please install FFmpeg to process video files. Visit: https://ffmpeg.org/download.html",
             );
         }
-        console.error("[EXTRACT] Video processing failed:", error);
-        throw new Error(`Video processing failed: ${error.message}`);
+        if (env.verbose) console.error("[EXTRACT] Video processing failed:", error);
+        throw new Error(`Video processing failed: ${msg}`);
     } finally {
         // Clean up temp files
         try {
             if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath);
             if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
         } catch (e) {
-            console.warn("[EXTRACT] Failed to clean up temp files:", e);
+            if (env.verbose) console.warn("[EXTRACT] Failed to clean up temp files:", e);
         }
     }
 }

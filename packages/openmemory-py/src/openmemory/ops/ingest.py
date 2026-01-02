@@ -5,56 +5,50 @@ import uuid
 import time
 from typing import Dict, Any, Optional
 
-from ..core.db import q, db, transaction
+from ..core.db import q, db
 from ..memory.hsg import add_hsg_memory
-from ..utils.vectors import rid
 from .extract import extract_text
 
-# Port of backend/src/ops/ingest.ts
+from ..utils.chunking import chunk_text
 
-LG = 8000
-SEC = 3000
+logger = logging.getLogger("openmemory.ops.ingest")
 
-def split_text(t: str, sz: int) -> list[str]:
-    if len(t) <= sz: return [t]
-    secs = []
-    paras = t.split("\n\n") # regex \n\n+ in TS
-    cur = ""
-    for p in paras:
-        if len(cur) + len(p) > sz and len(cur) > 0:
-            secs.append(cur.strip())
-            cur = p
-        else:
-            cur += ("\n\n" if cur else "") + p
-            
-    if cur.strip(): secs.append(cur.strip())
-    return secs
+from ..core.security import get_encryption
+
+# Constants for ingestion strategy
+LG_THRESH = 8000
+SEC_SIZE = 3000
 
 async def mk_root(txt: str, ex: Dict, meta: Dict = None, user_id: str = None) -> str:
+    """
+    Create a root memory item that serves as a container for a large document.
+    
+    Args:
+        txt: Full document text.
+        ex: Extraction results containing metadata.
+        meta: Extra metadata to attach.
+        user_id: Owner of the memory.
+        
+    Returns:
+        The ID of the created root memory.
+    """
     summ = txt[:500] + "..." if len(txt) > 500 else txt
     ctype = ex["metadata"]["content_type"].upper()
-    sec_count = int(len(txt) / SEC) + 1
+    sec_count = int(len(txt) / SEC_SIZE) + 1
     content = f"[Document: {ctype}]\n\n{summ}\n\n[Full content split across {sec_count} sections]"
     
     mid = str(uuid.uuid4())
     ts = int(time.time()*1000)
     
+    full_meta = (meta or {}).copy()
+    full_meta.update(ex["metadata"])
+    
     try:
-        # db.execute("BEGIN") 
-        # Direct insert to bypass segmentation logic/embedding for root?
-        # TS uses `q.ins_mem.run`.
-        # Mirroring TS:
-        full_meta = meta or {}
-        full_meta.update(ex["metadata"])
-        full_meta.update({
-            "is_root": True,
-            "ingestion_strategy": "root-child",
-            "ingested_at": ts
-        })
-        
-        q.ins_mem(
+        await q.ins_mem(
             id=mid,
-            content=content,
+            user_id=user_id or "anonymous",
+            segment=1,
+            content=get_encryption().encrypt(content),
             primary_sector="reflective",
             tags=json.dumps([]),
             meta=json.dumps(full_meta, default=str),
@@ -63,37 +57,66 @@ async def mk_root(txt: str, ex: Dict, meta: Dict = None, user_id: str = None) ->
             last_seen_at=ts,
             salience=1.0,
             decay_lambda=0.1,
-            segment=1, # Default 1? HSG rotates. TS uses `q.ins_mem` manually.
-            user_id=user_id or "anonymous",
-            feedback_score=0 # TS passes null? I used default in py
+            version=1,
+            feedback_score=0,
+            commit=False # Defer to parent transaction
         )
-        # db.execute("COMMIT")
         return mid
     except Exception as e:
-        # db.execute("ROLLBACK")
+        logger.error(f"Failed to create root memory: {e}")
         raise e
 
-async def mk_child(txt: str, idx: int, tot: int, rid: str, meta: Dict = None, user_id: str = None) -> str:
+async def mk_child(txt: str, idx: int, tot: int, p_id: str, meta: Dict = None, user_id: str = None) -> str:
+    """
+    Create a child memory item representing a section of a document.
+    
+    Args:
+        txt: Section text.
+        idx: Index of this section.
+        tot: Total number of sections.
+        p_id: Parent root ID.
+        meta: Extra metadata.
+        user_id: Owner ID.
+        
+    Returns:
+        The ID of the created child memory.
+    """
     m = meta or {}
     m.update({
         "is_child": True,
         "section_index": idx,
         "total_sections": tot,
-        "parent_id": rid
+        "parent_id": p_id
     })
-    r = await add_hsg_memory(txt, json.dumps([]), m, user_id)
+    r = await add_hsg_memory(txt, json.dumps([]), m, user_id, commit=False)
     return r["id"]
 
-async def link(rid: str, cid: str, idx: int, user_id: str = None):
+async def link(root_id_val: str, child_id: str, idx: int, user_id: str = None):
+    """Create a waypoint link between a root and its child."""
     ts = int(time.time()*1000)
-    # q.ins_waypoint
-    db.execute("INSERT INTO waypoints(src_id,dst_id,user_id,weight,created_at,updated_at) VALUES (?,?,?,?,?,?)",
-               (rid, cid, user_id or "anonymous", 1.0, ts, ts))
-    db.commit()
+    await db.async_execute("INSERT INTO waypoints(src_id,dst_id,user_id,weight,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+               (root_id_val, child_id, user_id or "anonymous", 1.0, ts, ts))
 
 async def ingest_document(t: str, data: Any, meta: Dict = None, cfg: Dict = None, user_id: str = None, tags: list = None) -> Dict[str, Any]:
-    th = cfg.get("lg_thresh", LG) if cfg else LG
-    sz = cfg.get("sec_sz", SEC) if cfg else SEC
+    """
+    Ingest a document, automatically deciding between single or root-child strategy.
+    
+    Args:
+        t: Source text or content descriptor.
+        data: Raw data (bytes or str).
+        meta: Optional metadata.
+        cfg: Configuration overrides (lg_thresh, sec_sz, etc).
+        user_id: Target user ID.
+        tags: Optional tags list.
+        
+    Returns:
+        Dict containing root_memory_id and ingestion metrics.
+    """
+    th = cfg.get("lg_thresh", LG_THRESH) if cfg else LG_THRESH
+    sz = cfg.get("sec_sz", SEC_SIZE) if cfg else SEC_SIZE
+    
+    if not user_id and meta and "user_id" in meta:
+        user_id = meta["user_id"]
     
     ex = await extract_text(t, data)
     text = ex["text"]
@@ -101,9 +124,6 @@ async def ingest_document(t: str, data: Any, meta: Dict = None, cfg: Dict = None
     est_tok = exMeta["estimated_tokens"]
     
     use_rc = (cfg and cfg.get("force_root")) or est_tok > th
-    
-    # Ensure tags is JSON string if needed, or list. add_hsg_memory expects JSON string for tags usually? 
-    # Let's check db definition. It expects string.
     tags_json = json.dumps(tags or [])
     
     if not use_rc:
@@ -120,36 +140,46 @@ async def ingest_document(t: str, data: Any, meta: Dict = None, cfg: Dict = None
             "extraction": exMeta
         }
         
-    secs = split_text(text, sz)
-    print(f"[INGEST] Splitting into {len(secs)} sections")
+    # Use robust chunking for splitting
+    chunks = chunk_text(text, tgt=sz, ovr=cfg.get("overlap", 0.1) if cfg else 0.1)
+    logger.info(f"Splitting text into {len(chunks)} sections using chunk_text for ingest")
     
-    cids = []
     try:
-        rid_val = await mk_root(text, ex, meta, user_id)
-        for i, s in enumerate(secs):
-             cid = await mk_child(s, i, len(secs), rid_val, meta, user_id)
-             cids.append(cid)
-             await link(rid_val, cid, i, user_id)
-             
-        return {
-            "root_memory_id": rid_val,
-            "child_count": len(secs),
-            "total_tokens": est_tok,
-            "strategy": "root-child",
-            "extraction": exMeta
-        }
+        async with db.transaction():
+            rid_val = await mk_root(text, ex, meta, user_id)
+            for i, c in enumerate(chunks):
+                 cid = await mk_child(c["text"], i, len(chunks), rid_val, meta, user_id)
+                 await link(rid_val, cid, i, user_id)
+                 
+            return {
+                "root_memory_id": rid_val,
+                "child_count": len(chunks),
+                "total_tokens": est_tok,
+                "strategy": "root-child",
+                "extraction": exMeta
+            }
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"[INGEST] Failed: {e}")
+        logger.exception(f"Ingest document failed: {e}")
         raise e
 
 async def ingest_url(url: str, meta: Dict = None, cfg: Dict = None, user_id: str = None) -> Dict[str, Any]:
+    """
+    Ingest text content from a URL, automatically deciding between single or root-child strategy.
+    
+    Args:
+        url: The URL to ingest.
+        meta: Optional metadata.
+        cfg: Configuration overrides.
+        user_id: Target user ID.
+        
+    Returns:
+        Dict containing root_memory_id and ingestion metrics.
+    """
     from .extract import extract_url
     ex = await extract_url(url)
     
-    th = cfg.get("lg_thresh", LG) if cfg else LG
-    sz = cfg.get("sec_sz", SEC) if cfg else SEC
+    th = cfg.get("lg_thresh", LG_THRESH) if cfg else LG_THRESH
+    sz = cfg.get("sec_sz", SEC_SIZE) if cfg else SEC_SIZE
     
     use_rc = (cfg and cfg.get("force_root")) or ex["metadata"]["estimated_tokens"] > th
     
@@ -166,26 +196,26 @@ async def ingest_url(url: str, meta: Dict = None, cfg: Dict = None, user_id: str
             "extraction": ex["metadata"]
         }
         
-    secs = split_text(ex["text"], sz)
-    cids = []
+    # Use robust chunking
+    chunks = chunk_text(ex["text"], tgt=sz, ovr=cfg.get("overlap", 0.1) if cfg else 0.1)
     
     m_root = meta or {}
     m_root["source_url"] = url
     
     try:
-        rid_val = await mk_root(ex["text"], ex, m_root, user_id)
-        for i, s in enumerate(secs):
-             cid = await mk_child(s, i, len(secs), rid_val, m_root, user_id)
-             cids.append(cid)
-             await link(rid_val, cid, i, user_id)
-             
-        return {
-            "root_memory_id": rid_val,
-            "child_count": len(secs),
-            "total_tokens": ex["metadata"]["estimated_tokens"],
-            "strategy": "root-child",
-            "extraction": ex["metadata"]
-        }
+        async with db.transaction():
+            rid_val = await mk_root(ex["text"], ex, m_root, user_id)
+            for i, c in enumerate(chunks):
+                 cid = await mk_child(c["text"], i, len(chunks), rid_val, m_root, user_id)
+                 await link(rid_val, cid, i, user_id)
+                 
+            return {
+                "root_memory_id": rid_val,
+                "child_count": len(chunks),
+                "total_tokens": ex["metadata"]["estimated_tokens"],
+                "strategy": "root-child",
+                "extraction": ex["metadata"]
+            }
     except Exception as e:
-        print(f"[INGEST] URL Failed: {e}")
+        logger.error(f"URL ingest failed for {url}: {e}", exc_info=True)
         raise e

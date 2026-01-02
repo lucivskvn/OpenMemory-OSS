@@ -42,18 +42,19 @@ class ValkeyVectorStore(VectorStore):
         }
         await client.hset(key, mapping=mapping)
 
-    async def getVectorsById(self, id: str) -> List[VectorRow]:
+    async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]:
         client = await self._get_client()
         key = self._key(id)
         data = await client.hgetall(key)
         if not data: return []
         
         # Decode
-        # Redis return bytes for keys and values usually if not decoding responses
-        # Assuming decode_responses=False default, or handling bytes manually
-        # Let's handle bytes safely
         def dec(x): return x.decode('utf-8') if isinstance(x, bytes) else str(x)
         
+        v_uid = dec(data.get(b'user_id') or data.get('user_id') or '')
+        if user_id and v_uid and v_uid != user_id:
+            return []
+            
         vec_bytes = data.get(b'v') or data.get('v')
         vec = list(np.frombuffer(vec_bytes, dtype=np.float32))
         
@@ -64,10 +65,10 @@ class ValkeyVectorStore(VectorStore):
             int(dec(data.get(b'dim') or data.get('dim')))
         )]
 
-    async def getVector(self, id: str, sector: str) -> Optional[VectorRow]:
+    async def getVector(self, id: str, sector: str, user_id: Optional[str] = None) -> Optional[VectorRow]:
         # KV store doesn't support query by two keys efficiently without index, 
         # but ID is the primary key here basically.
-        rows = await self.getVectorsById(id)
+        rows = await self.getVectorsById(id, user_id)
         for r in rows:
             if r.sector == sector:
                 return r
@@ -78,6 +79,18 @@ class ValkeyVectorStore(VectorStore):
         await client.delete(self._key(id))
 
     async def search(self, vector: List[float], sector: str, k: int, filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """
+        Perform vector similarity search.
+        
+        Args:
+            vector: Query vector
+            sector: Sector to search in
+            k: Number of results to return
+            filter: Optional filters (user_id)
+            
+        Returns:
+            List of dicts with 'id' and 'score'
+        """
         # Without RediSearch module, we must scan.
         # This is expensive (O(N)), but valid for small scale or fallback.
         # Ideally we use FT.SEARCH if available.
@@ -95,7 +108,7 @@ class ValkeyVectorStore(VectorStore):
         # For now, naive scan.
         
         while True:
-            cursor, keys = await client.scan(cursor, match=f"{self.prefix}*", count=100)
+            cursor, keys = await client.scan(cursor, match=f"{self.prefix}*", count=1000)
             if keys:
                 # pipeline fetch
                 pipe = client.pipeline()
@@ -124,10 +137,19 @@ class ValkeyVectorStore(VectorStore):
                     
                     results.append({
                         "id": dec(item.get(b'id') or item.get('id')),
-                        "similarity": float(sim)
+                        "score": float(sim)
                     })
             
             if cursor == 0: break
             
-        results.sort(key=lambda x: x["similarity"], reverse=True)
+        results.sort(key=lambda x: x["score"], reverse=True)
         return results[:k]
+        
+    async def disconnect(self):
+        """Close Redis connection."""
+        if self.client:
+            try:
+                await self.client.aclose()
+            except Exception as e:
+                logger.warning(f"Error during Valkey disconnect: {e}")
+            self.client = None

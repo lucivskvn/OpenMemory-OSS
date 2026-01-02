@@ -1,7 +1,10 @@
 import yaml
 import os
+import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
+
+logger = logging.getLogger("openmemory.models")
 
 ModelCfg = Dict[str, Dict[str, str]]
 
@@ -20,19 +23,33 @@ def load_models() -> ModelCfg:
     global _cfg
     if _cfg: return _cfg
     
-    # path: ../../../models.yml relative to core
-    p = Path(__file__).parent.parent.parent.parent / "models.yml"
-    if not p.exists():
-        print("[MODELS] models.yml not found, using defaults")
+    # Try multiple paths for models.yml
+    # 1. ROOT/.env (legacy location mentioned in comments)
+    # 2. ROOT/models.yml
+    # 3. Current Working Directory
+    root = Path(__file__).parent.parent.parent.parent
+    paths = [
+        root / "models.yml",
+        Path.cwd() / "models.yml"
+    ]
+    
+    config_path = None
+    for p in paths:
+        if p.exists():
+            config_path = p
+            break
+            
+    if not config_path:
+        logger.info("models.yml not found, using defaults")
         return get_defaults()
         
     try:
-        with open(p, "r", encoding="utf-8") as f:
+        with open(config_path, "r", encoding="utf-8") as f:
             _cfg = yaml.safe_load(f)
-            print(f"[MODELS] Loaded models.yml")
+            logger.info(f"Loaded models configuration from {config_path}")
             return _cfg
     except Exception as e:
-        print(f"[MODELS] Failed to parse models.yml: {e}")
+        logger.error(f"Failed to parse models.yml at {config_path}: {e}")
         return get_defaults()
 
 def get_model(sector: str, provider: str) -> str:

@@ -4,6 +4,7 @@ from typing import TypedDict, Optional, Any, Dict
 
 class TemporalFact(TypedDict):
     id: str
+    user_id: Optional[str]
     subject: str
     predicate: str
     object: str
@@ -15,6 +16,7 @@ class TemporalFact(TypedDict):
 
 class TemporalEdge(TypedDict):
     id: str
+    user_id: Optional[str]
     source_id: str
     target_id: str
     relation_type: str
@@ -32,6 +34,7 @@ class TimelineEntry(TypedDict):
     change_type: str # 'created' | 'updated' | 'invalidated'
 
 class TemporalQuery(TypedDict, total=False):
+    user_id: Optional[str]
     subject: Optional[str]
     predicate: Optional[str]
     object: Optional[str]

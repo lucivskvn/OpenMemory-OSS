@@ -2,6 +2,7 @@ import { add_hsg_memory } from "../memory/hsg";
 import { q, transaction } from "../core/db";
 import { rid, now, j } from "../utils";
 import { extractText, ExtractionResult } from "./extract";
+import { env } from "../core/cfg";
 
 const LG = 8000,
     SEC = 3000;
@@ -34,33 +35,33 @@ const split = (t: string, sz: number): string[] => {
     return secs;
 };
 
-const mkRoot = async (
-    txt: string,
-    ex: ExtractionResult,
-    meta?: Record<string, unknown>,
+const createRootMemory = async (
+    text: string,
+    extraction: ExtractionResult,
+    metadata?: Record<string, unknown>,
     user_id?: string | null,
 ) => {
-    const sum = txt.length > 500 ? txt.slice(0, 500) + "..." : txt;
-    const cnt = `[Document: ${ex.metadata.content_type.toUpperCase()}]\n\n${sum}\n\n[Full content split across ${Math.ceil(txt.length / SEC)} sections]`;
-    const id = rid(),
-        ts = now();
+    const summary_snippet = text.length > 500 ? text.slice(0, 500) + "..." : text;
+    const content = `[Document: ${extraction.metadata.content_type.toUpperCase()}]\n\n${summary_snippet}\n\n[Full content split across ${Math.ceil(text.length / SEC)} sections]`;
+    const memory_id = rid(),
+        timestamp = now();
     await transaction.begin();
     try {
         await q.ins_mem.run(
-            id,
-            cnt,
+            memory_id,
+            content,
             "reflective",
             j([]),
             j({
-                ...meta,
-                ...ex.metadata,
+                ...metadata,
+                ...extraction.metadata,
                 is_root: true,
                 ingestion_strategy: "root-child",
-                ingested_at: ts,
+                ingested_at: timestamp,
             }),
-            ts,
-            ts,
-            ts,
+            timestamp,
+            timestamp,
+            timestamp,
             1.0,
             0.1,
             1,
@@ -68,35 +69,35 @@ const mkRoot = async (
             null,
         );
         await transaction.commit();
-        return id;
-    } catch (e) {
-        console.error("[ERROR] Root failed:", e);
+        return memory_id;
+    } catch (e: unknown) {
+        if (env.verbose) console.error("[ERROR] Root memory creation failed:", e);
         await transaction.rollback();
         throw e;
     }
 };
 
-const mkChild = async (
-    txt: string,
-    idx: number,
-    tot: number,
-    rid: string,
-    meta?: Record<string, unknown>,
+const createChildMemory = async (
+    text: string,
+    index: number,
+    total: number,
+    root_id: string,
+    metadata?: Record<string, unknown>,
     user_id?: string | null,
 ) => {
-    const r = await add_hsg_memory(
-        txt,
+    const result = await add_hsg_memory(
+        text,
         j([]),
         {
-            ...meta,
+            ...metadata,
             is_child: true,
-            section_index: idx,
-            total_sections: tot,
-            parent_id: rid,
+            section_index: index,
+            total_sections: total,
+            parent_id: root_id,
         },
         user_id || undefined,
     );
-    return r.id;
+    return result.id;
 };
 
 const link = async (
@@ -110,16 +111,26 @@ const link = async (
     try {
         await q.ins_waypoint.run(rid, cid, user_id || "anonymous", 1.0, ts, ts);
         await transaction.commit();
-        console.log(
-            `[INGEST] Linked: ${rid.slice(0, 8)} -> ${cid.slice(0, 8)} (section ${idx})`,
-        );
-    } catch (e) {
+        if (env.verbose) {
+            console.log(
+                `[INGEST] Linked: ${rid.slice(0, 8)} -> ${cid.slice(0, 8)} (section ${idx})`,
+            );
+        }
+    } catch (e: unknown) {
         await transaction.rollback();
-        console.error(`[INGEST] Link failed for section ${idx}:`, e);
+        if (env.verbose) console.error(`[INGEST] Link failed for section ${idx}:`, e);
         throw e;
     }
 };
 
+/**
+ * Ingests a raw document (text or buffer), optionally splitting it into generic chunks linked to a root memory.
+ * @param t Raw text content (extracted or direct)
+ * @param data Original data buffer (if applicable)
+ * @param meta Additional metadata
+ * @param cfg Configuration options (thresholds, force root)
+ * @param user_id Owner of the memories
+ */
 export async function ingestDocument(
     t: string,
     data: string | Buffer,
@@ -155,54 +166,69 @@ export async function ingestDocument(
     }
 
     const secs = split(text, sz);
-    console.log(`[INGEST] Document: ${exMeta.estimated_tokens} tokens`);
-    console.log(`[INGEST] Splitting into ${secs.length} sections`);
+    if (env.verbose) {
+        console.log(`[INGEST] Document: ${exMeta.estimated_tokens} tokens`);
+        console.log(`[INGEST] Splitting into ${secs.length} sections`);
+    }
 
-    let rid: string;
-    const cids: string[] = [];
+    let root_id: string;
+    const child_ids: string[] = [];
 
     try {
-        rid = await mkRoot(text, ex, meta, user_id);
-        console.log(`[INGEST] Root memory created: ${rid}`);
+        root_id = await createRootMemory(text, ex, meta, user_id);
+        if (env.verbose) console.log(`[INGEST] Root memory created: ${root_id}`);
         for (let i = 0; i < secs.length; i++) {
             try {
-                const cid = await mkChild(
+                const child_id = await createChildMemory(
                     secs[i],
                     i,
                     secs.length,
-                    rid,
+                    root_id,
                     meta,
                     user_id,
                 );
-                cids.push(cid);
-                await link(rid, cid, i, user_id);
-                console.log(
-                    `[INGEST] Section ${i + 1}/${secs.length} processed: ${cid}`,
-                );
-            } catch (e) {
-                console.error(
-                    `[INGEST] Section ${i + 1}/${secs.length} failed:`,
-                    e,
-                );
+                child_ids.push(child_id);
+                await link(root_id, child_id, i, user_id);
+                if (env.verbose) {
+                    console.log(
+                        `[INGEST] Section ${i + 1}/${secs.length} processed: ${child_id}`,
+                    );
+                }
+            } catch (e: unknown) {
+                if (env.verbose) {
+                    console.error(
+                        `[INGEST] Section ${i + 1}/${secs.length} failed:`,
+                        e,
+                    );
+                }
                 throw e;
             }
         }
-        console.log(
-            `[INGEST] Completed: ${cids.length} sections linked to ${rid}`,
-        );
+        if (env.verbose) {
+            console.log(
+                `[INGEST] Completed: ${child_ids.length} sections linked to ${root_id}`,
+            );
+        }
         return {
-            root_memory_id: rid,
+            root_memory_id: root_id,
             child_count: secs.length,
             total_tokens: exMeta.estimated_tokens,
             strategy: "root-child",
             extraction: exMeta,
         };
-    } catch (e) {
-        console.error("[INGEST] Document ingestion failed:", e);
+    } catch (e: unknown) {
+        if (env.verbose) console.error("[INGEST] Document ingestion failed:", e);
         throw e;
     }
 }
 
+/**
+ * Ingests content from a URL by extracting text and metadata.
+ * @param url The target URL
+ * @param meta Additional metadata
+ * @param cfg Configuration options
+ * @param user_id Owner of the memories
+ */
 export async function ingestURL(
     url: string,
     meta?: Record<string, unknown>,
@@ -237,50 +263,58 @@ export async function ingestURL(
     }
 
     const secs = split(ex.text, sz);
-    console.log(`[INGEST] URL: ${ex.metadata.estimated_tokens} tokens`);
-    console.log(`[INGEST] Splitting into ${secs.length} sections`);
+    if (env.verbose) {
+        console.log(`[INGEST] URL: ${ex.metadata.estimated_tokens} tokens`);
+        console.log(`[INGEST] Splitting into ${secs.length} sections`);
+    }
 
-    let rid: string;
-    const cids: string[] = [];
+    let root_id: string;
+    const child_ids: string[] = [];
 
     try {
-        rid = await mkRoot(ex.text, ex, { ...meta, source_url: url }, user_id);
-        console.log(`[INGEST] Root memory for URL: ${rid}`);
+        root_id = await createRootMemory(ex.text, ex, { ...meta, source_url: url }, user_id);
+        if (env.verbose) console.log(`[INGEST] Root memory for URL: ${root_id}`);
         for (let i = 0; i < secs.length; i++) {
             try {
-                const cid = await mkChild(
+                const child_id = await createChildMemory(
                     secs[i],
                     i,
                     secs.length,
-                    rid,
+                    root_id,
                     { ...meta, source_url: url },
                     user_id,
                 );
-                cids.push(cid);
-                await link(rid, cid, i, user_id);
-                console.log(
-                    `[INGEST] URL section ${i + 1}/${secs.length} processed: ${cid}`,
-                );
-            } catch (e) {
-                console.error(
-                    `[INGEST] URL section ${i + 1}/${secs.length} failed:`,
-                    e,
-                );
+                child_ids.push(child_id);
+                await link(root_id, child_id, i, user_id);
+                if (env.verbose) {
+                    console.log(
+                        `[INGEST] URL section ${i + 1}/${secs.length} processed: ${child_id}`,
+                    );
+                }
+            } catch (e: unknown) {
+                if (env.verbose) {
+                    console.error(
+                        `[INGEST] URL section ${i + 1}/${secs.length} failed:`,
+                        e,
+                    );
+                }
                 throw e;
             }
         }
-        console.log(
-            `[INGEST] URL completed: ${cids.length} sections linked to ${rid}`,
-        );
+        if (env.verbose) {
+            console.log(
+                `[INGEST] URL completed: ${child_ids.length} sections linked to ${root_id}`,
+            );
+        }
         return {
-            root_memory_id: rid,
+            root_memory_id: root_id,
             child_count: secs.length,
             total_tokens: ex.metadata.estimated_tokens,
             strategy: "root-child",
             extraction: ex.metadata,
         };
-    } catch (e) {
-        console.error("[INGEST] URL ingestion failed:", e);
+    } catch (e: unknown) {
+        if (env.verbose) console.error("[INGEST] URL ingestion failed:", e);
         throw e;
     }
 }

@@ -1,12 +1,15 @@
 import time
 import json
 import asyncio
+import logging
 from typing import Dict, Any, List
-
 from ..core.db import q, db
 from ..core.config import env
+from ..ai.adapters import get_adapter
 
 # Port of backend/src/memory/user_summary.ts
+
+logger = logging.getLogger("user_summary")
 
 def gen_user_summary(mems: List[Dict]) -> str:
     if not mems: return "User profile initializing... (No memories recorded yet)"
@@ -44,27 +47,64 @@ def gen_user_summary(mems: List[Dict]) -> str:
 async def gen_user_summary_async(user_id: str) -> str:
     # q.all_mem_by_user.all(user_id, 100, 0)
     # Reimplement query
-    rows = db.fetchall("SELECT * FROM memories WHERE user_id=? ORDER BY created_at DESC LIMIT 100 OFFSET 0", (user_id,))
+    rows = await db.async_fetchall("SELECT * FROM memories WHERE user_id=? ORDER BY created_at DESC LIMIT 100 OFFSET 0", (user_id,))
+    
+    if env.tier == "smart" or (env.openai_key or env.gemini_key):
+        return await gen_user_summary_smart(rows, user_id)
+        
     return gen_user_summary(rows)
+
+async def gen_user_summary_smart(mems: List[Dict], user_id: str) -> str:
+    if not mems: return "User profile initializing..."
+    
+    # Simple extraction for context
+    context = []
+    for m in mems[:50]: # Limit to 50 for context window
+        try:
+             # Just use partial content to save tokens
+             c_snip = m["content"][:200]
+             meta = m.get("meta") or "{}"
+             context.append(f"- [{m['primary_sector']}] {c_snip} (Meta: {meta})")
+        except: pass
+        
+    prompt = f"""You are analyzing the memory stream of user '{user_id}'.
+Based on the following {len(context)} recent memory fragments, generate a concise, high-level professional profile summary.
+Focus on:
+1. Current active projects and technologies.
+2. key goals or problems being solved.
+3. User's preferred working style or patterns.
+
+Keep it under 100 words.
+
+Memories:
+{chr(10).join(context)}
+"""
+    try:
+        adapter = get_adapter()
+        summary = await adapter.chat([{"role": "user", "content": prompt}], model="gpt-4o")
+        return summary.strip()
+    except Exception as e:
+        logger.error(f"[USER_SUMMARY] Smart summary failed: {e}")
+        return gen_user_summary(mems)
 
 async def update_user_summary(user_id: str):
     try:
         summary = await gen_user_summary_async(user_id)
         now = int(time.time()*1000)
         
-        existing = db.fetchone("SELECT * FROM users WHERE user_id=?", (user_id,))
+        existing = await db.async_fetchone("SELECT * FROM openmemory_users WHERE user_id=?", (user_id,))
         if not existing:
-             db.execute("INSERT INTO users(user_id,summary,reflection_count,created_at,updated_at) VALUES (?,?,?,?,?)",
+             await db.async_execute("INSERT INTO openmemory_users(user_id,summary,reflection_count,created_at,updated_at) VALUES (?,?,?,?,?)",
                         (user_id, summary, 0, now, now))
         else:
-             db.execute("UPDATE users SET summary=?, updated_at=? WHERE user_id=?", (summary, now, user_id))
-        db.commit()
+             await db.async_execute("UPDATE openmemory_users SET summary=?, updated_at=? WHERE user_id=?", (summary, now, user_id))
+        await db.async_commit()
     except Exception as e:
-        print(f"[USER_SUMMARY] Error for {user_id}: {e}")
+        logger.error(f"[USER_SUMMARY] Error for {user_id}: {e}")
 
 async def auto_update_user_summaries():
-    all_mems = db.fetchall("SELECT user_id FROM memories LIMIT 10000")
-    uids = set(m["user_id"] for m in all_mems if m["user_id"])
+    users = await q.get_active_users()
+    uids = [u["user_id"] for u in users if u["user_id"]]
     
     updated = 0
     for u in uids:
@@ -80,7 +120,7 @@ async def user_summary_loop():
         try:
             await auto_update_user_summaries()
         except Exception as e:
-            print(f"[USER_SUMMARY] Loop error: {e}")
+            logger.error(f"[USER_SUMMARY] Loop error: {e}")
         await asyncio.sleep(interval)
 
 def start_user_summary_reflection():

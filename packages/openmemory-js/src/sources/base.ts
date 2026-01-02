@@ -1,15 +1,10 @@
-/**
- * base source class for openmemory data sources - production grade
- * 
- * features:
- * - custom exception hierarchy
- * - logging
- * - retry logic with exponential backoff
- * - rate limiting
- */
+import { env } from '../core/cfg';
 
 // -- exceptions --
 
+/**
+ * Base error class for all Source/Connector related exceptions.
+ */
 export class source_error extends Error {
     source?: string;
     cause?: Error;
@@ -131,7 +126,9 @@ export async function with_retry<T>(
                     ? e.retry_after * 1000
                     : Math.min(base_delay * Math.pow(2, attempt), max_delay);
 
-                console.warn(`[retry] attempt ${attempt + 1}/${max_attempts} failed: ${e.message}, retrying in ${delay}ms`);
+                if (env.verbose) {
+                    console.warn(`[retry] attempt ${attempt + 1}/${max_attempts} failed: ${e.message}, retrying in ${delay}ms`);
+                }
                 await new Promise(r => setTimeout(r, delay));
             }
         }
@@ -142,6 +139,14 @@ export async function with_retry<T>(
 
 // -- base source --
 
+/**
+ * Abstract base class for all data sources (connectors).
+ * Handles:
+ * - Connection management
+ * - Rate limiting
+ * - Retry logic
+ * - Common Ingestion flow
+ */
 export abstract class base_source {
     name: string = 'base';
     user_id: string;
@@ -160,11 +165,11 @@ export abstract class base_source {
     }
 
     async connect(creds?: Record<string, any>): Promise<boolean> {
-        console.log(`[${this.name}] connecting...`);
+        if (env.verbose) console.log(`[${this.name}] connecting...`);
         try {
             const result = await this._connect(creds || {});
             this._connected = result;
-            if (result) {
+            if (result && env.verbose) {
                 console.log(`[${this.name}] connected`);
             }
             return result;
@@ -176,7 +181,7 @@ export abstract class base_source {
 
     async disconnect(): Promise<void> {
         this._connected = false;
-        console.log(`[${this.name}] disconnected`);
+        if (env.verbose) console.log(`[${this.name}] disconnected`);
     }
 
     async list_items(filters?: Record<string, any>): Promise<source_item[]> {
@@ -191,7 +196,7 @@ export abstract class base_source {
                 () => this._list_items(filters || {}),
                 this._max_retries
             );
-            console.log(`[${this.name}] found ${items.length} items`);
+            if (env.verbose) console.log(`[${this.name}] found ${items.length} items`);
             return items;
         } catch (e: any) {
             throw new source_fetch_error(e.message, this.name, e);
@@ -222,7 +227,7 @@ export abstract class base_source {
         const ids: string[] = [];
         const errors: { id: string; error: string }[] = [];
 
-        console.log(`[${this.name}] ingesting ${items.length} items...`);
+        if (env.verbose) console.log(`[${this.name}] ingesting ${items.length} items...`);
 
         for (let i = 0; i < items.length; i++) {
             const item = items[i];
@@ -242,7 +247,7 @@ export abstract class base_source {
             }
         }
 
-        console.log(`[${this.name}] ingested ${ids.length} items, ${errors.length} errors`);
+        if (env.verbose) console.log(`[${this.name}] ingested ${ids.length} items, ${errors.length} errors`);
         return ids;
     }
 

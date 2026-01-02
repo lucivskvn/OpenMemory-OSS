@@ -18,23 +18,30 @@ your model stays stateless. **your app stops being amnesiac.**
 
 ---
 
+## system requirements
+
+- **Runtime**: [Bun](https://bun.sh) v1.1+ (Recommended) or Node.js v20+
+- **Database**: SQLite (built-in) or PostgreSQL (optional w/ pgvector)
+
 ## quick start
 
 ```bash
-npm install openmemory-js
+npm install openmemory-js@latest
+# or
+bun add openmemory-js@latest
 ```
 
 ```typescript
 import { Memory } from "openmemory-js"
 
-const mem = new Memory()
-await mem.add("user likes spicy food", { user_id: "u1" })
-const results = await mem.search("food?", { user_id: "u1" })
+const mem = new Memory({ user_id: "u1" })
+await mem.add("user likes spicy food")
+const results = await mem.search("food?")
 ```
 
 drop this into:
 
-- node backends
+- node/bun backends
 - clis
 - local tools
 - anything that needs durable memory without running a separate service
@@ -42,6 +49,17 @@ drop this into:
 **that's it.** you're now running a fully local cognitive memory engine 🎉
 
 ---
+
+## 🔒 security & encryption
+
+openmemory supports **AES-256-GCM encryption at rest** for sensitive data.
+
+```bash
+export OM_ENCRYPTION_ENABLED=true
+export OM_ENCRYPTION_KEY=your-32-char-secret-key-must-be-long-enough-123
+```
+
+when enabled, all memory content is encrypted before storage and decrypted only upon retrieval. vector embeddings remain unencrypted for searchability but contain no raw text.
 
 ## 📥 sources (connectors)
 
@@ -223,21 +241,18 @@ const howtos = await mem.search("deployment", { sectors: ["procedural"] });
 
 create a new memory instance with optional default user_id.
 
-### `async add(content: string, metadata?: object): Promise<hsg_mem>`
+### `async add(content: string, options?: MemoryOptions): Promise<MemoryItem>`
 
 store a new memory.
 
 **parameters:**
 - `content` - text content to store
-- `metadata` - optional metadata object:
-  - `user_id` - user identifier
+- `options` - optional object:
+  - `user_id` - override default user
   - `tags` - array of tag strings
-  - `created_at` - timestamp
-  - any other custom fields
+  - `[key: string]` - any other custom metadata
 
-**returns:** memory object with `id`, `primary_sector`, `sectors`
-
-### `async search(query: string, options?: object): Promise<hsg_q_result[]>`
+### `async search(query: string, options?: SearchOptions): Promise<MemoryItem[]>`
 
 search for relevant memories.
 
@@ -246,19 +261,55 @@ search for relevant memories.
 - `options`:
   - `user_id` - filter by user
   - `limit` - max results (default: 10)
-  - `sectors` - array of sectors to search
-  - `startTime` - filter memories after this timestamp
-  - `endTime` - filter memories before this timestamp
+  - `sectors` - array of sectors to search (e.g., `["episodic", "semantic"]`)
 
-**returns:** array of memory results with `id`, `content`, `score`, `sectors`, `salience`, `tags`, `meta`
+### `async ingest(options: IngestOptions): Promise<void>`
 
-### `async get(id: string): Promise<memory | null>`
+ingest documents or raw text.
 
-retrieve a memory by id.
+```typescript
+await mem.ingest({
+  content_type: "text/plain",
+  data: "full document text...",
+  metadata: { filename: "notes.txt" }
+})
+```
 
-### `async wipe(): Promise<void>`
+### `async update(id: string, content?: string, tags?: string[], meta?: object)`
 
-**⚠️ danger**: delete all memories, vectors, and waypoints. useful for testing.
+update an existing memory.
+
+### `async reinforce(id: string, boost?: number)`
+
+reinforce a memory's salience (importance) manually.
+
+### `async delete(id: string)`
+
+delete a specific memory.
+
+### `async delete_all(user_id?: string)`
+
+**danger**: delete all memories for a specific user. required for privacy/cleanup.
+
+### `async wipe()`
+
+**deprecated**: destroys the ENTIRE database. use only for testing.
+
+### `get temporal`
+
+Access temporal graph features:
+- `add(subject, predicate, object, opts)`
+- `get(subject, predicate)`
+- `search(pattern, opts)`
+- `history(subject)`
+
+### `get compression`
+
+Access optimization features:
+- `compress(text, algo)`: "semantic" (default), "syntactic", or "aggressive"
+- `batch(texts, algo)`: compress multiple strings
+- `analyze(text)`: compare all compression algorithms
+- `stats()`: get global savings statistics
 
 ---
 

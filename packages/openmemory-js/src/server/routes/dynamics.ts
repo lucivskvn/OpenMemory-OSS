@@ -1,9 +1,10 @@
 import { q } from "../../core/db";
+import type { AdvancedRequest, AdvancedResponse } from "../index";
+import { AppError, sendError } from "../errors";
 import {
     calculateDynamicSalienceWithTimeDecay,
     calculateCrossSectorResonanceScore,
     retrieveMemoriesWithEnergyThresholding,
-    applyRetrievalTraceReinforcementToMemory,
     propagateAssociativeReinforcementToLinkedNodes,
     performSpreadingActivationRetrieval,
     buildAssociativeWaypointGraphFromMemories,
@@ -18,356 +19,237 @@ import {
     TAU_ENERGY_THRESHOLD_FOR_RETRIEVAL,
     SECTORAL_INTERDEPENDENCE_MATRIX_FOR_COGNITIVE_RESONANCE,
 } from "../../ops/dynamics";
+import { z } from "zod";
+
+const SalienceSchema = z.object({
+    initial_salience: z.number().optional().default(0.5),
+    decay_lambda: z.number().optional().default(0.01),
+    recall_count: z.number().optional().default(0),
+    emotional_frequency: z.number().optional().default(0),
+    time_elapsed_days: z.number().optional().default(0)
+});
+
+const ResonanceSchema = z.object({
+    memory_sector: z.string().optional().default("semantic"),
+    query_sector: z.string().optional().default("semantic"),
+    base_similarity: z.number().optional().default(0.8)
+});
+
+const EnergyRetrievalSchema = z.object({
+    query: z.string().min(1),
+    sector: z.string().optional().default("semantic"),
+    min_energy: z.number().optional().default(TAU_ENERGY_THRESHOLD_FOR_RETRIEVAL)
+});
+
+const SpreadingActivationSchema = z.object({
+    initial_memory_ids: z.array(z.string()).min(1),
+    max_iterations: z.number().optional().default(3)
+});
 
 export function dynroutes(app: any) {
-    app.get(
-        "/dynamics/constants",
-        async (incoming_http_request: any, outgoing_http_response: any) => {
-            try {
-                const advanced_memory_dynamics_configuration_constants = {
-                    alpha_learning_rate_for_recall_reinforcement_value:
-                        ALPHA_LEARNING_RATE_FOR_RECALL_REINFORCEMENT,
-                    beta_learning_rate_for_emotional_frequency_value:
-                        BETA_LEARNING_RATE_FOR_EMOTIONAL_FREQUENCY,
-                    gamma_attenuation_constant_for_graph_distance_value:
-                        GAMMA_ATTENUATION_CONSTANT_FOR_GRAPH_DISTANCE,
-                    theta_consolidation_coefficient_for_long_term_memory:
-                        THETA_CONSOLIDATION_COEFFICIENT_FOR_LONG_TERM,
-                    eta_reinforcement_factor_for_trace_learning_value:
-                        ETA_REINFORCEMENT_FACTOR_FOR_TRACE_LEARNING,
-                    lambda_one_fast_decay_rate_for_short_term:
-                        LAMBDA_ONE_FAST_DECAY_RATE,
-                    lambda_two_slow_decay_rate_for_consolidation:
-                        LAMBDA_TWO_SLOW_DECAY_RATE,
-                    tau_energy_threshold_for_retrieval_cutoff:
-                        TAU_ENERGY_THRESHOLD_FOR_RETRIEVAL,
-                    sectoral_interdependence_matrix_for_cross_sector_resonance:
-                        SECTORAL_INTERDEPENDENCE_MATRIX_FOR_COGNITIVE_RESONANCE,
-                };
-                outgoing_http_response.json({
-                    success_status_indicator: true,
-                    dynamics_constants_configuration:
-                        advanced_memory_dynamics_configuration_constants,
-                });
-            } catch (unexpected_error_during_constants_retrieval) {
-                console.error(
-                    "[DYNAMICS] Error retrieving dynamics constants:",
-                    unexpected_error_during_constants_retrieval,
-                );
-                outgoing_http_response.status(500).json({ err: "internal" });
+    app.get("/dynamics/constants", async (req: AdvancedRequest, res: AdvancedResponse) => {
+        try {
+            const constants = {
+                alpha_learning_rate: ALPHA_LEARNING_RATE_FOR_RECALL_REINFORCEMENT,
+                beta_learning_rate: BETA_LEARNING_RATE_FOR_EMOTIONAL_FREQUENCY,
+                gamma_attenuation_constant: GAMMA_ATTENUATION_CONSTANT_FOR_GRAPH_DISTANCE,
+                theta_consolidation_coefficient: THETA_CONSOLIDATION_COEFFICIENT_FOR_LONG_TERM,
+                eta_reinforcement_factor: ETA_REINFORCEMENT_FACTOR_FOR_TRACE_LEARNING,
+                lambda_one_fast_decay: LAMBDA_ONE_FAST_DECAY_RATE,
+                lambda_two_slow_decay: LAMBDA_TWO_SLOW_DECAY_RATE,
+                tau_energy_threshold: TAU_ENERGY_THRESHOLD_FOR_RETRIEVAL,
+                sectoral_interdependence_matrix: SECTORAL_INTERDEPENDENCE_MATRIX_FOR_COGNITIVE_RESONANCE,
+            };
+            res.json({
+                success: true,
+                constants,
+            });
+        } catch (err) {
+            console.error("[DYNAMICS] Error retrieving dynamics constants:", err);
+            sendError(res, err);
+        }
+    });
+
+    app.post("/dynamics/salience/calculate", async (req: AdvancedRequest, res: AdvancedResponse) => {
+        try {
+            const validated = SalienceSchema.safeParse(req.body);
+            if (!validated.success) {
+                return sendError(res, new AppError(400, "VALIDATION_ERROR", "Invalid salience parameters", validated.error.format()));
             }
-        },
-    );
 
-    app.post(
-        "/dynamics/salience/calculate",
-        async (incoming_http_request: any, outgoing_http_response: any) => {
-            try {
-                const incoming_request_body_payload =
-                    incoming_http_request.body;
-                const initial_salience_value_from_request =
-                    incoming_request_body_payload.initial_salience || 0.5;
-                const lambda_decay_constant_from_request =
-                    incoming_request_body_payload.decay_lambda || 0.01;
-                const recall_reinforcement_count_from_request =
-                    incoming_request_body_payload.recall_count || 0;
-                const emotional_frequency_metric_from_request =
-                    incoming_request_body_payload.emotional_frequency || 0;
-                const time_elapsed_in_days_from_request =
-                    incoming_request_body_payload.time_elapsed_days || 0;
+            const { initial_salience, decay_lambda, recall_count, emotional_frequency, time_elapsed_days } = validated.data;
 
-                const calculated_dynamic_salience_result =
-                    await calculateDynamicSalienceWithTimeDecay(
-                        initial_salience_value_from_request,
-                        lambda_decay_constant_from_request,
-                        recall_reinforcement_count_from_request,
-                        emotional_frequency_metric_from_request,
-                        time_elapsed_in_days_from_request,
-                    );
+            const result = await calculateDynamicSalienceWithTimeDecay(
+                initial_salience,
+                decay_lambda,
+                recall_count,
+                emotional_frequency,
+                time_elapsed_days,
+            );
 
-                outgoing_http_response.json({
-                    success_status_indicator: true,
-                    calculated_salience_value:
-                        calculated_dynamic_salience_result,
-                    input_parameters_used: {
-                        initial_salience: initial_salience_value_from_request,
-                        decay_lambda: lambda_decay_constant_from_request,
-                        recall_count: recall_reinforcement_count_from_request,
-                        emotional_frequency:
-                            emotional_frequency_metric_from_request,
-                        time_elapsed_days: time_elapsed_in_days_from_request,
-                    },
-                });
-            } catch (unexpected_error_during_salience_calculation) {
-                console.error(
-                    "[DYNAMICS] Error calculating dynamic salience:",
-                    unexpected_error_during_salience_calculation,
-                );
-                outgoing_http_response.status(500).json({ err: "internal" });
+            res.json({
+                success: true,
+                calculated_salience: result,
+                parameters: validated.data,
+            });
+        } catch (err) {
+            console.error("[DYNAMICS] Error calculating dynamic salience:", err);
+            sendError(res, err);
+        }
+    });
+
+    app.post("/dynamics/resonance/calculate", async (req: AdvancedRequest, res: AdvancedResponse) => {
+        try {
+            const validated = ResonanceSchema.safeParse(req.body);
+            if (!validated.success) {
+                return sendError(res, new AppError(400, "VALIDATION_ERROR", "Invalid resonance parameters", validated.error.format()));
             }
-        },
-    );
 
-    app.post(
-        "/dynamics/resonance/calculate",
-        async (incoming_http_request: any, outgoing_http_response: any) => {
-            try {
-                const incoming_request_body_payload =
-                    incoming_http_request.body;
-                const memory_sector_type_from_request =
-                    incoming_request_body_payload.memory_sector || "semantic";
-                const query_sector_type_from_request =
-                    incoming_request_body_payload.query_sector || "semantic";
-                const base_cosine_similarity_from_request =
-                    incoming_request_body_payload.base_similarity || 0.8;
+            const { memory_sector, query_sector, base_similarity } = validated.data;
 
-                const calculated_cross_sector_resonance_score =
-                    await calculateCrossSectorResonanceScore(
-                        memory_sector_type_from_request,
-                        query_sector_type_from_request,
-                        base_cosine_similarity_from_request,
-                    );
+            const result = await calculateCrossSectorResonanceScore(
+                memory_sector,
+                query_sector,
+                base_similarity,
+            );
 
-                outgoing_http_response.json({
-                    success_status_indicator: true,
-                    resonance_modulated_score:
-                        calculated_cross_sector_resonance_score,
-                    input_parameters_used: {
-                        memory_sector: memory_sector_type_from_request,
-                        query_sector: query_sector_type_from_request,
-                        base_similarity: base_cosine_similarity_from_request,
-                    },
-                });
-            } catch (unexpected_error_during_resonance_calculation) {
-                console.error(
-                    "[DYNAMICS] Error calculating cross-sector resonance:",
-                    unexpected_error_during_resonance_calculation,
-                );
-                outgoing_http_response.status(500).json({ err: "internal" });
+            res.json({
+                success: true,
+                resonance_modulated_score: result,
+                parameters: validated.data,
+            });
+        } catch (err) {
+            console.error("[DYNAMICS] Error calculating cross-sector resonance:", err);
+            sendError(res, err);
+        }
+    });
+
+    app.post("/dynamics/retrieval/energy-based", async (req: AdvancedRequest, res: AdvancedResponse) => {
+        try {
+            const validated = EnergyRetrievalSchema.safeParse(req.body);
+            if (!validated.success) {
+                return sendError(res, new AppError(400, "VALIDATION_ERROR", "Invalid retrieval parameters", validated.error.format()));
             }
-        },
-    );
 
-    app.post(
-        "/dynamics/retrieval/energy-based",
-        async (incoming_http_request: any, outgoing_http_response: any) => {
-            try {
-                const incoming_request_body_payload =
-                    incoming_http_request.body;
-                const query_text_content_from_request =
-                    incoming_request_body_payload.query;
-                const query_sector_type_from_request =
-                    incoming_request_body_payload.sector || "semantic";
-                const minimum_energy_threshold_from_request =
-                    incoming_request_body_payload.min_energy ||
-                    TAU_ENERGY_THRESHOLD_FOR_RETRIEVAL;
+            const { query, sector, min_energy } = validated.data;
+            const user_id = req.user?.id;
 
-                if (!query_text_content_from_request) {
-                    return outgoing_http_response
-                        .status(400)
-                        .json({ err: "query_required" });
-                }
+            const { embedForSector } = await import("../../memory/embed");
+            const query_vector = await embedForSector(query, sector);
 
-                const { embedForSector } = await import("../../memory/embed");
-                const query_vector_embedding_array = await embedForSector(
-                    query_text_content_from_request,
-                    query_sector_type_from_request,
-                );
+            const results = await retrieveMemoriesWithEnergyThresholding(
+                query_vector,
+                sector,
+                min_energy,
+                user_id,
+            );
 
-                const retrieved_memories_with_energy_scores =
-                    await retrieveMemoriesWithEnergyThresholding(
-                        query_vector_embedding_array,
-                        query_sector_type_from_request,
-                        minimum_energy_threshold_from_request,
-                    );
+            res.json({
+                success: true,
+                query,
+                sector,
+                min_energy,
+                count: results.length,
+                memories: results.map((m) => ({
+                    id: m.id,
+                    content: m.content,
+                    primary_sector: m.primary_sector,
+                    salience: m.salience,
+                    activation_energy: (m as any).activation_energy,
+                })),
+            });
+        } catch (err) {
+            console.error("[DYNAMICS] Error performing energy-based retrieval:", err);
+            sendError(res, err);
+        }
+    });
 
-                outgoing_http_response.json({
-                    success_status_indicator: true,
-                    query_text: query_text_content_from_request,
-                    query_sector: query_sector_type_from_request,
-                    minimum_energy_threshold:
-                        minimum_energy_threshold_from_request,
-                    retrieved_memories_count:
-                        retrieved_memories_with_energy_scores.length,
-                    memories_with_activation_energy:
-                        retrieved_memories_with_energy_scores.map(
-                            (memory_record) => ({
-                                memory_id: memory_record.id,
-                                memory_content: memory_record.content,
-                                primary_sector_classification:
-                                    memory_record.primary_sector,
-                                salience_score: memory_record.salience,
-                                activation_energy_level:
-                                    memory_record.activation_energy,
-                            }),
-                        ),
-                });
-            } catch (unexpected_error_during_energy_retrieval) {
-                console.error(
-                    "[DYNAMICS] Error performing energy-based retrieval:",
-                    unexpected_error_during_energy_retrieval,
-                );
-                outgoing_http_response.status(500).json({ err: "internal" });
+    app.post("/dynamics/reinforcement/trace", async (req: AdvancedRequest, res: AdvancedResponse) => {
+        try {
+            const memory_id = req.body.memory_id;
+            if (!memory_id) {
+                return sendError(res, new AppError(400, "MISSING_MEMORY_ID", "memory_id is required"));
             }
-        },
-    );
 
-    app.post(
-        "/dynamics/reinforcement/trace",
-        async (incoming_http_request: any, outgoing_http_response: any) => {
-            try {
-                const incoming_request_body_payload =
-                    incoming_http_request.body;
-                const target_memory_id_from_request =
-                    incoming_request_body_payload.memory_id;
+            const user_id = req.user?.id;
+            const memory = await q.get_mem.get(memory_id, user_id);
 
-                if (!target_memory_id_from_request) {
-                    return outgoing_http_response
-                        .status(400)
-                        .json({ err: "memory_id_required" });
-                }
-
-                const memory_record_from_database = await q.get_mem.get(
-                    target_memory_id_from_request,
-                );
-                if (!memory_record_from_database) {
-                    return outgoing_http_response
-                        .status(404)
-                        .json({ err: "memory_not_found" });
-                }
-
-                const current_salience_before_reinforcement =
-                    memory_record_from_database.salience;
-                const updated_salience_after_reinforcement =
-                    await applyRetrievalTraceReinforcementToMemory(
-                        target_memory_id_from_request,
-                        current_salience_before_reinforcement,
-                    );
-
-                await q.upd_seen.run(
-                    target_memory_id_from_request,
-                    Date.now(),
-                    updated_salience_after_reinforcement,
-                    Date.now(),
-                );
-
-                const connected_waypoints_from_database =
-                    await q.get_waypoints_by_src.all(
-                        target_memory_id_from_request,
-                    );
-                const linked_nodes_with_weights_array =
-                    connected_waypoints_from_database.map(
-                        (waypoint_record: any) => ({
-                            target_id: waypoint_record.dst_id,
-                            weight: waypoint_record.weight,
-                        }),
-                    );
-
-                const propagated_reinforcement_updates_list =
-                    await propagateAssociativeReinforcementToLinkedNodes(
-                        target_memory_id_from_request,
-                        updated_salience_after_reinforcement,
-                        linked_nodes_with_weights_array,
-                    );
-
-                for (const reinforcement_update_record of propagated_reinforcement_updates_list) {
-                    await q.upd_seen.run(
-                        reinforcement_update_record.node_id,
-                        Date.now(),
-                        reinforcement_update_record.new_salience,
-                        Date.now(),
-                    );
-                }
-
-                outgoing_http_response.json({
-                    success_status_indicator: true,
-                    reinforced_memory_id: target_memory_id_from_request,
-                    previous_salience_value:
-                        current_salience_before_reinforcement,
-                    updated_salience_value:
-                        updated_salience_after_reinforcement,
-                    salience_increase_amount:
-                        updated_salience_after_reinforcement -
-                        current_salience_before_reinforcement,
-                    linked_nodes_reinforced_count:
-                        propagated_reinforcement_updates_list.length,
-                    linked_nodes_updates: propagated_reinforcement_updates_list,
-                });
-            } catch (unexpected_error_during_trace_reinforcement) {
-                console.error(
-                    "[DYNAMICS] Error applying trace reinforcement:",
-                    unexpected_error_during_trace_reinforcement,
-                );
-                outgoing_http_response.status(500).json({ err: "internal" });
+            if (!memory) {
+                return sendError(res, new AppError(404, "NOT_FOUND", "Memory not found"));
             }
-        },
-    );
 
-    app.post(
-        "/dynamics/activation/spreading",
-        async (incoming_http_request: any, outgoing_http_response: any) => {
-            try {
-                const incoming_request_body_payload =
-                    incoming_http_request.body;
-                const initial_memory_ids_array_from_request =
-                    incoming_request_body_payload.initial_memory_ids || [];
-                const maximum_spreading_iterations_from_request =
-                    incoming_request_body_payload.max_iterations || 3;
+            const salience = memory.salience || 0.1;
+            const waypoints = await q.get_waypoints_by_src.all(memory_id, user_id);
 
-                if (
-                    !Array.isArray(initial_memory_ids_array_from_request) ||
-                    initial_memory_ids_array_from_request.length === 0
-                ) {
-                    return outgoing_http_response
-                        .status(400)
-                        .json({ err: "initial_memory_ids_required" });
-                }
+            const propagated_updates = await propagateAssociativeReinforcementToLinkedNodes(
+                memory_id,
+                salience,
+                waypoints.map((w) => ({ target_id: w.dst_id, weight: w.weight })),
+                user_id,
+            );
 
-                const spreading_activation_results_map =
-                    await performSpreadingActivationRetrieval(
-                        initial_memory_ids_array_from_request,
-                        maximum_spreading_iterations_from_request,
-                    );
-
-                const activation_results_as_array = Array.from(
-                    spreading_activation_results_map.entries(),
-                )
-                    .map(([memory_node_id, activation_energy_level]) => ({
-                        memory_id: memory_node_id,
-                        activation_level: activation_energy_level,
-                    }))
-                    .sort(
-                        (first_entry, second_entry) =>
-                            second_entry.activation_level -
-                            first_entry.activation_level,
-                    );
-
-                outgoing_http_response.json({
-                    success_status_indicator: true,
-                    initial_activated_memories_count:
-                        initial_memory_ids_array_from_request.length,
-                    maximum_iterations_performed:
-                        maximum_spreading_iterations_from_request,
-                    total_activated_nodes_count:
-                        activation_results_as_array.length,
-                    spreading_activation_results: activation_results_as_array,
-                });
-            } catch (unexpected_error_during_spreading_activation) {
-                console.error(
-                    "[DYNAMICS] Error performing spreading activation:",
-                    unexpected_error_during_spreading_activation,
-                );
-                outgoing_http_response.status(500).json({ err: "internal" });
+            const now_sec = Math.floor(Date.now() / 1000);
+            for (const update of propagated_updates) {
+                await q.upd_seen.run(update.node_id, now_sec, update.new_salience, now_sec);
             }
-        },
-    );
+
+            await q.upd_seen.run(memory_id, now_sec, Math.min(1, salience + 0.15), now_sec);
+
+            res.json({
+                success: true,
+                propagated_count: propagated_updates.length,
+                new_salience: Math.min(1, salience + 0.15),
+            });
+        } catch (err) {
+            console.error("[DYNAMICS] Error applying trace reinforcement:", err);
+            sendError(res, err);
+        }
+    });
+
+    app.post("/dynamics/activation/spreading", async (req: AdvancedRequest, res: AdvancedResponse) => {
+        try {
+            const validated = SpreadingActivationSchema.safeParse(req.body);
+            if (!validated.success) {
+                return sendError(res, new AppError(400, "VALIDATION_ERROR", "Invalid spreading activation parameters", validated.error.format()));
+            }
+
+            const { initial_memory_ids, max_iterations } = validated.data;
+            const user_id = req.user?.id;
+
+            const results_map = await performSpreadingActivationRetrieval(
+                initial_memory_ids,
+                max_iterations,
+                user_id,
+            );
+
+            const activation_results = Array.from(results_map.entries())
+                .map(([memory_id, activation_level]) => ({
+                    memory_id,
+                    activation_level,
+                }))
+                .sort((a, b) => b.activation_level - a.activation_level);
+
+            res.json({
+                success: true,
+                initial_count: initial_memory_ids.length,
+                iterations: max_iterations,
+                total_activated: activation_results.length,
+                results: activation_results,
+            });
+        } catch (err) {
+            console.error("[DYNAMICS] Error performing spreading activation:", err);
+            sendError(res, err);
+        }
+    });
 
     app.get(
         "/dynamics/waypoints/graph",
-        async (incoming_http_request: any, outgoing_http_response: any) => {
+        async (incoming_http_request: AdvancedRequest, outgoing_http_response: AdvancedResponse) => {
             try {
                 const waypoint_graph_structure_from_database =
-                    await buildAssociativeWaypointGraphFromMemories();
+                    await buildAssociativeWaypointGraphFromMemories(
+                        incoming_http_request.user?.id,
+                    );
 
                 const graph_statistics_summary = {
                     total_nodes_in_graph:
@@ -424,93 +306,62 @@ export function dynroutes(app: any) {
                     "[DYNAMICS] Error building waypoint graph:",
                     unexpected_error_building_waypoint_graph,
                 );
-                outgoing_http_response.status(500).json({ err: "internal" });
+                sendError(outgoing_http_response, unexpected_error_building_waypoint_graph);
             }
         },
     );
 
-    app.post(
-        "/dynamics/waypoints/calculate-weight",
-        async (incoming_http_request: any, outgoing_http_response: any) => {
-            try {
-                const incoming_request_body_payload =
-                    incoming_http_request.body;
-                const source_memory_id_from_request =
-                    incoming_request_body_payload.source_memory_id;
-                const target_memory_id_from_request =
-                    incoming_request_body_payload.target_memory_id;
+    app.post("/dynamics/waypoints/calculate-weight", async (req: AdvancedRequest, res: AdvancedResponse) => {
+        try {
+            const validated = z.object({
+                source_memory_id: z.string().min(1),
+                target_memory_id: z.string().min(1)
+            }).safeParse(req.body);
 
-                if (
-                    !source_memory_id_from_request ||
-                    !target_memory_id_from_request
-                ) {
-                    return outgoing_http_response
-                        .status(400)
-                        .json({ err: "both_memory_ids_required" });
-                }
-
-                const source_memory_record = await q.get_mem.get(
-                    source_memory_id_from_request,
-                );
-                const target_memory_record = await q.get_mem.get(
-                    target_memory_id_from_request,
-                );
-
-                if (!source_memory_record || !target_memory_record) {
-                    return outgoing_http_response
-                        .status(404)
-                        .json({ err: "one_or_both_memories_not_found" });
-                }
-
-                const source_memory_mean_vector = source_memory_record.mean_vec;
-                const target_memory_mean_vector = target_memory_record.mean_vec;
-
-                if (!source_memory_mean_vector || !target_memory_mean_vector) {
-                    return outgoing_http_response
-                        .status(400)
-                        .json({ err: "memories_missing_embeddings" });
-                }
-
-                const { bufferToVector } = await import("../../memory/embed");
-                const source_vector_array = bufferToVector(
-                    source_memory_mean_vector,
-                );
-                const target_vector_array = bufferToVector(
-                    target_memory_mean_vector,
-                );
-
-                const time_gap_between_memories_milliseconds = Math.abs(
-                    source_memory_record.created_at -
-                        target_memory_record.created_at,
-                );
-
-                const calculated_waypoint_link_weight =
-                    await calculateAssociativeWaypointLinkWeight(
-                        source_vector_array,
-                        target_vector_array,
-                        time_gap_between_memories_milliseconds,
-                    );
-
-                outgoing_http_response.json({
-                    success_status_indicator: true,
-                    source_memory_identifier: source_memory_id_from_request,
-                    target_memory_identifier: target_memory_id_from_request,
-                    calculated_link_weight_value:
-                        calculated_waypoint_link_weight,
-                    time_gap_in_days:
-                        time_gap_between_memories_milliseconds / 86400000,
-                    calculation_details: {
-                        temporal_decay_factor_applied: true,
-                        cosine_similarity_computed: true,
-                    },
-                });
-            } catch (unexpected_error_calculating_waypoint_weight) {
-                console.error(
-                    "[DYNAMICS] Error calculating waypoint weight:",
-                    unexpected_error_calculating_waypoint_weight,
-                );
-                outgoing_http_response.status(500).json({ err: "internal" });
+            if (!validated.success) {
+                return sendError(res, new AppError(400, "VALIDATION_ERROR", "Both memory IDs are required", validated.error.format()));
             }
-        },
-    );
+
+            const { source_memory_id, target_memory_id } = validated.data;
+            const user_id = req.user?.id;
+
+            const source_memory = await q.get_mem.get(source_memory_id, user_id);
+            const target_memory = await q.get_mem.get(target_memory_id, user_id);
+
+            if (!source_memory || !target_memory) {
+                return sendError(res, new AppError(404, "NOT_FOUND", "One or both memories not found"));
+            }
+
+            if (!source_memory.mean_vec || !target_memory.mean_vec) {
+                return sendError(res, new AppError(400, "MISSING_EMBEDDINGS", "Memories missing embeddings"));
+            }
+
+            const { bufferToVector } = await import("../../memory/embed");
+            const source_vector = bufferToVector(source_memory.mean_vec);
+            const target_vector = bufferToVector(target_memory.mean_vec);
+
+            const time_gap_ms = Math.abs((source_memory.created_at || 0) - (target_memory.created_at || 0));
+
+            const weight = await calculateAssociativeWaypointLinkWeight(
+                source_vector,
+                target_vector,
+                time_gap_ms,
+            );
+
+            res.json({
+                success: true,
+                source_id: source_memory_id,
+                target_id: target_memory_id,
+                weight,
+                time_gap_days: time_gap_ms / 86400000,
+                details: {
+                    temporal_decay: true,
+                    cosine_similarity: true,
+                },
+            });
+        } catch (err) {
+            console.error("[DYNAMICS] Error calculating waypoint weight:", err);
+            sendError(res, err);
+        }
+    });
 }

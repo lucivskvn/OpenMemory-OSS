@@ -45,7 +45,7 @@ SECTOR_CONFIGS: Dict[str, SectorCfg] = {
             re.compile(r"\b(first|second|then|next|finally|afterwards|lastly)\b", re.I),
             re.compile(r"\b(install|run|execute|compile|build|deploy|configure|setup)\b", re.I),
             re.compile(r"\b(click|press|type|enter|select|drag|drop|scroll)\b", re.I),
-            re.compile(r"\b(method|function|class|algorithm|routine|recipie)\b", re.I),
+            re.compile(r"\b(method|function|class|algorithm|routine|recipe)\b", re.I),
             re.compile(r"\b(to\s+do|to\s+make|to\s+build|to\s+create)\b", re.I),
         ],
     },

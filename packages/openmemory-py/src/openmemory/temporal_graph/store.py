@@ -4,40 +4,54 @@ import json
 import logging
 from typing import List, Dict, Any, Optional
 
-from ..core.db import q, db, transaction
+from ..core.db import q, db
 
 # Port of backend/src/temporal_graph/store.ts
 
 logger = logging.getLogger("temporal")
 
-async def insert_fact(subject: str, predicate: str, subject_object: str, valid_from: int = None, confidence: float = 1.0, metadata: Dict[str, Any] = None, user_id: Optional[str] = None) -> str:
-    # subject_object -> "object" column (object is reserved word in python less dangerous but avoiding confusion)
+async def insert_fact(subject: str, predicate: str, subject_object: str, valid_from: int = None, confidence: float = 1.0, metadata: Dict[str, Any] = None, user_id: Optional[str] = None, commit: bool = True) -> str:
+    """
+    Insert a new temporal fact.
+    
+    Args:
+        subject: The subject of the fact.
+        predicate: The relationship verb/type.
+        subject_object: The object of the fact.
+        valid_from: Timestamp (ms) when fact became true. Default: now.
+        confidence: Confidence score (0.0-1.0).
+        metadata: Optional metadata dict.
+        user_id: Owner user ID.
+        commit: Whether to commit transaction immediately.
+
+    Returns:
+        The UUID of the new fact.
+    """
+    # subject_object -> "object" column (object is reserved word in python)
     fact_id = str(uuid.uuid4())
     now = int(time.time() * 1000)
     valid_from_ts = valid_from if valid_from is not None else now
     
-    # Invalidate existing
-    existing = db.fetchall("SELECT id, valid_from FROM temporal_facts WHERE subject=? AND predicate=? AND valid_to IS NULL ORDER BY valid_from DESC", (subject, predicate))
-    
-    for old in existing:
-        if old["valid_from"] < valid_from_ts:
-            db.execute("UPDATE temporal_facts SET valid_to=? WHERE id=?", (valid_from_ts - 1, old["id"]))
-            # logger.info(f"[TEMPORAL] Closed fact {old['id']}")
-            
-    meta_json = json.dumps(metadata) if metadata else None
-    if user_id:
-        md = metadata or {}
-        md["user_id"] = user_id
-        meta_json = json.dumps(md)
-    
-    db.execute("INSERT INTO temporal_facts(id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata) VALUES (?,?,?,?,?,NULL,?,?,?)",
-               (fact_id, subject, predicate, subject_object, valid_from_ts, confidence, now, meta_json))
-    
-    db.commit()
-    # logger.info(f"[TEMPORAL] Inserted fact: {subject} {predicate} {subject_object}")
+    async with db.transaction():
+        # Invalidate existing
+        user_clause = "AND user_id = ?" if user_id else "AND user_id IS NULL"
+        user_param = (user_id,) if user_id else ()
+        
+        existing = await db.async_fetchall(f"SELECT id, valid_from FROM temporal_facts WHERE subject=? AND predicate=? {user_clause} AND valid_to IS NULL ORDER BY valid_from DESC", (subject, predicate) + user_param)
+        
+        for old in existing:
+            if old["valid_from"] < valid_from_ts:
+                logger.info(f"[Temporal] Invalidating old fact {old['id']} for {subject}.{predicate}")
+                await db.async_execute("UPDATE temporal_facts SET valid_to=? WHERE id=?", (valid_from_ts - 1, old["id"]))
+                
+        meta_json = json.dumps(metadata) if metadata else None
+        
+        await db.async_execute("INSERT INTO temporal_facts(id, user_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata) VALUES (?,?,?,?,?,?,NULL,?,?,?)",
+                   (fact_id, user_id, subject, predicate, subject_object, valid_from_ts, confidence, now, meta_json))
     return fact_id
 
-async def update_fact(fact_id: str, confidence: Optional[float] = None, metadata: Optional[Dict[str, Any]] = None):
+async def update_fact(fact_id: str, user_id: str, confidence: Optional[float] = None, metadata: Optional[Dict[str, Any]] = None):
+    """Update metadata or confidence of an existing active fact."""
     updates = []
     params = []
     
@@ -54,100 +68,86 @@ async def update_fact(fact_id: str, confidence: Optional[float] = None, metadata
     updates.append("last_updated=?")
     params.append(int(time.time() * 1000))
     params.append(fact_id)
+    params.append(user_id)
     
-    sql = f"UPDATE temporal_facts SET {', '.join(updates)} WHERE id=?"
-    db.execute(sql, tuple(params))
-    db.commit()
+    sql = f"UPDATE temporal_facts SET {', '.join(updates)} WHERE id=? AND user_id=?"
+    await db.async_execute(sql, tuple(params))
+    await db.async_commit()
 
-async def invalidate_fact(fact_id: str, valid_to: int = None):
+async def invalidate_fact(fact_id: str, user_id: str, valid_to: int = None):
+    """Mark a fact as no longer valid from valid_to timestamp."""
     ts = valid_to if valid_to is not None else int(time.time() * 1000)
-    db.execute("UPDATE temporal_facts SET valid_to=?, last_updated=? WHERE id=?", (ts, int(time.time() * 1000), fact_id))
-    db.commit()
+    await db.async_execute("UPDATE temporal_facts SET valid_to=?, last_updated=? WHERE id=? AND user_id=?", (ts, int(time.time() * 1000), fact_id, user_id))
+    await db.async_commit()
     
-async def delete_fact(fact_id: str):
-    db.execute("DELETE FROM temporal_facts WHERE id=?", (fact_id,))
-    db.commit()
+async def delete_fact(fact_id: str, user_id: str):
+    """Hard delete a fact and its related edges."""
+    async with db.transaction():
+        await db.async_execute("DELETE FROM temporal_facts WHERE id=? AND user_id=?", (fact_id, user_id))
+        # Also delete related edges (orphans)
+        await db.async_execute("DELETE FROM temporal_edges WHERE (source_id=? OR target_id=?) AND user_id=?", (fact_id, fact_id, user_id))
 
-async def insert_edge(source_id: str, target_id: str, relation_type: str, valid_from: int = None, weight: float = 1.0, metadata: Dict[str, Any] = None) -> str:
+async def insert_edge(source_id: str, target_id: str, relation_type: str, valid_from: int = None, weight: float = 1.0, metadata: Dict[str, Any] = None, user_id: Optional[str] = None, commit: bool = True) -> str:
+    """Insert a new temporal edge between two facts."""
     edge_id = str(uuid.uuid4())
     now = int(time.time() * 1000)
     valid_from_ts = valid_from if valid_from is not None else now
-    meta_json = json.dumps(metadata) if metadata else None
     
-    db.execute("INSERT INTO temporal_edges(id, source_id, target_id, relation_type, valid_from, valid_to, weight, metadata) VALUES (?,?,?,?,?,NULL,?,?)",
-               (edge_id, source_id, target_id, relation_type, valid_from_ts, weight, meta_json))
-    db.commit()
+    async with db.transaction():
+        # Invalidate existing edges of same type between same nodes
+        user_clause = "AND user_id = ?" if user_id else "AND user_id IS NULL"
+        user_param = (user_id,) if user_id else ()
+        
+        existing = await db.async_fetchall(f"SELECT id, valid_from FROM temporal_edges WHERE source_id=? AND target_id=? AND relation_type=? {user_clause} AND valid_to IS NULL", (source_id, target_id, relation_type) + user_param)
+        
+        for old in existing:
+            if old["valid_from"] < valid_from_ts:
+                logger.info(f"[Temporal] Invalidating old edge {old['id']} between {source_id} and {target_id}")
+                await db.async_execute("UPDATE temporal_edges SET valid_to=? WHERE id=?", (valid_from_ts - 1, old["id"]))
+
+        meta_json = json.dumps(metadata) if metadata else None
+        
+        await db.async_execute("INSERT INTO temporal_edges(id, user_id, source_id, target_id, relation_type, valid_from, valid_to, weight, metadata) VALUES (?,?,?,?,?,?,NULL,?,?)",
+                   (edge_id, user_id, source_id, target_id, relation_type, valid_from_ts, weight, meta_json))
     return edge_id
 
-async def invalidate_edge(edge_id: str, valid_to: int = None):
+async def invalidate_edge(edge_id: str, user_id: str, valid_to: int = None):
+    """Mark an edge as no longer valid."""
     ts = valid_to if valid_to is not None else int(time.time() * 1000)
-    db.execute("UPDATE temporal_edges SET valid_to=? WHERE id=?", (ts, edge_id))
-    db.commit()
+    await db.async_execute("UPDATE temporal_edges SET valid_to=? WHERE id=? AND user_id=?", (ts, edge_id, user_id))
+    await db.async_commit()
 
 async def batch_insert_facts(facts: List[Dict[str, Any]]) -> List[str]:
+    """Batch insert facts using a single transaction."""
     ids = []
-    try:
-        db.execute("BEGIN")
-        # Reuse logic logic but inside TX? 
-        # `insert_fact` commits. I MUST NOT call `insert_fact` if I want atomic batch commit.
-        # But `insert_fact` logic is complex (invalidation).
-        # I should replicate logic here or change `insert_fact` to support `commit=False`.
-        # Given "chaotic genius", I'll reimplement loop here for safety/speed.
-        
-        # Or better: `insert_fact` using `db.execute` on shared conn. 
-        # If `insert_fact` calls `db.commit()`, it commits EVERYTHING in transaction so far.
-        # So calling `insert_fact` inside a `BEGIN`... `COMMIT` block works in SQLite (nested transactions unsupported, but commit commits all).
-        # Wait, if `insert_fact` commits, then the "Batch" atomicity is broken if one fails later.
-        # Proper way: refactor `insert_fact` to accept transaction handle or optional commit.
-        # But for 1:1 port, let's just loop and call `insert_fact`. The TS code sends `BEGIN` then calls `insert_fact`.
-        # TS `run_async` likely AUTO-COMMITS if not inside transaction or if connection is shared?
-        # `core/db.ts` uses `better-sqlite3` or similar pool. `run_async` is wrapper.
-        # `db.py` uses single `conn`.
-        # If I call `db.execute("BEGIN")`, then `commit()` inside `insert_fact` commits the transaction including the BEGIN.
-        # So subsequent inserts are NOT in the transaction anymore?
-        # Yes.
-        # I will modify `insert_fact` to NOT commit if I can.
-        # But `insert_fact` signatures shouldn't change if keeping 1:1 API.
-        # I'll just reimplement logic for batch.
-        
-        now = int(time.time()*1000)
-        
+    async with db.transaction():
         for f in facts:
-            fid = str(uuid.uuid4())
-            sub, pred, obj = f["subject"], f["predicate"], f["object"]
-            vf = f.get("valid_from", now)
-            conf = f.get("confidence", 1.0)
-            meta = f.get("metadata")
-            
-            # Invalidation
-            existing = db.conn.execute("SELECT id, valid_from FROM temporal_facts WHERE subject=? AND predicate=? AND valid_to IS NULL", (sub, pred)).fetchall()
-            for old in existing:
-                 # usage of dict factory assumed in db.py? db.py returns rows.
-                 if old["valid_from"] < vf:
-                     db.conn.execute("UPDATE temporal_facts SET valid_to=? WHERE id=?", (vf - 1, old["id"]))
-            
-            db.conn.execute("INSERT INTO temporal_facts(id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata) VALUES (?,?,?,?,?,NULL,?,?,?)",
-               (fid, sub, pred, obj, vf, conf, now, json.dumps(meta) if meta else None))
+            fid = await insert_fact(
+                subject=f["subject"],
+                predicate=f["predicate"],
+                subject_object=f["object"],
+                valid_from=f.get("valid_from"),
+                confidence=f.get("confidence", 1.0),
+                metadata=f.get("metadata"),
+                user_id=f.get("user_id"),
+                commit=False
+            )
             ids.append(fid)
-            
-        db.execute("COMMIT")
-        return ids
-    except Exception as e:
-        db.execute("ROLLBACK")
-        raise e
+    return ids
 
 async def apply_confidence_decay(decay_rate: float = 0.01) -> int:
+    """Apply decay to confidence scores of all active facts."""
     now = int(time.time() * 1000)
     one_day = 86400000
     
-    # SQLite math?
-    # MAX(0.1, confidence * (1 - ? * ((? - valid_from) / ?)))
-    # SQLite has MAX.
-    sql = """
+    # Postgres uses GREATEST, SQLite uses MAX
+    func = "GREATEST" if db.is_pg else "MAX"
+    
+    sql = f"""
         UPDATE temporal_facts 
-        SET confidence = MAX(0.1, confidence * (1 - ? * ((? - valid_from) / ?)))
+        SET confidence = {func}(0.1, confidence * (1 - ? * ((? - valid_from) / ?)))
         WHERE valid_to IS NULL AND confidence > 0.1
     """
-    db.execute(sql, (decay_rate, now, one_day))
-    db.commit()
-    return db.conn.total_changes
+    cursor = await db.async_execute(sql, (decay_rate, now, one_day))
+    await db.async_commit()
+    return cursor.rowcount

@@ -1,7 +1,7 @@
 import os from 'node:os'
 import { env } from './cfg'
 
-const DISABLED = (process.env.OM_TELEMETRY ?? '').toLowerCase() === 'false'
+const DISABLED = !env.telemetry_enabled;
 const gatherVersion = (): string => {
     if (process.env.npm_package_version) return process.env.npm_package_version
     try {
@@ -35,10 +35,8 @@ export const sendTelemetry = async () => {
             body: JSON.stringify(payload),
             keepalive: true,
         })
-        if (!res.ok) {
-            console.warn(``)
-        } else {
-            console.log(`[telemetry] sent`)
+        if (res.ok && env.verbose) {
+            console.log(`[telemetry] sent`);
         }
     } catch {
         // silently ignore telemetry errors

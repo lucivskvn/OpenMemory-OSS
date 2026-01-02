@@ -45,6 +45,22 @@ Search for memories.
 }
 ```
 
+### `GET /users`
+
+List all unique user IDs present in the system.
+
+### `GET /users/:user_id`
+
+Get the profile details for a specific user, including summary and stats.
+
+### `GET /users/:user_id/memories`
+
+List all memories for a specific user with pagination. Use `?l=100&u=0` for limit and offset.
+
+### `DELETE /users/:user_id/memories`
+
+Deletes all memories and associated data for a specific user.
+
 ### `GET /health`
 
 Returns `200 OK` if the system is running.

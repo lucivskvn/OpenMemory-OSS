@@ -3,10 +3,15 @@ web crawler connector for openmemory
 requires: httpx, beautifulsoup4
 no auth required for public urls
 """
+import asyncio
+import logging
 from typing import List, Dict, Optional, Set
 import os
 from urllib.parse import urljoin, urlparse
 from .base import base_connector
+
+
+logger = logging.getLogger("openmemory.connectors.web_crawler")
 
 class web_crawler_connector(base_connector):
     """connector for crawling web pages"""
@@ -27,11 +32,7 @@ class web_crawler_connector(base_connector):
     
     async def list_items(self, start_url: str = None, follow_links: bool = True, **filters) -> List[Dict]:
         """
-        crawl from starting url and list discovered pages
-        
-        args:
-            start_url: url to start crawling from
-            follow_links: whether to follow internal links
+        crawl from starting url and list discovered pages with parallel workers
         """
         if not start_url:
             raise ValueError("start_url is required")
@@ -46,70 +47,89 @@ class web_crawler_connector(base_connector):
         self.crawled.clear()
         
         base_domain = urlparse(start_url).netloc
-        to_visit = [(start_url, 0)]  # (url, depth)
+        queue = [(start_url, 0)]  # (url, depth)
+        
+        semaphore = asyncio.Semaphore(10) # limit concurrent requests
         
         async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
-            while to_visit and len(self.crawled) < self.max_pages:
-                url, depth = to_visit.pop(0)
+            while queue and len(self.crawled) < self.max_pages:
+                # Process queue in levels or chunks to allow parallelization?
+                # A simple way is to process current level in parallel
+                current_batch = queue[:20] # Take a slice of the queue
+                queue = queue[20:]
                 
-                if url in self.visited:
-                    continue
+                tasks = []
+                for url, depth in current_batch:
+                    if url in self.visited: continue
+                    if depth > self.max_depth: continue
+                    self.visited.add(url)
+                    tasks.append(self._crawl_page(client, url, depth, base_domain, follow_links, semaphore))
                 
-                if depth > self.max_depth:
-                    continue
+                if not tasks: break
                 
-                self.visited.add(url)
+                results = await asyncio.gather(*tasks)
                 
-                try:
-                    resp = await client.get(url, headers={
-                        "User-Agent": "OpenMemory-Crawler/1.0 (compatible)"
-                    })
-                    
-                    if resp.status_code != 200:
-                        continue
-                    
-                    content_type = resp.headers.get("content-type", "")
-                    if "text/html" not in content_type:
-                        continue
-                    
-                    soup = BeautifulSoup(resp.text, "html.parser")
-                    
-                    # get title
-                    title = soup.title.string if soup.title else url
-                    
-                    self.crawled.append({
-                        "id": url,
-                        "name": title.strip() if title else url,
-                        "type": "webpage",
-                        "url": url,
-                        "depth": depth
-                    })
-                    
-                    # find and queue links
-                    if follow_links and depth < self.max_depth:
-                        for link in soup.find_all("a", href=True):
-                            href = link["href"]
-                            full_url = urljoin(url, href)
-                            parsed = urlparse(full_url)
-                            
-                            # only follow same-domain links
-                            if parsed.netloc == base_domain:
-                                # normalize url
-                                clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-                                if clean_url not in self.visited:
-                                    to_visit.append((clean_url, depth + 1))
-                
-                except Exception as e:
-                    print(f"[crawler] failed to fetch {url}: {e}")
-                    continue
-        
+                for discovered_links in results:
+                    if discovered_links:
+                        queue.extend(discovered_links)
+
         return self.crawled
-    
-    async def fetch_item(self, item_id: str) -> Dict:
-        """
-        fetch and extract text from a url
+
+    async def _crawl_page(self, client, url, depth, base_domain, follow_links, semaphore):
+        """Internal helper to crawl a single page and find links."""
+        from bs4 import BeautifulSoup
+        from urllib.parse import urljoin, urlparse
         
-        item_id is the url to fetch
+        async with semaphore:
+            try:
+                resp = await client.get(url, headers={
+                    "User-Agent": "OpenMemory-Crawler/1.0 (compatible)"
+                })
+                
+                if resp.status_code != 200:
+                    return []
+                
+                content_type = resp.headers.get("content-type", "")
+                if "text/html" not in content_type:
+                    return []
+                
+                soup = BeautifulSoup(resp.text, "html.parser")
+                title = soup.title.string if soup.title else url
+                
+                self.crawled.append({
+                    "id": url,
+                    "name": title.strip() if title else url,
+                    "type": "webpage",
+                    "url": url,
+                    "depth": depth
+                })
+                
+                discovered = []
+                if follow_links and depth < self.max_depth:
+                    for link in soup.find_all("a", href=True):
+                        href = link["href"]
+                        full_url = urljoin(url, href)
+                        parsed = urlparse(full_url)
+                        
+                        # Only stay on same domain
+                        if parsed.netloc == base_domain:
+                            clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+                            discovered.append((clean_url, depth + 1))
+                return discovered
+                
+            except Exception as e:
+                logger.warning(f"failed to fetch {url}: {e}")
+                return []
+    
+    async def fetch_item(self, item_id: str) -> Dict[str, Any]:
+        """
+        Fetch and extract clean text from a URL.
+        
+        Args:
+            item_id: The URL to fetch.
+            
+        Returns:
+            Dict containing the extracted text and metadata.
         """
         try:
             import httpx
@@ -125,25 +145,28 @@ class web_crawler_connector(base_connector):
             
             soup = BeautifulSoup(resp.text, "html.parser")
             
-            # remove script and style elements
-            for element in soup(["script", "style", "nav", "footer", "header"]):
+            # remove junk elements
+            for element in soup(["script", "style", "nav", "footer", "header", "aside", "form"]):
                 element.decompose()
             
             # get title
             title = soup.title.string if soup.title else item_id
             
-            # get main content
-            main = soup.find("main") or soup.find("article") or soup.find("body")
+            # Priority selectors for main content
+            main = (
+                soup.find("main") or 
+                soup.find("article") or 
+                soup.find("div", class_=re.compile(r"content|article|post|main", re.I)) or
+                soup.find("body")
+            )
             
             if main:
-                # extract text
                 text = main.get_text(separator="\n", strip=True)
             else:
                 text = soup.get_text(separator="\n", strip=True)
             
-            # clean up whitespace
-            lines = [line.strip() for line in text.split("\n") if line.strip()]
-            text = "\n".join(lines)
+            # Final cleanup of excessive newlines
+            text = re.sub(r"\n{3,}", "\n\n", text).strip()
         
         return {
             "id": item_id,

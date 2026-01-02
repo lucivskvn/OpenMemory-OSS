@@ -1,27 +1,13 @@
-import { q } from "../core/db";
+import { q, Memory } from "../core/db";
 import { env } from "../core/cfg";
 
-const cos = (a: number[], b: number[]): number => {
-    let d = 0,
-        ma = 0,
-        mb = 0;
-    for (let i = 0; i < a.length; i++) {
-        d += a[i] * b[i];
-        ma += a[i] * a[i];
-        mb += b[i] * b[i];
-    }
-    return d / (Math.sqrt(ma) * Math.sqrt(mb));
-};
-
-const gen_user_summary = (mems: any[]): string => {
+const gen_user_summary = (mems: Memory[]): string => {
     if (!mems.length) return "User profile initializing... (No memories recorded yet)";
 
-    const recent = mems.slice(0, 10);
     const projects = new Set<string>();
     const languages = new Set<string>();
     const files = new Set<string>();
 
-    let events = 0;
     let saves = 0;
 
     for (const m of mems) {
@@ -30,20 +16,21 @@ const gen_user_summary = (mems: any[]): string => {
                 const meta = typeof m.meta === 'string' ? JSON.parse(m.meta) : m.meta;
                 if (meta.ide_project_name) projects.add(meta.ide_project_name);
                 if (meta.language) languages.add(meta.language);
-                if (meta.ide_file_path) files.add(meta.ide_file_path.split(/[\\/]/).pop());
+                if (meta.ide_file_path) {
+                    const fname = meta.ide_file_path.split(/[\\/]/).pop();
+                    if (fname) files.add(fname);
+                }
                 if (meta.ide_event_type === 'save') saves++;
             } catch (e) { /* ignore */ }
         }
-        events++;
     }
 
     const project_str = projects.size > 0 ? Array.from(projects).join(", ") : "Unknown Project";
     const lang_str = languages.size > 0 ? Array.from(languages).join(", ") : "General";
-    const recent_files = Array.from(files).slice(0, 3).join(", ");
-
+    const recent_files = Array.from(files).slice(0, 5).join(", ");
     const last_active = mems[0].created_at ? new Date(mems[0].created_at).toLocaleString() : "Recently";
 
-    return `Active in ${project_str} using ${lang_str}. Focused on ${recent_files || "various files"}. (${mems.length} memories, ${saves} saves). Last active: ${last_active}.`;
+    return `Active in ${project_str} using ${lang_str}. Recently working on: ${recent_files || "various files"}. Summarized from ${mems.length} events (${saves} saves). Last active: ${last_active}.`;
 };
 
 export const gen_user_summary_async = async (
@@ -72,8 +59,8 @@ export const update_user_summary = async (user_id: string): Promise<void> => {
 export const auto_update_user_summaries = async (): Promise<{
     updated: number;
 }> => {
-    const all_mems = await q.all_mem.all(10000, 0);
-    const user_ids = new Set(all_mems.map((m) => m.user_id).filter(Boolean));
+    const users = await q.get_active_users.all();
+    const user_ids = users.map((u: any) => u.user_id).filter(Boolean);
 
     let updated = 0;
     for (const uid of user_ids) {
@@ -95,9 +82,9 @@ export const start_user_summary_reflection = () => {
     const int = (env.user_summary_interval || 30) * 60000;
     timer = setInterval(
         () =>
-            auto_update_user_summaries().catch((e) =>
-                console.error("[USER_SUMMARY]", e),
-            ),
+            auto_update_user_summaries().catch((e) => {
+                if (env.verbose) console.error("[USER_SUMMARY]", e);
+            }),
         int,
     );
 };

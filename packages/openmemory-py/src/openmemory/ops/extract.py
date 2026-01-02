@@ -1,11 +1,13 @@
 import os
 import time
 import json
-import logging
 import asyncio
 import tempfile
 import re
+import logging
 from typing import Dict, Any, Union
+
+logger = logging.getLogger("openmemory.ops.extract")
 
 # Dependencies
 # pdf-parse -> pypdf
@@ -23,8 +25,10 @@ from ..core.config import env
 
 # Port of backend/src/ops/extract.ts
 
+import math
+
 def estimate_tokens(text: str) -> int:
-    return int(len(text) / 4) + 1
+    return math.ceil(len(text) / 4)
 
 async def extract_pdf(data: bytes) -> Dict[str, Any]:
     # pypdf logic
@@ -75,6 +79,11 @@ async def extract_html(html: str) -> Dict[str, Any]:
     }
 
 async def extract_url(url: str) -> Dict[str, Any]:
+    from ..utils.security import validate_url
+    is_valid, err = await validate_url(url)
+    if not is_valid:
+        raise ValueError(err)
+
     async with httpx.AsyncClient() as client:
         resp = await client.get(url, follow_redirects=True)
         resp.raise_for_status()
@@ -83,7 +92,7 @@ async def extract_url(url: str) -> Dict[str, Any]:
     return await extract_html(html)
 
 async def extract_audio(data: bytes, mime_type: str) -> Dict[str, Any]:
-    api_key = env.openai_api_key or os.getenv("OPENAI_API_KEY")
+    api_key = env.openai_key or os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise ValueError("OpenAI API key required for audio transcription")
         
@@ -124,7 +133,7 @@ async def extract_audio(data: bytes, mime_type: str) -> Dict[str, Any]:
             }
         }
     except Exception as e:
-        print(f"[EXTRACT] Audio failed: {e}")
+        logger.error(f"Audio extraction failed: {e}", exc_info=True)
         raise e
     finally:
         if os.path.exists(tmp_path):
@@ -159,34 +168,97 @@ async def extract_video(data: bytes) -> Dict[str, Any]:
         return res
         
     except FileNotFoundError:
-        raise RuntimeError("FFmpeg not found")
+        raise RuntimeError("FFmpeg not found - ensure ffmpeg is installed for video transcription")
     except Exception as e:
-        print(f"[EXTRACT] Video failed: {e}")
+        logger.error(f"Video extraction failed: {e}", exc_info=True)
         raise e
     finally:
         if os.path.exists(vid_path): os.unlink(vid_path)
         if os.path.exists(audio_path): os.unlink(audio_path)
 
+async def extract_image(data: bytes, mime_type: str) -> Dict[str, Any]:
+    api_key = env.openai_key or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        # Fallback to simple metadata if no key
+        return {
+            "text": "[Image Content - No OCR/Vision API Key provided]",
+            "metadata": {
+                "content_type": "image",
+                "mime_type": mime_type,
+                "size_bytes": len(data),
+                "extraction_method": "placeholder"
+            }
+        }
+    
+    import base64
+    b64_img = base64.b64encode(data).decode('utf-8')
+    data_url = f"data:{mime_type};base64,{b64_img}"
+    
+    try:
+        client = AsyncOpenAI(api_key=api_key)
+        response = await client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Describe this image in detail, capturing all visible text and visual elements."},
+                        {"type": "image_url", "image_url": {"url": data_url}}
+                    ],
+                }
+            ],
+            max_tokens=1000
+        )
+        text = response.choices[0].message.content
+        return {
+            "text": text,
+            "metadata": {
+                "content_type": "image",
+                "mime_type": mime_type,
+                "size_bytes": len(data),
+                "extraction_method": "gpt-4o-vision",
+                "estimated_tokens": estimate_tokens(text)
+            }
+        }
+    except Exception as e:
+        logger.error(f"Image extraction failed: {e}")
+        return {
+            "text": f"[Image Content - Extraction Failed: {str(e)}]",
+            "metadata": {
+                "content_type": "image",
+                "error": str(e)
+            }
+        }
+
 async def extract_text(content_type: str, data: Union[str, bytes]) -> Dict[str, Any]:
     ctype = content_type.lower()
     
+    import base64
+    
     # Check audio/video
+    if any(x in ctype for x in ["image", "png", "jpg", "jpeg", "gif", "webp"]):
+        buf = data if isinstance(data, bytes) else base64.b64decode(data) if isinstance(data, str) and not data.startswith("http") else data.encode("utf-8")
+        # infer mime
+        mime = "image/jpeg"
+        if "png" in ctype: mime = "image/png"
+        elif "gif" in ctype: mime = "image/gif"
+        elif "webp" in ctype: mime = "image/webp"
+        return await extract_image(buf, mime)
+
     if any(x in ctype for x in ["audio", "mp3", "wav", "m4a", "ogg", "webm"]) and "video" not in ctype:
-        buf = data if isinstance(data, bytes) else data.encode("utf-8") # likely base64 decoded if passed as string?
-        # Extract.ts handles base64 string conversion if needed.
-        # Python: expect bytes for binary.
+        buf = data if isinstance(data, bytes) else base64.b64decode(data) if isinstance(data, str) and not data.startswith("http") else data.encode("utf-8")
         return await extract_audio(buf, ctype)
         
     if any(x in ctype for x in ["video", "mp4", "avi", "mov"]):
-        buf = data if isinstance(data, bytes) else data.encode("utf-8")
+        buf = data if isinstance(data, bytes) else base64.b64decode(data) if isinstance(data, str) else data.encode("utf-8")
         return await extract_video(buf)
         
     if "pdf" in ctype:
-        buf = data if isinstance(data, bytes) else data.encode("utf-8")
+        buf = data if isinstance(data, bytes) else base64.b64decode(data) if isinstance(data, str) else data.encode("utf-8")
         return await extract_pdf(buf)
         
     if "docx" in ctype or ctype.endswith(".doc") or "msword" in ctype:
-        buf = data if isinstance(data, bytes) else data.encode("utf-8")
+        buf = data if isinstance(data, bytes) else base64.b64decode(data) if isinstance(data, str) else data.encode("utf-8")
         return await extract_docx(buf)
         
     if "html" in ctype or "htm" in ctype:
@@ -198,7 +270,7 @@ async def extract_text(content_type: str, data: Union[str, bytes]) -> Dict[str, 
         return {
             "text": s,
             "metadata": {
-                "content_type": ctype,
+                "content_type": "markdown" if "markdown" in ctype or "md" in ctype else "txt",
                 "char_count": len(s),
                 "estimated_tokens": estimate_tokens(s),
                 "extraction_method": "passthrough"

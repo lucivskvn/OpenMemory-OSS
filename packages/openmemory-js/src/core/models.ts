@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
+import { env } from "./cfg";
 interface model_cfg {
     [sector: string]: Record<string, string>;
 }
@@ -25,26 +26,16 @@ export const load_models = (): model_cfg => {
     }
 };
 
+import { parse } from "yaml";
+
 const parse_yaml = (yml: string): model_cfg => {
-    const lines = yml.split("\n");
-    const obj: model_cfg = {};
-    let cur_sec: string | null = null;
-    for (const line of lines) {
-        const trim = line.trim();
-        if (!trim || trim.startsWith("#")) continue;
-        const indent = line.search(/\S/);
-        const [key, ...val_parts] = trim.split(":");
-        const val = val_parts.join(":").trim();
-        if (indent === 0 && val) {
-            continue;
-        } else if (indent === 0) {
-            cur_sec = key;
-            obj[cur_sec] = {};
-        } else if (cur_sec && val) {
-            obj[cur_sec][key] = val;
-        }
+    try {
+        const parsed = parse(yml);
+        return (parsed as model_cfg) || {};
+    } catch (e) {
+        console.error("[MODELS] Yaml parse error:", e);
+        return {};
     }
-    return obj;
 };
 
 const get_defaults = (): model_cfg => ({
@@ -87,11 +78,14 @@ const get_defaults = (): model_cfg => ({
 
 export const get_model = (sector: string, provider: string): string => {
     // Environment variable overrides
-    if (provider === "ollama" && process.env.OM_OLLAMA_MODEL) {
-        return process.env.OM_OLLAMA_MODEL;
+    if (provider === "ollama" && env.ollama_model) {
+        return env.ollama_model || "nomic-embed-text";
     }
-    if (provider === "openai" && process.env.OM_OPENAI_MODEL) {
-        return process.env.OM_OPENAI_MODEL;
+    if (provider === "openai" && env.openai_model) {
+        return env.openai_model;
+    }
+    if (provider === "gemini" && env.gemini_model) {
+        return env.gemini_model;
     }
 
     const cfg = load_models();

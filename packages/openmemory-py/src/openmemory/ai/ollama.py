@@ -1,7 +1,12 @@
 import httpx
+import asyncio
+import logging
 from typing import List, Dict, Any, Optional
 from ..core.config import env
 from .adapter import AIAdapter
+
+
+logger = logging.getLogger("ai.ollama")
 
 class OllamaAdapter(AIAdapter):
     def __init__(self, base_url: str = None):
@@ -28,10 +33,15 @@ class OllamaAdapter(AIAdapter):
     async def embed_batch(self, texts: List[str], model: str = None) -> List[List[float]]:
         m = model or env.ollama_embedding_model or "nomic-embed-text"
         url = f"{self.base_url.rstrip('/')}/api/embeddings"
-        res = []
-        async with httpx.AsyncClient() as client:
-            for t in texts:
-                r = await client.post(url, json={"model": m, "prompt": t})
-                if r.status_code != 200: raise Exception(f"Ollama Emb: {r.text}")
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            tasks = [client.post(url, json={"model": m, "prompt": t}) for t in texts]
+            responses = await asyncio.gather(*tasks)
+            
+            res = []
+            for i, r in enumerate(responses):
+                if r.status_code != 200: 
+                    logger.error(f"Ollama Emb Error for '{texts[i][:50]}...': {r.text}")
+                    raise Exception(f"Ollama Emb: {r.text}")
                 res.append(r.json()["embedding"])
-        return res
+            return res

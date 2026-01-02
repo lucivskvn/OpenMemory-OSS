@@ -24,11 +24,14 @@ mem = Memory()
     *   Retrieves relevant memories based on semantic similarity + recency.
     *   **Returns**: List of memory objects, sorted by score.
 
-*   `delete(memory_id: str) -> bool`
-    *   Removes a memory by ID.
+*   `delete(memory_id: str, user_id: str = None) -> bool`
+    *   Removes a memory by ID. Checks ownership if `user_id` is provided.
 
-*   `history(user_id: str) -> list[dict]`
+*   `history(user_id: str, limit: int = 20, offset: int = 0) -> list[dict]`
     *   Returns the temporal chain of interactions for a user.
+
+*   `list_users() -> list[str]`
+    *   Returns a list of all active user IDs in the store.
 
 ### `OpenAIWrapper`
 
