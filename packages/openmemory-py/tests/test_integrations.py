@@ -1,4 +1,3 @@
-
 import unittest
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
@@ -31,7 +30,7 @@ class TestIntegrations(unittest.TestCase):
     def test_crewai_save(self):
         adapter = CrewAIMemory(self.mock_mem, user_id="test_agent")
         adapter.save("test content")
-        
+
         # Verify add was awaited
         self.mock_mem.add.assert_called_once()
         args, kwargs = self.mock_mem.add.call_args
@@ -40,33 +39,61 @@ class TestIntegrations(unittest.TestCase):
 
     def test_langchain_messages_sync_property(self):
         # Setup mock history return
-        item1 = MemoryItem(id="1", content="User: Hello", created_at=1, updated_at=1, last_seen_at=1, primary_sector="semantic", sectors=["semantic"], tags=[], meta={}, salience=0.5, user_id="u1", feedback_score=0)
-        item2 = MemoryItem(id="2", content="Assistant: Hi", created_at=2, updated_at=2, last_seen_at=2, primary_sector="semantic", sectors=["semantic"], tags=[], meta={}, salience=0.5, user_id="u1", feedback_score=0)
-        
+        item1 = MemoryItem(
+            id="1",
+            content="User: Hello",
+            created_at=1,
+            updated_at=1,
+            last_seen_at=1,
+            primary_sector="semantic",
+            sectors=["semantic"],
+            tags=[],
+            metadata={},
+            salience=0.5,
+            user_id="u1",
+            feedback_score=0,
+            _debug=None,
+        )
+        item2 = MemoryItem(
+            id="2",
+            content="Assistant: Hi",
+            created_at=2,
+            updated_at=2,
+            last_seen_at=2,
+            primary_sector="semantic",
+            sectors=["semantic"],
+            tags=[],
+            metadata={},
+            salience=0.5,
+            user_id="u1",
+            feedback_score=0,
+            _debug=None,
+        )
+
         self.mock_mem.history.return_value = [item1, item2] 
 
         history = OpenMemoryChatMessageHistory(self.mock_mem, user_id="u1")
-        
+
         # Accessing .messages property which calls run_sync -> invokes history()
         # We replaced the try-except in src with "silent catch" returning [], so we might not see the error from here.
         # But we can patch logger if there was one? No logger there.
         # The code in langchain.py:
         # try: ... except: return []
-        
+
         # I should test run_sync directly with the mock to see if it fails.
         try:
-             res = run_sync(self.mock_mem.history("u1"))
-             print(f"DIRECT RUN_SYNC RESULT: {res}")
+            res = run_sync(self.mock_mem.history("u1"))
+            print(f"DIRECT RUN_SYNC RESULT: {res}")
         except Exception as e:
-             print(f"DIRECT RUN_SYNC ERROR: {e}")
-             import traceback
-             traceback.print_exc()
+            print(f"DIRECT RUN_SYNC ERROR: {e}")
+            import traceback
+            traceback.print_exc()
 
         msgs = history.messages
         # If len is 0, print that failed
         if len(msgs) == 0:
             print("History messages returned empty list.")
-        
+
         self.assertEqual(len(msgs), 2)
         self.assertEqual(msgs[0].content, "Hello")
         self.assertEqual(msgs[1].content, "Hi")

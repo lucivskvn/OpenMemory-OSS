@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { api, Memory } from "@/lib/api";
 import { MemoryCard } from "@/components/MemoryCard";
-import { Search, Loader2 } from "lucide-react";
+import { Search, Loader2, Database } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 export default function MemoryStorePage() {
     const [memories, setMemories] = useState<Memory[]>([]);
@@ -49,33 +50,53 @@ export default function MemoryStorePage() {
     };
 
     return (
-        <div className="flex flex-col gap-8">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 glass-card p-4">
-                <h1 className="text-2xl font-bold">Memory Store</h1>
-                <form onSubmit={handleSearch} className="flex-1 max-w-md relative">
+        <div className="flex flex-col gap-8 animate-in fade-in duration-700">
+            <header className="flex flex-col md:flex-row md:items-center justify-between gap-6 glass-card border-primary/10">
+                <div className="flex items-center gap-4">
+                    <div className="p-3 bg-primary/10 rounded-2xl text-primary shadow-inner">
+                        <Database size={28} />
+                    </div>
+                    <div>
+                        <h1 className="text-3xl font-black tracking-tight text-white">Memory Store</h1>
+                        <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mt-1">
+                            Neural Trace Explorer
+                        </p>
+                    </div>
+                </div>
+
+                <form onSubmit={handleSearch} className="flex-1 max-w-xl relative group">
                     <input
                         type="text"
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
-                        placeholder="Search memories..."
-                        className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2 pl-10 focus:outline-none focus:border-primary/50 transition-all"
+                        placeholder="Query neural network..."
+                        className="w-full bg-black/40 border border-white/10 rounded-2xl px-6 py-4 pl-14 focus:outline-none focus:border-primary/50 focus:ring-4 focus:ring-primary/5 transition-all text-sm font-medium placeholder:text-zinc-600"
                     />
-                    <Search className="absolute left-3 top-2.5 text-gray-500" size={18} />
+                    <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-zinc-600 group-focus-within:text-primary transition-colors" size={20} />
                     {isSearching && (
-                        <Loader2 className="absolute right-3 top-2.5 text-primary animate-spin" size={18} />
+                        <Loader2 className="absolute right-5 top-1/2 -translate-y-1/2 text-primary animate-spin" size={20} />
                     )}
                 </form>
-            </div>
+            </header>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
                 {loading ? (
-                    <div className="col-span-full flex flex-col items-center justify-center py-20 text-gray-500">
-                        <Loader2 className="animate-spin mb-4" size={32} />
-                        <p>Accessing memory traces...</p>
+                    <div className="col-span-full flex flex-col items-center justify-center py-32 text-zinc-500 gap-6">
+                        <div className="relative">
+                            <Loader2 className="animate-spin text-primary" size={48} strokeWidth={1} />
+                            <div className="absolute inset-0 blur-2xl bg-primary/20 animate-pulse" />
+                        </div>
+                        <div className="text-center">
+                            <p className="font-black text-[10px] uppercase tracking-[0.2em] mb-2 opacity-50">Synchronizing</p>
+                            <p className="text-sm font-medium italic">Accessing cortical memory traces...</p>
+                        </div>
                     </div>
                 ) : memories.length === 0 ? (
-                    <div className="col-span-full text-center py-20 text-gray-500 italic">
-                        No memories found matching your criteria.
+                    <div className="col-span-full text-center py-32 glass-card border-dashed border-white/10 opacity-60">
+                        <Search className="mx-auto mb-4 text-zinc-700" size={48} strokeWidth={1} />
+                        <p className="text-sm font-medium text-zinc-500 italic">
+                            No matching neural patterns identified.
+                        </p>
                     </div>
                 ) : (
                     memories.map((mem) => (

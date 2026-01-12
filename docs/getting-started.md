@@ -9,9 +9,9 @@ OpenMemory provides a drop-in, SQL-native long-term memory layer for your AI age
 pip install openmemory
 ```
 
-### Node.js
+### Bun / TypeScript
 ```bash
-npm install openmemory-js
+bun add openmemory-js
 ```
 
 ## Quick Start (Python)
@@ -36,7 +36,7 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-## Quick Start (Node.js)
+## Quick Start (Bun / TypeScript)
 
 ```javascript
 const { Memory } = require('openmemory-js');

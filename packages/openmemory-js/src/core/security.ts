@@ -1,4 +1,23 @@
-import { env } from "./cfg";
+/**
+ * @file Security module for OpenMemory.
+ * Handles encryption-at-rest, key derivation (AES-256-GCM), and security boundary management.
+ */
+import { now } from "../utils";
+import { logger } from "../utils/logger";
+import { env, reloadConfig } from "./cfg";
+
+/**
+ * Custom error class for security-related failures.
+ */
+export class SecurityError extends Error {
+    constructor(
+        message: string,
+        public readonly originalError?: unknown,
+    ) {
+        super(message);
+        this.name = "SecurityError";
+    }
+}
 
 /**
  * Interface for encryption providers.
@@ -12,117 +31,192 @@ export interface EncryptionProvider {
 /**
  * No-op provider for when encryption is disabled.
  */
-export class NoOpProvider implements EncryptionProvider {
-    async encrypt(plaintext: string): Promise<string> { return plaintext; }
-    async decrypt(ciphertext: string): Promise<string> { return ciphertext; }
+export class NoopProvider implements EncryptionProvider {
+    async encrypt(plaintext: string): Promise<string> {
+        return plaintext;
+    }
+    async decrypt(ciphertext: string): Promise<string> {
+        return ciphertext;
+    }
 }
 
 /**
- * AES-256-GCM implementation using Node/Bun crypto.
- * Keys are derived from the configured API Key or a specific SECRET_KEY.
+ * AES-256-GCM implementation using SubtleCrypto.
+ * Keys are stretched from secrets using PBKDF2 with 100k iterations.
  */
 export class AesGcmProvider implements EncryptionProvider {
-    private keyVal: CryptoKey | null = null;
+    private keyCache = new Map<string, CryptoKey>();
     private readonly ALGO = "AES-GCM";
     private readonly IV_LEN = 12; // 96 bits
 
-    constructor(private secret: string) {
-        if (!secret || secret.length < 16) {
-            throw new Error("Encryption secret must be at least 16 characters.");
+    constructor(
+        private primarySecret: string,
+        private secondarySecrets: string[] = [],
+    ) {
+        if (!primarySecret || primarySecret.length < 16) {
+            throw new Error(
+                "Primary encryption secret must be at least 16 characters.",
+            );
         }
     }
 
-    private async getKey(): Promise<CryptoKey> {
-        if (this.keyVal) return this.keyVal;
+    /**
+     * Derives a cryptographic key from a secret string using PBKDF2.
+     * @param secret - The raw secret string.
+     * @returns A Promise resolving to the CryptoKey.
+     */
+    private async getKey(secret: string): Promise<CryptoKey> {
+        if (this.keyCache.has(secret)) return this.keyCache.get(secret)!;
 
-        // Use PBKDF2 to derive a strong key from the secret string
         const enc = new TextEncoder();
         const keyMaterial = await crypto.subtle.importKey(
             "raw",
-            enc.encode(this.secret),
+            enc.encode(secret),
             { name: "PBKDF2" },
             false,
-            ["deriveKey"]
+            ["deriveKey"],
         );
 
-        this.keyVal = await crypto.subtle.deriveKey(
+        const key = await crypto.subtle.deriveKey(
             {
                 name: "PBKDF2",
-                salt: enc.encode("openmemory-salt-v1"), // Fixed salt for determinism (consider randomizing if key rotation is added)
-                iterations: 100000,
-                hash: "SHA-256"
+                salt: enc.encode("openmemory-salt-v1"), // Deterministic salt for per-node derivation
+                iterations: 600000,
+                hash: "SHA-256",
             },
             keyMaterial,
             { name: this.ALGO, length: 256 },
             false,
-            ["encrypt", "decrypt"]
+            ["encrypt", "decrypt"],
         );
-        return this.keyVal;
+        this.keyCache.set(secret, key);
+        return key;
     }
 
+    /**
+     * Encrypts plaintext using AES-GCM with the primary key.
+     * @param plaintext - The string to encrypt.
+     * @returns The ciphertext in format `v1:ivB64:contentB64`.
+     * @throws {SecurityError} If encryption fails.
+     */
     async encrypt(plaintext: string): Promise<string> {
-        const key = await this.getKey();
-        const iv = crypto.getRandomValues(new Uint8Array(this.IV_LEN));
-        const enc = new TextEncoder();
-
-        const encrypted = await crypto.subtle.encrypt(
-            { name: this.ALGO, iv },
-            key,
-            enc.encode(plaintext)
-        );
-
-        // serialize: iv:ciphertext in base64
-        const ivB64 = Buffer.from(iv).toString('base64');
-        const contentB64 = Buffer.from(encrypted).toString('base64');
-        return `enc:${ivB64}:${contentB64}`;
-    }
-
-    async decrypt(ciphertext: string): Promise<string> {
-        if (!ciphertext.startsWith("enc:")) return ciphertext; // Migration path: allow unencrypted
-
-        const parts = ciphertext.split(":");
-        if (parts.length !== 3) throw new Error("Invalid ciphertext format");
-
-        const key = await this.getKey();
-        const iv = Buffer.from(parts[1], 'base64');
-        const content = Buffer.from(parts[2], 'base64');
-
         try {
-            const decent = await crypto.subtle.decrypt(
+            const key = await this.getKey(this.primarySecret);
+            const iv = crypto.getRandomValues(new Uint8Array(this.IV_LEN));
+            const enc = new TextEncoder();
+
+            const encrypted = await crypto.subtle.encrypt(
                 { name: this.ALGO, iv },
                 key,
-                content
+                enc.encode(plaintext),
             );
-            return new TextDecoder().decode(decent);
-        } catch (e: unknown) {
-            console.error("Decryption failed:", e);
-            throw new Error("Decryption failed. Check key consistency.");
+
+            // Serialization: v1:iv:ciphertext in base64
+            const ivB64 = Buffer.from(iv).toString("base64");
+            const contentB64 = Buffer.from(encrypted).toString("base64");
+            return `v1:${ivB64}:${contentB64}`;
+        } catch (e) {
+            const { getContext } = await import("./context");
+            const ctx = getContext();
+            logger.error("[Security] Encryption failed:", { error: e, rid: ctx?.requestId });
+            throw new SecurityError("Encryption failed", e);
+        }
+    }
+
+    /**
+     * Decrypts ciphertext using AES-GCM.
+     * Attempts decryption with the primary key, then falls back to secondary keys (rotation support).
+     * @param ciphertext - The string to decrypt.
+     * @returns The decrypted plaintext.
+     * @throws {SecurityError} If decryption fails with all available keys.
+     */
+    async decrypt(ciphertext: string): Promise<string> {
+        // Support legacy "enc:" prefix and current "v1:" prefix
+        if (!ciphertext.startsWith("v1:") && !ciphertext.startsWith("enc:")) {
+            return ciphertext;
+        }
+
+        const parts = ciphertext.split(":");
+        if (parts.length !== 3) {
+            throw new SecurityError("Invalid ciphertext format");
+        }
+
+        const iv = Buffer.from(parts[1], "base64");
+        const content = Buffer.from(parts[2], "base64");
+        const allSecrets = [this.primarySecret, ...this.secondarySecrets];
+
+        for (const secret of allSecrets) {
+            try {
+                const key = await this.getKey(secret);
+                const decent = await crypto.subtle.decrypt(
+                    { name: this.ALGO, iv },
+                    key,
+                    content,
+                );
+                return new TextDecoder().decode(decent);
+            } catch {
+                // Try next key if decryption fails (e.g. wrong key during rotation)
+                continue;
+            }
+        }
+
+        const { getContext } = await import("./context");
+        const ctx = getContext();
+        logger.error("[Security] Decryption failed with all available keys.", { rid: ctx?.requestId });
+        throw new SecurityError("Decryption failed. No valid keys found.");
+    }
+
+    /**
+     * Verifies that the primary key is functional.
+     */
+    async verifyKey(): Promise<boolean> {
+        try {
+            const testPayload = "om_security_check_" + now();
+            const encrypted = await this.encrypt(testPayload);
+            const decrypted = await this.decrypt(encrypted);
+            return decrypted === testPayload;
+        } catch (e) {
+            logger.error("[Security] Key verification failed:", { error: e });
+            return false;
         }
     }
 }
 
-let instance: EncryptionProvider | null = null;
+let providerInstance: EncryptionProvider | null = null;
 
-export const get_encryption = (): EncryptionProvider => {
-    if (instance) return instance;
+/**
+ * Retrieves the singleton encryption provider based on environment configuration.
+ */
+export const getEncryption = (): EncryptionProvider => {
+    if (providerInstance) return providerInstance;
 
-    // Use OM_ENCRYPTION_KEY if set, otherwise fallback to API Key (not ideal but better than nothing for demo)
-    // If neither, no encryption.
-    const secret = process.env.OM_ENCRYPTION_KEY || process.env.OM_API_KEY;
-    const enabled = process.env.OM_ENCRYPTION_ENABLED === "true";
+    const secret = env.encryptionKey || env.apiKey;
+    const secondarySecrets = env.encryptionSecondaryKeys || [];
+    const enabled = env.encryptionEnabled;
 
     if (enabled && secret) {
-        instance = new AesGcmProvider(secret);
-        console.log("[SECURITY] 🔒 Encryption-at-Rest ENABLED (AES-256-GCM)");
+        providerInstance = new AesGcmProvider(secret, secondarySecrets);
+        logger.info("[Security] 🔒 Encryption-at-Rest ENABLED (AES-256-GCM)");
+        if (secondarySecrets.length > 0) {
+            logger.info(
+                `[Security] Rotation support active (${secondarySecrets.length} secondary keys)`,
+            );
+        }
     } else {
-        instance = new NoOpProvider();
+        providerInstance = new NoopProvider();
         if (enabled && !secret) {
-            console.warn("[SECURITY] ⚠️ Encryption enabled but no key found. Falling back to plaintext.");
+            logger.warn(
+                "[Security] ⚠️ Encryption enabled but no key found. Falling back to plaintext.",
+            );
         }
     }
-    return instance;
+    return providerInstance;
 };
 
-export const reset_security = () => {
-    instance = null;
+/**
+ * Resets the encryption provider instance (primarily for configuration refresh or testing).
+ */
+export const resetSecurity = () => {
+    reloadConfig();
+    providerInstance = null;
 };

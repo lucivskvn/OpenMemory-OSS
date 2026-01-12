@@ -19,15 +19,12 @@ jobs:
 
     - name: Install Dependencies
       run: |
-        cd packages/openmemory-js
         bun install
 
-    - name: Run Build
+    - name: Verify Monorepo Build (SDK + Dashboard + Extension)
       run: |
-        cd packages/openmemory-js
         bun run build
 
     - name: Run Tests
       run: |
-        cd packages/openmemory-js
-        bun test
+        bun run test

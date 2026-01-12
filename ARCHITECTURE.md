@@ -19,7 +19,7 @@ OpenMemory is a self-hosted AI memory engine implementing **Hierarchical Memory 
                                      │
                          ┌───────────▼───────────┐
                          │   REST API SERVER     │
-                         │   (TypeScript/Node)   │
+                         │   (TypeScript/Bun)    │
                          │   Port: 8080          │
                          └───────────┬───────────┘
                                      │
@@ -84,6 +84,18 @@ OpenMemory is a self-hosted AI memory engine implementing **Hierarchical Memory 
 | `POST` | `/lgm/context`    | Get summarized multi-sector context |
 | `POST` | `/lgm/reflection` | Generate and store reflections      |
 | `GET`  | `/lgm/config`     | Inspect LangGraph configuration     |
+| `GET`  | `/lgm/health`     | Check LangGraph module health       |
+
+**Temporal Graph Endpoints**:
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/temporal/fact` | Create temporal fact |
+| `GET` | `/api/temporal/fact` | Query facts (time-travel supported) |
+| `GET` | `/api/temporal/timeline` | Get entity timeline |
+| `GET` | `/api/temporal/compare` | Compare facts between two timestamps |
+| `POST` | `/api/temporal/edge` | Create temporal edge |
+| `GET` | `/api/temporal/edge` | Query temporal edges |
 
 **Features:**
 
@@ -402,6 +414,37 @@ NODE_SECTOR_MAP = {
 
 ---
 
+### 7. Temporal Knowledge Graph (`packages/openmemory-js/src/temporal_graph/`)
+
+**Purpose:** Time-aware knowledge graph for tracking facts and relationships over time.
+
+#### 7.1 Data Model
+
+**Facts Table (`temporal_facts`):**
+- `subject`: Entity identifier
+- `predicate`: Relationship type
+- `object`: Target value/entity
+- `valid_from`: Start validity timestamp
+- `valid_to`: End validity timestamp (NULL = active)
+- `confidence`: Certainty score (0-1)
+- `metadata`: JSON payload
+
+**Edges Table (`temporal_edges`):**
+- `source_id`, `target_id`: Linked entities
+- `relation_type`: Edge type
+- `valid_from`, `valid_to`: Validity window
+- `weight`: Edge strength
+
+#### 7.2 Features
+
+- **Time-Travel Queries:** Query the state of facts at any historical point in time.
+- **Fact Collision Handling:** Automatically "close" overlapping facts (set `valid_to`) when new facts contradict them.
+- **Confidence Decay:** Optional decay for fact confidence over time.
+- **Volatile Facts:** identify frequently changing facts.
+
+
+---
+
 ## Data Flow Diagrams
 
 ### Add Memory Flow
@@ -692,15 +735,15 @@ Ports:
 
 ```bash
 cd packages/openmemory-js
-npm install
-npm run dev
+bun install
+bun run dev
 ```
 
 ### Production
 
 ```bash
-npm run build
-npm start
+bun run build
+bun start
 ```
 
 **Systemd service:**
@@ -714,7 +757,7 @@ After=network.target
 Type=simple
 User=openmemory
 WorkingDirectory=/opt/openmemory/packages/openmemory-js
-ExecStart=/usr/bin/node dist/server/index.js
+ExecStart=/usr/bin/bun dist/server/index.js
 Restart=always
 
 [Install]

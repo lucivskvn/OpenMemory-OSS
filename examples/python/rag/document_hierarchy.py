@@ -16,13 +16,21 @@ from openmemory.client import Memory
 async def index_document(mem: Memory, uid: str, doc_id: str, title: str, chunks: list):
     # Store Parent (Simulated as a meta-memory or just metadata on chunks)
     # Here we tag chunks with doc_id
+    # Validating list of items for batch ingestion
+    items = []
     for i, chunk in enumerate(chunks):
-        await mem.add(chunk, user_id=uid, meta={
-            "doc_id": doc_id,
-            "doc_title": title,
-            "chunk_index": i,
-            "total_chunks": len(chunks)
+        items.append({
+            "content": chunk,
+            "metadata": {
+                "doc_id": doc_id,
+                "doc_title": title,
+                "chunk_index": i,
+                "total_chunks": len(chunks)
+            }
         })
+    
+    # Use batch ingestion for performance
+    await mem.add_batch(items, user_id=uid)
 
 async def main():
     mem = Memory()

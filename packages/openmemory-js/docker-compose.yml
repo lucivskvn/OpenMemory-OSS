@@ -1,0 +1,82 @@
+  version: '3.8'
+
+services:
+  openmemory:
+    build: .
+    image: openmemory-js:latest
+    container_name: openmemory
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/usr/src/app/data
+      - ./logs:/usr/src/app/logs
+    environment:
+      - OM_PORT=8080
+      - OM_LOG_LEVEL=info
+      # Connection to Ollama (host.docker.internal works for Desktop, for Linux use the service name 'ollama' if enabled below)
+      - OLLAMA_URL=http://ollama:11434
+      # - OM_OPENAI_API_KEY=sk-... # Optional: Set keys here or in Dashboard
+      
+    depends_on:
+      - ollama
+      - init-ollama
+      # - redis # Uncomment if using Redis
+      
+    networks:
+      - om-net
+
+  # Local Model Service (Local First!)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: om-ollama
+    restart: always
+    volumes:
+      - ./ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks:
+      - om-net
+    # GPU Support: Uncomment below to enable Nvidia GPU support
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  # Helper to auto-pull models on startup
+  init-ollama:
+    image: curlimages/curl
+    container_name: om-init-ollama
+    restart: on-failure
+    volumes:
+      - ./data:/data
+    command: >
+      sh -c "
+        echo 'Waiting for Ollama...';
+        while ! curl -s http://ollama:11434/api/version; do sleep 2; done;
+        echo 'Ollama is up. Pulling models...';
+        curl -X POST http://ollama:11434/api/pull -d '{\"name\": \"llama3.2\"}';
+        curl -X POST http://ollama:11434/api/pull -d '{\"name\": \"snowflake-arctic-embed\"}';
+        echo 'Models pulled!';
+      "
+    depends_on:
+      - ollama
+    networks:
+      - om-net
+
+  # Optional: Redis for High Performance Vector Cache / Locks
+  # redis:
+  #   image: redis:alpine
+  #   container_name: om-redis
+  #   restart: always
+  #   ports:
+  #     - "6379:6379"
+  #   networks:
+  #     - om-net
+
+networks:
+  om-net:
+    driver: bridge

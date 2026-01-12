@@ -1,320 +1,281 @@
-import { add_hsg_memory } from "../memory/hsg";
+/**
+ * @file Ingestion Operations for OpenMemory.
+ * Handles document extraction, summarization, chunking, and hierarchical storage.
+ */
+import { get_generator } from "../ai/adapters";
 import { q, transaction } from "../core/db";
-import { rid, now, j } from "../utils";
-import { extractText, ExtractionResult } from "./extract";
-import { env } from "../core/cfg";
+import { triggerMaintenance } from "../core/scheduler";
+import { IngestionConfig, IngestionResult } from "../core/types";
+import { addHsgMemories, addHsgMemory } from "../memory/hsg";
+import { normalizeUserId, now, stringifyJSON } from "../utils";
+import { splitText } from "../utils/chunking";
+import { logger } from "../utils/logger";
+import { compressionEngine } from "./compress";
+import { ExtractionResult, extractText, extractURL } from "./extract";
 
-const LG = 8000,
-    SEC = 3000;
+const DEFAULT_LARGE_THRESHOLD = 12000;
+const DEFAULT_SECTION_SIZE = 4000;
 
-export interface ingestion_cfg {
-    force_root?: boolean;
-    sec_sz?: number;
-    lg_thresh?: number;
-}
-export interface IngestionResult {
-    root_memory_id: string;
-    child_count: number;
-    total_tokens: number;
-    strategy: "single" | "root-child";
-    extraction: ExtractionResult["metadata"];
-}
+// Adaptive Maintenance Triggers
+let ingestionCounter = 0;
+const REFLECTION_TRIGGER_THRESHOLD = 20;
+const DECAY_TRIGGER_THRESHOLD = 50;
 
-const split = (t: string, sz: number): string[] => {
-    if (t.length <= sz) return [t];
-    const secs: string[] = [];
-    const paras = t.split(/\n\n+/);
-    let cur = "";
-    for (const p of paras) {
-        if (cur.length + p.length > sz && cur.length > 0) {
-            secs.push(cur.trim());
-            cur = p;
-        } else cur += (cur ? "\n\n" : "") + p;
+/**
+ * Triggers background maintenance tasks based on ingestion frequency.
+ */
+function triggerPostIngestMaintenance() {
+    ingestionCounter++;
+    // Use setImmediate if available (Node) or setTimeout (Bun/Browser) to ensure it runs out-of-band
+    const trigger = (task: "reflect" | "decay") => {
+        const msg = `[INGEST] Triggering background ${task} maintenance (counter: ${ingestionCounter})`;
+        logger.info(msg);
+
+        if (typeof setImmediate !== 'undefined') {
+            setImmediate(() => void triggerMaintenance(task));
+        } else {
+            setTimeout(() => void triggerMaintenance(task), 0);
+        }
+    };
+
+    if (ingestionCounter % REFLECTION_TRIGGER_THRESHOLD === 0) {
+        trigger("reflect");
     }
-    if (cur.trim()) secs.push(cur.trim());
-    return secs;
-};
+    if (ingestionCounter % DECAY_TRIGGER_THRESHOLD === 0) {
+        trigger("decay");
+    }
+}
 
-const createRootMemory = async (
+/**
+ * Creates the root memory for a document or URL.
+ */
+async function createRootMemory(
     text: string,
     extraction: ExtractionResult,
     metadata?: Record<string, unknown>,
-    user_id?: string | null,
-) => {
-    const summary_snippet = text.length > 500 ? text.slice(0, 500) + "..." : text;
-    const content = `[Document: ${extraction.metadata.content_type.toUpperCase()}]\n\n${summary_snippet}\n\n[Full content split across ${Math.ceil(text.length / SEC)} sections]`;
-    const memory_id = rid(),
-        timestamp = now();
-    await transaction.begin();
-    try {
-        await q.ins_mem.run(
-            memory_id,
-            content,
-            "reflective",
-            j([]),
-            j({
-                ...metadata,
-                ...extraction.metadata,
-                is_root: true,
-                ingestion_strategy: "root-child",
-                ingested_at: timestamp,
-            }),
-            timestamp,
-            timestamp,
-            timestamp,
-            1.0,
-            0.1,
-            1,
-            user_id || "anonymous",
-            null,
-        );
-        await transaction.commit();
-        return memory_id;
-    } catch (e: unknown) {
-        if (env.verbose) console.error("[ERROR] Root memory creation failed:", e);
-        await transaction.rollback();
-        throw e;
-    }
-};
+    userId?: string | null,
+    config?: IngestionConfig,
+    overrides?: { id?: string; createdAt?: number },
+) {
+    const uid = normalizeUserId(userId);
+    let summarySnippet = "";
 
-const createChildMemory = async (
-    text: string,
-    index: number,
-    total: number,
-    root_id: string,
-    metadata?: Record<string, unknown>,
-    user_id?: string | null,
-) => {
-    const result = await add_hsg_memory(
-        text,
-        j([]),
+    // Strategy 1: Heuristic/Syntactic Compression (Extreme Token Savings)
+    const useFast = config?.fastSummarize ?? true;
+    if (useFast) {
+        summarySnippet = compressionEngine.compress(text, "semantic", uid).comp;
+        if (summarySnippet.length > 800)
+            summarySnippet = summarySnippet.slice(0, 800) + "...";
+    } else {
+        // Strategy 2: AI Summarization (High Accuracy, Higher Cost)
+        const gen = await get_generator(uid);
+        if (gen && text.length > 300) {
+            try {
+                const prompt = `Summarize the following document into a concise paragraph (max 3 sentences) capturing its core topic and key details:\n\n${text.slice(0, 8000)}`;
+                summarySnippet = await gen.generate(prompt, {
+                    max_tokens: 250,
+                });
+            } catch (e: unknown) {
+                logger.warn(
+                    `[INGEST] AI summarization failed, falling back to compression:`,
+                    { error: e },
+                );
+                summarySnippet =
+                    compressionEngine
+                        .compress(text, "semantic", uid)
+                        .comp.slice(0, 800) + "...";
+            }
+        } else {
+            summarySnippet = text.slice(0, 500) + "...";
+        }
+    }
+
+    const contentType =
+        (
+            extraction.metadata.contentType as string | undefined
+        )?.toUpperCase() || "DOCUMENT";
+    const sectionCount = Math.ceil(
+        text.length / (config?.secSz || DEFAULT_SECTION_SIZE),
+    );
+    const content = `[Document: ${contentType}]\n\n${summarySnippet}\n\n[Full content split across ${sectionCount} sections]`;
+
+    const res = await addHsgMemory(
+        content,
+        stringifyJSON([]),
         {
             ...metadata,
-            is_child: true,
-            section_index: index,
-            total_sections: total,
-            parent_id: root_id,
+            ...extraction.metadata,
+            isRoot: true,
+            ingestionStrategy: "root-child",
+            sector: metadata?.sector || "reflective",
         },
-        user_id || undefined,
+        uid,
+        overrides,
     );
-    return result.id;
-};
 
-const link = async (
-    rid: string,
-    cid: string,
-    idx: number,
-    user_id?: string | null,
-) => {
-    const ts = now();
-    await transaction.begin();
-    try {
-        await q.ins_waypoint.run(rid, cid, user_id || "anonymous", 1.0, ts, ts);
-        await transaction.commit();
-        if (env.verbose) {
-            console.log(
-                `[INGEST] Linked: ${rid.slice(0, 8)} -> ${cid.slice(0, 8)} (section ${idx})`,
-            );
-        }
-    } catch (e: unknown) {
-        await transaction.rollback();
-        if (env.verbose) console.error(`[INGEST] Link failed for section ${idx}:`, e);
-        throw e;
-    }
-};
+    return res.id;
+}
 
 /**
- * Ingests a raw document (text or buffer), optionally splitting it into generic chunks linked to a root memory.
- * @param t Raw text content (extracted or direct)
- * @param data Original data buffer (if applicable)
- * @param meta Additional metadata
- * @param cfg Configuration options (thresholds, force root)
- * @param user_id Owner of the memories
+ * Unified logic for root-child strategy.
+ */
+async function ingestRootChild(
+    text: string,
+    extraction: ExtractionResult,
+    metadata: Record<string, unknown> | undefined,
+    config: IngestionConfig | undefined,
+    userId: string | null | undefined,
+    overrides?: { id?: string; createdAt?: number },
+): Promise<{ rootId: string; childCount: number }> {
+    const uid = normalizeUserId(userId);
+    const rootId = await createRootMemory(text, extraction, metadata, userId, config, overrides);
+
+    const size = config?.secSz || DEFAULT_SECTION_SIZE;
+    const sections = splitText(text, size);
+
+    const childItems = sections.map((section, i) => ({
+        content: section,
+        metadata: {
+            ...metadata,
+            isChild: true,
+            sectionIndex: i,
+            totalSections: sections.length,
+            parentId: rootId,
+            ingestedAt: overrides?.createdAt || now(),
+        },
+    }));
+
+    const childResults = await addHsgMemories(childItems, uid);
+
+    const waypoints = childResults.map((child) => ({
+        srcId: rootId,
+        dstId: child.id,
+        userId: uid,
+        weight: 1.0,
+        createdAt: now(),
+        updatedAt: now(),
+    }));
+
+    await q.insWaypoints.run(waypoints);
+    return { rootId, childCount: sections.length };
+}
+
+/**
+ * Ingests a raw document (text or buffer), optionally splitting it into hierarchical chunks.
  */
 export async function ingestDocument(
-    t: string,
+    contentType: string,
     data: string | Buffer,
-    meta?: Record<string, unknown>,
-    cfg?: ingestion_cfg,
-    user_id?: string | null,
+    metadata?: Record<string, unknown>,
+    config?: IngestionConfig,
+    userId?: string | null,
+    overrides?: { id?: string; createdAt?: number },
 ): Promise<IngestionResult> {
-    const th = cfg?.lg_thresh || LG,
-        sz = cfg?.sec_sz || SEC;
-    const ex = await extractText(t, data);
-    const { text, metadata: exMeta } = ex;
-    const useRC = cfg?.force_root || exMeta.estimated_tokens > th;
+    const threshold = config?.lgThresh || DEFAULT_LARGE_THRESHOLD;
+    const uid = normalizeUserId(userId);
 
-    if (!useRC) {
-        const r = await add_hsg_memory(
-            text,
-            j([]),
-            {
-                ...meta,
-                ...exMeta,
-                ingestion_strategy: "single",
-                ingested_at: now(),
-            },
-            user_id || undefined,
-        );
-        return {
-            root_memory_id: r.id,
-            child_count: 0,
-            total_tokens: exMeta.estimated_tokens,
-            strategy: "single",
-            extraction: exMeta,
-        };
+    const extraction = await extractText(contentType, data);
+    const { text, metadata: extractionMetadata } = extraction;
+    if (!text || text.trim().length === 0) {
+        throw new Error("Ingestion Failed: Extracted content is empty");
     }
 
-    const secs = split(text, sz);
-    if (env.verbose) {
-        console.log(`[INGEST] Document: ${exMeta.estimated_tokens} tokens`);
-        console.log(`[INGEST] Splitting into ${secs.length} sections`);
-    }
+    const estimatedTokens = Number(extractionMetadata.estimatedTokens) || 0;
+    const useRootChild = config?.forceRoot || estimatedTokens > threshold;
 
-    let root_id: string;
-    const child_ids: string[] = [];
+    return await transaction.run(async () => {
+        let rootMemoryId: string;
+        let childCount = 0;
+        let strategy: "single" | "root-child";
 
-    try {
-        root_id = await createRootMemory(text, ex, meta, user_id);
-        if (env.verbose) console.log(`[INGEST] Root memory created: ${root_id}`);
-        for (let i = 0; i < secs.length; i++) {
-            try {
-                const child_id = await createChildMemory(
-                    secs[i],
-                    i,
-                    secs.length,
-                    root_id,
-                    meta,
-                    user_id,
-                );
-                child_ids.push(child_id);
-                await link(root_id, child_id, i, user_id);
-                if (env.verbose) {
-                    console.log(
-                        `[INGEST] Section ${i + 1}/${secs.length} processed: ${child_id}`,
-                    );
-                }
-            } catch (e: unknown) {
-                if (env.verbose) {
-                    console.error(
-                        `[INGEST] Section ${i + 1}/${secs.length} failed:`,
-                        e,
-                    );
-                }
-                throw e;
-            }
-        }
-        if (env.verbose) {
-            console.log(
-                `[INGEST] Completed: ${child_ids.length} sections linked to ${root_id}`,
+        if (!useRootChild) {
+            strategy = "single";
+            const result = await addHsgMemory(
+                text,
+                stringifyJSON([]),
+                {
+                    ...metadata,
+                    ...extractionMetadata,
+                    ingestionStrategy: "single",
+                    ingestedAt: overrides?.createdAt || now(),
+                },
+                uid,
+                overrides,
             );
+            rootMemoryId = result.id;
+        } else {
+            strategy = "root-child";
+            // For root-child, the root ID is the one overridden if provided
+            const res = await ingestRootChild(text, extraction, metadata, config, userId, overrides);
+            rootMemoryId = res.rootId;
+            childCount = res.childCount;
+            logger.info(`[INGEST] Document: ${estimatedTokens} tokens, split into ${childCount} sections`);
         }
+
+        triggerPostIngestMaintenance();
+
         return {
-            root_memory_id: root_id,
-            child_count: secs.length,
-            total_tokens: exMeta.estimated_tokens,
-            strategy: "root-child",
-            extraction: exMeta,
+            rootMemoryId,
+            childCount,
+            totalTokens: estimatedTokens,
+            strategy,
+            extraction: extractionMetadata,
         };
-    } catch (e: unknown) {
-        if (env.verbose) console.error("[INGEST] Document ingestion failed:", e);
-        throw e;
-    }
+    });
 }
 
 /**
  * Ingests content from a URL by extracting text and metadata.
- * @param url The target URL
- * @param meta Additional metadata
- * @param cfg Configuration options
- * @param user_id Owner of the memories
  */
-export async function ingestURL(
+export async function ingestUrl(
     url: string,
-    meta?: Record<string, unknown>,
-    cfg?: ingestion_cfg,
-    user_id?: string | null,
+    metadata?: Record<string, unknown>,
+    config?: IngestionConfig,
+    userId?: string | null,
+    overrides?: { id?: string; createdAt?: number },
 ): Promise<IngestionResult> {
-    const { extractURL } = await import("./extract");
-    const ex = await extractURL(url);
-    const th = cfg?.lg_thresh || LG,
-        sz = cfg?.sec_sz || SEC;
-    const useRC = cfg?.force_root || ex.metadata.estimated_tokens > th;
+    const extraction = await extractURL(url);
+    const threshold = config?.lgThresh || DEFAULT_LARGE_THRESHOLD;
+    const estimatedTokens = Number(extraction.metadata.estimatedTokens) || 0;
+    const useRootChild = config?.forceRoot || estimatedTokens > threshold;
+    const uid = normalizeUserId(userId);
 
-    if (!useRC) {
-        const r = await add_hsg_memory(
-            ex.text,
-            j([]),
-            {
-                ...meta,
-                ...ex.metadata,
-                ingestion_strategy: "single",
-                ingested_at: now(),
-            },
-            user_id || undefined,
-        );
-        return {
-            root_memory_id: r.id,
-            child_count: 0,
-            total_tokens: ex.metadata.estimated_tokens,
-            strategy: "single",
-            extraction: ex.metadata,
-        };
-    }
+    return await transaction.run(async () => {
+        let rootMemoryId: string;
+        let childCount = 0;
+        let strategy: "single" | "root-child";
 
-    const secs = split(ex.text, sz);
-    if (env.verbose) {
-        console.log(`[INGEST] URL: ${ex.metadata.estimated_tokens} tokens`);
-        console.log(`[INGEST] Splitting into ${secs.length} sections`);
-    }
-
-    let root_id: string;
-    const child_ids: string[] = [];
-
-    try {
-        root_id = await createRootMemory(ex.text, ex, { ...meta, source_url: url }, user_id);
-        if (env.verbose) console.log(`[INGEST] Root memory for URL: ${root_id}`);
-        for (let i = 0; i < secs.length; i++) {
-            try {
-                const child_id = await createChildMemory(
-                    secs[i],
-                    i,
-                    secs.length,
-                    root_id,
-                    { ...meta, source_url: url },
-                    user_id,
-                );
-                child_ids.push(child_id);
-                await link(root_id, child_id, i, user_id);
-                if (env.verbose) {
-                    console.log(
-                        `[INGEST] URL section ${i + 1}/${secs.length} processed: ${child_id}`,
-                    );
-                }
-            } catch (e: unknown) {
-                if (env.verbose) {
-                    console.error(
-                        `[INGEST] URL section ${i + 1}/${secs.length} failed:`,
-                        e,
-                    );
-                }
-                throw e;
-            }
-        }
-        if (env.verbose) {
-            console.log(
-                `[INGEST] URL completed: ${child_ids.length} sections linked to ${root_id}`,
+        if (!useRootChild) {
+            strategy = "single";
+            const result = await addHsgMemory(
+                extraction.text,
+                stringifyJSON([]),
+                {
+                    ...metadata,
+                    ...extraction.metadata,
+                    ingestionStrategy: "single",
+                    ingestedAt: overrides?.createdAt || now(),
+                },
+                uid,
+                overrides,
             );
+            rootMemoryId = result.id;
+        } else {
+            strategy = "root-child";
+            const res = await ingestRootChild(extraction.text, extraction, { ...metadata, sourceUrl: url }, config, userId, overrides);
+            rootMemoryId = res.rootId;
+            childCount = res.childCount;
+            logger.info(`[INGEST] URL: ${estimatedTokens} tokens, split into ${childCount} sections`);
         }
+
+        triggerPostIngestMaintenance();
+
         return {
-            root_memory_id: root_id,
-            child_count: secs.length,
-            total_tokens: ex.metadata.estimated_tokens,
-            strategy: "root-child",
-            extraction: ex.metadata,
+            rootMemoryId,
+            childCount,
+            totalTokens: estimatedTokens,
+            strategy,
+            extraction: extraction.metadata,
         };
-    } catch (e: unknown) {
-        if (env.verbose) console.error("[INGEST] URL ingestion failed:", e);
-        throw e;
-    }
+    });
 }

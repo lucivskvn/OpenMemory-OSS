@@ -16,16 +16,35 @@ from ..core.security import get_encryption
 
 logger = logging.getLogger("reflect")
 
+import re
+from ..utils.vectors import cos_sim, buf_to_vec
+
 def vec_tf(txt: str) -> List[int]:
-    w = txt.lower().split()
+    w = re.findall(r'\w+', txt.lower())
     uniq = sorted(list(set(w)))
     return [w.count(u) for u in uniq]
 
-def sim_txt(t1: str, t2: str) -> float:
-    # Fixed robust Jaccard similarity (matches JS implementation)
-    # Using simple tokenization for speed
-    s1 = set(t1.lower().split())
-    s2 = set(t2.lower().split())
+def sim_content(m1: Dict, m2: Dict, t1: str, t2: str) -> float:
+    # Try semantic similarity first if vectors exist
+    v1_buf = m1.get("mean_vec")
+    v2_buf = m2.get("mean_vec")
+    
+    if v1_buf and v2_buf:
+        try:
+             # If it's already list (unlikely from DB raw row, but possible if processed)
+             if isinstance(v1_buf, list): v1 = v1_buf
+             else: v1 = buf_to_vec(v1_buf)
+             
+             if isinstance(v2_buf, list): v2 = v2_buf
+             else: v2 = buf_to_vec(v2_buf)
+             
+             return cos_sim(v1, v2)
+        except Exception:
+             pass # Fallback to text
+
+    # Faster text Jaccard with regex tokenization
+    s1 = set(re.findall(r'\w+', t1.lower()))
+    s2 = set(re.findall(r'\w+', t2.lower()))
     if not s1 or not s2: return 0.0
     
     inter = len(s1.intersection(s2))
@@ -47,7 +66,7 @@ def cluster(mems: List[Dict]) -> List[Dict]:
              if mem["id"] in text_cache: return text_cache[mem["id"]]
              try:
                  pt = get_encryption().decrypt(mem["content"])
-             except:
+             except Exception:
                  pt = mem["content"]
              text_cache[mem["id"]] = pt
              return pt
@@ -60,7 +79,8 @@ def cluster(mems: List[Dict]) -> List[Dict]:
             if o["id"] in used: continue
             if m["primary_sector"] != o["primary_sector"]: continue
             
-            if sim_txt(text_m, get_text(o)) > 0.8:
+            # Hybrid similarity: prefer vector, fallback to text
+            if sim_content(m, o, text_m, get_text(o)) > 0.85: # Increased threshold for semantic
                 c["mem"].append(o)
                 c["n"] += 1
                 used.add(o["id"])
@@ -116,43 +136,47 @@ def summ(c: Dict) -> str:
     for m in c["mem"]:
         try:
              decoded.append(enc.decrypt(m["content"]))
-        except:
+        except Exception:
              decoded.append(m["content"])
              
     txt = "; ".join([t[:60] for t in decoded])
     return f"{n} {sec} pattern: {txt[:200]}"
 
-async def mark_consolidated(ids: List[str]):
+async def mark_consolidated(ids: List[str], commit: bool = True):
     if not ids: return
     now = int(time.time() * 1000)
     placeholders = ",".join(["?"] * len(ids))
     # We use a batch update to mark as consolidated
-    sql = f"UPDATE memories SET meta = json_set(COALESCE(meta, '{{}}'), '$.consolidated', true), updated_at=? WHERE id IN ({placeholders})"
+    t = q.tables
+    sql = f"UPDATE {t['memories']} SET meta = json_set(COALESCE(meta, '{{}}'), '$.consolidated', true), updated_at=? WHERE id IN ({placeholders})"
     await db.async_execute(sql, (now,) + tuple(ids))
+    if commit: await db.async_commit()
 
 # boost
-async def boost(ids: List[str]):
+async def boost(ids: List[str], commit: bool = True):
     if not ids: return
     now = int(time.time() * 1000)
     placeholders = ",".join(["?"] * len(ids))
     # Batch boost salience by 10% capped at 1.0
-    sql = f"UPDATE memories SET salience = MIN(1.0, COALESCE(salience, 0) * 1.1), updated_at=? WHERE id IN ({placeholders})"
+    t = q.tables
+    sql = f"UPDATE {t['memories']} SET salience = MIN(1.0, COALESCE(salience, 0) * 1.1), updated_at=? WHERE id IN ({placeholders})"
     await db.async_execute(sql, (now,) + tuple(ids))
+    if commit: await db.async_commit()
 
-async def run_reflection() -> Dict[str, Any]:
-    logger.info("[REFLECT] Starting reflection job...")
+async def run_reflection(user_id: Optional[str] = None) -> Dict[str, Any]:
+    logger.info(f"[REFLECT] Starting reflection job for user: {user_id or 'all'}...")
     min_mems = env.reflect_min or 20
     # Increased default scan range from 100 to 500 for better pattern detection
     limit = env.reflect_limit or 500
-    mems = await q.all_mem(limit, 0)
+    mems = await q.all_mem(limit, 0, user_id=user_id)
     logger.info(f"[REFLECT] Fetched {len(mems)} memories (min {min_mems})")
     
     if len(mems) < min_mems:
-        print("[REFLECT] Not enough memories, skipping")
+        logger.info("[REFLECT] Not enough memories, skipping")
         return {"created": 0, "reason": "low"}
         
     cls = cluster(mems)
-    print(f"[REFLECT] Clustered into {len(cls)} groups")
+    logger.info(f"[REFLECT] Clustered into {len(cls)} groups")
     
     async with db.transaction(): # Use db.transaction for async context manager
         n = 0
@@ -167,13 +191,13 @@ async def run_reflection() -> Dict[str, Any]:
                 "at": time.strftime("%Y-%m-%dT%H:%M:%S")
             }
             
-            print(f"[REFLECT] Creating reflection: {c['n']} mems, sal={s:.3f}, sec={c['mem'][0]['primary_sector']}")
+            logger.info(f"[REFLECT] Creating reflection: {c['n']} mems, sal={s:.3f}, sec={c['mem'][0]['primary_sector']}")
             
             # Insert reflection
             # Pass commit=False to avoid nested transaction (since we are in db.transaction())
-            await add_hsg_memory(txt, json.dumps(["reflect:auto"]), meta, commit=False)
-            await mark_consolidated(src)
-            await boost(src)
+            await add_hsg_memory(txt, json.dumps(["reflect:auto"]), meta, user_id=user_id, commit=False)
+            await mark_consolidated(src, commit=False)
+            await boost(src, commit=False)
             n += 1
             
         if n > 0: 
@@ -182,9 +206,10 @@ async def run_reflection() -> Dict[str, Any]:
             # log_maint_op in db.py has db.commit().
             # If I call it inside the transaction block, it will commit!
             # I should use db.execute directly for log_maint_op logic if I want atomicity.
-            await db.async_execute("INSERT INTO stats (type, count, ts) VALUES (?, ?, ?)", ("reflect", n, int(time.time() * 1000)))
+            t = q.tables
+            await db.async_execute(f"INSERT INTO {t['stats']} (type, count, ts) VALUES (?, ?, ?)", ("reflect", n, int(time.time() * 1000)))
             
-    print(f"[REFLECT] Job complete: created {n} reflections")
+    logger.info(f"[REFLECT] Job complete: created {n} reflections")
     return {"created": n, "clusters": len(cls)}
 
 _timer_task = None
@@ -193,16 +218,27 @@ async def reflection_loop():
     interval = (env.reflect_interval or 10) * 60
     while True:
         try:
-            await run_reflection()
+            # Multi-tenancy: Process per user
+            t = q.tables
+            users_rows = await db.async_fetchall(f"SELECT id FROM {t['users']}")
+            user_ids = [r["id"] for r in users_rows]
+            
+            if not user_ids:
+                # Fallback to anonymous if no users, or just skip
+                await run_reflection(None)
+            else:
+                for uid in user_ids:
+                    await run_reflection(uid)
+                    await asyncio.sleep(1) # Yield
         except Exception as e:
-            print(f"[REFLECT] Error: {e}")
+            logger.error(f"[REFLECT] Error: {e}")
         await asyncio.sleep(interval)
 
 def start_reflection():
     global _timer_task
     if not getattr(env, "auto_reflect", True) or _timer_task: return
     _timer_task = asyncio.create_task(reflection_loop())
-    print(f"[REFLECT] Started: every {env.reflect_interval or 10}m")
+    logger.info(f"[REFLECT] Started: every {env.reflect_interval or 10}m")
 
 def stop_reflection():
     global _timer_task

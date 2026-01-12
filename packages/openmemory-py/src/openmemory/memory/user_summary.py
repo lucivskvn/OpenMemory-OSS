@@ -32,7 +32,8 @@ def gen_user_summary(mems: List[Dict]) -> str:
                 if meta.get("ide_file_path"): 
                     files.add(meta["ide_file_path"].replace("\\", "/").split("/")[-1])
                 if meta.get("ide_event_type") == "save": saves += 1
-            except: pass
+            except Exception:
+                pass
         events += 1
         
     proj_str = ", ".join(projects) if projects else "Unknown Project"
@@ -47,7 +48,8 @@ def gen_user_summary(mems: List[Dict]) -> str:
 async def gen_user_summary_async(user_id: str) -> str:
     # q.all_mem_by_user.all(user_id, 100, 0)
     # Reimplement query
-    rows = await db.async_fetchall("SELECT * FROM memories WHERE user_id=? ORDER BY created_at DESC LIMIT 100 OFFSET 0", (user_id,))
+    t = q.tables
+    rows = await db.async_fetchall(f"SELECT * FROM {t['memories']} WHERE user_id=? ORDER BY created_at DESC LIMIT 100 OFFSET 0", (user_id,))
     
     if env.tier == "smart" or (env.openai_key or env.gemini_key):
         return await gen_user_summary_smart(rows, user_id)
@@ -65,7 +67,8 @@ async def gen_user_summary_smart(mems: List[Dict], user_id: str) -> str:
              c_snip = m["content"][:200]
              meta = m.get("meta") or "{}"
              context.append(f"- [{m['primary_sector']}] {c_snip} (Meta: {meta})")
-        except: pass
+        except Exception:
+            pass
         
     prompt = f"""You are analyzing the memory stream of user '{user_id}'.
 Based on the following {len(context)} recent memory fragments, generate a concise, high-level professional profile summary.
@@ -80,8 +83,9 @@ Memories:
 {chr(10).join(context)}
 """
     try:
-        adapter = get_adapter()
-        summary = await adapter.chat([{"role": "user", "content": prompt}], model="gpt-4o")
+        adapter = await get_adapter(user_id)
+        model = env.model or "gpt-4o"
+        summary = await adapter.chat([{"role": "user", "content": prompt}], model=model)
         return summary.strip()
     except Exception as e:
         logger.error(f"[USER_SUMMARY] Smart summary failed: {e}")
@@ -92,12 +96,11 @@ async def update_user_summary(user_id: str):
         summary = await gen_user_summary_async(user_id)
         now = int(time.time()*1000)
         
-        existing = await db.async_fetchone("SELECT * FROM openmemory_users WHERE user_id=?", (user_id,))
+        existing = await q.get_user(user_id)
         if not existing:
-             await db.async_execute("INSERT INTO openmemory_users(user_id,summary,reflection_count,created_at,updated_at) VALUES (?,?,?,?,?)",
-                        (user_id, summary, 0, now, now))
+             await q.ins_user(user_id, summary, 0, now, now)
         else:
-             await db.async_execute("UPDATE openmemory_users SET summary=?, updated_at=? WHERE user_id=?", (summary, now, user_id))
+             await q.upd_user_summary(user_id, summary, now)
         await db.async_commit()
     except Exception as e:
         logger.error(f"[USER_SUMMARY] Error for {user_id}: {e}")

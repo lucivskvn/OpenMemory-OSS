@@ -20,21 +20,21 @@ class SupermemoryProvider(BaseProvider):
         except Exception as e:
             raise Exception(f"Supermemory connection failed: {e}")
 
-    async def export(self) -> AsyncGenerator[MigrationRecord, None]:
+    async def export(self) -> AsyncGenerator[MigrationRecord, None]:  # type: ignore
         try:
             logger.info("[SUPERMEMORY] Fetching documents...")
             page = 1
             limit = 100
             total = 0
-            
+
             while True:
                 url = f"{self.base_url}/v3/documents?page={page}&limit={limit}"
                 data = await self._get(url, headers=self.headers)
                 batch = data.get("documents", []) or data.get("data", [])
-                
+
                 if not batch:
                     break
-                    
+
                 for doc in batch:
                     yield self._transform(doc)
                     total += 1
@@ -50,12 +50,13 @@ class SupermemoryProvider(BaseProvider):
 
     def _transform(self, d: Dict) -> MigrationRecord:
         from dateutil import parser
-        
+
         created_at = 0
         if d.get("created_at"):
             try:
                 created_at = int(parser.parse(d["created_at"]).timestamp() * 1000)
-            except: pass
+            except:
+                pass
 
         return MigrationRecord(
             id=str(d.get("id") or d.get("document_id") or f"sm_{created_at}"),

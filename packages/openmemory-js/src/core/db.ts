@@ -1,1191 +1,2262 @@
-import { Database } from "bun:sqlite";
-import { Pool, PoolClient } from "pg";
-import { env } from "./cfg";
+/**
+ * @file Core Database Layer for OpenMemory.
+ * Provides a unified API for SQLite and Postgres backends with transactional support and batching.
+ */
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
-import { VectorStore } from "./vector_store";
+import { threadId } from "node:worker_threads";
+
+import { Database } from "bun:sqlite";
+import { Pool, PoolClient } from "pg";
+
+import { normalizeUserId } from "../utils";
+import { logger } from "../utils/logger";
+import { env } from "./cfg";
+import type { SqlParams, SqlValue } from "./db_utils";
+// Imported from db_utils to avoid circular dependencies
+import { applySqlUser, pUser, sqlUser } from "./db_utils";
+import {
+    BatchMemoryInsertItem,
+    BatchWaypointInsertItem,
+    LogEntry,
+    MaintLogEntry,
+    MemoryRow,
+    SectorStat,
+    Waypoint,
+} from "./types";
 import { SqlVectorStore } from "./vector/sql";
 import { ValkeyVectorStore } from "./vector/valkey";
+import { VectorStore } from "./vector_store";
+export { pUser, sqlUser };
+export type { SqlParams, SqlValue };
 
-import { MemoryRow, SectorStat, LogEntry, AddMemoryRequest, QueryMemoryRequest, TemporalFact, TemporalEdge } from "./types";
-
-export type SqlValue = string | number | boolean | null | Uint8Array | Date;
-export type SqlParams = SqlValue[];
-
-type q_type = {
-    ins_mem: { run: (...p: SqlParams) => Promise<number> };
-    upd_mean_vec: {
+export interface QType {
+    insMem: {
+        run: (
+            id: string,
+            content: string,
+            primarySector: string,
+            tags: string | null,
+            metadata: string | null,
+            userId: string | null | undefined,
+            segment: number,
+            simhash: string | null,
+            createdAt: number,
+            updatedAt: number,
+            lastSeenAt: number,
+            salience: number,
+            decayLambda: number,
+            version: number,
+            meanDim: number,
+            meanVec: Buffer | Uint8Array,
+            compressedVec: Buffer | Uint8Array,
+            feedbackScore: number,
+            generatedSummary: string | null,
+        ) => Promise<number>;
+    };
+    insMems: {
+        run: (items: BatchMemoryInsertItem[]) => Promise<number>;
+    };
+    updMeanVec: {
         run: (
             id: string,
             dim: number,
             vec: Buffer | Uint8Array,
-            user_id?: string,
+            userId?: string | null,
         ) => Promise<number>;
     };
-    upd_compressed_vec: {
-        run: (id: string, vec: Buffer | Uint8Array, user_id?: string) => Promise<number>;
-    };
-    upd_feedback: {
+    updCompressedVec: {
         run: (
             id: string,
-            feedback_score: number,
-            user_id?: string,
+            vec: Buffer | Uint8Array,
+            userId?: string | null,
         ) => Promise<number>;
     };
-    upd_seen: {
+    updFeedback: {
         run: (
             id: string,
-            last_seen_at: number,
+            feedbackScore: number,
+            userId?: string | null,
+        ) => Promise<number>;
+    };
+    updSeen: {
+        run: (
+            id: string,
+            lastSeenAt: number,
             salience: number,
-            updated_at: number,
-            user_id?: string,
+            updatedAt: number,
+            userId?: string | null,
         ) => Promise<number>;
     };
-    upd_summary: {
-        run: (id: string, summary: string, user_id?: string) => Promise<number>;
-    };
-    upd_mem: {
+    updSummary: {
         run: (
-            content: string,
-            tags: string | null,
-            meta: string | null,
-            updated_at: number,
             id: string,
-            user_id?: string,
+            summary: string,
+            userId?: string | null,
         ) => Promise<number>;
     };
-    upd_mem_with_sector: {
+    updMem: {
         run: (
             content: string,
+            primarySector: string,
+            tags: string | null,
+            metadata: string | null,
+            updatedAt: number,
+            id: string,
+            userId?: string | null,
+        ) => Promise<number>;
+    };
+    updSector: {
+        run: (
+            id: string,
             sector: string,
-            tags: string | null,
-            meta: string | null,
-            updated_at: number,
-            id: string,
-            user_id?: string,
+            userId?: string | null,
         ) => Promise<number>;
     };
-    del_mem: { run: (id: string, user_id?: string) => Promise<number> };
-    get_mem: {
-        get: (id: string, user_id?: string) => Promise<MemoryRow | undefined>;
+    delMem: { run: (id: string, userId?: string | null) => Promise<number> };
+    delMems: {
+        run: (ids: string[], userId?: string | null) => Promise<number>;
     };
-    get_mem_by_simhash: { get: (simhash: string, user_id?: string) => Promise<MemoryRow | undefined> };
-    get_active_users: { all: () => Promise<{ user_id: string }[]> };
-    all_mem: { all: (limit: number, offset: number) => Promise<MemoryRow[]> };
-    all_mem_by_sector: {
-        all: (sector: string, limit: number, offset: number, user_id?: string) => Promise<MemoryRow[]>;
+    getMem: {
+        get: (
+            id: string,
+            userId?: string | null,
+        ) => Promise<MemoryRow | undefined>;
     };
-    get_training_data: {
-        all: (user_id: string, limit: number) => Promise<Array<{ primary_sector: string, mean_vec: Uint8Array }>>;
+    getMems: {
+        all: (ids: string[], userId?: string | null) => Promise<MemoryRow[]>;
     };
-    all_mem_by_user: {
-        all: (user_id: string, limit: number, offset: number) => Promise<MemoryRow[]>;
+    getMemRaw: {
+        get: (
+            id: string,
+            userId?: string | null,
+        ) => Promise<MemoryRow | undefined>;
     };
-    get_segment_count: { get: (segment: number) => Promise<{ c: number } | undefined> };
-    get_max_segment: { get: () => Promise<{ max_seg: number } | undefined> };
-    get_segments: { all: () => Promise<{ segment: number }[]> };
-    get_mem_by_segment: { all: (segment: number) => Promise<MemoryRow[]> };
-    del_mem_by_user: { run: (user_id: string) => Promise<number> };
-
-    // Waypoints
-    ins_waypoint: { run: (...p: SqlParams) => Promise<number> };
-    get_neighbors: { all: (src: string, user_id?: string) => Promise<{ dst_id: string; weight: number }[]> };
-    get_waypoints_by_src: { all: (src: string, user_id?: string) => Promise<{ src_id: string; dst_id: string; weight: number; created_at: number; updated_at: number }[]> };
-    get_waypoint: { get: (src: string, dst: string, user_id?: string) => Promise<{ weight: number; user_id: string; created_at: number; updated_at: number } | undefined> };
-    upd_waypoint: { run: (...p: SqlParams) => Promise<number> };
-    del_waypoints: { run: (...p: SqlParams) => Promise<number> };
-    prune_waypoints: { run: (threshold: number, user_id?: string) => Promise<number> };
-
-    // Logs
-    ins_log: { run: (...p: SqlParams) => Promise<number> };
-    upd_log: { run: (...p: SqlParams) => Promise<number> };
-    get_pending_logs: { all: () => Promise<LogEntry[]> };
-    get_failed_logs: { all: () => Promise<LogEntry[]> };
-
-    // Users
-    ins_user: { run: (...p: SqlParams) => Promise<number> };
-    get_user: { get: (user_id: string) => Promise<{ user_id: string; summary: string; reflection_count: number; created_at: number; updated_at: number } | undefined> };
-    upd_user_summary: { run: (...p: SqlParams) => Promise<number> };
-    clear_all: { run: () => Promise<void> };
-    get_mem_by_meta_like: { all: (pattern: string, user_id?: string) => Promise<MemoryRow[]> };
-    get_sector_stats: { all: (user_id?: string) => Promise<SectorStat[]> };
-
-    // Classifier Models
-    get_classifier_model: {
-        get: (user_id: string) => Promise<{
-            user_id: string;
-            weights: string;
-            biases: string;
-            version: number;
-            updated_at: number;
-        } | undefined>;
+    getMemBySimhash: {
+        get: (
+            simhash: string,
+            userId?: string | null,
+        ) => Promise<MemoryRow | undefined>;
     };
-    get_tables: {
-        all: () => Promise<{ name: string }[]>;
+    clearAll: { run: () => Promise<number> };
+    getStats: {
+        get: (
+            userId?: string | null,
+        ) => Promise<{ count: number; avgSalience: number } | undefined>;
     };
-    ins_classifier_model: {
+    getSectorStats: {
+        all: (
+            userId?: string | null,
+        ) => Promise<
+            Array<{ sector: string; count: number; avgSalience: number }>
+        >;
+    };
+    getRecentActivity: {
+        all: (
+            limit?: number,
+            userId?: string | null,
+        ) => Promise<
+            Array<{
+                id: string;
+                content: string;
+                lastSeenAt: number;
+                primarySector: string;
+            }>
+        >;
+    };
+    getTopMemories: {
+        all: (
+            limit?: number,
+            userId?: string | null,
+        ) => Promise<
+            Array<{
+                id: string;
+                content: string;
+                salience: number;
+                primarySector: string;
+            }>
+        >;
+    };
+    getSectorTimeline: {
+        all: (
+            sector: string,
+            limit?: number,
+            userId?: string | null,
+        ) => Promise<Array<{ lastSeenAt: number; salience: number }>>;
+    };
+    getMaintenanceLogs: {
+        all: (
+            limit?: number,
+            userId?: string | null,
+        ) => Promise<
+            Array<{ op: string; status: string; details: string; ts: number }>
+        >;
+    };
+    getMemBySegment: {
+        all: (segment: number, userId?: string | null) => Promise<MemoryRow[]>;
+    };
+    getSegments: {
+        all: (userId?: string | null) => Promise<Array<{ segment: number }>>;
+    };
+    getMaxSegment: {
+        get: (
+            userId?: string | null,
+        ) => Promise<{ maxSeg: number } | undefined>;
+    };
+    getSegmentCount: {
+        get: (
+            segment: number,
+            userId?: string | null,
+        ) => Promise<{ c: number } | undefined>;
+    };
+    getMemCount: {
+        get: (userId?: string | null) => Promise<{ c: number } | undefined>;
+    };
+    getVecCount: {
+        get: (userId?: string | null) => Promise<{ c: number } | undefined>;
+    };
+    getFactCount: {
+        get: (userId?: string | null) => Promise<{ c: number } | undefined>;
+    };
+    getEdgeCount: {
+        get: (userId?: string | null) => Promise<{ c: number } | undefined>;
+    };
+    allMemByUser: {
+        all: (
+            userId: string | null | undefined,
+            limit: number,
+            offset: number,
+        ) => Promise<MemoryRow[]>;
+    };
+    allMem: {
+        all: (
+            limit: number,
+            offset: number,
+            userId?: string | null,
+        ) => Promise<MemoryRow[]>;
+    };
+    allMemStable: {
+        all: (
+            limit: number,
+            offset: number,
+            userId?: string | null,
+        ) => Promise<MemoryRow[]>;
+    };
+    allMemCursor: {
+        all: (
+            limit: number,
+            cursor: { createdAt: number; id: string } | null,
+            userId?: string | null,
+        ) => Promise<MemoryRow[]>;
+    };
+    allMemBySector: {
+        all: (
+            sector: string,
+            limit: number,
+            offset: number,
+            userId?: string | null,
+        ) => Promise<MemoryRow[]>;
+    };
+    allMemBySectorAndTag: {
+        all: (
+            sector: string,
+            tag: string,
+            limit: number,
+            offset: number,
+            userId?: string | null,
+        ) => Promise<MemoryRow[]>;
+    };
+    insWaypoint: {
         run: (
-            user_id: string,
+            srcId: string,
+            dstId: string,
+            userId: string | null | undefined,
+            weight: number,
+            createdAt: number,
+            updatedAt: number,
+        ) => Promise<number>;
+    };
+    insWaypoints: { run: (items: BatchWaypointInsertItem[]) => Promise<number> };
+    getWaypoint: {
+        get: (
+            srcId: string,
+            dstId: string,
+            userId?: string | null,
+        ) => Promise<Waypoint | undefined>;
+    };
+    getWaypointsBySrc: {
+        all: (srcId: string, userId?: string | null) => Promise<Waypoint[]>;
+    };
+    getNeighbors: {
+        all: (
+            srcId: string,
+            userId?: string | null,
+        ) => Promise<Array<{ dstId: string; weight: number }>>;
+    };
+    updWaypoint: {
+        run: (
+            srcId: string,
+            weight: number,
+            updatedAt: number,
+            dstId: string,
+            userId?: string | null,
+        ) => Promise<number>;
+    };
+    pruneWaypoints: {
+        run: (threshold: number, userId?: string | null) => Promise<number>;
+    };
+    getLowSalienceMemories: {
+        all: (
+            threshold: number,
+            limit: number,
+            userId?: string | null,
+        ) => Promise<Array<{ id: string; userId: string }>>;
+    };
+    pruneMemories: {
+        run: (threshold: number, userId?: string | null) => Promise<number>;
+    };
+    updSaliences: {
+        run: (
+            items: Array<{
+                id: string;
+                salience: number;
+                lastSeenAt: number;
+                updatedAt: number;
+            }>,
+            userId?: string | null,
+        ) => Promise<number>;
+    };
+    insMaintLog: {
+        run: (
+            userId: string | null | undefined,
+            status: string,
+            details: string,
+            ts: number,
+        ) => Promise<number>;
+    };
+    logMaintOp: {
+        run: (
+            op: string,
+            status: string,
+            details: string,
+            ts: number,
+            userId?: string | null,
+        ) => Promise<number>;
+    };
+    insLog: {
+        run: (
+            id: string,
+            userId: string | null | undefined,
+            model: string,
+            status: string,
+            ts: number,
+            err: string | null,
+        ) => Promise<number>;
+    };
+    updLog: {
+        run: (
+            id: string,
+            status: string,
+            err: string | null,
+        ) => Promise<number>;
+    };
+    getPendingLogs: { all: (userId?: string | null) => Promise<LogEntry[]> };
+    getFailedLogs: { all: (userId?: string | null) => Promise<LogEntry[]> };
+    insUser: {
+        run: (
+            userId: string | null | undefined,
+            summary: string,
+            reflectionCount: number,
+            createdAt: number,
+            updatedAt: number,
+        ) => Promise<number>;
+    };
+    getUser: {
+        get: (userId: string | null | undefined) => Promise<
+            | {
+                userId: string;
+                summary: string;
+                reflectionCount: number;
+                createdAt: number;
+                updatedAt: number;
+            }
+            | undefined
+        >;
+    };
+    updUserSummary: {
+        run: (
+            userId: string | null | undefined,
+            summary: string,
+            updatedAt: number,
+        ) => Promise<number>;
+    };
+    delMemByUser: {
+        run: (userId: string | null | undefined) => Promise<number>;
+    };
+    delUser: { run: (userId: string | null | undefined) => Promise<number> };
+    getMemByMetadataLike: {
+        all: (
+            pattern: string,
+            userId?: string | null | undefined,
+        ) => Promise<MemoryRow[]>;
+    };
+    getTrainingData: {
+        all: (
+            userId: string | null | undefined,
+            limit: number,
+        ) => Promise<
+            Array<{ meanVec: Buffer | Uint8Array; primarySector: string }>
+        >;
+    };
+    getClassifierModel: {
+        get: (userId: string) => Promise<
+            | {
+                weights: string;
+                biases: string;
+                version: number;
+                updatedAt: number;
+            }
+            | undefined
+        >;
+    };
+    insClassifierModel: {
+        run: (
+            userId: string | null | undefined,
             weights: string,
             biases: string,
             version: number,
-            updated_at: number,
+            updatedAt: number,
         ) => Promise<number>;
     };
-};
+    getActiveUsers: { all: () => Promise<Array<{ userId: string }>> };
+    getUsers: {
+        all: (
+            limit: number,
+            offset: number,
+        ) => Promise<
+            Array<{
+                userId: string;
+                summary: string;
+                reflectionCount: number;
+                createdAt: number;
+                updatedAt: number;
+            }>
+        >;
+    };
+    getTables: { all: () => Promise<{ name: string }[]> };
+    insSourceConfig: {
+        run: (
+            userId: string | null,
+            type: string,
+            config: string,
+            status: string,
+            createdAt: number,
+            updatedAt: number,
+        ) => Promise<number>;
+    };
+    updSourceConfig: {
+        run: (
+            userId: string | null,
+            type: string,
+            config: string,
+            status: string,
+            updatedAt: number,
+        ) => Promise<number>;
+    };
+    getSourceConfig: {
+        get: (
+            userId: string | null,
+            type: string,
+        ) => Promise<
+            | {
+                userId: string | null;
+                type: string;
+                config: string;
+                status: string;
+                createdAt: number;
+                updatedAt: number;
+            }
+            | undefined
+        >;
+    };
+    getSourceConfigsByUser: {
+        all: (userId: string | null) => Promise<
+            Array<{
+                userId: string | null;
+                type: string;
+                config: string;
+                status: string;
+                createdAt: number;
+                updatedAt: number;
+            }>
+        >;
+    };
+    delSourceConfig: {
+        run: (userId: string | null, type: string) => Promise<number>;
+    };
 
-export let run_async: (sql: string, p?: SqlParams) => Promise<number>;
-export let get_async: <T = any>(sql: string, p?: SqlParams) => Promise<T>;
-export let all_async: <T = any>(sql: string, p?: SqlParams) => Promise<T[]>;
-/**
- * Global transaction management abstraction.
- * Note: Check specific backend implementation nuances.
- */
-let transaction: {
-    begin: () => Promise<void>;
-    commit: () => Promise<void>;
-    rollback: () => Promise<void>;
-};
-export let close_db: () => Promise<void> = async () => { };
-let q: q_type;
-let vector_store: VectorStore;
-let memories_table: string;
-
-const is_pg = env.metadata_backend === "postgres";
-
-// Convert SQLite-style ? placeholders to PostgreSQL $1, $2, $3 placeholders
-function convertPlaceholders(sql: string): string {
-    if (!is_pg) return sql;
-    let index = 1;
-    return sql.replace(/\?/g, () => `$${index++}`);
+    insApiKey: {
+        run: (
+            keyHash: string,
+            userId: string,
+            role: string,
+            note: string | null,
+            createdAt: number,
+            updatedAt: number,
+            expiresAt: number,
+        ) => Promise<number>;
+    };
+    getApiKey: {
+        get: (keyHash: string) => Promise<
+            | {
+                keyHash: string;
+                userId: string;
+                role: string;
+                note: string;
+                expiresAt: number;
+            }
+            | undefined
+        >;
+    };
+    delApiKey: { run: (keyHash: string) => Promise<number> };
+    getApiKeysByUser: {
+        all: (userId: string) => Promise<
+            Array<{
+                keyHash: string;
+                userId: string;
+                role: string;
+                note: string;
+                createdAt: number;
+            }>
+        >;
+    };
+    getAllApiKeys: {
+        all: () => Promise<
+            Array<{
+                keyHash: string;
+                userId: string;
+                role: string;
+                note: string;
+                createdAt: number;
+            }>
+        >;
+    };
+    getAdminCount: { get: () => Promise<{ count: number } | undefined> };
+    // Cascade Delete Helpers
+    delFactsByUser: { run: (userId: string) => Promise<number> };
+    delEdgesByUser: { run: (userId: string) => Promise<number> };
+    delLearnedModel: { run: (userId: string) => Promise<number> };
+    delSourceConfigsByUser: { run: (userId: string) => Promise<number> };
+    delWaypointsByUser: { run: (userId: string) => Promise<number> };
+    delEmbedLogsByUser: { run: (userId: string) => Promise<number> };
+    delMaintLogsByUser: { run: (userId: string) => Promise<number> };
+    delStatsByUser: { run: (userId: string) => Promise<number> };
+    delOrphanWaypoints: { run: () => Promise<number> };
+    searchMemsByKeyword: {
+        all: (
+            keyword: string,
+            limit: number,
+            userId?: string | null,
+        ) => Promise<MemoryRow[]>;
+    };
 }
 
-if (is_pg) {
-    const ssl =
-        process.env.OM_PG_SSL === "require"
-            ? { rejectUnauthorized: false }
-            : process.env.OM_PG_SSL === "disable"
-                ? false
-                : undefined;
-    const db_name = process.env.OM_PG_DB || "openmemory";
-    const pool = (db: string) =>
-        new Pool({
-            host: process.env.OM_PG_HOST,
-            port: process.env.OM_PG_PORT ? +process.env.OM_PG_PORT : undefined,
-            database: db,
-            user: process.env.OM_PG_USER,
-            password: process.env.OM_PG_PASSWORD,
-            ssl,
-        });
-    let pg = pool(db_name);
-    let cli: PoolClient | null = null;
-    const sc = process.env.OM_PG_SCHEMA || "public";
-    const m = `"${sc}"."${process.env.OM_PG_TABLE || "openmemory_memories"}"`;
-    memories_table = m;
-    const v = `"${sc}"."${process.env.OM_VECTOR_TABLE || "openmemory_vectors"}"`;
-    const w = `"${sc}"."openmemory_waypoints"`;
-    const l = `"${sc}"."openmemory_embed_logs"`;
-    const tf = `"${sc}"."openmemory_temporal_facts"`;
-    const te = `"${sc}"."openmemory_temporal_edges"`;
-    const st = `"${sc}"."openmemory_stats"`;
-    const f = `"${sc}"."openmemory_memories_fts"`;
-    const exec_res = async (sql: string, p: any[] = []) => {
-        const c = cli || pg;
-        return await c.query(convertPlaceholders(sql), p);
-    };
-    const exec = async (sql: string, p: any[] = []) => {
-        return (await exec_res(sql, p)).rows;
-    };
-    run_async = async (sql, p = []) => {
-        return (await exec_res(sql, p)).rowCount || 0;
-    };
-    get_async = async (sql, p = []) => (await exec(sql, p))[0];
-    all_async = async (sql, p = []) => await exec(sql, p);
-    transaction = {
-        begin: async () => {
-            if (cli) throw new Error("transaction active");
-            cli = await pg.connect();
-            await cli.query("BEGIN");
-        },
-        commit: async () => {
-            if (!cli) return;
-            try {
-                await cli.query("COMMIT");
-            } finally {
-                cli.release();
-                cli = null;
-            }
-        },
-        rollback: async () => {
-            if (!cli) return;
-            try {
-                await cli.query("ROLLBACK");
-            } finally {
-                cli.release();
-                cli = null;
-            }
-        },
-    };
-    close_db = async () => {
-        if (pg) await pg.end();
-        if (vector_store && typeof vector_store.disconnect === 'function') {
-            await vector_store.disconnect();
-        }
-    };
-    let ready = false;
-    const wait_ready = () =>
-        new Promise<void>((ok) => {
-            const check = () => (ready ? ok() : setTimeout(check, 10));
-            check();
-        });
-    const init = async () => {
-        try {
-            await pg.query("SELECT 1");
-        } catch (err: any) {
-            if (err.code === "3D000") {
-                const admin = pool("postgres");
-                try {
-                    await admin.query(`CREATE DATABASE ${db_name}`);
-                    if (env.verbose) console.log(`[DB] Created ${db_name}`);
-                } catch (e: any) {
-                    if (e.code !== "42P04") throw e;
-                } finally {
-                    await admin.end();
-                }
-                pg = pool(db_name);
-                await pg.query("SELECT 1");
-            } else throw err;
-        }
-        await pg.query(
-            `create table if not exists ${m}(id uuid primary key,user_id text,segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,meta text,created_at bigint,updated_at bigint,last_seen_at bigint,salience double precision,decay_lambda double precision,version integer default 1,mean_dim integer,mean_vec bytea,compressed_vec bytea,feedback_score double precision default 0)`,
-        );
-        await pg.query(
-            `create table if not exists ${v}(id uuid,sector text,user_id text,v bytea,dim integer not null,primary key(id,sector))`,
-        );
-        await pg.query(
-            `create table if not exists ${w}(src_id text,dst_id text not null,user_id text,weight double precision not null,created_at bigint,updated_at bigint,primary key(src_id,dst_id,user_id))`,
-        );
-        await pg.query(
-            `create table if not exists ${l}(id text primary key,user_id text,model text,status text,ts bigint,err text)`,
-        );
-        await pg.query(`ALTER TABLE ${l} ADD COLUMN IF NOT EXISTS user_id text`);
-        await pg.query(
-            `create table if not exists "${sc}"."openmemory_users"(user_id text primary key,summary text,reflection_count integer default 0,created_at bigint,updated_at bigint)`,
-        );
-        await pg.query(
-            `create table if not exists ${st}(id serial primary key,type text not null,count integer default 1,ts bigint not null)`,
-        );
-        await pg.query(
-            `create table if not exists ${tf}(id text primary key,user_id text,subject text not null,predicate text not null,object text not null,valid_from bigint not null,valid_to bigint,confidence double precision not null check(confidence >= 0 and confidence <= 1),last_updated bigint not null,metadata text,unique(user_id,subject,predicate,object,valid_from))`,
-        );
-        await pg.query(
-            `create table if not exists ${te}(id text primary key,user_id text,source_id text not null,target_id text not null,relation_type text not null,valid_from bigint not null,valid_to bigint,weight double precision not null,metadata text,foreign key(source_id) references ${tf}(id),foreign key(target_id) references ${tf}(id))`,
-        );
-        // Migrations: ensure user_id exists if table already existed
-        await pg.query(`ALTER TABLE ${tf} ADD COLUMN IF NOT EXISTS user_id text`);
-        await pg.query(`ALTER TABLE ${te} ADD COLUMN IF NOT EXISTS user_id text`);
-        await pg.query(`ALTER TABLE ${w} ADD COLUMN IF NOT EXISTS user_id text`);
-        // Note: For unique constraint changes in PG, we might need more complex logic if it already existed without user_id.
-        // But for now we prioritize getting the columns in.
-        await pg.query(
-            `create index if not exists openmemory_memories_sector_idx on ${m}(primary_sector)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_memories_segment_idx on ${m}(segment)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_memories_simhash_idx on ${m}(simhash)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_memories_user_idx on ${m}(user_id)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_vectors_user_idx on ${v}(user_id)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_waypoints_user_idx on ${w}(user_id)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_stats_ts_idx on ${st}(ts)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_embed_logs_user_idx on ${l}(user_id)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_stats_type_idx on ${st}(type)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_temporal_subject_idx on ${tf}(subject)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_temporal_predicate_idx on ${tf}(predicate)`,
-        );
-        // Composite indexes for user-scoped queries
-        await pg.query(
-            `create index if not exists openmemory_mem_user_sector_idx on ${m}(user_id, primary_sector)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_mem_user_ts_idx on ${m}(user_id, last_seen_at)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_temporal_user_subject_idx on ${tf}(user_id, subject)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_temporal_user_edges_idx on ${te}(user_id, source_id, target_id)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_temporal_validity_idx on ${tf}(valid_from,valid_to)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_edges_source_idx on ${te}(source_id)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_edges_target_idx on ${te}(target_id)`,
-        );
-        await pg.query(
-            `create table if not exists learned_models(user_id text primary key,weights text,biases text,version integer default 1,updated_at bigint)`,
-        );
-        ready = true;
+// Global Exports
+// Implementation moved to bottom to satisfy prefer-const and no-hoisting issues
 
-        // Initialize VectorStore
-        if (env.vector_backend === "valkey") {
-            vector_store = new ValkeyVectorStore();
-            console.log("[DB] Using Valkey VectorStore");
+
+
+export async function waitForDb(timeout = 5000) {
+    const start = Date.now();
+    while (!q) {
+        if (Date.now() - start > timeout) throw new Error("Timeout waiting for DB q object");
+        await new Promise(r => setTimeout(r, 100));
+    }
+    return true;
+}
+
+export const memoriesTable: string = "memories";
+
+// Thread-local state
+const dbs = new Map<string, Database>();
+const readyStates = new Map<string, boolean>();
+const readyPromises = new Map<string, Promise<void> | null>();
+const vectorStores = new Map<string, VectorStore>();
+const stmt_cache = new Map<string, ReturnType<Database["prepare"]>>();
+
+const getContextId = () => process.env.TEST_WORKER_ID || threadId.toString();
+
+let lifecycle_lock = Promise.resolve();
+let tx_lock = Promise.resolve();
+const txStorage = new AsyncLocalStorage<{ depth: number; cli?: PoolClient }>();
+
+const getIsPg = () =>
+    env.metadataBackend === "postgres" || env.vectorBackend === "postgres";
+
+export const TABLES = {
+    get memories() {
+        return getIsPg() ? `"${env.pgSchema}"."${env.pgTable}"` : "memories";
+    },
+    get vectors() {
+        return getIsPg()
+            ? `"${env.pgSchema}"."${env.pgTable}_vectors"`
+            : env.vectorTable || "vectors";
+    },
+    get waypoints() {
+        return getIsPg()
+            ? `"${env.pgSchema}"."${env.pgTable}_waypoints"`
+            : "waypoints";
+    },
+    get users() {
+        return getIsPg()
+            ? `"${env.pgSchema}"."${env.usersTable || "users"}"`
+            : "users";
+    },
+    get stats() {
+        return getIsPg() ? `"${env.pgSchema}"."${env.pgTable}_stats"` : "stats";
+    },
+    get maint_logs() {
+        return getIsPg()
+            ? `"${env.pgSchema}"."${env.pgTable}_maint_logs"`
+            : "maint_logs";
+    },
+    get embed_logs() {
+        return getIsPg()
+            ? `"${env.pgSchema}"."${env.pgTable}_embed_logs"`
+            : "embed_logs";
+    },
+    get temporal_facts() {
+        return getIsPg()
+            ? `"${env.pgSchema}"."${env.pgTable}_temporal_facts"`
+            : "temporal_facts";
+    },
+    get temporal_edges() {
+        return getIsPg()
+            ? `"${env.pgSchema}"."${env.pgTable}_temporal_edges"`
+            : "temporal_edges";
+    },
+    get learned_models() {
+        return getIsPg()
+            ? `"${env.pgSchema}"."${env.pgTable}_learned_models"`
+            : "learned_models";
+    },
+    get source_configs() {
+        return getIsPg()
+            ? `"${env.pgSchema}"."${env.pgTable}_source_configs"`
+            : "source_configs";
+    },
+    get api_keys() {
+        return getIsPg()
+            ? `"${env.pgSchema}"."${env.pgTable}_api_keys"`
+            : "api_keys";
+    },
+};
+
+export const getVectorStore = (): VectorStore => {
+    let vs = vectorStores.get(getContextId());
+    if (!vs) {
+        if (env.vectorBackend === "valkey") {
+            vs = new ValkeyVectorStore();
         } else {
-            const vt = process.env.OM_VECTOR_TABLE || "openmemory_vectors";
-            vector_store = new SqlVectorStore({ run_async, get_async, all_async }, v.replace(/"/g, ""));
-            if (env.verbose) console.log(`[DB] Using Postgres VectorStore with table: ${v}`);
+            vs = new SqlVectorStore(
+                {
+                    runAsync,
+                    getAsync,
+                    allAsync,
+                    transaction: transaction.run,
+                    iterateAsync,
+                },
+                TABLES.vectors,
+            );
         }
-    };
-    init().catch((err) => {
-        console.error("[DB] Init failed:", err);
-        process.exit(1);
+        vectorStores.set(getContextId(), vs);
+    }
+    return vs;
+};
+
+export const vectorStore: VectorStore = {
+    getVectorsById: (id, userId) => getVectorStore().getVectorsById(id, userId),
+    getVectorsByIds: (ids, userId) =>
+        getVectorStore().getVectorsByIds(ids, userId),
+    getVector: (id, sector, userId) =>
+        getVectorStore().getVector(id, sector, userId),
+    searchSimilar: (sector, queryVec, topK, userId, filter) =>
+        getVectorStore().searchSimilar(sector, queryVec, topK, userId, filter),
+    storeVector: (id, sector, vec, dim, userId, metadata) =>
+        getVectorStore().storeVector(id, sector, vec, dim, userId, metadata),
+    storeVectors: (items, userId) =>
+        getVectorStore().storeVectors(items, userId),
+    deleteVector: (id, sector, userId) =>
+        getVectorStore().deleteVector(id, sector, userId),
+    deleteVectors: (ids, userId) => getVectorStore().deleteVectors(ids, userId),
+    deleteVectorsByUser: (userId) => getVectorStore().deleteVectorsByUser(userId),
+    getVectorsBySector: (sector, userId) =>
+        getVectorStore().getVectorsBySector(sector, userId),
+    getAllVectorIds: (userId) => getVectorStore().getAllVectorIds(userId),
+    disconnect: async () => {
+        await getVectorStore().disconnect?.();
+    },
+};
+
+let pg: Pool | null = null;
+let hasVector = false;
+
+const pool = (dbOverride?: string) =>
+    new Pool({
+        user: env.pgUser,
+        host: env.pgHost,
+        database: dbOverride || env.pgDb,
+        password: env.pgPassword,
+        port: env.pgPort,
+        ssl:
+            env.pgSsl === "require"
+                ? { rejectUnauthorized: false }
+                : env.pgSsl === "disable"
+                    ? false
+                    : undefined,
+        max: env.pgMax,
+        idleTimeoutMillis: env.pgIdleTimeout,
+        connectionTimeoutMillis: env.pgConnTimeout,
     });
-    const safe_exec = async (sql: string, p: any[] = []) => {
-        await wait_ready();
-        return exec(sql, p);
-    };
-    const safe_exec_rowCount = async (sql: string, p: any[] = []) => {
-        await wait_ready();
-        const res = await exec_res(sql, p);
-        return res.rowCount || 0;
-    };
-    run_async = async (sql, p = []) => {
-        return await safe_exec_rowCount(sql, p);
-    };
-    get_async = async (sql, p = []) => (await safe_exec(sql, p))[0];
-    all_async = async (sql, p = []) => await safe_exec(sql, p);
-    const clean = (s: string) =>
-        s ? s.replace(/"/g, "").replace(/\s+OR\s+/gi, " OR ") : "";
 
-    /**
-     * Unified Query Interface supporting both PostgreSQL and SQLite backends.
-     * Abstraction layer to handle SQL dialect differences and provide type-safe data access.
-     */
-    q = {
-        ins_mem: {
-            run: (...p) =>
-                run_async(
-                    `insert into ${m}(id,user_id,segment,content,simhash,primary_sector,tags,meta,created_at,updated_at,last_seen_at,salience,decay_lambda,version,mean_dim,mean_vec,compressed_vec,feedback_score) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) on conflict(id) do update set user_id=excluded.user_id,segment=excluded.segment,content=excluded.content,simhash=excluded.simhash,primary_sector=excluded.primary_sector,tags=excluded.tags,meta=excluded.meta,created_at=excluded.created_at,updated_at=excluded.updated_at,last_seen_at=excluded.last_seen_at,salience=excluded.salience,decay_lambda=excluded.decay_lambda,version=excluded.version,mean_dim=excluded.mean_dim,mean_vec=excluded.mean_vec,compressed_vec=excluded.compressed_vec,feedback_score=excluded.feedback_score`,
-                    p,
-                ),
-        },
-        upd_mean_vec: {
-            run: (id: string, dim: number, vec: Buffer, user_id?: string) => {
-                const user_clause = user_id ? "and user_id = $4" : "";
-                const p: any[] = [id, dim, vec];
-                if (user_id) p.push(user_id);
-                return run_async(
-                    `update ${m} set mean_dim=$2,mean_vec=$3 where id=$1 ${user_clause}`,
-                    p,
-                );
-            }
-        },
-        upd_compressed_vec: {
-            run: (id: string, vec: Buffer, user_id?: string) => {
-                const user_clause = user_id ? "and user_id = $3" : "";
-                const p: any[] = [id, vec];
-                if (user_id) p.push(user_id);
-                return run_async(`update ${m} set compressed_vec=$2 where id=$1 ${user_clause}`, p);
-            }
-        },
-        upd_feedback: {
-            run: (id: string, feedback_score: number, user_id?: string) => {
-                const user_clause = user_id ? "and user_id = $3" : "";
-                const p: any[] = [id, feedback_score];
-                if (user_id) p.push(user_id);
-                return run_async(`update ${m} set feedback_score=$2 where id=$1 ${user_clause}`, p);
-            }
-        },
-        upd_seen: {
-            run: (id: string, last_seen_at: number, salience: number, updated_at: number, user_id?: string) => {
-                const user_clause = user_id ? "and user_id = $5" : "";
-                const p = [id, last_seen_at, salience, updated_at];
-                if (user_id) p.push(user_id);
-                return run_async(
-                    `update ${m} set last_seen_at=$2,salience=$3,updated_at=$4 where id=$1 ${user_clause}`,
-                    p as any,
-                );
-            }
-        },
-        upd_summary: {
-            run: (id: string, summary: string, user_id?: string) => {
-                const user_clause = user_id ? "and user_id = $3" : "";
-                const p: any[] = [id, summary];
-                if (user_id) p.push(user_id);
-                return run_async(`update ${m} set summary=$2 where id=$1 ${user_clause}`, p);
-            }
-        },
-        upd_mem: {
-            run: (content: string, tags: string | null, meta: string | null, updated_at: number, id: string, user_id?: string) => {
-                const user_clause = user_id ? "and user_id = $6" : "";
-                const p: any[] = [content, tags, meta, updated_at, id];
-                if (user_id) p.push(user_id);
-                return run_async(
-                    `update ${m} set content=$1,tags=$2,meta=$3,updated_at=$4,version=version+1 where id=$5 ${user_clause}`,
-                    p,
-                );
-            }
-        },
-        upd_mem_with_sector: {
-            run: (content: string, sector: string, tags: string | null, meta: string | null, updated_at: number, id: string, user_id?: string) => {
-                const user_clause = user_id ? "and user_id = $7" : "";
-                const p: any[] = [content, sector, tags, meta, updated_at, id];
-                if (user_id) p.push(user_id);
-                return run_async(
-                    `update ${m} set content=$1,primary_sector=$2,tags=$3,meta=$4,updated_at=$5,version=version+1 where id=$6 ${user_clause}`,
-                    p,
-                );
-            }
-        },
-        del_mem: {
-            run: async (id: string, user_id?: string) => {
-                const user_clause = user_id ? "and user_id = $2" : "";
-                const p = user_id ? [id, user_id] : [id];
-                await run_async(`delete from ${v} where id=$1 ${user_clause}`, p as any);
-                const w_clause = user_id ? "and user_id = $2" : "";
-                await run_async(`delete from ${w} where (src_id=$1 or dst_id=$1) ${w_clause}`, p as any);
-                return await run_async(`delete from ${m} where id=$1 ${user_clause}`, p as any);
-            },
-        },
-        get_classifier_model: {
-            get: (user_id: string) => get_async(`select * from learned_models where user_id=$1`, [user_id]),
-        },
-        ins_classifier_model: {
-            run: (user_id, weights, biases, version, updated_at) =>
-                run_async(
-                    `insert into learned_models(user_id,weights,biases,version,updated_at) values($1,$2,$3,$4,$5) on conflict(user_id) do update set weights=$2,biases=$3,version=$4,updated_at=$5`,
-                    [user_id, weights, biases, version, updated_at],
-                ),
-        },
-        get_mem: {
-            get: (id: string, user_id?: string) => {
-                const user_clause = user_id ? "and user_id = $2" : "";
-                const p = [id];
-                if (user_id) p.push(user_id);
-                return get_async(`select * from ${m} where id=$1 ${user_clause}`, p as any);
-            }
-        },
-        get_mem_by_simhash: {
-            get: (simhash, user_id) => {
-                const user_clause = user_id ? "user_id = $2" : "1=1";
-                const p = user_id ? [simhash, user_id] : [simhash];
-                return get_async(`select * from ${m} where simhash=$1 and ${user_clause} order by salience desc limit 1`, p);
-            }
-        },
-        get_active_users: {
-            all: () =>
-                all_async(
-                    `select distinct user_id from ${m} where user_id is not null`,
-                ),
-        },
-        all_mem: {
-            all: (limit, offset) =>
-                all_async(
-                    `select * from ${m} order by created_at desc limit $1 offset $2`,
-                    [limit, offset],
-                ),
-        },
-        all_mem_by_sector: {
-            all: (sector, limit, offset, user_id) => {
-                const user_clause = user_id ? "and user_id=$4" : "";
-                const p = user_id ? [sector, limit, offset, user_id] : [sector, limit, offset];
-                return all_async(
-                    `select * from ${m} where primary_sector=$1 ${user_clause} order by created_at desc limit $2 offset $3`,
-                    p,
-                );
-            },
-        },
-        get_training_data: {
-            all: (user_id, limit) =>
-                all_async(
-                    `select primary_sector, mean_vec from ${m} where user_id=$1 and mean_vec is not null limit $2`,
-                    [user_id, limit],
-                ) as any,
-        },
-        get_segment_count: {
-            get: (segment) =>
-                get_async(`select count(*) as c from ${m} where segment=$1`, [
-                    segment,
-                ]),
-        },
-        get_max_segment: {
-            get: () =>
-                get_async(
-                    `select coalesce(max(segment), 0) as max_seg from ${m}`,
-                    [],
-                ),
-        },
-        get_segments: {
-            all: () =>
-                all_async(
-                    `select distinct segment from ${m} order by segment desc`,
-                    [],
-                ),
-        },
-        get_mem_by_segment: {
-            all: (segment) =>
-                all_async(
-                    `select * from ${m} where segment=$1 order by created_at desc`,
-                    [segment],
-                ),
-        },
-        // Vector operations removed
-        ins_waypoint: {
-            run: (...p) =>
-                run_async(
-                    `insert into ${w}(src_id,dst_id,user_id,weight,created_at,updated_at) values($1,$2,$3,$4,$5,$6) on conflict(src_id,dst_id,user_id) do update set weight=excluded.weight,updated_at=excluded.updated_at`,
-                    p,
-                ),
-        },
-        get_neighbors: {
-            all: (src, user_id) => {
-                const user_clause = user_id ? "and user_id=$2" : "";
-                const p = user_id ? [src, user_id] : [src];
-                return all_async(
-                    `select dst_id,weight from ${w} where src_id=$1 ${user_clause} order by weight desc`,
-                    p,
-                );
-            },
-        },
-        get_waypoints_by_src: {
-            all: (src, user_id) => {
-                const user_clause = user_id ? "and user_id=$2" : "";
-                const p = user_id ? [src, user_id] : [src];
-                return all_async(
-                    `select src_id,dst_id,weight,created_at,updated_at from ${w} where src_id=$1 ${user_clause}`,
-                    p,
-                );
-            },
-        },
-        get_waypoint: {
-            get: (src, dst, user_id) => {
-                const user_clause = user_id ? "and user_id=$3" : "";
-                const p = user_id ? [src, dst, user_id] : [src, dst];
-                return get_async(
-                    `select weight, user_id, created_at, updated_at from ${w} where src_id=$1 and dst_id=$2 ${user_clause}`,
-                    p,
-                );
-            },
-        },
-        upd_waypoint: {
-            run: (...p) => {
-                // p: [src_id, weight, updated_at, dst_id, user_id]
-                const user_id = p[4];
-                const user_clause = user_id ? "and user_id=$5" : "";
-                const params = user_id ? p : p.slice(0, 4);
-                return run_async(
-                    `update ${w} set weight=$2,updated_at=$3 where src_id=$1 and dst_id=$4 ${user_clause}`,
-                    params,
-                );
-            },
-        },
-        del_waypoints: {
-            run: (...p) => {
-                // p: [id, id, user_id]
-                const user_id = p[2];
-                const user_clause = user_id ? "and user_id=$3" : "";
-                const params = user_id ? p : p.slice(0, 2);
-                return run_async(`delete from ${w} where (src_id=$1 or dst_id=$2) ${user_clause}`, params);
-            },
-        },
-        prune_waypoints: {
-            run: (t, user_id) => {
-                const user_clause = user_id ? "and user_id=$2" : "";
-                const p = user_id ? [t, user_id] : [t];
-                return run_async(`delete from ${w} where weight<$1 ${user_clause}`, p);
-            },
-        },
-        ins_log: {
-            run: (...p) =>
-                run_async(
-                    `insert into ${l}(id,user_id,model,status,ts,err) values($1,$2,$3,$4,$5,$6) on conflict(id) do update set user_id=excluded.user_id,model=excluded.model,status=excluded.status,ts=excluded.ts,err=excluded.err`,
-                    p,
-                ),
-        },
-        upd_log: {
-            run: (...p) =>
-                run_async(`update ${l} set status=$2,err=$3 where id=$1`, p),
-        },
-        get_pending_logs: {
-            all: () =>
-                all_async(`select * from ${l} where status=$1`, ["pending"]),
-        },
-        get_failed_logs: {
-            all: () =>
-                all_async(
-                    `select * from ${l} where status=$1 order by ts desc limit 100`,
-                    ["failed"],
-                ),
-        },
-        all_mem_by_user: {
-            all: (user_id, limit, offset) =>
-                all_async(
-                    `select * from ${m} where user_id=$1 order by created_at desc limit $2 offset $3`,
-                    [user_id, limit, offset],
-                ),
-        },
-        del_mem_by_user: {
-            run: async (user_id: string) => {
-                await run_async(`delete from ${v} where user_id=$1`, [user_id]);
-                await run_async(`delete from ${w} where user_id=$1`, [user_id]);
-                await run_async(`delete from temporal_facts where user_id=$1`, [user_id]);
-                await run_async(`delete from temporal_edges where user_id=$1`, [user_id]);
-                return await run_async(`delete from ${m} where user_id=$1`, [user_id]);
-            },
-        },
-        ins_user: {
-            run: (...p) =>
-                run_async(
-                    `insert into "${sc}"."openmemory_users"(user_id,summary,reflection_count,created_at,updated_at) values($1,$2,$3,$4,$5) on conflict(user_id) do update set summary=excluded.summary,reflection_count=excluded.reflection_count,updated_at=excluded.updated_at`,
-                    p,
-                ),
-        },
-        get_user: {
-            get: (user_id) =>
-                get_async(
-                    `select * from "${sc}"."openmemory_users" where user_id=$1`,
-                    [user_id],
-                ),
-        },
-        upd_user_summary: {
-            run: (...p) =>
-                run_async(
-                    `update "${sc}"."openmemory_users" set summary=$2,reflection_count=reflection_count+1,updated_at=$3 where user_id=$1`,
-                    p,
-                ),
-        },
-        clear_all: {
-            run: async () => {
-                await run_async(`delete from ${m}`);
-                await run_async(`delete from ${v}`);
-                await run_async(`delete from ${w}`);
-                await run_async(`delete from "${sc}"."openmemory_users"`);
-                await run_async(`delete from temporal_facts`);
-                await run_async(`delete from temporal_edges`);
-            },
-        },
-        get_mem_by_meta_like: {
-            all: (pattern: string, user_id?: string) => {
-                const user_clause = user_id ? "and user_id = $2" : "";
-                const p = user_id ? [`%${pattern}%`, user_id] : [`%${pattern}%`];
-                return all_async(
-                    `select * from ${memories_table} where meta like $1 ${user_clause} order by created_at desc`,
-                    p as any,
-                );
-            }
-        },
-        get_sector_stats: {
-            all: (user_id) => {
-                const user_clause = user_id ? "WHERE user_id = $1" : "WHERE user_id IS NULL";
-                const p = user_id ? [user_id] : [];
-                return all_async(
-                    `select primary_sector as sector, count(*) as count, avg(salience) as avg_salience from ${memories_table} ${user_clause} group by primary_sector`,
-                    p,
-                ) as Promise<SectorStat[]>;
-            }
-        },
-    };
-} else {
-    const db_path =
-        env.db_path ||
-        path.resolve(__dirname, "../../data/openmemory.sqlite");
-    const dir = path.dirname(db_path);
-    if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
+if (getIsPg()) {
+    pg = pool();
+    pg.on("error", (err) =>
+        logger.error("[DB] Unexpected PG error", { error: err }),
+    );
+}
+
+export const get_sq_db = () => {
+    const db_path = env.dbPath || ":memory:";
+    // Force shared instance for in-memory DBs to avoid split-brain in tests
+    const cacheKey = `${db_path}_${getContextId()}`;
+
+    let d = dbs.get(cacheKey);
+    if (d) return d;
+    if (db_path !== ":memory:") {
+        const dir = path.dirname(db_path);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     }
+    d = new Database(db_path, { create: true });
+    if (db_path !== ":memory:") {
+        d.exec("PRAGMA journal_mode=WAL");
+        d.exec("PRAGMA synchronous=NORMAL");
+        d.exec("PRAGMA foreign_keys = ON;");
+    }
+    dbs.set(cacheKey, d);
+    return d;
+};
 
-    // Bun:sqlite native database
-    const db = new Database(db_path, { create: true });
+const init = async () => {
+    const release = await (async () => {
+        let r: () => void;
+        const p = new Promise<void>((resolve) => {
+            r = resolve;
+        });
+        const old = lifecycle_lock;
+        lifecycle_lock = p;
+        await old;
+        return r!;
+    })();
 
-    // SQLite vector table name from env (default: "vectors" for backward compatibility)
-    const sqlite_vector_table = process.env.OM_VECTOR_TABLE || "vectors";
-
-    // WAL mode and settings
-    db.exec("PRAGMA journal_mode=WAL");
-    db.exec("PRAGMA synchronous=NORMAL");
-    db.exec("PRAGMA temp_store=MEMORY");
-    db.exec("PRAGMA cache_size=-8000");
-    db.exec("PRAGMA mmap_size=134217728");
-    db.exec("PRAGMA foreign_keys=OFF");
-    db.exec("PRAGMA wal_autocheckpoint=20000");
-    db.exec("PRAGMA locking_mode=NORMAL");
-    db.exec("PRAGMA busy_timeout=5000");
-
-    close_db = async () => {
-        db.close();
-        if (vector_store && typeof (vector_store as any).disconnect === 'function') {
-            await (vector_store as any).disconnect();
-        }
-    };
-
-    // SQLite Migrations: ensure user_id column exists
-    const ensureColumn = (table: string, column: string, type: string) => {
-        const info = db.prepare(`PRAGMA table_info(${table})`).all() as any[];
-        if (!info.some(c => c.name === column)) {
-            console.error(`[DB] Migration: Adding ${column} to ${table}`);
-            db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
-        }
-    };
-
-    db.exec(`create table if not exists memories(id text primary key,user_id text,segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,meta text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0)`);
-    db.exec(`create table if not exists ${sqlite_vector_table}(id text not null,sector text not null,user_id text,v blob not null,dim integer not null,primary key(id,sector))`);
-    db.exec(`create table if not exists waypoints(src_id text,dst_id text not null,user_id text,weight real not null,created_at integer,updated_at integer,primary key(src_id,dst_id,user_id))`);
-    db.exec(`create table if not exists embed_logs(id text primary key,user_id text,model text,status text,ts integer,err text)`);
-    db.exec(`create table if not exists temporal_facts (id text primary key,user_id text,subject text not null,predicate text not null,object text not null,valid_from integer not null,valid_to integer,confidence real not null check(confidence >= 0 and confidence <= 1),last_updated integer not null,metadata text,unique(user_id,subject,predicate,object,valid_from))`);
-    db.exec(`create table if not exists temporal_edges (id text primary key,user_id text,source_id text not null,target_id text not null,relation_type text not null,valid_from integer not null,valid_to integer,weight real not null,metadata text,foreign key(source_id) references temporal_facts(id),foreign key(target_id) references temporal_facts(id))`);
-    db.exec(`create table if not exists learned_models(user_id text primary key,weights text,biases text,version integer default 1,updated_at integer)`);
-    ensureColumn("embed_logs", "user_id", "text");
-    ensureColumn("temporal_facts", "user_id", "text");
-    ensureColumn("temporal_edges", "user_id", "text");
-    ensureColumn("waypoints", "user_id", "text");
-    ensureColumn("memories", "user_id", "text");
-    ensureColumn(sqlite_vector_table, "user_id", "text");
-
-    // SQLite Migration: fix waypoints primary key if it was created wrongly
     try {
-        const wpInfo = db.prepare("PRAGMA table_info(waypoints)").all() as any[];
-        const pkCount = wpInfo.filter(c => c.pk > 0).length;
-        if (pkCount === 2) { // Old (src_id, user_id)
-            console.error("[DB] Migration: Re-creating waypoints table with correct primary key");
-            db.exec("BEGIN TRANSACTION");
-            db.exec("ALTER TABLE waypoints RENAME TO waypoints_old");
-            db.exec("create table waypoints(src_id text,dst_id text not null,user_id text,weight real not null,created_at integer,updated_at integer,primary key(src_id,dst_id,user_id))");
-            db.exec("insert into waypoints select * from waypoints_old");
-            db.exec("drop table waypoints_old");
-            db.exec("COMMIT");
+        if (readyStates.get(getContextId())) return;
+        if (getIsPg()) {
+            try {
+                await pg!.query("SELECT 1");
+            } catch (err: unknown) {
+                if ((err as { code?: string }).code === "3D000") {
+                    const admin = pool("postgres");
+                    try {
+                        await admin.query(`CREATE DATABASE ${env.pgDb}`);
+                    } catch (e: unknown) {
+                        if ((e as { code?: string }).code !== "42P04") throw e;
+                    } finally {
+                        await admin.end();
+                    }
+                    await pg!.query("SELECT 1");
+                } else throw err;
+            }
+            await pg!.query("CREATE EXTENSION IF NOT EXISTS vector");
+            hasVector =
+                (
+                    await pg!.query(
+                        "SELECT 1 FROM pg_extension WHERE extname='vector'",
+                    )
+                ).rowCount! > 0;
+            const vt = hasVector ? "vector" : "bytea";
+            const sc = env.pgSchema;
+            await pg!.query(`CREATE SCHEMA IF NOT EXISTS "${sc}"`);
+            await pg!.query(`SET search_path TO "${sc}", public`);
+
+            // Parallel Table Creation
+            await Promise.all([
+                pg!.query(`create table if not exists ${TABLES.memories}(id uuid primary key,user_id text,segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,metadata text,created_at bigint,updated_at bigint,last_seen_at bigint,salience double precision,decay_lambda double precision,version integer default 1,mean_dim integer,mean_vec ${vt},compressed_vec bytea,feedback_score double precision default 0,generated_summary text,coactivations integer default 0)`),
+                pg!.query(`create table if not exists ${TABLES.vectors}(id uuid,sector text,user_id text,v ${vt},dim integer not null,metadata text,primary key(id,sector))`),
+                pg!.query(`create table if not exists ${TABLES.waypoints}(src_id text,dst_id text not null,user_id text,weight double precision not null,created_at bigint,updated_at bigint,primary key(src_id,dst_id,user_id))`),
+                pg!.query(`create table if not exists ${TABLES.embed_logs}(id text primary key,user_id text,model text,status text,ts bigint,err text)`),
+                pg!.query(`create table if not exists ${TABLES.users}(user_id text primary key,summary text,reflection_count integer default 0,created_at bigint,updated_at bigint)`),
+                pg!.query(`create table if not exists ${TABLES.stats}(id serial primary key,type text not null,count integer default 1,ts bigint not null,user_id text)`),
+                pg!.query(`create table if not exists ${TABLES.maint_logs}(id serial primary key,op text not null,status text not null,details text,ts bigint not null,user_id text)`),
+                pg!.query(`create table if not exists ${TABLES.temporal_facts}(id text primary key,user_id text,subject text not null,predicate text not null,object text not null,valid_from bigint not null,valid_to bigint,confidence double precision not null,last_updated bigint not null,metadata text)`),
+                pg!.query(`create table if not exists ${TABLES.temporal_edges}(id text primary key,user_id text,source_id text not null,target_id text not null,relation_type text not null,valid_from bigint not null,valid_to bigint,weight double precision not null,metadata text,last_updated bigint)`),
+                pg!.query(`create table if not exists ${TABLES.learned_models}(user_id text primary key,weights text,biases text,version integer default 1,updated_at bigint)`),
+                pg!.query(`create table if not exists ${TABLES.source_configs}(user_id text,type text,config text not null,status text default 'enabled',created_at bigint,updated_at bigint,primary key(user_id,type))`),
+                pg!.query(`create table if not exists ${TABLES.api_keys}(key_hash text primary key,user_id text not null,role text not null default 'user',note text,created_at bigint,updated_at bigint,expires_at bigint)`),
+            ]);
+
+            // Auto-Migration for coactivations
+            await pg!.query(`ALTER TABLE ${TABLES.memories} ADD COLUMN IF NOT EXISTS coactivations integer DEFAULT 0`).catch(() => { });
+
+            // Parallel Index Creation
+            const indices = [
+                `create index if not exists idx_mem_user on ${TABLES.memories}(user_id)`,
+                `create index if not exists idx_mem_sector on ${TABLES.memories}(primary_sector)`,
+                `create index if not exists idx_tf_subj on ${TABLES.temporal_facts}(subject)`,
+                `create index if not exists idx_tf_obj on ${TABLES.temporal_facts}(object)`,
+                `create index if not exists idx_tf_subj_pred on ${TABLES.temporal_facts}(subject, predicate)`,
+                `create index if not exists idx_tf_user_pred on ${TABLES.temporal_facts}(user_id, predicate)`,
+                `create index if not exists idx_tf_user_subj_pred on ${TABLES.temporal_facts}(user_id, subject, predicate)`,
+                `create index if not exists idx_tf_temporal on ${TABLES.temporal_facts}(valid_from, valid_to)`,
+                `create index if not exists idx_te_src on ${TABLES.temporal_edges}(source_id)`,
+                `create index if not exists idx_te_tgt on ${TABLES.temporal_edges}(target_id)`,
+                `create index if not exists idx_te_full on ${TABLES.temporal_edges}(source_id, target_id, relation_type)`,
+                `create index if not exists idx_te_user_rel on ${TABLES.temporal_edges}(user_id, relation_type)`,
+            ];
+            await Promise.all(indices.map(sql => pg!.query(sql)));
+
+            // Optimization Indices
+            await pg!.query(
+                `create index if not exists idx_mem_user_created on ${TABLES.memories}(user_id, created_at DESC)`,
+            );
+            await pg!.query(
+                `create index if not exists idx_mem_user_lastseen on ${TABLES.memories}(user_id, last_seen_at DESC)`,
+            );
+            await pg!.query(
+                `create index if not exists idx_mem_user_segment on ${TABLES.memories}(user_id, segment DESC)`,
+            );
+            await pg!.query(
+                `create index if not exists idx_vec_user on ${TABLES.vectors}(user_id)`,
+            );
+            await pg!.query(
+                `create index if not exists idx_vec_user_sector on ${TABLES.vectors}(user_id, sector)`,
+            );
+            await pg!.query(
+                `create index if not exists idx_mem_user_salience on ${TABLES.memories}(user_id, salience DESC)`,
+            );
+            await pg!.query(
+                `create index if not exists idx_mem_simhash on ${TABLES.memories}(simhash)`,
+            );
+
+            if (hasVector && env.vectorBackend === "postgres") {
+                await pg!
+                    .query(
+                        `create index if not exists idx_vec_hnsw on ${TABLES.vectors} using hnsw (v vector_cosine_ops) WITH (m = 16, ef_construction = 64)`,
+                    )
+                    .catch((e) => {
+                        logger.warn(
+                            "[DB] HNSW index creation failed (might be expected if not enough rows or old pgvector):",
+                            { error: e },
+                        );
+                    });
+            }
+            if (env.vectorBackend === "valkey") {
+                vectorStores.set(getContextId(), new ValkeyVectorStore());
+            } else {
+                vectorStores.set(
+                    getContextId(),
+                    new SqlVectorStore(
+                        {
+                            runAsync,
+                            getAsync,
+                            allAsync,
+                            transaction: transaction.run,
+                            iterateAsync,
+                        },
+                        TABLES.vectors,
+                    ),
+                );
+            }
+        } else {
+            const d = get_sq_db();
+            d.exec(
+                `create table if not exists ${TABLES.memories}(id text primary key,segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,metadata text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,user_id text,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0,generated_summary text,coactivations integer default 0)`,
+            );
+            d.exec(
+                `create table if not exists ${TABLES.vectors}(id text,sector text,user_id text,v blob,dim integer not null,metadata text,primary key(id,sector))`,
+            );
+            d.exec(
+                `create table if not exists waypoints(src_id text,dst_id text not null,user_id text,weight real not null,created_at integer,updated_at integer,primary key(src_id,dst_id,user_id))`,
+            );
+            d.exec(
+                `create table if not exists embed_logs(id text primary key,user_id text,model text,status text,ts integer,err text)`,
+            );
+            d.exec(
+                `create table if not exists users(user_id text primary key,summary text,reflection_count integer default 0,created_at integer,updated_at integer)`,
+            );
+            d.exec(
+                `create table if not exists stats(id integer primary key autoincrement,type text not null,count integer default 1,ts integer not null,user_id text)`,
+            );
+            d.exec(
+                `create table if not exists maint_logs(id integer primary key autoincrement,op text not null,status text not null,details text,ts integer not null,user_id text)`,
+            );
+            d.exec(
+                `create table if not exists temporal_facts(id text primary key,user_id text,subject text not null,predicate text not null,object text not null,valid_from integer not null,valid_to integer,confidence real not null,last_updated integer not null,metadata text)`,
+            );
+            d.exec(
+                `create table if not exists temporal_edges(id text primary key,user_id text,source_id text not null,target_id text not null,relation_type text not null,valid_from integer not null,valid_to integer,weight real not null,metadata text,last_updated integer)`,
+            );
+            d.exec(
+                `create table if not exists learned_models(user_id text primary key,weights text,biases text,version integer default 1,updated_at integer)`,
+            );
+            d.exec(
+                `create table if not exists ${TABLES.source_configs}(user_id text,type text,config text not null,status text default 'enabled',created_at integer,updated_at integer,primary key(user_id,type))`,
+            );
+            d.exec(
+                `create table if not exists ${TABLES.api_keys}(key_hash text primary key,user_id text not null,role text not null default 'user',note text,created_at integer,updated_at integer,expires_at integer)`,
+            );
+
+            // SQLite Auto-Migration for coactivations
+            try { d.exec(`ALTER TABLE memories ADD COLUMN coactivations integer DEFAULT 0`); } catch (e) { }
+
+            d.exec(`create index if not exists idx_mem_user on memories(user_id)`);
+            d.exec(`create index if not exists idx_vec_user_sector on vectors(user_id, sector)`);
+            d.exec(`create index if not exists idx_tf_subj on temporal_facts(subject)`);
+            d.exec(`create index if not exists idx_tf_obj on temporal_facts(object)`);
+            d.exec(`create index if not exists idx_tf_subj_pred on temporal_facts(subject, predicate)`);
+            d.exec(`create index if not exists idx_tf_user_pred on temporal_facts(user_id, predicate)`);
+            d.exec(`create index if not exists idx_tf_user_subj_pred on temporal_facts(user_id, subject, predicate)`);
+            d.exec(`create index if not exists idx_tf_temporal on temporal_facts(valid_from, valid_to)`);
+            d.exec(`create index if not exists idx_te_src on temporal_edges(source_id)`);
+            d.exec(`create index if not exists idx_te_tgt on temporal_edges(target_id)`);
+            d.exec(`create index if not exists idx_te_full on temporal_edges(source_id, target_id, relation_type)`);
+            d.exec(`create index if not exists idx_te_user_rel on temporal_edges(user_id, relation_type)`);
+
+            // Optimization Indices
+            d.exec(
+                `create index if not exists idx_mem_user_created on memories(user_id, created_at DESC)`,
+            );
+            d.exec(
+                `create index if not exists idx_mem_user_lastseen on memories(user_id, last_seen_at DESC)`,
+            );
+            d.exec(
+                `create index if not exists idx_mem_user_segment on memories(user_id, segment DESC)`,
+            );
+            d.exec(
+                `create index if not exists idx_vec_user on vectors(user_id)`,
+            );
+            d.exec(
+                `create index if not exists idx_mem_user_salience on memories(user_id, salience DESC)`,
+            );
+            d.exec(
+                `create index if not exists idx_mem_simhash on memories(simhash)`,
+            );
+
+            if (env.vectorBackend === "valkey") {
+                vectorStores.set(getContextId(), new ValkeyVectorStore());
+            } else {
+                vectorStores.set(
+                    getContextId(),
+                    new SqlVectorStore(
+                        { runAsync, getAsync, allAsync, iterateAsync },
+                        TABLES.vectors,
+                    ),
+                );
+            }
         }
-    } catch (e) {
-        console.warn("[DB] Waypoints migration check failed:", e);
+        readyStates.set(getContextId(), true);
+    } finally {
+        release();
     }
+};
 
-    db.exec("create index if not exists idx_memories_sector on memories(primary_sector)");
-    db.exec("create index if not exists idx_memories_segment on memories(segment)");
-    db.exec("create index if not exists idx_memories_simhash on memories(simhash)");
-    db.exec("create index if not exists idx_memories_ts on memories(last_seen_at)");
-    db.exec("create index if not exists idx_memories_user on memories(user_id)");
-    db.exec(`create index if not exists idx_vectors_user on ${sqlite_vector_table}(user_id)`);
-    db.exec("create index if not exists idx_waypoints_src on waypoints(src_id)");
-    db.exec("create index if not exists idx_waypoints_dst on waypoints(dst_id)");
-    db.exec("create index if not exists idx_waypoints_user on waypoints(user_id)");
-    db.exec("create index if not exists idx_stats_ts on stats(ts)");
-    db.exec("create index if not exists idx_stats_type on stats(type)");
-    db.exec("create index if not exists idx_embed_logs_user on embed_logs(user_id)");
+export const waitReady = async () => {
+    if (readyStates.get(getContextId())) return;
+    let p = readyPromises.get(getContextId());
+    if (!p) {
+        p = init();
+        readyPromises.set(getContextId(), p);
+    }
+    await p;
+    readyPromises.set(getContextId(), null);
+};
 
-    // Composite indexes for user-scoped queries
-    db.exec("create index if not exists idx_mem_user_sector on memories(user_id, primary_sector)");
-    db.exec("create index if not exists idx_mem_user_ts on memories(user_id, last_seen_at)");
-    db.exec("create index if not exists idx_tf_user_subject on temporal_facts(user_id, subject)");
-    db.exec("create index if not exists idx_te_user_src_dst on temporal_edges(user_id, source_id, target_id)");
-    db.exec("create index if not exists idx_temporal_user on temporal_facts(user_id)");
-    db.exec("create index if not exists idx_temporal_subject on temporal_facts(subject)");
-    db.exec("create index if not exists idx_temporal_predicate on temporal_facts(predicate)");
-    db.exec("create index if not exists idx_temporal_validity on temporal_facts(valid_from,valid_to)");
-    db.exec("create index if not exists idx_temporal_composite on temporal_facts(user_id,subject,predicate,valid_from,valid_to)");
-    db.exec("create index if not exists idx_edges_user on temporal_edges(user_id)");
-    db.exec("create index if not exists idx_edges_source on temporal_edges(source_id)");
-    db.exec("create index if not exists idx_edges_target on temporal_edges(target_id)");
-    db.exec("create index if not exists idx_edges_validity on temporal_edges(valid_from,valid_to)");
+export async function closeDb() {
+    const release = await (async () => {
+        let r: () => void;
+        const p = new Promise<void>((resolve) => {
+            r = resolve;
+        });
+        const old = lifecycle_lock;
+        lifecycle_lock = p;
+        await old;
+        return r!;
+    })();
+    try {
+        const d = dbs.get(getContextId());
+        if (d) {
+            d.close();
+            dbs.delete(getContextId());
+        }
+        if (pg) {
+            await pg.end();
+            pg = null;
+        }
+        readyStates.delete(getContextId());
+        readyPromises.delete(getContextId());
+        vectorStores.delete(getContextId());
+        stmt_cache.clear();
+    } finally {
+        release();
+    }
+};
 
-    memories_table = "memories";
+/**
+ * Converts `?` placeholders to `$N` for PostgreSQL compatibility.
+ * Safely ignores `?` (and strings containing `?`) inside single/double quotes.
+ */
+export function convertPlaceholders(sql: string): string {
+    if (!getIsPg()) return sql;
+    let index = 1;
+    // Regex matches single-quoted strings, double-quoted strings, or the placeholder ?
+    return sql.replace(/'(?:''|[^'])*'|"(?:""|[^"])*"|\?/g, (match) => {
+        if (match === "?") {
+            return `$${index++}`;
+        }
+        return match;
+    });
+}
 
-    transaction = {
-        begin: async () => { db.exec("BEGIN TRANSACTION"); },
-        commit: async () => { db.exec("COMMIT"); },
-        rollback: async () => { db.exec("ROLLBACK"); }
-    };
+const execRes = async (sql: string, p: SqlParams = []) => {
+    const ctx = txStorage.getStore();
+    // Sanitize parameters for SQLite/PG strictness
+    const safeP = p.map((v) => {
+        if (v === undefined) return null;
+        if (Array.isArray(v) && !((v as unknown) instanceof Uint8Array))
+            return null;
+        return v;
+    });
 
-    // Statement Caching
-    const stmt_cache = new Map<string, any>();
-    const get_stmt = (sql: string) => {
+    if (getIsPg()) {
+        const c = ctx?.cli || pg;
+        if (!c) throw new Error("PG not initialized");
+        return await c.query(convertPlaceholders(sql), safeP);
+    } else {
+        const d = get_sq_db();
+        // Use stmt_cache for sustainability
         let stmt = stmt_cache.get(sql);
         if (!stmt) {
-            stmt = db.prepare(sql);
+            stmt = d.prepare(sql);
             stmt_cache.set(sql, stmt);
         }
-        return stmt;
-    };
-
-    const exec_rowCount = (sql: string, p: any[] = []) =>
-        new Promise<number>((ok, no) => {
-            try {
-                const res = get_stmt(sql).run(...p);
-                ok(res.changes);
-            } catch (e) { no(e); }
-        });
-    const one = (sql: string, p: any[] = []) =>
-        new Promise<any>((ok, no) => {
-            try {
-                ok(get_stmt(sql).get(...p));
-            } catch (e) { no(e); }
-        });
-    const many = (sql: string, p: any[] = []) =>
-        new Promise<any[]>((ok, no) => {
-            try {
-                ok(get_stmt(sql).all(...p));
-            } catch (e) { no(e); }
-        });
-
-    run_async = exec_rowCount;
-    get_async = one;
-    all_async = many;
-
-    // Initialize VectorStore (SQLite uses PostgresVectorStore impl internally via DbOps if backend is postgres)
-    if (env.vector_backend === "valkey") {
-        vector_store = new ValkeyVectorStore();
-        if (env.verbose) console.log("[DB] SQLite with Valkey VectorStore");
-    } else {
-        vector_store = new SqlVectorStore({ run_async, get_async, all_async }, sqlite_vector_table);
-        if (env.verbose) console.log(`[DB] SQLite with internal SqlVectorStore (table: ${sqlite_vector_table})`);
-    }
-    q = {
-        ins_mem: {
-            run: (...p) =>
-                exec_rowCount(
-                    "insert into memories(id,user_id,segment,content,simhash,primary_sector,tags,meta,created_at,updated_at,last_seen_at,salience,decay_lambda,version,mean_dim,mean_vec,compressed_vec,feedback_score) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    p,
-                ),
-        },
-        upd_mean_vec: {
-            run: (id, dim, vec, user_id) => {
-                const user_clause = user_id ? "and user_id = ?" : "";
-                const p = user_id ? [dim, vec, id, user_id] : [dim, vec, id];
-                return exec_rowCount(`update memories set mean_dim=?,mean_vec=? where id=? ${user_clause}`, p as any);
-            }
-        },
-        upd_compressed_vec: {
-            run: (id, vec, user_id) => {
-                const user_clause = user_id ? "and user_id = ?" : "";
-                const p = user_id ? [vec, id, user_id] : [vec, id];
-                return exec_rowCount(`update memories set compressed_vec=? where id=? ${user_clause}`, p as any);
-            }
-        },
-        upd_feedback: {
-            run: (id, feedback_score, user_id) => {
-                const user_clause = user_id ? "and user_id = ?" : "";
-                const p = user_id ? [feedback_score, id, user_id] : [feedback_score, id];
-                return exec_rowCount(`update memories set feedback_score=? where id=? ${user_clause}`, p as any);
-            }
-        },
-        upd_seen: {
-            run: (id, last_seen_at, salience, updated_at, user_id) => {
-                const user_clause = user_id ? "and user_id = ?" : "";
-                const p = user_id ? [last_seen_at, salience, updated_at, id, user_id] : [last_seen_at, salience, updated_at, id];
-                return exec_rowCount(
-                    `update memories set last_seen_at=?,salience=?,updated_at=? where id=? ${user_clause}`,
-                    p as any,
-                );
-            }
-        },
-        upd_summary: {
-            run: (id, summary, user_id) => {
-                const user_clause = user_id ? "and user_id = ?" : "";
-                const p = user_id ? [summary, id, user_id] : [summary, id];
-                return exec_rowCount(`update memories set summary=? where id=? ${user_clause}`, p as any);
-            }
-        },
-        upd_mem: {
-            run: (content, tags, meta, updated_at, id, user_id) => {
-                const user_clause = user_id ? "and user_id = ?" : "";
-                const p = user_id ? [content, tags, meta, updated_at, id, user_id] : [content, tags, meta, updated_at, id];
-                return exec_rowCount(
-                    `update memories set content=?,tags=?,meta=?,updated_at=?,version=version+1 where id=? ${user_clause}`,
-                    p as any,
-                );
-            }
-        },
-        upd_mem_with_sector: {
-            run: (content, sector, tags, meta, updated_at, id, user_id) => {
-                const user_clause = user_id ? "and user_id = ?" : "";
-                const p = user_id ? [content, sector, tags, meta, updated_at, id, user_id] : [content, sector, tags, meta, updated_at, id];
-                return exec_rowCount(
-                    `update memories set content=?,primary_sector=?,tags=?,meta=?,updated_at=?,version=version+1 where id=? ${user_clause}`,
-                    p as any,
-                );
-            }
-        },
-        get_classifier_model: {
-            get: (user_id: string) => one(`select * from learned_models where user_id=?`, [user_id]),
-        },
-        ins_classifier_model: {
-            run: (user_id, weights, biases, version, updated_at) =>
-                exec_rowCount(
-                    `insert or replace into learned_models(user_id,weights,biases,version,updated_at) values(?,?,?,?,?)`,
-                    [user_id, weights, biases, version, updated_at],
-                ),
-        },
-        del_mem: {
-            run: async (id: string, user_id?: string) => {
-                const user_clause = user_id ? "and user_id = ?" : "";
-                const p = user_id ? [id, user_id] : [id];
-                await exec_rowCount(`delete from ${sqlite_vector_table} where id=? ${user_clause}`, p as any);
-                const w_clause = user_id ? "and user_id = ?" : "";
-                await exec_rowCount(`delete from waypoints where (src_id=? or dst_id=?) ${w_clause}`, [id, id, ...(user_id ? [user_id] : [])] as any);
-                return await exec_rowCount(`delete from memories where id=? ${user_clause}`, p as any);
-            },
-        },
-        get_mem: {
-            get: (id, user_id) => {
-                const user_clause = user_id ? "and user_id = ?" : "";
-                const p = user_id ? [id, user_id] : [id];
-                return one(`select * from memories where id=? ${user_clause}`, p as any);
-            }
-        },
-        get_mem_by_simhash: {
-            get: (simhash, user_id) => {
-                const user_clause = user_id ? "user_id = ?" : "1=1";
-                const p = user_id ? [simhash, user_id] : [simhash];
-                return one(`select * from memories where simhash=? and ${user_clause} order by salience desc limit 1`, p);
-            }
-        },
-        get_active_users: {
-            all: () =>
-                many(
-                    "select distinct user_id from memories where user_id is not null",
-                ),
-        },
-        all_mem: {
-            all: (limit, offset) =>
-                many(
-                    "select * from memories order by created_at desc limit ? offset ?",
-                    [limit, offset],
-                ),
-        },
-        all_mem_by_sector: {
-            all: (sector, limit, offset, user_id) => {
-                const user_clause = user_id ? "and user_id=?" : "";
-                const p = user_id ? [sector, user_id, limit, offset] : [sector, limit, offset];
-                return many(
-                    `select * from memories where primary_sector=? ${user_clause} order by created_at desc limit ? offset ?`,
-                    p,
-                );
-            },
-        },
-        get_training_data: {
-            all: (user_id, limit) =>
-                many(
-                    `select primary_sector, mean_vec from memories where user_id=? and mean_vec is not null limit ?`,
-                    [user_id, limit],
-                ) as any,
-        },
-        get_segment_count: {
-            get: (segment) =>
-                one("select count(*) as c from memories where segment=?", [
-                    segment,
-                ]),
-        },
-        get_max_segment: {
-            get: () =>
-                one(
-                    "select coalesce(max(segment), 0) as max_seg from memories",
-                    [],
-                ),
-        },
-        get_segments: {
-            all: () =>
-                many(
-                    "select distinct segment from memories order by segment desc",
-                    [],
-                ),
-        },
-        get_mem_by_segment: {
-            all: (segment) =>
-                many(
-                    "select * from memories where segment=? order by created_at desc",
-                    [segment],
-                ),
-        },
-        // Vector operations removed
-        ins_waypoint: {
-            run: (...p) =>
-                exec_rowCount(
-                    "insert or replace into waypoints(src_id,dst_id,user_id,weight,created_at,updated_at) values(?,?,?,?,?,?)",
-                    p,
-                ),
-        },
-        get_neighbors: {
-            all: (src, user_id) => {
-                const user_clause = user_id ? "and user_id = ?" : "";
-                const p = user_id ? [src, user_id] : [src];
-                return many(
-                    `select dst_id,weight from waypoints where src_id=? ${user_clause} order by weight desc`,
-                    p,
-                );
-            },
-        },
-        get_waypoints_by_src: {
-            all: (src, user_id) => {
-                const user_clause = user_id ? "and user_id = ?" : "";
-                const p = user_id ? [src, user_id] : [src];
-                return many(
-                    `select src_id,dst_id,weight,created_at,updated_at from waypoints where src_id=? ${user_clause}`,
-                    p,
-                );
-            },
-        },
-        get_waypoint: {
-            get: (src, dst, user_id) => {
-                const user_clause = user_id ? "and user_id = ?" : "";
-                const p = user_id ? [src, dst, user_id] : [src, dst];
-                return one(
-                    `select weight from waypoints where src_id=? and dst_id=? ${user_clause}`,
-                    p,
-                );
-            },
-        },
-        upd_waypoint: {
-            run: (...p) => {
-                // p: [src_id, weight, updated_at, dst_id, user_id]
-                const user_id = p[4];
-                const user_clause = user_id ? "and user_id = ?" : "";
-                const params = user_id ? [p[1], p[2], p[0], p[3], user_id] : [p[1], p[2], p[0], p[3]];
-                return exec_rowCount(
-                    `update waypoints set weight=?,updated_at=? where src_id=? and dst_id=? ${user_clause}`,
-                    params,
-                );
-            },
-        },
-        del_waypoints: {
-            run: (...p) => {
-                // p: [id, id, user_id]
-                const user_id = p[2];
-                const user_clause = user_id ? "and user_id = ?" : "";
-                const params = user_id ? p : p.slice(0, 2);
-                return exec_rowCount(`delete from waypoints where (src_id=? or dst_id=?) ${user_clause}`, params);
-            },
-        },
-        prune_waypoints: {
-            run: (t, user_id) => {
-                const user_clause = user_id ? "and user_id = ?" : "";
-                const p = user_id ? [t, user_id] : [t];
-                return exec_rowCount(`delete from waypoints where weight<? ${user_clause}`, p);
-            },
-        },
-        ins_log: {
-            run: (...p) =>
-                exec_rowCount(
-                    "insert or replace into embed_logs(id,user_id,model,status,ts,err) values(?,?,?,?,?,?)",
-                    p,
-                ),
-        },
-        upd_log: {
-            run: (...p) =>
-                // p: [id, status, error]
-                exec_rowCount("update embed_logs set status=?,err=? where id=?", [p[1], p[2], p[0]]),
-        },
-        get_pending_logs: {
-            all: () =>
-                many("select * from embed_logs where status=?", ["pending"]),
-        },
-        get_failed_logs: {
-            all: () =>
-                many(
-                    "select * from embed_logs where status=? order by ts desc limit 100",
-                    ["failed"],
-                ),
-        },
-        all_mem_by_user: {
-            all: (user_id, limit, offset) =>
-                many(
-                    "select * from memories where user_id=? order by created_at desc limit ? offset ?",
-                    [user_id, limit, offset],
-                ),
-        },
-        del_mem_by_user: {
-            run: async (user_id: string) => {
-                await exec_rowCount(`delete from ${sqlite_vector_table} where user_id=?`, [user_id]);
-                await exec_rowCount(`delete from waypoints where user_id=?`, [user_id]);
-                await exec_rowCount(`delete from temporal_facts where user_id=?`, [user_id]);
-                await exec_rowCount(`delete from temporal_edges where user_id=?`, [user_id]);
-                return await exec_rowCount("delete from memories where user_id=?", [user_id]);
-            },
-        },
-        ins_user: {
-            run: (...p) =>
-                exec_rowCount(
-                    "insert or ignore into users(user_id,summary,reflection_count,created_at,updated_at) values(?,?,?,?,?)",
-                    p,
-                ),
-        },
-        get_user: {
-            get: (user_id) =>
-                one("select * from users where user_id=?", [user_id]),
-        },
-        upd_user_summary: {
-            run: (...p) =>
-                // p: [user_id, summary, updated_at]
-                exec_rowCount(
-                    "update users set summary=?,reflection_count=reflection_count+1,updated_at=? where user_id=?",
-                    [p[1], p[2], p[0]],
-                ),
-        },
-        clear_all: {
-            run: async () => {
-                await run_async(`delete from memories`);
-                await run_async(`delete from waypoints`);
-                await run_async(`delete from users`);
-                await run_async(`delete from stats`);
-                await run_async(`delete from temporal_facts`);
-                await run_async(`delete from temporal_edges`);
-                const vec_table = process.env.OM_VECTOR_TABLE || "vectors";
-                await run_async(`delete from ${vec_table}`);
-            },
-        },
-        get_mem_by_meta_like: {
-            all: (pattern: string, user_id?: string) => {
-                const user_clause = user_id ? "and user_id = ?" : "";
-                const p = user_id ? [`%${pattern}%`, user_id] : [`%${pattern}%`];
-                return many(
-                    `select * from memories where meta like ? ${user_clause} order by created_at desc`,
-                    p as any,
-                );
-            }
-        },
-        get_sector_stats: {
-            all: (user_id) => {
-                const user_clause = user_id ? "WHERE user_id = ?" : "WHERE user_id IS NULL";
-                const p = user_id ? [user_id] : [];
-                return many(
-                    `select primary_sector as sector, count(*) as count, avg(salience) as avg_salience from memories ${user_clause} group by primary_sector`,
-                    p,
-                ) as Promise<SectorStat[]>;
-            }
-        },
-    };
-}
-
-export const log_maint_op = async (
-    type: "decay" | "reflect" | "consolidate",
-    cnt = 1,
-) => {
-    try {
-        const sql = is_pg
-            ? `insert into "${process.env.OM_PG_SCHEMA || "public"}"."stats"(type,count,ts) values($1,$2,$3)`
-            : "insert into stats(type,count,ts) values(?,?,?)";
-        await run_async(sql, [type, cnt, Date.now()]);
-    } catch (e) {
-        console.error("[DB] Maintenance log error:", e);
+        const res = stmt.run(...(safeP as (string | number | boolean | Buffer | null)[]));
+        return { rows: [], rowCount: res.changes };
     }
 };
 
-export { q, transaction, memories_table, vector_store };
+/**
+ * Maps a database row to its camelCase TypeScript equivalent.
+ */
+const mapRow = (
+    row: Record<string, unknown> | null,
+): Record<string, unknown> | null => {
+    if (!row) return row;
+
+    // Strict mapping to ensure only camelCase keys exist, preventing ambiguity and memory bloat.
+    const mapped: Record<string, unknown> = {};
+
+    // Common Fields (Direct Copy)
+    const directKeys = ["id", "content", "tags", "metadata", "segment", "simhash", "salience", "version", "coactivations", "role", "note", "type", "config", "status", "count", "ts", "op", "details", "subject", "predicate", "object", "weights", "biases", "err", "model"];
+    for (const k of directKeys) {
+        if (row[k] !== undefined) mapped[k] = row[k];
+    }
+
+    // Mapped Fields (snake_case -> camelCase)
+    // Memories / Vectors
+    if (row.user_id !== undefined) mapped.userId = row.user_id;
+    if (row.primary_sector !== undefined) mapped.primarySector = row.primary_sector;
+    if (row.created_at !== undefined) mapped.createdAt = Number(row.created_at);
+    if (row.updated_at !== undefined) mapped.updatedAt = Number(row.updated_at);
+    if (row.last_seen_at !== undefined) mapped.lastSeenAt = Number(row.last_seen_at);
+    if (row.decay_lambda !== undefined) mapped.decayLambda = row.decay_lambda;
+    if (row.feedback_score !== undefined) mapped.feedbackScore = row.feedback_score;
+    if (row.generated_summary !== undefined) mapped.generatedSummary = row.generated_summary;
+    if (row.mean_dim !== undefined) mapped.meanDim = row.mean_dim;
+    if (row.mean_vec !== undefined) mapped.meanVec = row.mean_vec;
+    if (row.compressed_vec !== undefined) mapped.compressedVec = row.compressed_vec;
+
+    // Temporal
+    if (row.valid_from !== undefined) mapped.validFrom = Number(row.valid_from);
+    if (row.valid_to !== undefined) mapped.validTo = row.valid_to ? Number(row.valid_to) : null;
+    if (row.last_updated !== undefined) mapped.lastUpdated = Number(row.last_updated);
+    if (row.source_id !== undefined) mapped.sourceId = row.source_id;
+    if (row.target_id !== undefined) mapped.targetId = row.target_id;
+    if (row.relation_type !== undefined) mapped.relationType = row.relation_type;
+
+    // Keys / Users
+    if (row.key_hash !== undefined) mapped.keyHash = row.key_hash;
+    if (row.expires_at !== undefined) mapped.expiresAt = Number(row.expires_at);
+    if (row.reflection_count !== undefined) mapped.reflectionCount = row.reflection_count;
+
+    // Fallback: If we have aliased keys (e.g. "count as cnt"), allow them if they are already camelCase-ish? 
+    // Actually, SQL aliases like `as userId` in queries might be used.
+    // If the input row ALREADY has a camelCase key, preserve it.
+    for (const k of Object.keys(row)) {
+        // If it's NOT in our list of mapped snake_keys AND it looks like camelCase (or at least not snake), keep it?
+        // Simple heuristic: if it contains `_`, skip it (unless it's a known underscore key we want? NO, we want consistent camel).
+        // Exceptions: `app_id` etc if we ever add them.
+        // Better: If mapped[k] is set, skip. If not set, and it's not a known snake key...
+
+        // This is risky. Better to just trust the mappings above for CORE tables.
+        // But `select count(*) as count` returns `count`. Added to directKeys.
+        // `select ... as avgSalience` returns `avgSalience`.
+
+        if (mapped[k] === undefined && !k.includes("_")) {
+            mapped[k] = row[k];
+        }
+    }
+
+    return mapped;
+};
+
+const execAll = async <T>(sql: string, p: SqlParams = []) => {
+    let rows: Record<string, unknown>[];
+    if (getIsPg()) {
+        rows = (await execRes(sql, p)).rows;
+    } else {
+        const d = get_sq_db();
+        let stmt = stmt_cache.get(sql);
+        if (!stmt) {
+            stmt = d.prepare(sql);
+            stmt_cache.set(sql, stmt);
+        }
+        rows = stmt.all(...(p as (string | number | boolean | Buffer | null)[])) as Record<string, unknown>[];
+    }
+    return rows.map(mapRow) as T[];
+};
+
+export async function runAsync(sql: string, p: SqlParams = []) {
+    await waitReady();
+    return (await execRes(sql, p)).rowCount || 0;
+}
+
+export async function getAsync<T = unknown>(sql: string, p: SqlParams = []): Promise<T | undefined> {
+    await waitReady();
+    const rows = await execAll(sql, p);
+
+    return rows[0] as T | undefined;
+}
+export async function allAsync<T = unknown>(sql: string, p: SqlParams = []): Promise<T[]> {
+    await waitReady();
+    return (await execAll(sql, p)) as T[];
+}
+
+export async function* iterateAsync<T = unknown>(
+    sql: string,
+    p: SqlParams = [],
+): AsyncIterable<T> {
+    await waitReady();
+
+    // Sanitize parameters
+    const safeP = p.map((v) => {
+        if (v === undefined) return null;
+        if (Array.isArray(v) && !((v as unknown) instanceof Uint8Array))
+            return null;
+        return v;
+    });
+
+    if (getIsPg()) {
+        // PG Fallback: Load all (since we lack pg-cursor dependency)
+        // Note: For PG vector search, we rely on server-side pgvector anyway.
+        const rows = (await execAll(sql, p)) as T[];
+        for (const row of rows) yield row;
+    } else {
+        // SQLite Streaming
+        const d = get_sq_db();
+        let stmt = stmt_cache.get(sql);
+        if (!stmt) {
+            stmt = d.prepare(sql);
+            stmt_cache.set(sql, stmt);
+        }
+
+        // Bun SQLite iterate returns an Iterable, which we yield from asynchronously
+        // Cast params safely for Bun's strict typing
+        const iterator = stmt.iterate(...(safeP as any[]));
+        for (const row of iterator) {
+            yield mapRow(row as Record<string, unknown>) as T;
+        }
+    }
+}
+
+export const transaction = {
+    run: async <T>(fn: () => Promise<T>): Promise<T> => {
+        const ctx = txStorage.getStore();
+        if (ctx) {
+            ctx.depth++;
+            try {
+                return await fn();
+            } finally {
+                ctx.depth--;
+            }
+        }
+
+        const txId = Math.random().toString(36).substring(7);
+        const { getContext } = await import("./context");
+        const sysCtx = getContext();
+        const currentDepth = (ctx as any)?.depth || 0;
+
+        if (getIsPg()) {
+            if (!pg) {
+                // If we are in "PG Mode" but PG is not initialized (e.g. tests switched env vars mid-process),
+                // we must fail gracefully or fallback. Since this is likely a test artifact or startup race, throw clear error.
+                throw new Error("DB Connection Error: Postgres enabled but client not initialized. Restart required on config change.");
+            }
+            const client = await pg.connect();
+            logger.debug(`[DB] [TX:${txId}] BEGIN (PG), depth: ${currentDepth + 1}, rid: ${sysCtx?.requestId}`);
+            try {
+                return await txStorage.run(
+                    { depth: currentDepth + 1, cli: client },
+                    async () => {
+                        await client.query("BEGIN");
+                        try {
+                            const res = await fn();
+                            await client.query("COMMIT");
+                            logger.debug(`[DB] [TX:${txId}] COMMIT (PG)`);
+                            return res;
+                        } catch (e) {
+                            await client.query("ROLLBACK");
+                            logger.warn(`[DB] [TX:${txId}] ROLLBACK (PG)`, { error: e });
+                            throw e;
+                        }
+                    },
+                );
+            } finally {
+                client.release();
+            }
+        } else {
+            const d = get_sq_db();
+            const release = await (async () => {
+                let r: () => void;
+                const p = new Promise<void>((resolve) => {
+                    r = resolve;
+                });
+                const old = tx_lock;
+                tx_lock = p;
+                await old;
+                return r!;
+            })();
+            logger.debug(`[DB] [TX:${txId}] BEGIN (SQLite), depth: ${currentDepth + 1}, rid: ${sysCtx?.requestId}`);
+            try {
+                return await txStorage.run({ depth: currentDepth + 1 }, async () => {
+                    try {
+                        d.exec("BEGIN IMMEDIATE TRANSACTION");
+                        const res = await fn();
+                        d.exec("COMMIT");
+                        logger.debug(`[DB] [TX:${txId}] COMMIT (SQLite)`);
+                        return res;
+                    } catch (e) {
+                        try {
+                            d.exec("ROLLBACK");
+                            logger.warn(`[DB] [TX:${txId}] ROLLBACK (SQLite)`, { error: e });
+                        } catch { }
+                        throw e;
+                    }
+                });
+            } finally {
+                release();
+            }
+        }
+    },
+};
+
+function toVectorString(
+    v: Buffer | Uint8Array | number[] | null,
+): string | null {
+    if (!v) return null;
+    const arr = Array.isArray(v)
+        ? v
+        : Array.from(
+            v instanceof Buffer
+                ? new Float32Array(v.buffer, v.byteOffset, v.byteLength / 4)
+                : v,
+        );
+    if (arr.length === 0) return null; // Handle empty vectors as NULL
+    return `[${arr.join(",")}]`;
+}
+
+
+// Wrapper helpers for safe injection
+export const runUser = async (sql: string, params: SqlParams, userId: string | null | undefined): Promise<number> => {
+    const { sql: s, params: p } = applySqlUser(sql, params, userId);
+    return await runAsync(s, p);
+};
+
+export const getUser = async <T = unknown>(sql: string, params: SqlParams, userId: string | null | undefined): Promise<T | undefined> => {
+    const { sql: s, params: p } = applySqlUser(sql, params, userId);
+    return await getAsync<T>(s, p);
+};
+
+export const allUser = async <T = unknown>(sql: string, params: SqlParams, userId: string | null | undefined): Promise<T[]> => {
+    const { sql: s, params: p } = applySqlUser(sql, params, userId);
+    return await allAsync<T>(s, p);
+};
+
+// Main SQL Interface
+export const q: QType = {
+    insMem: {
+        run: async (
+            id,
+            content,
+            sector,
+            tags,
+            meta,
+            userId,
+            segment,
+            simhash,
+            ca,
+            ua,
+            lsa,
+            salience,
+            dl,
+            version,
+            dim,
+            mv,
+            cv,
+            fs,
+            summary,
+        ) => {
+            const p = [
+                id,
+                content,
+                sector,
+                tags,
+                meta,
+                userId ?? null,
+                segment,
+                simhash,
+                ca,
+                ua,
+                lsa,
+                salience,
+                dl,
+                version,
+                dim,
+                getIsPg() && hasVector ? toVectorString(mv) : mv,
+                cv,
+                fs,
+                summary,
+            ];
+            const sql = `insert into ${TABLES.memories}(id,content,primary_sector,tags,metadata,user_id,segment,simhash,created_at,updated_at,last_seen_at,salience,decay_lambda,version,mean_dim,mean_vec,compressed_vec,feedback_score,generated_summary) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) on conflict(id) do update set content=excluded.content,updated_at=excluded.updated_at,last_seen_at=excluded.last_seen_at,salience=excluded.salience`;
+            return await runAsync(sql, p);
+        },
+    },
+    insMems: {
+        run: async (items) => {
+            if (items.length === 0) return 0;
+
+            // Helper to execute a single chunk
+            const execChunk = async (chunk: BatchMemoryInsertItem[]) => {
+                if (getIsPg()) {
+                    // Multi-row INSERT for Postgres
+                    const params: unknown[] = [];
+                    const rows: string[] = [];
+                    let idx = 1;
+                    for (const item of chunk) {
+                        const rowParams = [
+                            item.id,
+                            item.content,
+                            item.primarySector,
+                            item.tags,
+                            item.metadata,
+                            item.userId,
+                            item.segment || 0,
+                            item.simhash,
+                            item.createdAt,
+                            item.updatedAt,
+                            item.lastSeenAt,
+                            item.salience || 0.5,
+                            item.decayLambda || 0.05,
+                            item.version || 1,
+                            item.meanDim,
+                            hasVector
+                                ? toVectorString(item.meanVec)
+                                : item.meanVec,
+                            item.compressedVec,
+                            item.feedbackScore || 0,
+                            item.generatedSummary || null,
+                        ];
+                        params.push(...rowParams);
+                        const placeholders = rowParams
+                            .map(() => `$${idx++}`)
+                            .join(",");
+                        rows.push(`(${placeholders})`);
+                    }
+                    const sql = `insert into ${TABLES.memories}(id,content,primary_sector,tags,metadata,user_id,segment,simhash,created_at,updated_at,last_seen_at,salience,decay_lambda,version,mean_dim,mean_vec,compressed_vec,feedback_score,generated_summary) values ${rows.join(",")} on conflict(id) do update set content=excluded.content,updated_at=excluded.updated_at,last_seen_at=excluded.last_seen_at,salience=excluded.salience`;
+                    const c = txStorage.getStore()?.cli || pg;
+                    if (!c) throw new Error("PG not initialized");
+                    return (await c.query(sql, params)).rowCount || 0;
+                } else {
+                    // Transactional sequential inserts for SQLite
+                    return await transaction.run(async () => {
+                        let count = 0;
+                        for (const item of chunk) {
+                            count += await q.insMem.run(
+                                item.id,
+                                item.content,
+                                item.primarySector,
+                                item.tags,
+                                item.metadata,
+                                item.userId,
+                                item.segment || 0,
+                                item.simhash,
+                                item.createdAt,
+                                item.updatedAt,
+                                item.lastSeenAt,
+                                item.salience || 0.5,
+                                item.decayLambda || 0.05,
+                                item.version || 1,
+                                item.meanDim,
+                                item.meanVec,
+                                item.compressedVec,
+                                item.feedbackScore || 0,
+                                item.generatedSummary || null,
+                            );
+                        }
+                        return count;
+                    });
+                }
+            };
+
+            // Postgres Parameter Limit ~65535. Each row ~20 params. Safe batch ~3000.
+            // SQLite variable limit is also default 999 or 32766. Safe batch ~500.
+            // Using strict limit of 500 rows per chunk to be safe for both.
+            const BATCH_SIZE = 500;
+            let total = 0;
+            for (let i = 0; i < items.length; i += BATCH_SIZE) {
+                total += await execChunk(items.slice(i, i + BATCH_SIZE));
+            }
+            return total;
+        },
+    },
+    updMeanVec: {
+        run: (id, dim, vec, userId) =>
+            runUser(
+                `update ${TABLES.memories} set mean_dim=?,mean_vec=? where id=?`,
+                [dim, vec, id],
+                userId,
+            ),
+    },
+    updCompressedVec: {
+        run: (id, vec, userId) =>
+            runUser(
+                `update ${TABLES.memories} set compressed_vec=? where id=?`,
+                [vec, id],
+                userId,
+            ),
+    },
+    updFeedback: {
+        run: (id, fs, userId) =>
+            runUser(
+                `update ${TABLES.memories} set feedback_score=? where id=?`,
+                [fs, id],
+                userId,
+            ),
+    },
+    updSeen: {
+        run: (id, lsa, sa, ua, userId) =>
+            runUser(
+                `update ${TABLES.memories} set last_seen_at=?,salience=?,updated_at=? where id=?`,
+                [lsa, sa, ua, id],
+                userId,
+            ),
+    },
+    updSaliences: {
+        run: async (updates, userId) => {
+            if (updates.length === 0) return 0;
+            const uid = normalizeUserId(userId);
+
+            if (getIsPg()) {
+                const rows = [];
+                const params: (string | number | null)[] = [];
+                let idx = 1;
+                for (const item of updates) {
+                    params.push(item.id, item.salience, item.lastSeenAt, item.updatedAt);
+                    rows.push(`($${idx++}::uuid, $${idx++}::double precision, $${idx++}::bigint, $${idx++}::bigint)`);
+                }
+
+                const sql = `
+                    UPDATE ${TABLES.memories} AS m
+                    SET 
+                        salience = u.new_salience,
+                        last_seen_at = u.new_lsa,
+                        updated_at = u.new_ua
+                    FROM (VALUES ${rows.join(",")}) AS u(id, new_salience, new_lsa, new_ua)
+                    WHERE m.id = u.id AND (m.user_id = $${idx} OR (m.user_id IS NULL AND $${idx} IS NULL))
+                `;
+                params.push(uid ?? null);
+                const res = await pg!.query(sql, params);
+                return res.rowCount || 0;
+            } else {
+                return await transaction.run(async () => {
+                    let count = 0;
+                    for (const item of updates) {
+                        count += await q.updSeen.run(
+                            item.id,
+                            item.lastSeenAt,
+                            item.salience,
+                            item.updatedAt,
+                            uid,
+                        );
+                    }
+                    return count;
+                });
+            }
+        },
+    },
+    updSummary: {
+        run: (id, sum, userId) =>
+            runUser(
+                `update ${TABLES.memories} set generated_summary=? where id=?`,
+                [sum, id],
+                userId,
+            ),
+    },
+    updMem: {
+        run: (content, sector, tags, meta, ua, id, userId) =>
+            runUser(
+                `update ${TABLES.memories} set content=?,primary_sector=?,tags=?,metadata=?,updated_at=?,version=version+1 where id=?`,
+                [content, sector, tags, meta, ua, id],
+                userId,
+            ),
+    },
+    updSector: {
+        run: (id, sector, userId) =>
+            runUser(
+                `update ${TABLES.memories} set primary_sector=? where id=?`,
+                [sector, id],
+                userId,
+            ),
+    },
+    getMem: {
+        get: (id, userId) =>
+            getUser<MemoryRow>(
+                `select * from ${TABLES.memories} where id=?`,
+                [id],
+                userId,
+            ),
+    },
+    getMems: {
+        all: (ids, userId) =>
+            allUser<MemoryRow>(
+                `select * from ${TABLES.memories} where id IN (${ids.map(() => "?").join(",")})`,
+                [...ids],
+                userId,
+            ),
+    },
+    getMemRaw: {
+        get: (id, userId) =>
+            getUser<MemoryRow>(
+                `select * from ${TABLES.memories} where id=?`,
+                [id],
+                userId,
+            ),
+    },
+    getMemBySimhash: {
+        get: (sh, userId) =>
+            getUser<MemoryRow>(
+                `select * from ${TABLES.memories} where simhash=? order by salience desc limit 1`,
+                [sh],
+                userId,
+            ),
+    },
+    delMem: {
+        run: async (id, userId) => {
+            const res = await transaction.run(async () => {
+                // Cascade delete waypoints (src or dst)
+                await runUser(
+                    `delete from ${TABLES.waypoints} where src_id=? or dst_id=?`,
+                    [id, id],
+                    userId,
+                );
+                // Delete memory
+                return await runUser(
+                    `delete from ${TABLES.memories} where id=?`,
+                    [id],
+                    userId,
+                );
+            });
+
+            // Integrity: Delete vectors only after DB transaction succeeds
+            try {
+                await vectorStore.deleteVectors([id], userId);
+            } catch (e) {
+                logger.warn(`[DB] Failed to cleanup vectors for memory ${id}:`, { error: e });
+            }
+            return res;
+        },
+    },
+    delMems: {
+        run: async (ids: string[], userId?: string | null) => {
+            if (ids.length === 0) return 0;
+            return await transaction.run(async () => {
+                const placeholders = ids.map(() => "?").join(",");
+                // Cascade vectors
+                await runUser(
+                    `delete from ${TABLES.vectors} where id in (${placeholders})`,
+                    [...ids],
+                    userId,
+                );
+                // Cascade waypoints (complex with IN clause for src/dst, might be slow for huge batches but safer)
+                // For batch, simpler to just let them be orphaned? No, integrity first.
+                // "delete from waypoints where src_id in (...) or dst_id in (...)"
+                await runUser(
+                    `delete from ${TABLES.waypoints} where src_id in (${placeholders}) or dst_id in (${placeholders})`,
+                    [...ids, ...ids],
+                    userId,
+                );
+                // Delete memories
+                const res = await execRes(
+                    (await applySqlUser(
+                        `DELETE FROM ${TABLES.memories} WHERE id IN (${placeholders})`,
+                        [...ids],
+                        userId,
+                    )).sql,
+                    (await applySqlUser(
+                        `DELETE FROM ${TABLES.memories} WHERE id IN (${placeholders})`,
+                        [...ids],
+                        userId,
+                    )).params,
+                );
+                return res.rowCount || 0;
+            });
+        },
+    },
+    allMemByUser: {
+        all: (uid, limit, offset) =>
+            allUser<MemoryRow>(
+                `select * from ${TABLES.memories} order by created_at desc limit ? offset ?`,
+                [limit, offset],
+                uid,
+            ),
+    },
+    allMem: {
+        all: (limit, offset, userId) =>
+            allUser<MemoryRow>(
+                `select * from ${TABLES.memories} order by created_at desc limit ? offset ?`,
+                [limit, offset],
+                userId,
+            ),
+    },
+    allMemStable: {
+        all: (limit: number, offset: number, userId?: string | null) =>
+            allUser<MemoryRow>(
+                `select * from ${TABLES.memories} order by created_at desc, id asc limit ? offset ?`,
+                [limit, offset],
+                userId,
+            ),
+    },
+    allMemCursor: {
+        all: (limit: number, cursor: { createdAt: number; id: string } | null, userId?: string | null) => {
+            // Keyset Pagination: (created_at, id) < (cursor.createdAt, cursor.id)
+            // Order DESC for "Last Created" first
+            if (!cursor) {
+                return allUser<MemoryRow>(
+                    `select * from ${TABLES.memories} order by created_at desc, id desc limit ?`,
+                    [limit],
+                    userId,
+                );
+            }
+            // For (A, B) < (a, b) => A < a OR (A = a AND B < b)
+            return allUser<MemoryRow>(
+                `select * from ${TABLES.memories} where (created_at < ?) OR (created_at = ? AND id < ?) order by created_at desc, id desc limit ?`,
+                [cursor.createdAt, cursor.createdAt, cursor.id, limit],
+                userId,
+            );
+        },
+    },
+    allMemBySector: {
+        all: (sec, limit, offset, userId) =>
+            allUser<MemoryRow>(
+                `select * from ${TABLES.memories} where primary_sector=? order by created_at desc limit ? offset ?`,
+                [sec, limit, offset],
+                userId,
+            ),
+    },
+    allMemBySectorAndTag: {
+        all: (sec, tag, limit, offset, userId) =>
+            allUser<MemoryRow>(
+                `select * from ${TABLES.memories} where primary_sector=? and tags like ? order by created_at desc limit ? offset ?`,
+                [sec, `%${tag}%`, limit, offset],
+                userId,
+            ),
+    },
+    getSegmentCount: {
+        get: (seg, userId) =>
+            getUser(
+                `select count(*) as c from ${TABLES.memories} where segment=?`,
+                [seg],
+                userId,
+            ),
+    },
+    getMemCount: {
+        get: (userId) =>
+            getUser(
+                `select count(*) as c from ${TABLES.memories}`,
+                [],
+                userId,
+            ),
+    },
+    getVecCount: {
+        get: (userId) =>
+            getUser(
+                `select count(*) as c from ${TABLES.vectors}`,
+                [],
+                userId,
+            ),
+    },
+    getFactCount: {
+        get: (userId) =>
+            getUser(
+                `select count(*) as c from ${TABLES.temporal_facts}`,
+                [],
+                userId,
+            ),
+    },
+    getEdgeCount: {
+        get: (userId) =>
+            getUser(
+                `select count(*) as c from ${TABLES.temporal_edges}`,
+                [],
+                userId,
+            ),
+    },
+    getMaxSegment: {
+        get: (userId) =>
+            getUser(
+                `select coalesce(max(segment), 0) as maxSeg from ${TABLES.memories}`,
+                [],
+                userId,
+            ),
+    },
+    getSegments: {
+        all: (userId) =>
+            allUser(
+                `select distinct segment from ${TABLES.memories} order by segment desc`,
+                [],
+                userId,
+            ),
+    },
+    getMemBySegment: {
+        all: (seg, userId) =>
+            allUser<MemoryRow>(
+                `select * from ${TABLES.memories} where segment=? order by created_at desc`,
+                [seg],
+                userId,
+            ),
+    },
+    insUser: {
+        run: (userId, summary, rc, ca, ua) =>
+            runAsync(
+                `insert into ${TABLES.users}(user_id,summary,reflection_count,created_at,updated_at) values(?,?,?,?,?) on conflict(user_id) do update set summary=excluded.summary,updated_at=excluded.updated_at`,
+                [userId ?? null, summary, rc, ca, ua],
+            ),
+    },
+    getUser: {
+        get: (userId) =>
+            getAsync(`select * from ${TABLES.users} where user_id=?`, [
+                userId ?? null,
+            ]),
+    },
+    updUserSummary: {
+        run: (userId, summary, ua) =>
+            runAsync(
+                `update ${TABLES.users} set summary=?,updated_at=?,reflection_count=reflection_count+1 where user_id=?`,
+                [summary, ua, userId ?? null],
+            ),
+    },
+    delMemByUser: {
+        run: async (uid) => {
+            if (!uid) return 0;
+            return await transaction.run(async () => {
+                const p = [uid];
+                await runAsync(`delete from ${TABLES.vectors} where user_id=?`, p);
+                await runAsync(`delete from ${TABLES.waypoints} where user_id=?`, p);
+                await runAsync(`delete from ${TABLES.temporal_facts} where user_id=?`, p);
+                await runAsync(`delete from ${TABLES.temporal_edges} where user_id=?`, p);
+                await runAsync(`delete from ${TABLES.learned_models} where user_id=?`, p);
+                return runAsync(`delete from ${TABLES.memories} where user_id=?`, p);
+            });
+        },
+    },
+    delUser: {
+        run: (uid) =>
+            runAsync(`delete from ${TABLES.users} where user_id=?`, [
+                uid ?? null,
+            ]),
+    },
+    getMemByMetadataLike: {
+        all: (pat, userId) =>
+            allUser<MemoryRow>(
+                `select * from ${TABLES.memories} where metadata like ? order by created_at desc`,
+                [`%${pat}%`],
+                userId,
+            ),
+    },
+    getTrainingData: {
+        all: (uid, limit) =>
+            allAsync(
+                `select mean_vec as meanVec, primary_sector as primarySector from ${TABLES.memories} where user_id=? and mean_vec is not null limit ?`,
+                [uid ?? null, limit],
+            ),
+    },
+    getClassifierModel: {
+        get: (uid) =>
+            getAsync(`select * from ${TABLES.learned_models} where user_id=?`, [
+                uid ?? null,
+            ]),
+    },
+    insClassifierModel: {
+        run: (uid, w, b, v, ua) =>
+            runAsync(
+                `insert into ${TABLES.learned_models}(user_id,weights,biases,version,updated_at) values(?,?,?,?,?) on conflict(user_id) do update set weights=excluded.weights,biases=excluded.biases,version=excluded.version,updated_at=excluded.updated_at`,
+                [uid ?? null, w, b, v, ua],
+            ),
+    },
+    getActiveUsers: {
+        all: () => allAsync(`select user_id as userId from ${TABLES.users}`),
+    },
+    getUsers: {
+        all: (limit: number, offset: number) =>
+            allAsync(
+                `select user_id as userId, summary, reflection_count as reflectionCount, created_at as createdAt, updated_at as updatedAt from ${TABLES.users} order by updated_at desc limit ? offset ?`,
+                [limit, offset],
+            ),
+    },
+    insWaypoint: {
+        run: (src, dst, userId, w, ca, ua) =>
+            runAsync(
+                `insert into ${TABLES.waypoints}(src_id,dst_id,user_id,weight,created_at,updated_at) values(?,?,?,?,?,?) on conflict(src_id,dst_id,user_id) do update set weight=excluded.weight,updated_at=excluded.updated_at`,
+                [src, dst, userId ?? null, w, ca, ua],
+            ),
+    },
+    insWaypoints: {
+        run: async (items) => {
+            if (items.length === 0) return 0;
+            if (getIsPg()) {
+                const params: unknown[] = [];
+                const rows: string[] = [];
+                let idx = 1;
+                for (const item of items) {
+                    const rowParams = [
+                        item.srcId,
+                        item.dstId,
+                        item.userId ?? null,
+                        item.weight,
+                        item.createdAt,
+                        item.updatedAt,
+                    ];
+                    params.push(...rowParams);
+                    const placeholders = rowParams
+                        .map(() => `$${idx++}`)
+                        .join(",");
+                    rows.push(`(${placeholders})`);
+                }
+                const sql = `insert into ${TABLES.waypoints}(src_id,dst_id,user_id,weight,created_at,updated_at) values ${rows.join(",")} on conflict(src_id,dst_id,user_id) do update set weight=excluded.weight,updated_at=excluded.updated_at`;
+                const c = txStorage.getStore()?.cli || pg;
+                if (!c) throw new Error("PG not initialized");
+                return (await c.query(sql, params)).rowCount || 0;
+            } else {
+                return await transaction.run(async () => {
+                    let count = 0;
+                    for (const item of items) {
+                        count += await q.insWaypoint.run(
+                            item.srcId,
+                            item.dstId,
+                            item.userId,
+                            item.weight,
+                            item.createdAt,
+                            item.updatedAt,
+                        );
+                    }
+                    return count;
+                });
+            }
+        },
+    },
+    getWaypoint: {
+        get: (src, dst, userId) =>
+            getUser<Waypoint>(
+                `select * from ${TABLES.waypoints} where src_id=? and dst_id=?`,
+                [src, dst],
+                userId,
+            ),
+    },
+    getWaypointsBySrc: {
+        all: (src, userId) =>
+            allUser<Waypoint>(
+                `select * from ${TABLES.waypoints} where src_id=?`,
+                [src],
+                userId,
+            ),
+    },
+    getNeighbors: {
+        all: (src, userId) =>
+            allUser<{ dstId: string; weight: number }>(
+                `select dst_id as dstId, weight from ${TABLES.waypoints} where src_id=? order by weight desc`,
+                [src],
+                userId,
+            ),
+    },
+    updWaypoint: {
+        run: (src, weight, ua, dst, userId) =>
+            runUser(
+                `update ${TABLES.waypoints} set weight=?,updated_at=? where src_id=? and dst_id=?`,
+                [weight, ua, src, dst],
+                userId,
+            ),
+    },
+    pruneWaypoints: {
+        run: (t, userId) =>
+            runUser(
+                `delete from ${TABLES.waypoints} where weight<?`,
+                [t],
+                userId,
+            ),
+    },
+    getLowSalienceMemories: {
+        all: (t, limit, userId) =>
+            allUser<{ id: string; userId: string }>(
+                `select id, user_id as userId from ${TABLES.memories} where salience<? limit ?`,
+                [t, limit],
+                userId,
+            ),
+    },
+    pruneMemories: {
+        run: async (t, userId) => {
+            // Fetch IDs to be pruned first to ensure vector cleanup
+            // Limit to 1000 to prevent massive memory usage, caller should loop
+            const rows = await allUser<{ id: string }>(
+                `select id from ${TABLES.memories} where salience<? limit 1000`,
+                [t],
+                userId,
+            );
+            if (rows.length === 0) return 0;
+            const ids = rows.map((r) => r.id);
+
+            // Cleanup DB First (Integrity)
+            const placeholders = ids.map(() => '?').join(',');
+            const count = await runUser(
+                `delete from ${TABLES.memories} where id in (${placeholders})`,
+                [...ids],
+                userId,
+            );
+
+            // Cleanup vectors - Only if DB delete succeeded
+            try {
+                await vectorStore.deleteVectors(ids, userId);
+            } catch (e) {
+                logger.warn("[DB] Prune vector cleanup failed", { error: e });
+            }
+
+            return count;
+        },
+    },
+
+    insMaintLog: {
+        run: (userId, status, details, ts) =>
+            runAsync(
+                `insert into ${TABLES.maint_logs}(op,user_id,status,details,ts) values('routine',?,?,?,?)`,
+                [userId ?? null, status, details, ts],
+            ),
+    },
+    logMaintOp: {
+        run: (op, status, details, ts, userId) =>
+            runAsync(
+                `insert into ${TABLES.maint_logs}(op,status,details,ts,user_id) values(?,?,?,?,?)`,
+                [op, status, details, ts, userId ?? null],
+            ),
+    },
+    insLog: {
+        run: (id, userId, model, status, ts, err) =>
+            runAsync(
+                `insert into ${TABLES.embed_logs}(id,user_id,model,status,ts,err) values(?,?,?,?,?,?) on conflict(id) do update set status=excluded.status,err=excluded.err`,
+                [id, userId ?? null, model, status, ts, err ?? null],
+            ),
+    },
+    updLog: {
+        run: (id, status, err) =>
+            runAsync(
+                `update ${TABLES.embed_logs} set status=?,err=? where id=?`,
+                [status, err ?? null, id],
+            ),
+    },
+    getPendingLogs: {
+        all: (userId) =>
+            allUser<LogEntry>(
+                `select * from ${TABLES.embed_logs} where status='pending'`,
+                [],
+                userId,
+            ),
+    },
+    getFailedLogs: {
+        all: (userId) =>
+            allUser<LogEntry>(
+                `select * from ${TABLES.embed_logs} where status='failed' order by ts desc limit 100`,
+                [],
+                userId,
+            ),
+    },
+    clearAll: {
+        run: async () => {
+            const tables = [
+                TABLES.memories,
+                TABLES.vectors,
+                TABLES.waypoints,
+                TABLES.users,
+                TABLES.temporal_facts,
+                TABLES.temporal_edges,
+                TABLES.source_configs,
+                TABLES.embed_logs,
+                TABLES.maint_logs,
+                TABLES.stats,
+                TABLES.learned_models,
+            ];
+            for (const t of tables) await runAsync(`delete from ${t}`);
+            return 1;
+        },
+    },
+    getStats: {
+        get: (userId) =>
+            getUser(
+                `select count(*) as count, avg(salience) as avgSalience from ${TABLES.memories}`,
+                [],
+                userId,
+            ),
+    },
+    getSectorStats: {
+        all: (userId) =>
+            allUser<SectorStat>(
+                `select type as sector, sum(count) as count, 0 as avgSalience from stats where type like 'sector:%' group by type`,
+                [],
+                userId,
+            ),
+    },
+    getRecentActivity: {
+        all: (limit = 10, userId) =>
+            allUser<{
+                id: string;
+                content: string;
+                lastSeenAt: number;
+                primarySector: string;
+            }>(
+                `select id, content, last_seen_at as lastSeenAt, primary_sector as primarySector from ${TABLES.memories} order by last_seen_at desc limit ?`,
+                [limit],
+                userId,
+            ),
+    },
+    getTopMemories: {
+        all: (limit = 10, userId) =>
+            allUser<{
+                id: string;
+                content: string;
+                salience: number;
+                primarySector: string;
+            }>(
+                `select id, content, salience, primary_sector as primarySector from ${TABLES.memories} order by salience desc limit ?`,
+                [limit],
+                userId,
+            ),
+    },
+    getSectorTimeline: {
+        all: (sec, limit = 50, userId) =>
+            allUser<{ lastSeenAt: number; salience: number }>(
+                `select last_seen_at as lastSeenAt, salience from ${TABLES.memories} where primary_sector=? order by last_seen_at desc limit ?`,
+                [sec, limit],
+                userId,
+            ),
+    },
+    getMaintenanceLogs: {
+        all: (limit = 50, userId) =>
+            allUser<MaintLogEntry>(
+                `select * from ${TABLES.maint_logs} order by ts desc limit ?`,
+                [limit],
+                userId,
+            ),
+    },
+    getTables: {
+        all: () =>
+            allAsync(
+                getIsPg()
+                    ? `SELECT table_name as name FROM information_schema.tables WHERE table_schema = '${env.pgSchema}'`
+                    : "SELECT name FROM sqlite_master WHERE type='table'",
+            ),
+    },
+    insSourceConfig: {
+        run: (userId, type, config, status, ca, ua) =>
+            runAsync(
+                `insert into ${TABLES.source_configs}(user_id,type,config,status,created_at,updated_at) values(?,?,?,?,?,?) on conflict(user_id,type) do update set config=excluded.config,status=excluded.status,updated_at=excluded.updated_at`,
+                [userId ?? null, type, config, status, ca, ua],
+            ),
+    },
+    updSourceConfig: {
+        run: (userId, type, config, status, ua) =>
+            runAsync(
+                `update ${TABLES.source_configs} set config=?,status=?,updated_at=? where user_id ${userId ? "=?" : "is null"} and type=?`,
+                userId
+                    ? [config, status, ua, userId, type]
+                    : [config, status, ua, type],
+            ),
+    },
+    getSourceConfig: {
+        get: (userId, type) =>
+            getUser(
+                `select * from ${TABLES.source_configs} where type=?`,
+                [type],
+                userId,
+            ),
+    },
+    getSourceConfigsByUser: {
+        all: (userId) =>
+            allUser(
+                `select * from ${TABLES.source_configs}`,
+                [],
+                userId,
+            ),
+    },
+    delSourceConfig: {
+        run: (userId, type) =>
+            runAsync(
+                `delete from ${TABLES.source_configs} where user_id ${userId ? "=?" : "is null"} and type=?`,
+                userId ? [userId, type] : [type],
+            ),
+    },
+
+    insApiKey: {
+        run: (
+            kh: string,
+            uid: string,
+            role: string,
+            note: string | null,
+            ca: number,
+            ua: number,
+            ea: number,
+        ) =>
+            runAsync(
+                `insert into ${TABLES.api_keys}(key_hash,user_id,role,note,created_at,updated_at,expires_at) values(?,?,?,?,?,?,?) on conflict(key_hash) do update set role=excluded.role,note=excluded.note,updated_at=excluded.updated_at,expires_at=excluded.expires_at`,
+                [kh, uid, role, note, ca, ua, ea],
+            ),
+    },
+    getApiKey: {
+        get: (kh: string) =>
+            getAsync<{
+                keyHash: string;
+                userId: string;
+                role: string;
+                note: string;
+                expiresAt: number;
+            }>(
+                `select key_hash as keyHash, user_id as userId, role, note, expires_at as expiresAt from ${TABLES.api_keys} where key_hash=?`,
+                [kh],
+            ),
+    },
+    delApiKey: {
+        run: (kh: string) =>
+            runAsync(`delete from ${TABLES.api_keys} where key_hash=?`, [kh]),
+    },
+    getApiKeysByUser: {
+        all: (uid: string) =>
+            allAsync(
+                `select key_hash as keyHash, user_id as userId, role, note, created_at as createdAt from ${TABLES.api_keys} where user_id=?`,
+                [uid],
+            ),
+    },
+    getAllApiKeys: {
+        all: () =>
+            allAsync(
+                `select key_hash as keyHash, user_id as userId, role, note, created_at as createdAt from ${TABLES.api_keys}`,
+            ),
+    },
+    getAdminCount: {
+        get: () =>
+            getAsync<{ count: number }>(
+                `select count(*) as count from ${TABLES.api_keys} where role='admin'`,
+            ),
+    },
+
+    delFactsByUser: {
+        run: (uid) =>
+            runAsync(`delete from ${TABLES.temporal_facts} where user_id=?`, [
+                uid,
+            ]),
+    },
+    delEdgesByUser: {
+        run: (uid) =>
+            runAsync(`delete from ${TABLES.temporal_edges} where user_id=?`, [
+                uid,
+            ]),
+    },
+    delLearnedModel: {
+        run: (uid) =>
+            runAsync(`delete from ${TABLES.learned_models} where user_id=?`, [
+                uid,
+            ]),
+    },
+    delSourceConfigsByUser: {
+        run: (uid) =>
+            runAsync(`delete from ${TABLES.source_configs} where user_id=?`, [
+                uid,
+            ]),
+    },
+    delWaypointsByUser: {
+        run: (uid) =>
+            runAsync(`delete from ${TABLES.waypoints} where user_id=?`, [uid]),
+    },
+    delEmbedLogsByUser: {
+        run: (uid) =>
+            runAsync(`delete from ${TABLES.embed_logs} where user_id=?`, [uid]),
+    },
+    delMaintLogsByUser: {
+        run: (uid) =>
+            runAsync(`delete from ${TABLES.maint_logs} where user_id=?`, [uid]),
+    },
+    delStatsByUser: {
+        run: (uid) =>
+            runAsync(`delete from ${TABLES.stats} where user_id=?`, [uid]),
+    },
+    delOrphanWaypoints: {
+        run: () =>
+            runAsync(
+                `delete from ${TABLES.waypoints} where src_id not in (select id from ${TABLES.memories}) or dst_id not in (select id from ${TABLES.memories})`,
+            ),
+    },
+    searchMemsByKeyword: {
+        all: (keyword, limit, userId) =>
+            allUser<MemoryRow>(
+                `select * from ${TABLES.memories} where content like ? or tags like ? order by salience desc limit ?`,
+                [`%${keyword}%`, `%${keyword}%`, limit],
+                userId,
+            ),
+    },
+};
+
+/**
+ * Logs a maintenance operation to the stats table.
+ * @param type The type of operation (decay, reflect, consolidate).
+ * @param cnt The count of items processed (default 1).
+ * @param userId The user context, if any.
+ */
+export const logMaintOp = async (
+    type: "decay" | "reflect" | "consolidate",
+    cnt = 1,
+    userId?: string | null,
+) => {
+    try {
+        await runAsync(
+            `insert into ${TABLES.stats}(type,count,ts,user_id) values(?,?,?,?)`,
+            [type, cnt, Date.now(), userId ?? null],
+        );
+    } catch (e) {
+        logger.error("[DB] logMaintOp error", { error: e });
+    }
+};

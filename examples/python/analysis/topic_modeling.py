@@ -11,7 +11,7 @@ from openmemory.client import Memory
 
 async def find_themes(mem: Memory, uid: str):
     # Retrieve a broad set of memories
-    history = mem.history(user_id=uid, limit=50)
+    history = await mem.history(user_id=uid, limit=50)
     texts = [h['content'] for h in history]
     
     if not texts:
@@ -28,7 +28,7 @@ async def find_themes(mem: Memory, uid: str):
     for theme in themes:
         hits = await mem.search(theme, user_id=uid, limit=10)
         # Filter for quality
-        count = len([h for h in hits if h.get('score', 0) > 0.75])
+        count = len([h for h in hits if (h.get('score') or 0) > 0.75])
         print(f"Theme '{theme}': {count} strong matches.")
 
 async def main():

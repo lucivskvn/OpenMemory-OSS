@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { shouldSkipEvent, getSectorFilter } from './hooks/ideEvents';
+import * as path from 'path';
 import { writeCursorConfig } from './writers/cursor';
 import { writeClaudeConfig } from './writers/claude';
 import { writeWindsurfConfig } from './writers/windsurf';
@@ -8,57 +8,46 @@ import { writeCodexConfig } from './writers/codex';
 import { writeAntigravityConfig } from './writers/antigravity';
 import { DashboardPanel } from './panels/DashboardPanel';
 import { generateDiff } from './utils/diff';
-import { Memory, Pattern, EventData } from './types';
+import { shouldSkipEvent, getSectorFilter } from './hooks/ideEvents';
+import { MemoryItem, IdePattern } from 'openmemory-js/client';
+import { StateManager } from './StateManager';
+import { UIService } from './UIService';
 
-let session_id: string | null = null;
-let backend_url = 'http://localhost:8080';
-let api_key: string | undefined = undefined;
-let status_bar: vscode.StatusBarItem;
-let is_tracking = false;
-let auto_linked = false;
-let use_mcp = false;
-let mcp_server_path = '';
-let is_enabled = true;
-let user_id = '';
-const fileCache = new Map<string, string>();
+let stateManager: StateManager;
+let uiService: UIService;
 
+/**
+ * Activates the OpenMemory extension.
+ * @param context VS Code extension context
+ */
 export function activate(context: vscode.ExtensionContext) {
-    const config = vscode.workspace.getConfiguration('openmemory');
-    is_enabled = config.get('enabled') ?? true;
-    backend_url = config.get('backendUrl') || 'http://localhost:8080';
-    api_key = config.get('apiKey') || undefined;
-    use_mcp = config.get('useMCP') || false;
-    mcp_server_path = config.get('mcpServerPath') || '';
-    user_id = getUserId(context, config);
+    stateManager = StateManager.getInstance(context);
+    uiService = new UIService(context, stateManager);
 
-    status_bar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    status_bar.command = 'openmemory.statusBarClick';
-    context.subscriptions.push(status_bar);
+    const { isEnabled } = stateManager.getState();
+    const statusClick = vscode.commands.registerCommand('openmemory.statusBarClick', () => showMenu());
 
-    const status_click = vscode.commands.registerCommand('openmemory.statusBarClick', () => show_menu());
-
-    if (!is_enabled) {
-        update_status_bar('disabled');
-        status_bar.show();
-        context.subscriptions.push(status_click);
+    if (!isEnabled) {
+        uiService.update('disabled');
+        context.subscriptions.push(statusClick);
         return;
     }
 
-    update_status_bar('connecting');
-    status_bar.show();
+    uiService.update('connecting');
 
-    check_connection().then(async connected => {
+    checkConnection().then(async connected => {
         if (connected) {
-            await auto_link_all();
-            await start_session();
+            await autoLinkAll();
+            await startSession();
         } else {
-            update_status_bar('disconnected');
-            show_quick_setup();
+            uiService.update('disconnected');
+            showQuickSetup();
         }
     });
 
-    // ... commands ...
-    const query_cmd = vscode.commands.registerCommand('openmemory.queryContext', async () => {
+    // --- Commands ---
+
+    const queryCmd = vscode.commands.registerCommand('openmemory.queryContext', async () => {
         const editor = vscode.window.activeTextEditor;
         if (!editor) {
             vscode.window.showErrorMessage('No active editor');
@@ -72,8 +61,8 @@ export function activate(context: vscode.ExtensionContext) {
         }, async () => {
             try {
                 const query = editor.document.getText(editor.selection) || editor.document.getText();
-                const memories = await query_context(query, editor.document.uri.fsPath);
-                const doc = await vscode.workspace.openTextDocument({ content: format_memories(memories), language: 'markdown' });
+                const memories = await queryContext(query, editor.document.uri.fsPath);
+                const doc = await vscode.workspace.openTextDocument({ content: formatMemories(memories), language: 'markdown' });
                 await vscode.window.showTextDocument(doc);
             } catch (error) {
                 vscode.window.showErrorMessage(`Query failed: ${error}`);
@@ -81,7 +70,7 @@ export function activate(context: vscode.ExtensionContext) {
         });
     });
 
-    const add_cmd = vscode.commands.registerCommand('openmemory.addToMemory', async () => {
+    const addCmd = vscode.commands.registerCommand('openmemory.addToMemory', async () => {
         const editor = vscode.window.activeTextEditor;
         if (!editor) {
             vscode.window.showErrorMessage('No active editor');
@@ -99,7 +88,7 @@ export function activate(context: vscode.ExtensionContext) {
             cancellable: false
         }, async () => {
             try {
-                await add_memory(selection, editor.document.uri.fsPath);
+                await addMemory(selection, editor.document.uri.fsPath);
                 vscode.window.showInformationMessage('Selection added to OpenMemory');
             } catch (error) {
                 vscode.window.showErrorMessage(`Failed to add memory: ${error}`);
@@ -107,7 +96,7 @@ export function activate(context: vscode.ExtensionContext) {
         });
     });
 
-    const note_cmd = vscode.commands.registerCommand('openmemory.quickNote', async () => {
+    const noteCmd = vscode.commands.registerCommand('openmemory.quickNote', async () => {
         const input = await vscode.window.showInputBox({
             prompt: 'Enter a quick note to remember',
             placeHolder: 'e.g. Refactored the auth logic to use JWT'
@@ -121,7 +110,7 @@ export function activate(context: vscode.ExtensionContext) {
             cancellable: false
         }, async () => {
             try {
-                await ingest_data(input, 'quick_note', {
+                await ingestData(input, 'quick_note', {
                     timestamp: Date.now(),
                     type: 'quick_note'
                 });
@@ -132,124 +121,171 @@ export function activate(context: vscode.ExtensionContext) {
         });
     });
 
-    const patterns_cmd = vscode.commands.registerCommand('openmemory.viewPatterns', async () => {
-        if (!session_id) {
+    const patternsCmd = vscode.commands.registerCommand('openmemory.viewPatterns', async () => {
+        const { sessionId } = stateManager.getState();
+        if (!sessionId) {
             vscode.window.showErrorMessage('No active session');
             return;
         }
         try {
-            const patterns = await get_patterns(session_id);
-            const doc = await vscode.workspace.openTextDocument({ content: format_patterns(patterns), language: 'markdown' });
+            const patterns = await getPatterns(sessionId);
+            const doc = await vscode.workspace.openTextDocument({ content: formatPatterns(patterns), language: 'markdown' });
             await vscode.window.showTextDocument(doc);
         } catch (error) {
             vscode.window.showErrorMessage(`Failed: ${error}`);
         }
     });
 
-    const toggle_cmd = vscode.commands.registerCommand('openmemory.toggleTracking', () => {
-        is_tracking = !is_tracking;
-        update_status_bar(is_tracking ? 'active' : 'paused');
+    const toggleCmd = vscode.commands.registerCommand('openmemory.toggleTracking', () => {
+        const current = stateManager.getState().isTracking;
+        stateManager.updateState({ isTracking: !current });
+        uiService.update(stateManager.getState().isTracking ? 'active' : 'paused');
     });
 
-    const setup_cmd = vscode.commands.registerCommand('openmemory.setup', () => show_quick_setup());
-    const dashboard_cmd = vscode.commands.registerCommand('openmemory.dashboard', () => { DashboardPanel.createOrShow(context.extensionUri); });
+    const setupCmd = vscode.commands.registerCommand('openmemory.setup', () => showQuickSetup());
+    const dashboardCmd = vscode.commands.registerCommand('openmemory.dashboard', () => { DashboardPanel.createOrShow(context.extensionUri, stateManager.client); });
 
     // Initialize cache for all currently open documents
     vscode.workspace.textDocuments.forEach(doc => {
         if (doc.uri.scheme === 'file') {
-            fileCache.set(doc.uri.toString(), doc.getText());
+            stateManager.fileCache.set(doc.uri.toString(), doc.getText());
         }
     });
 
-    const open_listener = vscode.workspace.onDidOpenTextDocument((doc) => {
+    const openListener = vscode.workspace.onDidOpenTextDocument((doc: vscode.TextDocument) => {
         if (doc.uri.scheme === 'file') {
-            fileCache.set(doc.uri.toString(), doc.getText());
+            stateManager.fileCache.set(doc.uri.toString(), doc.getText());
         }
     });
 
-    const save_listener = vscode.workspace.onDidSaveTextDocument((doc) => {
-        if (is_enabled && is_tracking && doc.uri.scheme === 'file') {
+    const saveListener = vscode.workspace.onDidSaveTextDocument((doc: vscode.TextDocument) => {
+        const { isEnabled, isTracking } = stateManager.getState();
+        if (isEnabled && isTracking && doc.uri.scheme === 'file') {
             const newContent = doc.getText();
-            const oldContent = fileCache.get(doc.uri.toString());
+            const oldContent = stateManager.fileCache.get(doc.uri.toString());
             let contentToSend = "";
 
             if (oldContent) {
                 const diff = generateDiff(oldContent, newContent, doc.uri.fsPath);
-                // If diff is huge, maybe cap it? For now, user requested "parts which changed"
                 contentToSend = diff;
             } else {
                 contentToSend = `[New File Snapshot]\n${newContent}`;
             }
 
-            // Update cache for next save
-            fileCache.set(doc.uri.toString(), newContent);
+            // Deduplicate events to prevent redundant network calls
+            if (shouldSkipEvent(doc.uri.fsPath, 'save', contentToSend)) {
+                return;
+            }
 
-            send_event({ event_type: 'save', file_path: doc.uri.fsPath, language: doc.languageId, content: contentToSend });
+            // Update cache for next save
+            stateManager.fileCache.set(doc.uri.toString(), newContent);
+
+            // Get sector hints for better memory classification
+            const sectorHints = getSectorFilter('save');
+
+            sendEvent({
+                eventType: 'save',
+                filePath: doc.uri.fsPath,
+                language: doc.languageId,
+                content: contentToSend,
+                metadata: {
+                    lineCount: doc.lineCount,
+                    isDirty: doc.isDirty,
+                    workspaceFolder: vscode.workspace.getWorkspaceFolder(doc.uri)?.name,
+                    sectorHints
+                }
+            });
         }
     });
 
-    context.subscriptions.push(status_click, status_bar, toggle_cmd, setup_cmd, dashboard_cmd, save_listener, open_listener);
-    // Note: Re-registering commands that were elided in this block for brevity if they weren't before. 
-    // Actually, I need to be careful not to delete the existing command registrations if I'm replacing a huge block.
-    // The target range seems to include most of activate.
-    // I will try to be more precise or include the commands.
+    const ingestCmd = vscode.commands.registerCommand('openmemory.ingestItem', async (uri: vscode.Uri) => {
+        if (!uri) {
+            const folder = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: true, openLabel: 'Ingest' });
+            if (folder && folder[0]) uri = folder[0];
+            else return;
+        }
 
-    // Commands were: query_cmd, add_cmd, note_cmd, patterns_cmd.
-    // I will include them in the full replacement to be safe since I selected a large range.
+        await vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: `OpenMemory: Ingesting ${path.basename(uri.fsPath)}...`,
+            cancellable: false
+        }, async () => {
+            try {
+                // Determine if it's a file or folder
+                const stat = await vscode.workspace.fs.stat(uri);
+                if (stat.type === vscode.FileType.Directory) {
+                    await ingestPath(uri.fsPath);
+                } else {
+                    const doc = await vscode.workspace.openTextDocument(uri);
+                    await ingestData(doc.getText(), 'file', { filePath: uri.fsPath });
+                }
+                vscode.window.showInformationMessage('Ingestion complete');
+            } catch (error) {
+                vscode.window.showErrorMessage(`Ingestion failed: ${error}`);
+            }
+        });
+    });
+
+    context.subscriptions.push(statusClick, toggleCmd, setupCmd, dashboardCmd, saveListener, openListener, queryCmd, addCmd, noteCmd, patternsCmd, ingestCmd);
 }
 
-async function auto_link_all() {
-    auto_linked = false;
+/**
+ * Deactivates the extension.
+ */
+export async function deactivate() {
+    const { sessionId, userId } = stateManager.getState();
+    if (sessionId) {
+        try {
+            await stateManager.client.endIdeSession(sessionId, userId);
+            stateManager.updateState({ sessionId: null });
+        } catch (e) {
+            console.error('OpenMemory Session End Failed:', e);
+        }
+    }
+}
+
+/**
+ * Automatically configures external AI tools to use OpenMemory server.
+ */
+async function autoLinkAll() {
+    const { backendUrl, apiKey, useMcp, mcpServerPath } = stateManager.getState();
     const results: { name: string; success: boolean; error?: string }[] = [];
 
-    const try_link = async (name: string, fn: () => Promise<string>) => {
+    const tryLink = async (name: string, fn: () => string | Promise<string>) => {
         try {
-            await fn();
+            await Promise.resolve(fn());
             results.push({ name, success: true });
-        } catch (e: any) {
-            results.push({ name, success: false, error: e.message || String(e) });
+        } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e);
+            results.push({ name, success: false, error: msg });
         }
     };
 
-    await try_link('Cursor', () => writeCursorConfig(backend_url, api_key, use_mcp, mcp_server_path));
-    await try_link('Claude Desktop', () => writeClaudeConfig(backend_url, api_key, use_mcp, mcp_server_path));
-    await try_link('Windsurf', () => writeWindsurfConfig(backend_url, api_key, use_mcp, mcp_server_path));
-    await try_link('Copilot', () => writeCopilotConfig(backend_url, api_key, use_mcp, mcp_server_path));
-    await try_link('Codex', () => writeCodexConfig(backend_url, api_key, use_mcp, mcp_server_path));
-    await try_link('Antigravity', () => writeAntigravityConfig(backend_url, api_key, use_mcp, mcp_server_path));
+    await tryLink('Cursor', () => writeCursorConfig(backendUrl, apiKey, useMcp, mcpServerPath));
+    await tryLink('Claude Desktop', () => writeClaudeConfig(backendUrl, apiKey, useMcp, mcpServerPath));
+    await tryLink('Windsurf', () => writeWindsurfConfig(backendUrl, apiKey, useMcp, mcpServerPath));
+    await tryLink('Copilot', () => writeCopilotConfig(backendUrl, apiKey, useMcp, mcpServerPath));
+    await tryLink('Codex', () => writeCodexConfig(backendUrl, apiKey, useMcp, mcpServerPath));
+    await tryLink('Antigravity', () => writeAntigravityConfig(backendUrl, apiKey, useMcp, mcpServerPath));
 
     const failures = results.filter(r => !r.success);
-    const mode = use_mcp ? 'MCP protocol' : 'Direct HTTP';
+    const mode = useMcp ? 'MCP protocol' : 'Direct HTTP';
 
     if (failures.length === 0) {
-        vscode.window.showInformationMessage(`✅ Auto-linked OpenMemory to all AI tools (${mode})`);
-        auto_linked = true;
+        console.log(`✅ Auto-linked OpenMemory to all AI tools (${mode})`);
     } else if (failures.length === results.length) {
         vscode.window.showErrorMessage(`❌ Auto-link failed for all tools! Check permissions and logs.`);
     } else {
         const failedNames = failures.map(r => r.name).join(', ');
-        vscode.window.showWarningMessage(`⚠️ OpenMemory auto-linked but failed for: ${failedNames}`);
-        auto_linked = true; // Partial success is still marked as linked 
+        console.warn(`⚠️ OpenMemory partial auto-link failure: ${failedNames}`);
     }
 }
 
-function update_status_bar(state: 'active' | 'paused' | 'connecting' | 'disconnected' | 'disabled') {
-    const build = 'B';
-    const icons = { active: `$(pulse) OpenMemory [${build}]`, paused: `$(debug-pause) OpenMemory [${build}]`, connecting: `$(sync~spin) OpenMemory [${build}]`, disconnected: `$(error) OpenMemory [${build}]`, disabled: `$(circle-slash) OpenMemory [${build}]` };
-    const mode = use_mcp ? 'MCP' : 'HTTP';
-    const tooltips = {
-        active: `OpenMemory [${build}]: Tracking active (${mode}) • Click for options`,
-        paused: `OpenMemory [${build}]: Tracking paused (${mode}) • Click to resume`,
-        connecting: `OpenMemory [${build}]: Connecting (${mode})...`,
-        disconnected: `OpenMemory [${build}]: Disconnected (${mode}) • Click to setup`,
-        disabled: `OpenMemory [${build}]: Disabled • Click to enable`
-    };
-    status_bar.text = icons[state];
-    status_bar.tooltip = tooltips[state];
-}
 
-async function show_menu() {
-    if (!is_enabled) {
+async function showMenu() {
+    const { isEnabled, isTracking, useMcp, sessionId } = stateManager.getState();
+
+    if (!isEnabled) {
         const choice = await vscode.window.showQuickPick([
             { label: '$(check) Enable OpenMemory', action: 'enable' },
             { label: '$(gear) Setup', action: 'setup' }
@@ -258,62 +294,76 @@ async function show_menu() {
         if (choice.action === 'enable') {
             const config = vscode.workspace.getConfiguration('openmemory');
             await config.update('enabled', true, vscode.ConfigurationTarget.Global);
-            is_enabled = true;
+            stateManager.updateState({ isEnabled: true });
             vscode.window.showInformationMessage('OpenMemory enabled. Reloading window...');
             vscode.commands.executeCommand('workbench.action.reloadWindow');
         } else if (choice.action === 'setup') {
-            show_quick_setup();
+            showQuickSetup();
         }
         return;
     }
 
     const items = [];
-    items.push(is_tracking ? { label: '$(debug-pause) Pause Tracking', action: 'pause' } : { label: '$(play) Resume Tracking', action: 'resume' });
+    items.push(isTracking ? { label: '$(debug-pause) Pause Tracking', action: 'pause' } : { label: '$(play) Resume Tracking', action: 'resume' });
     items.push({ label: '$(dashboard) Open Dashboard', action: 'dashboard' });
-    items.push({ label: '$(search) Query Context', action: 'query' }, { label: '$(add) Add Selection', action: 'add' }, { label: '$(pencil) Quick Note', action: 'note' }, { label: '$(graph) View Patterns', action: 'patterns' }, { label: use_mcp ? '$(link) Switch to Direct HTTP' : '$(server-process) Switch to MCP Mode', action: 'toggle_mcp' }, { label: '$(circle-slash) Disable Extension', action: 'disable' }, { label: '$(gear) Setup', action: 'setup' }, { label: '$(refresh) Reconnect', action: 'reconnect' });
+    items.push({ label: '$(search) Query Context', action: 'query' }, { label: '$(add) Add Selection', action: 'add' }, { label: '$(pencil) Quick Note', action: 'note' }, { label: '$(graph) View Patterns', action: 'patterns' }, { label: useMcp ? '$(link) Switch to Direct HTTP' : '$(server-process) Switch to MCP Mode', action: 'toggle_mcp' }, { label: '$(circle-slash) Disable Extension', action: 'disable' }, { label: '$(gear) Setup', action: 'setup' }, { label: '$(refresh) Reconnect', action: 'reconnect' });
     const choice = await vscode.window.showQuickPick(items, { placeHolder: 'OpenMemory Actions' });
     if (!choice) return;
     switch (choice.action) {
         case 'dashboard': vscode.commands.executeCommand('openmemory.dashboard'); break;
-        case 'pause': is_tracking = false; update_status_bar('paused'); break;
-        case 'resume': is_tracking = true; update_status_bar('active'); break;
+        case 'pause':
+            stateManager.updateState({ isTracking: false });
+            uiService.update('paused');
+            break;
+        case 'resume':
+            stateManager.updateState({ isTracking: true });
+            uiService.update('active');
+            break;
         case 'query': vscode.commands.executeCommand('openmemory.queryContext'); break;
         case 'add': vscode.commands.executeCommand('openmemory.addToMemory'); break;
         case 'note': vscode.commands.executeCommand('openmemory.quickNote'); break;
         case 'patterns': vscode.commands.executeCommand('openmemory.viewPatterns'); break;
-        case 'toggle_mcp':
-            use_mcp = !use_mcp;
+        case 'toggle_mcp': {
+            const newMcp = !useMcp;
             const mcpConfig = vscode.workspace.getConfiguration('openmemory');
-            await mcpConfig.update('useMCP', use_mcp, vscode.ConfigurationTarget.Global);
-            vscode.window.showInformationMessage(`Switched to ${use_mcp ? 'MCP' : 'Direct HTTP'} mode. Reconnecting...`);
-            await auto_link_all();
+            await mcpConfig.update('useMCP', newMcp, vscode.ConfigurationTarget.Global);
+            stateManager.updateState({ useMcp: newMcp });
+            vscode.window.showInformationMessage(`Switched to ${newMcp ? 'MCP' : 'Direct HTTP'} mode. Reconnecting...`);
+            await autoLinkAll();
             break;
-        case 'disable':
+        }
+        case 'disable': {
             const config = vscode.workspace.getConfiguration('openmemory');
             await config.update('enabled', false, vscode.ConfigurationTarget.Global);
-            is_enabled = false;
-            if (session_id) await end_session();
-            update_status_bar('disabled');
+            stateManager.updateState({ isEnabled: false });
+            if (sessionId) {
+                const { userId } = stateManager.getState();
+                await stateManager.client.endIdeSession(sessionId, userId);
+            }
+            uiService.update('disabled');
             vscode.window.showInformationMessage('OpenMemory disabled');
             break;
-        case 'setup': show_quick_setup(); break;
-        case 'reconnect':
-            update_status_bar('connecting');
-            const connected = await check_connection();
+        }
+        case 'setup': showQuickSetup(); break;
+        case 'reconnect': {
+            uiService.update('connecting');
+            const connected = await checkConnection();
             if (connected) {
-                await start_session();
+                await startSession();
             } else {
-                update_status_bar('disconnected');
+                uiService.update('disconnected');
                 vscode.window.showErrorMessage('Cannot connect to backend');
             }
             break;
+        }
     }
 }
 
-async function show_quick_setup() {
+async function showQuickSetup() {
+    const { isEnabled, useMcp, mcpServerPath, backendUrl } = stateManager.getState();
     const items = [
-        { label: is_enabled ? '$(circle-slash) Disable Extension' : '$(check) Enable Extension', action: 'toggle_enabled', description: is_enabled ? 'Turn off OpenMemory tracking' : 'Turn on OpenMemory tracking' },
-        { label: '$(server-process) Toggle MCP Mode', action: 'mcp', description: use_mcp ? 'Currently: MCP (switch to Direct HTTP)' : 'Currently: Direct HTTP (switch to MCP)' },
+        { label: isEnabled ? '$(circle-slash) Disable Extension' : '$(check) Enable Extension', action: 'toggle_enabled', description: isEnabled ? 'Turn off OpenMemory tracking' : 'Turn on OpenMemory tracking' },
+        { label: '$(server-process) Toggle MCP Mode', action: 'mcp', description: useMcp ? 'Currently: MCP (switch to Direct HTTP)' : 'Currently: Direct HTTP (switch to MCP)' },
         { label: '$(key) Configure API Key', action: 'apikey' },
         { label: '$(server) Change Backend URL', action: 'url' },
         { label: '$(file-code) Set MCP Server Path', action: 'mcppath', description: 'Optional: custom MCP server executable' },
@@ -322,277 +372,236 @@ async function show_quick_setup() {
     ];
     const choice = await vscode.window.showQuickPick(items, { placeHolder: 'OpenMemory Setup' });
     if (!choice) return;
+
+    const config = vscode.workspace.getConfiguration('openmemory');
+
     switch (choice.action) {
-        case 'toggle_enabled':
-            const enabledConfig = vscode.workspace.getConfiguration('openmemory');
-            is_enabled = !is_enabled;
-            await enabledConfig.update('enabled', is_enabled, vscode.ConfigurationTarget.Global);
-            if (is_enabled) {
+        case 'toggle_enabled': {
+            const newEnabled = !isEnabled;
+            await config.update('enabled', newEnabled, vscode.ConfigurationTarget.Global);
+            stateManager.updateState({ isEnabled: newEnabled });
+            if (newEnabled) {
                 vscode.window.showInformationMessage('OpenMemory enabled. Reloading window...');
                 vscode.commands.executeCommand('workbench.action.reloadWindow');
             } else {
-                if (session_id) await end_session();
-                update_status_bar('disabled');
+                const { sessionId } = stateManager.getState();
+                if (sessionId) await deactivate();
+                uiService.update('disabled');
                 vscode.window.showInformationMessage('OpenMemory disabled');
             }
             break;
-        case 'mcp':
-            use_mcp = !use_mcp;
-            const mcpConfig = vscode.workspace.getConfiguration('openmemory');
-            await mcpConfig.update('useMCP', use_mcp, vscode.ConfigurationTarget.Global);
-            vscode.window.showInformationMessage(`Switched to ${use_mcp ? 'MCP' : 'Direct HTTP'} mode`);
-            await auto_link_all();
+        }
+        case 'mcp': {
+            const newMcp = !useMcp;
+            await config.update('useMCP', newMcp, vscode.ConfigurationTarget.Global);
+            stateManager.updateState({ useMcp: newMcp });
+            vscode.window.showInformationMessage(`Switched to ${newMcp ? 'MCP' : 'Direct HTTP'} mode`);
+            await autoLinkAll();
             break;
-        case 'mcppath':
-            const path = await vscode.window.showInputBox({ prompt: 'Enter MCP server executable path (leave empty to use backend MCP)', value: mcp_server_path, placeHolder: '/path/to/mcp-server' });
+        }
+        case 'mcppath': {
+            const path = await vscode.window.showInputBox({
+                prompt: 'Enter MCP server executable path (leave empty to use backend MCP)',
+                value: mcpServerPath,
+                placeHolder: '/path/to/mcp-server'
+            });
             if (path !== undefined) {
-                const config = vscode.workspace.getConfiguration('openmemory');
                 await config.update('mcpServerPath', path, vscode.ConfigurationTarget.Global);
-                mcp_server_path = path;
+                stateManager.updateState({ mcpServerPath: path });
                 vscode.window.showInformationMessage('MCP server path updated');
             }
             break;
-        case 'apikey':
-            const key = await vscode.window.showInputBox({ prompt: 'Enter API key (leave empty if not required)', password: true, placeHolder: 'your-api-key' });
+        }
+        case 'apikey': {
+            const key = await vscode.window.showInputBox({
+                prompt: 'Enter API key (leave empty if not required)',
+                password: true,
+                placeHolder: 'your-api-key'
+            });
             if (key !== undefined) {
-                const config = vscode.workspace.getConfiguration('openmemory');
                 await config.update('apiKey', key, vscode.ConfigurationTarget.Global);
-                api_key = key;
+                stateManager.updateState({ apiKey: key });
                 vscode.window.showInformationMessage('API key saved');
-                const connected = await check_connection();
-                if (connected) await start_session();
+                if (await checkConnection()) await startSession();
             }
             break;
-        case 'url':
-            const url = await vscode.window.showInputBox({ prompt: 'Enter backend URL', value: backend_url, placeHolder: 'http://localhost:8080' });
+        }
+        case 'url': {
+            const url = await vscode.window.showInputBox({
+                prompt: 'Enter backend URL',
+                value: backendUrl,
+                placeHolder: 'http://localhost:8080'
+            });
             if (url) {
-                const config = vscode.workspace.getConfiguration('openmemory');
                 await config.update('backendUrl', url, vscode.ConfigurationTarget.Global);
-                backend_url = url;
+                stateManager.updateState({ backendUrl: url });
                 vscode.window.showInformationMessage('Backend URL updated');
-                const connected = await check_connection();
-                if (connected) await start_session();
+                if (await checkConnection()) await startSession();
             }
             break;
+        }
         case 'docs': vscode.env.openExternal(vscode.Uri.parse('https://github.com/CaviraOSS/OpenMemory')); break;
         case 'test':
-            update_status_bar('connecting');
-            const connected = await check_connection();
-            if (connected) {
-                await start_session();
+            uiService.update('connecting');
+            if (await checkConnection()) {
+                await startSession();
                 vscode.window.showInformationMessage('✅ Connected successfully');
             } else {
-                update_status_bar('disconnected');
+                uiService.update('disconnected');
                 vscode.window.showErrorMessage('❌ Connection failed');
             }
             break;
     }
 }
 
-function getUserId(context: vscode.ExtensionContext, config: vscode.WorkspaceConfiguration): string {
-    // 1. Check if user has configured a custom userId
-    const configuredUserId = config.get<string>('userId');
-    if (configuredUserId) return configuredUserId;
+// --- Status Helpers ---
 
-    // 2. Check if we have a persistent userId in global state
-    let persistedUserId = context.globalState.get<string>('openmemory.userId');
-    if (persistedUserId) return persistedUserId;
-
-    // 3. Generate a new unique userId based on machine ID
-    const machineId = vscode.env.machineId; // Unique per machine
-    const userName = process.env.USERNAME || process.env.USER || 'user';
-    persistedUserId = `${userName}-${machineId.substring(0, 8)}`;
-
-    // 4. Persist it for future sessions
-    context.globalState.update('openmemory.userId', persistedUserId);
-
-    return persistedUserId;
-}
-
-// Helper to get standard headers
-function get_headers(): Record<string, string> {
-    const headers: Record<string, string> = {
-        'Content-Type': 'application/json'
-    };
-    if (api_key) {
-        headers['x-api-key'] = api_key;
-    }
-    return headers;
-}
-
-// Helper for standardized error handling
-async function safe_fetch(url: string, options: RequestInit): Promise<any> {
-    let res: Response;
+async function checkConnection(): Promise<boolean> {
     try {
-        res = await fetch(url, options);
-    } catch (e: any) {
-        throw new Error(`Network failure: ${e.message}`);
-    }
-
-    if (res.ok) {
-        if (res.status === 204) return {};
-        try {
-            return await res.json();
-        } catch {
-            return {};
-        }
-    }
-
-    // Handle error response
-    let errorMsg = `HTTP ${res.status}`;
-    try {
-        const json = await res.json();
-        if (json.error) {
-            // Standard format: { error: { code, message, details } }
-            if (typeof json.error === 'object' && json.error.message) {
-                errorMsg = `${json.error.message} (${json.error.code || res.status})`;
-            } else if (typeof json.error === 'string') {
-                errorMsg = json.error;
-            }
-        }
-    } catch {
-        errorMsg = `${res.status} ${res.statusText}`;
-    }
-    throw new Error(errorMsg);
-}
-
-// ... (retain existing exports and activation)
-
-// Refactored methods using safe_fetch
-
-async function check_connection(): Promise<boolean> {
-    try {
-        await safe_fetch(`${backend_url}/health`, { method: 'GET', headers: get_headers() });
-        return true;
+        const health = await stateManager.client.health();
+        return health === true;
     } catch {
         return false;
     }
 }
 
-async function start_session() {
+async function startSession() {
     try {
         const config = vscode.workspace.getConfiguration('openmemory');
         const configuredProject = config.get<string>('projectName');
         const project = configuredProject || vscode.workspace.workspaceFolders?.[0]?.name || 'unknown';
-        const data = await safe_fetch(`${backend_url}/api/ide/session/start`, {
-            method: 'POST',
-            headers: get_headers(),
-            body: JSON.stringify({ user_id: user_id, project_name: project, ide_name: 'vscode' })
+        const { userId } = stateManager.getState();
+
+        const data = await stateManager.client.startIdeSession({
+            userId,
+            projectName: project,
+            ideName: 'vscode'
         });
-        session_id = data.session_id;
-        is_tracking = true;
-        update_status_bar('active');
+
+        stateManager.updateState({ sessionId: data.sessionId, isTracking: true });
+        uiService.update('active');
         vscode.window.showInformationMessage('OpenMemory connected');
-    } catch {
-        update_status_bar('disconnected');
-        show_quick_setup();
+    } catch (e) {
+        console.error('OpenMemory Session Start Failed:', e);
+        uiService.update('disconnected');
+        showQuickSetup();
     }
 }
 
-async function end_session() {
-    if (!session_id) return;
+async function sendEvent(eventData: Record<string, unknown>) {
+    const { sessionId, userId, isTracking } = stateManager.getState();
+    if (!sessionId || !isTracking) return;
     try {
-        await safe_fetch(`${backend_url}/api/ide/session/end`, {
-            method: 'POST',
-            headers: get_headers(),
-            body: JSON.stringify({ session_id, user_id })
+        await stateManager.client.sendIdeEvent({
+            sessionId: sessionId,
+            userId: userId,
+            eventType: eventData.eventType as string,
+            filePath: eventData.filePath as string,
+            language: eventData.language as string,
+            content: eventData.content as string,
+            metadata: eventData.metadata as Record<string, unknown>
         });
-        session_id = null;
-    } catch { }
+    } catch (e) {
+        console.error('OpenMemory Event Sending Failed:', e);
+    }
 }
 
-
-async function send_event(event_data: EventData) {
-    if (!session_id || !is_tracking) return;
-    try {
-        await safe_fetch(`${backend_url}/api/ide/events`, {
-            method: 'POST',
-            headers: get_headers(),
-            body: JSON.stringify({
-                session_id,
-                user_id,
-                event_type: event_data.event_type,
-                file_path: event_data.file_path,
-                language: event_data.language,
-                content: event_data.content,
-                metadata: event_data.metadata,
-                timestamp: new Date().toISOString()
-            })
-        });
-    } catch { }
+// Local type for display purposes, avoiding full MemoryItem mocking
+interface DisplayMemory {
+    id: string;
+    content: string;
+    salience?: number;
+    primarySector?: string;
+    metadata?: Record<string, unknown>;
 }
 
-async function query_context(query: string, file: string): Promise<Memory[]> {
-    const data = await safe_fetch(`${backend_url}/api/ide/context`, {
-        method: 'POST',
-        headers: get_headers(),
-        body: JSON.stringify({ query, session_id, file_path: file, limit: 10 })
+async function queryContext(query: string, file: string): Promise<DisplayMemory[]> {
+    const { sessionId } = stateManager.getState();
+    const data = await stateManager.client.getIdeContext(query, {
+        sessionId: sessionId || undefined,
+        filePath: file,
+        k: 10
     });
-    return (data.memories || []) as Memory[];
+    // Map strictly typed IdeContextItem to a shape compatible with DisplayMemory
+    return (data.context || []).map((c) => ({
+        id: c.memoryId,
+        content: c.content,
+        salience: c.salience,
+        primarySector: c.primarySector,
+        metadata: {
+            score: c.score,
+            sectors: c.sectors,
+            lastSeenAt: c.lastSeenAt,
+            path: c.path
+        }
+    }));
 }
 
-async function add_memory(content: string, file: string) {
-    return await safe_fetch(`${backend_url}/memory/add`, {
-        method: 'POST',
-        headers: get_headers(),
-        body: JSON.stringify({
-            content,
-            user_id: user_id,
-            tags: ['manual', 'ide-selection'],
-            metadata: { source: 'vscode', file }
-        })
+async function addMemory(content: string, file: string) {
+    const { userId } = stateManager.getState();
+    return await stateManager.client.add(content, {
+        userId,
+        tags: ['manual', 'ide-selection'],
+        metadata: { source: 'vscode', file }
     });
 }
 
-async function get_patterns(sid: string): Promise<Pattern[]> {
-    const data = await safe_fetch(`${backend_url}/api/ide/patterns/${sid}`, {
-        method: 'GET',
-        headers: get_headers()
-    });
-    return (data.patterns || []) as Pattern[];
+async function getPatterns(sid: string): Promise<IdePattern[]> {
+    const data = await stateManager.client.getIdePatterns(sid);
+    return data.patterns || [];
 }
 
-// ... (rest of the formatting functions)
+// --- Formatters ---
 
-function format_memories(memories: Memory[]): string {
+function formatMemories(memories: DisplayMemory[]): string {
     let out = '# OpenMemory Context Results\n\n';
     if (memories.length === 0) return out + 'No relevant memories found.\n';
     for (const m of memories) {
-        // Handle standardized API fields
         const salience = m.salience ? m.salience.toFixed(3) : 'N/A';
-        out += `## Memory ID: ${m.id}\n**Salience:** ${salience}\n**Sector:** ${m.primary_sector}\n**Content:**\n\`\`\`\n${m.content}\n\`\`\`\n\n`;
+        const sector = m.primarySector || 'semantic';
+        out += `## Memory ID: ${m.id}\n**Salience:** ${salience}\n**Sector:** ${sector}\n**Content:**\n\`\`\`\n${m.content}\n\`\`\`\n\n`;
     }
     return out;
 }
 
-function format_patterns(patterns: Pattern[]): string {
+function formatPatterns(patterns: IdePattern[]): string {
     let out = '# Detected Coding Patterns\n\n';
     if (patterns.length === 0) return out + 'No patterns detected.\n';
     for (const p of patterns) {
-        out += `## Pattern: ${p.description || 'Unknown'}\n**Frequency:** ${p.frequency || 'N/A'}\n**Context:**\n\`\`\`\n${p.context || 'No context'}\n\`\`\`\n\n`;
+        out += `## Pattern: ${p.description || 'Unknown'}\n**Confidence:** ${p.confidence ? (p.confidence * 100).toFixed(1) : 'N/A'}%\n**Files:** ${p.affectedFiles?.join(', ') || 'N/A'}\n\n`;
     }
     return out;
 }
 
 // Helper to ingest data
-async function ingest_data(content: string, type: string, extra_meta: any = {}) {
-    if (!backend_url) return;
-
-    // Construct standard ingest request
-    const body = {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function ingestData(content: string, type: string, extraMeta: any = {}) {
+    const { userId } = stateManager.getState();
+    await stateManager.client.ingest({
         source: "connector",
-        content_type: "txt",
+        contentType: "txt",
         data: content,
-        user_id: user_id, // Top-level for correct ownership
         metadata: {
-            ...extra_meta,
-            origin: "vscode-quick-note"
+            ...extraMeta,
+            origin: "vscode-quick-note",
+            ideUserId: userId
         }
-    };
-
-    await safe_fetch(`${backend_url}/api/ingest`, {
-        method: 'POST',
-        headers: get_headers(),
-        body: JSON.stringify(body)
     });
 }
+
+// Helper to ingest an entire path
+async function ingestPath(dirPath: string) {
+    const files = await vscode.workspace.findFiles(new vscode.RelativePattern(dirPath, '**/*'));
+    for (const file of files) {
+        try {
+            const stat = await vscode.workspace.fs.stat(file);
+            if (stat.size > 5 * 1024 * 1024) continue; // Skip large files > 5MB
+
+            const content = await vscode.workspace.fs.readFile(file);
+            await ingestData(Buffer.from(content).toString('utf-8'), 'file', { filePath: file.fsPath });
+        } catch (e) {
+            console.warn(`Failed to ingest ${file.fsPath}:`, e);
+        }
+    }
+}
+

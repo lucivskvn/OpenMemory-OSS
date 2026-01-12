@@ -1,135 +1,389 @@
-import { VectorStore } from "../vector_store";
-import { cosineSimilarity, bufferToVector, vectorToBuffer } from "../../utils/vectors";
+/**
+ * SQL-based Vector Store Implementation.
+ * Supports both pgvector (Postgres) and blob-based storage (SQLite) with JS-fallback search.
+ */
+import { normalizeUserId } from "../../utils";
+import { logger } from "../../utils/logger";
+import {
+    bufferToFloat32Array,
+    bufferToVector,
+    cosineSimilarity,
+    vectorToBuffer,
+} from "../../utils/vectors";
 import { env } from "../cfg";
+import { applySqlUser, SqlValue } from "../db_utils";
+import { VectorStore } from "../vector_store";
 
 export interface DbOps {
-    run_async: (sql: string, params?: any[]) => Promise<number>;
-    get_async: (sql: string, params?: any[]) => Promise<any>;
-    all_async: (sql: string, params?: any[]) => Promise<any[]>;
+    runAsync: (sql: string, params?: SqlValue[]) => Promise<number>;
+    getAsync: <T = unknown>(
+        sql: string,
+        params?: SqlValue[],
+    ) => Promise<T | undefined>;
+    allAsync: <T = unknown>(sql: string, params?: SqlValue[]) => Promise<T[]>;
+    transaction?: <T>(fn: () => Promise<T>) => Promise<T>;
+    iterateAsync: <T = unknown>( // Made required for standard compliance
+        sql: string,
+        params?: SqlValue[],
+    ) => AsyncIterable<T>;
+}
+
+interface VectorRow {
+    id: string;
+    sector: string;
+    v: Buffer;
+    dim: number;
+    score?: number;
 }
 
 export class SqlVectorStore implements VectorStore {
     private table: string;
 
-    constructor(private db: DbOps, tableName: string = "vectors") {
+    constructor(
+        private db: DbOps,
+        tableName: string = "vectors",
+    ) {
         this.table = tableName;
     }
 
-    async storeVector(id: string, sector: string, vector: number[], dim: number, user_id?: string): Promise<void> {
-        if (env.verbose) console.error(`[Vector] Storing ID: ${id}, Sector: ${sector}, Dim: ${dim}`);
-        const v = vectorToBuffer(vector);
-        const sql = `insert into ${this.table}(id,sector,user_id,v,dim) values(?,?,?,?,?) on conflict(id,sector) do update set user_id=excluded.user_id,v=excluded.v,dim=excluded.dim`;
-        await this.db.run_async(sql, [id, sector, user_id || "anonymous", v, dim]);
+    async storeVector(
+        id: string,
+        sector: string,
+        vector: number[],
+        dim: number,
+        userId?: string | null,
+        metadata?: Record<string, unknown>,
+    ): Promise<void> {
+        if (env.verbose)
+            logger.debug(
+                `[Vector] Storing ID: ${id}, Sector: ${sector}, Dim: ${dim}`,
+            );
+        const isPg =
+            env.vectorBackend === "postgres" ||
+            env.metadataBackend === "postgres";
+        const v = isPg
+            ? `[${vector.join(",")}]`
+            : new Uint8Array(vectorToBuffer(vector));
+        const uid = normalizeUserId(userId);
+        const metaStr = metadata ? JSON.stringify(metadata) : null;
+        const placeholders = isPg ? "$1, $2, $3, $4, $5, $6" : "?, ?, ?, ?, ?, ?";
+        const sql = `insert into ${this.table}(id,sector,user_id,v,dim,metadata) values(${placeholders}) on conflict(id,sector) do update set user_id=excluded.user_id,v=excluded.v,dim=excluded.dim,metadata=excluded.metadata`;
+        await this.db.runAsync(sql, [id, sector, uid ?? null, v, dim, metaStr]);
     }
 
-    async deleteVector(id: string, sector: string): Promise<void> {
-        await this.db.run_async(`delete from ${this.table} where id=? and sector=?`, [id, sector]);
+    async storeVectors(
+        items: Array<{
+            id: string;
+            sector: string;
+            vector: number[];
+            dim: number;
+            metadata?: Record<string, unknown>;
+        }>,
+        userId?: string | null,
+    ): Promise<void> {
+        if (items.length === 0) return;
+        const uid = normalizeUserId(userId);
+        const isPg =
+            env.vectorBackend === "postgres" ||
+            env.metadataBackend === "postgres";
+
+        if (isPg) {
+            // Postgres supports large batches, but we chunk to be safe (e.g. 1000 items)
+            const BATCH_SIZE = 1000;
+            for (let i = 0; i < items.length; i += BATCH_SIZE) {
+                const chunk = items.slice(i, i + BATCH_SIZE);
+                const params: SqlValue[] = [];
+                const rows: string[] = [];
+                let idx = 1;
+                for (const item of chunk) {
+                    const vectorString = `[${item.vector.join(",")}]`;
+                    const metaStr = item.metadata ? JSON.stringify(item.metadata) : null;
+                    params.push(
+                        item.id,
+                        item.sector,
+                        uid,
+                        vectorString,
+                        item.dim,
+                        metaStr,
+                    );
+                    rows.push(
+                        `($${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++}, $${idx++})`,
+                    );
+                }
+                const sql = `insert into ${this.table}(id,sector,user_id,v,dim,metadata) values ${rows.join(",")} on conflict(id,sector) do update set user_id=excluded.user_id,v=excluded.v,dim=excluded.dim,metadata=excluded.metadata`;
+                await this.db.runAsync(sql, params);
+            }
+        } else {
+            // SQLite/Fallback: Sequential or transaction batch
+            const runBatch = async () => {
+                for (const item of items) {
+                    await this.storeVector(
+                        item.id,
+                        item.sector,
+                        item.vector,
+                        item.dim,
+                        userId,
+                        item.metadata,
+                    );
+                }
+            };
+            if (this.db.transaction) await this.db.transaction(runBatch);
+            else await runBatch();
+        }
     }
 
-    async deleteVectors(id: string): Promise<void> {
-        await this.db.run_async(`delete from ${this.table} where id=?`, [id]);
+    async deleteVector(
+        id: string,
+        sector: string,
+        userId?: string | null,
+    ): Promise<void> {
+        const uid = normalizeUserId(userId);
+        const { sql, params } = applySqlUser(
+            `delete from ${this.table} where id=? and sector=?`,
+            [id, sector],
+            uid,
+        );
+        await this.db.runAsync(sql, params);
     }
 
-    async searchSimilar(sector: string, queryVec: number[], topK: number, user_id?: string): Promise<Array<{ id: string; score: number }>> {
-        // Optimization: Use pgvector's cosine distance operator (<=>) if using Postgres
-        // Note: <=> returns distance (0..2), so similarity = 1 - distance/2 roughly, or just rank by distance ASC
-        // We assume cosine_similarity function might not exist, but <=> operator does if pgvector is installed.
-        // However, safely detecting "is postgres" here requires looking at `env.vector_backend`.
+    async deleteVectors(ids: string[], userId?: string | null): Promise<void> {
+        if (ids.length === 0) return;
+        const uid = normalizeUserId(userId);
 
-        if (process.env.OM_VECTOR_BACKEND === 'postgres') {
-            // For pgvector, we want 1 - (cosine distance). 
-            // pgvector <=> operator returns cosine distance.
-            // ORDER BY v <=> '[...]' ASC LIMIT k
-            const vecStr = `[${queryVec.join(",")}]`;
-            const user_clause = user_id ? `and user_id = $2` : `and user_id IS NULL`;
-            const params = user_id ? [sector, user_id] : [sector];
+        // Chunking to avoid "too many SQL variables" (SQLite limit ~999)
+        // We use a safe batch size of 200 IDs per delete
+        const BATCH_SIZE = 200;
+        for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+            const chunk = ids.slice(i, i + BATCH_SIZE);
+            const placeholders = chunk.map(() => "?").join(",");
+            const { sql, params } = applySqlUser(
+                `delete from ${this.table} where id IN (${placeholders})`,
+                [...chunk],
+                uid,
+            );
+            await this.db.runAsync(sql, params);
+        }
+    }
 
-            const sql = `
-                SELECT id, 1 - (v <=> '${vecStr}') as score 
-                FROM ${this.table} 
-                WHERE sector = $1 ${user_clause}
-                ORDER BY v <=> '${vecStr}' ASC
-                LIMIT ${topK}
-             `;
+    async searchSimilar(
+        sector: string,
+        queryVec: number[],
+        topK: number,
+        userId?: string | null,
+        filter?: { metadata?: Record<string, unknown> },
+    ): Promise<Array<{ id: string; score: number }>> {
+        const uid = normalizeUserId(userId);
+        let whereClause = "";
+        const extraParams: SqlValue[] = [];
 
-            // We need to use database-specific parameter placeholder syntax if we are bypassing the generic wrapper
-            // But our `db.all_async` wrapper handles ? -> $n conversion (if it's the one from core/db).
-            // Wait, `this.db.all_async` might be just the raw wrapper.
-            // The safest way is to stick to the wrapper's convention.
-
-            // Important: The `v <=> ?` syntax might not work with string-bound parameters in some drivers,
-            // often specific casting `?::vector` is needed.
-            // Let's rely on the fact that we can interpolate the vector string safely since it's just numbers.
-
-            try {
-                const rows = await this.db.all_async(sql, params);
-                return rows.map(r => ({ id: r.id, score: r.score }));
-            } catch (e) {
-                if (env.verbose) console.error("[Vector] pgvector search failed (fallback to JS):", e);
-                // Fallback to JS implementation
+        if (filter?.metadata) {
+            const isPg = env.vectorBackend === "postgres";
+            if (isPg) {
+                // Postgres native JSONB containment
+                whereClause += ` AND metadata @> ? `;
+                extraParams.push(JSON.stringify(filter.metadata));
+            } else {
+                // SQLite json_extract for each key
+                for (const [key, val] of Object.entries(filter.metadata)) {
+                    if (val !== undefined) {
+                        whereClause += ` AND json_extract(metadata, '$.' || ?) = ? `;
+                        extraParams.push(key, val as SqlValue);
+                    }
+                }
             }
         }
 
-        // Fallback: Generic SQL implementation (in-memory cosine sim)
-        // This works for both SQLite and Postgres (without pgvector)
-        let sql = `select id,v,dim from ${this.table} where sector=?`;
-        const params: any[] = [sector];
-        if (user_id) {
-            sql += ` and user_id=?`;
-            params.push(user_id);
+        if (env.vectorBackend === "postgres") {
+            const vectorString = `[${queryVec.join(",")}]`;
+
+            // Re-construct the query with native JSONB filtering
+            let sql = "";
+            let params: SqlValue[] = [];
+
+            sql = `
+                SELECT id, 1 - (v <=> $1) as score 
+                FROM ${this.table}
+                WHERE sector = $2
+                ${whereClause}
+             `;
+            params = [vectorString, sector, ...extraParams];
+
+            // User Logic
+            if (uid === null) {
+                sql += " AND user_id IS NULL";
+            } else if (uid !== undefined) {
+                sql += " AND user_id = $" + (params.length + 1);
+                params.push(uid);
+            }
+
+            sql += ` ORDER BY v <=> $1 ASC LIMIT ${topK}`;
+
+            // Fix placeholders for Postgres ($1, $2...)
+            let pIdx = 3; // $1=vec, $2=sector
+            sql = sql.replace(/\?/g, () => `$${pIdx++}`);
+
+            try {
+                const rows = await this.db.allAsync<{
+                    id: string;
+                    score: number;
+                }>(sql, params);
+                return rows.map((r) => ({ id: r.id, score: r.score }));
+            } catch (error: unknown) {
+                logger.warn(
+                    "[Vector] pgvector search failed (likely extension not enabled), using JS fallback.",
+                    { error },
+                );
+            }
         }
-        const rows = await this.db.all_async(sql, params);
-        if (env.verbose) {
-            console.error(`[Vector] Search Sector: ${sector}, Found ${rows.length} rows.`);
+
+        // JS Fallback (SQLite or non-pgvector)
+        // Optimized for Sustainability: Uses streaming iterator to prevent OOM on large datasets
+        let sql = `select id, v, dim from ${this.table} where sector=?`;
+        const params: SqlValue[] = [sector];
+
+        if (whereClause) {
+            sql += whereClause;
+            params.push(...extraParams);
         }
+
+        if (uid !== undefined) {
+            if (uid === null) sql += ` and user_id IS NULL`;
+            else {
+                sql += ` and user_id=?`;
+                params.push(uid);
+            }
+        }
+
         const sims: Array<{ id: string; score: number }> = [];
-        for (const row of rows) {
-            const vec = bufferToVector(row.v);
-            const sim = cosineSimilarity(queryVec, vec);
-            sims.push({ id: row.id, score: sim });
+        // Use Float32Array for query vector (zero copy if possible)
+        const qVec = new Float32Array(queryVec);
+
+        // Streaming Implementation (Memory Efficient)
+        // We rely on DbOps providing iterateAsync (which core/db.ts now does)
+        const iterator = this.db.iterateAsync<VectorRow>(sql, params);
+        for await (const row of iterator) {
+            if (!row.v) continue;
+            try {
+                // Zero-copy conversion if possible
+                const vec = bufferToFloat32Array(row.v);
+                if (vec.length !== qVec.length) continue;
+                const sim = cosineSimilarity(qVec, vec); // Optimized
+
+                // Only keep candidates that might be relevant? 
+                // For now, allow full scan but sort later. A heap would be better for topK but JS sort is fast enough for localized filtered sets.
+                sims.push({ id: row.id, score: sim });
+            } catch (e) { /* skip */ }
         }
+
         sims.sort((a, b) => b.score - a.score);
         return sims.slice(0, topK);
     }
 
-    async getVector(id: string, sector: string, user_id?: string): Promise<{ vector: number[]; dim: number } | null> {
-        let sql = `select v,dim from ${this.table} where id=? and sector=?`;
-        const params: any[] = [id, sector];
-        if (user_id) {
-            sql += ` and user_id=?`;
-            params.push(user_id);
-        }
-        const row = await this.db.get_async(sql, params);
+    async getVector(
+        id: string,
+        sector: string,
+        userId?: string | null,
+    ): Promise<{ vector: number[]; dim: number } | null> {
+        const uid = normalizeUserId(userId);
+        const { sql, params } = applySqlUser(
+            `select v,dim from ${this.table} where id=? and sector=?`,
+            [id, sector],
+            uid,
+        );
+        const row = await this.db.getAsync<VectorRow>(sql, params);
         if (!row) return null;
-        return { vector: bufferToVector(row.v), dim: row.dim };
-    }
-
-    async getVectorsById(id: string, user_id?: string): Promise<Array<{ sector: string; vector: number[]; dim: number }>> {
-        let sql = `select sector,v,dim from ${this.table} where id=?`;
-        const params: any[] = [id];
-        if (user_id) {
-            sql += ` and user_id=?`;
-            params.push(user_id);
+        try {
+            return { vector: bufferToVector(row.v), dim: row.dim };
+        } catch (e) {
+            logger.error(
+                `[Vector] Corrupted vector for ID ${id} in sector ${sector}`,
+                { error: e },
+            );
+            return null;
         }
-        const rows = await this.db.all_async(sql, params);
-        return rows.map(row => ({ sector: row.sector, vector: bufferToVector(row.v), dim: row.dim }));
     }
 
-    async getVectorsBySector(sector: string, user_id?: string): Promise<Array<{ id: string; vector: number[]; dim: number }>> {
-        let sql = `select id,v,dim from ${this.table} where sector=?`;
-        const params: any[] = [sector];
-        if (user_id) {
-            sql += ` and user_id=?`;
-            params.push(user_id);
+    async getVectorsById(
+        id: string,
+        userId?: string | null,
+    ): Promise<Array<{ sector: string; vector: number[]; dim: number }>> {
+        const rows = await this.getVectorsByIds([id], userId);
+        return rows.map((r) => ({
+            sector: r.sector,
+            vector: r.vector,
+            dim: r.dim,
+        }));
+    }
+
+    async getVectorsByIds(
+        ids: string[],
+        userId?: string | null,
+    ): Promise<
+        Array<{ id: string; sector: string; vector: number[]; dim: number }>
+    > {
+        if (ids.length === 0) return [];
+
+        const uid = normalizeUserId(userId);
+        const safePlaceholders = ids.map(() => "?").join(",");
+        const { sql, params: safeParams } = applySqlUser(
+            `select id,sector,v,dim from ${this.table} where id IN (${safePlaceholders})`,
+            [...ids],
+            uid,
+        );
+
+        const rows = await this.db.allAsync<VectorRow>(sql, safeParams);
+        return rows.map((r) => ({
+            id: r.id,
+            sector: r.sector,
+            vector: bufferToVector(r.v),
+            dim: r.dim,
+        }));
+    }
+
+    async getVectorsBySector(
+        sector: string,
+        userId?: string | null,
+    ): Promise<Array<{ id: string; vector: number[]; dim: number }>> {
+        const uid = normalizeUserId(userId);
+        const { sql, params } = applySqlUser(
+            `select id,v,dim from ${this.table} where sector=?`,
+            [sector],
+            uid,
+        );
+        const rows = await this.db.allAsync<VectorRow>(sql, params);
+        return rows.map((r) => ({
+            id: r.id,
+            vector: bufferToVector(r.v),
+            dim: r.dim,
+        }));
+    }
+
+    async deleteVectorsByUser(userId: string): Promise<void> {
+        const uid = normalizeUserId(userId);
+        if (!uid) return;
+
+        const isPg =
+            env.vectorBackend === "postgres" ||
+            env.metadataBackend === "postgres";
+
+        if (isPg) {
+            const sql = `delete from ${this.table} where user_id = $1`;
+            await this.db.runAsync(sql, [uid]);
         } else {
-            sql += ` and user_id IS NULL`;
+            const sql = `delete from ${this.table} where user_id = ?`;
+            await this.db.runAsync(sql, [uid]);
         }
-        const rows = await this.db.all_async(sql, params);
-        return rows.map(row => ({ id: row.id, vector: bufferToVector(row.v), dim: row.dim }));
     }
 
-    async disconnect(): Promise<void> {
-        // No-op for SQL store as it shares the main DB connection which is closed separately
-        return;
+    async getAllVectorIds(userId?: string | null): Promise<Set<string>> {
+        const uid = normalizeUserId(userId);
+        // Optimization: We only need distinct IDs.
+        const { sql, params } = applySqlUser(
+            `select distinct id from ${this.table}`,
+            [],
+            uid,
+        );
+        const rows = await this.db.allAsync<{ id: string }>(sql, params);
+        return new Set(rows.map((r) => r.id));
     }
 }

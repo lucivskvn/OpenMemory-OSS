@@ -54,7 +54,7 @@ People _love_ thorough bug reports. I'm not even kidding.
 - Git
 - Docker (optional, for containerized development)
 
-### Backend/Node SDK Development
+### Backend/JS SDK Development
 
 ```bash
 # Clone the repository
@@ -149,9 +149,7 @@ docs(api): update HSG endpoint documentation
 
 ### Testing
 
-#### Backend Tests
-
-#### Node.js SDK / Backend Tests
+#### JavaScript / TypeScript
 
 ```bash
 cd packages/openmemory-js

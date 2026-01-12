@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { resolveMcpPath } from '../utils/mcp';
 
 export interface ClaudeConfig {
     mcpServers?: {
@@ -15,9 +16,17 @@ export interface ClaudeConfig {
     api_key?: string;
 }
 
+/**
+ * Generates a Claude Desktop configuration object for OpenMemory integration.
+ * @param backendUrl URL of the OpenMemory backend server
+ * @param apiKey Optional API key for authentication
+ * @param useMCP Whether to use MCP protocol instead of direct HTTP
+ * @param mcpServerPath Optional custom path to MCP server executable
+ * @returns Configuration object for Claude Desktop
+ */
 export function generateClaudeConfig(backendUrl: string, apiKey?: string, useMCP = false, mcpServerPath?: string): ClaudeConfig {
     if (useMCP) {
-        const backendMcpPath = mcpServerPath || path.join(process.cwd(), 'backend', 'dist', 'ai', 'mcp.js');
+        const backendMcpPath = resolveMcpPath(mcpServerPath);
         return {
             mcpServers: {
                 openmemory: {
@@ -37,16 +46,32 @@ export function generateClaudeConfig(backendUrl: string, apiKey?: string, useMCP
     return config;
 }
 
-export async function writeClaudeConfig(backendUrl: string, apiKey?: string, useMCP = false, mcpServerPath?: string): Promise<string> {
+/**
+ * Writes the OpenMemory configuration file for Claude Desktop.
+ * Creates the necessary directories if they don't exist.
+ * @param backendUrl URL of the OpenMemory backend server
+ * @param apiKey Optional API key for authentication
+ * @param useMCP Whether to use MCP protocol instead of direct HTTP
+ * @param mcpServerPath Optional custom path to MCP server executable
+ * @returns Path to the created configuration file
+ * @throws Error if the configuration cannot be written (e.g., permission denied)
+ */
+export function writeClaudeConfig(backendUrl: string, apiKey?: string, useMCP = false, mcpServerPath?: string): string {
     const claudeDir = path.join(os.homedir(), '.claude', 'providers');
     const configFile = path.join(claudeDir, 'openmemory.json');
 
-    if (!fs.existsSync(claudeDir)) {
-        fs.mkdirSync(claudeDir, { recursive: true });
+    try {
+        if (!fs.existsSync(claudeDir)) {
+            fs.mkdirSync(claudeDir, { recursive: true });
+        }
+
+        const config = generateClaudeConfig(backendUrl, apiKey, useMCP, mcpServerPath);
+        fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
+
+        return configFile;
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(`Failed to write Claude config to ${configFile}: ${message}`);
     }
-
-    const config = generateClaudeConfig(backendUrl, apiKey, useMCP, mcpServerPath);
-    fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
-
-    return configFile;
 }
+

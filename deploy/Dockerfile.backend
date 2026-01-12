@@ -1,0 +1,45 @@
+# Backend Production/Deployment Dockerfile
+# Optimized for Python 3.11 + Bun ecosystem
+
+# Stage 1: Builder
+FROM python:3.11-slim as builder
+
+WORKDIR /app
+
+# Install system dependencies (build tools)
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install specific Python dependencies first for caching
+COPY packages/openmemory-py/pyproject.toml .
+# We might need a requirements.txt generated from pip or poetry/uv for optimal Docker layers.
+# For now, we assume pip install .[all] works.
+
+# Stage 2: Runner
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install runtime libs
+RUN apt-get update && apt-get install -y \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN groupadd -r openmemory && useradd -r -g openmemory openmemory
+
+# Copy source code
+COPY --chown=openmemory:openmemory packages/openmemory-py /app/packages/openmemory-py
+COPY --chown=openmemory:openmemory packages/openmemory-js /app/packages/openmemory-js
+
+# Install Python package
+WORKDIR /app/packages/openmemory-py
+RUN pip install --no-cache-dir .[all]
+
+USER openmemory
+
+EXPOSE 8080
+
+CMD ["uvicorn", "openmemory.server.api:app", "--host", "0.0.0.0", "--port", "8080"]

@@ -30,8 +30,38 @@ mem = Memory()
 *   `history(user_id: str, limit: int = 20, offset: int = 0) -> list[dict]`
     *   Returns the temporal chain of interactions for a user.
 
+*   `import_memory(content: str, user_id: str, id: str = None, created_at: int = None, meta: dict = None, tags: list = None) -> dict`
+    *   **Admin/Tooling**: Import a memory with explicit ID and Timestamp preservation.
+    *   Bypasses deduplication if explicit `id` is provided. Suitable for backups and migration.
+
 *   `list_users() -> list[str]`
     *   Returns a list of all active user IDs in the store.
+
+### `MemoryClient`
+
+The HTTP client for connecting to a remote OpenMemory server (e.g., Docker or Railway).
+Fully async and mirrors the `Memory` API.
+
+```python
+from openmemory.client import MemoryClient
+
+client = MemoryClient(base_url="http://localhost:8080", token="...")
+await client.add("remote memory")
+results = await client.search("query")
+```
+
+#### Methods
+
+*   **Core**: `add`, `get`, `update`, `delete`, `search`, `list`, `list_users`, `import_memory`
+*   **Ingestion**: 
+    *   `ingest(content_type, data, user_id, metadata)`
+    *   `ingest_url(url, user_id, metadata)`
+*   **Temporal Graph**:
+    *   `add_fact(subject, predicate, object, valid_from, confidence)`
+    *   `add_edge(source_id, target_id, relation_type, weight)`
+    *   `search_facts(pattern, type="all")`
+*   **System**: `health()`
+
 
 ### `OpenAIWrapper`
 

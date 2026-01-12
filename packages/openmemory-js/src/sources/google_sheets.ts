@@ -1,58 +1,110 @@
 /**
- * google sheets source for openmemory - production grade
- * requires: googleapis
- * env vars: GOOGLE_SERVICE_ACCOUNT_FILE or GOOGLE_CREDENTIALS_JSON
+ * Google Sheets Source Connector for OpenMemory.
+ * Ingests data from Google Sheets and converts to Markdown tables.
+ * Requires: googleapis
+ * Environment: GOOGLE_SERVICE_ACCOUNT_FILE or GOOGLE_CREDENTIALS_JSON
  */
 
-import { base_source, source_config_error, source_item, source_content } from './base';
-import type { sheets_v4, google as google_type } from 'googleapis';
+import type { google, sheets_v4 } from "googleapis";
 
-export class google_sheets_source extends base_source {
-    override name = 'google_sheets';
+import { env } from "../core/cfg";
+import {
+    BaseSource,
+    SourceConfigError,
+    SourceContent,
+    SourceFetchError,
+    SourceItem,
+} from "./base";
+
+interface GoogleSheetsCreds {
+    credentialsJson?: Record<string, unknown>;
+    serviceAccountFile?: string;
+}
+
+interface GoogleSheetsFilters {
+    spreadsheetId?: string;
+    [key: string]: unknown;
+}
+
+/**
+ * Google Sheets Source Connector.
+ * Ingests spreadsheets from Google Sheets.
+ */
+export class GoogleSheetsSource extends BaseSource<
+    GoogleSheetsCreds,
+    GoogleSheetsFilters
+> {
+    override name = "google_sheets";
     private service: sheets_v4.Sheets | null = null;
-    private auth: any = null;
+    private auth: unknown = null;
 
-    async _connect(creds: Record<string, any>): Promise<boolean> {
-        let google_mod: typeof google_type;
+    async _connect(creds: GoogleSheetsCreds): Promise<boolean> {
+        let googleMod: typeof google;
         try {
-            google_mod = await import('googleapis').then(m => m.google);
+            googleMod = await import("googleapis").then((m) => m.google);
         } catch {
-            throw new source_config_error('missing deps: npm install googleapis', this.name);
+            throw new SourceConfigError(
+                "missing deps: npm install googleapis",
+                this.name,
+            );
         }
 
-        const scopes = ['https://www.googleapis.com/auth/spreadsheets.readonly'];
+        const scopes = [
+            "https://www.googleapis.com/auth/spreadsheets.readonly",
+        ];
 
-        if (creds.credentials_json) {
-            this.auth = new google_mod.auth.GoogleAuth({ credentials: creds.credentials_json, scopes });
-        } else if (creds.service_account_file) {
-            this.auth = new google_mod.auth.GoogleAuth({ keyFile: creds.service_account_file as string, scopes });
-        } else if (process.env.GOOGLE_CREDENTIALS_JSON) {
-            this.auth = new google_mod.auth.GoogleAuth({ credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON), scopes });
-        } else if (process.env.GOOGLE_SERVICE_ACCOUNT_FILE) {
-            this.auth = new google_mod.auth.GoogleAuth({ keyFile: process.env.GOOGLE_SERVICE_ACCOUNT_FILE, scopes });
+        // Security: BaseSource.connect has already hydrated creds from Persisted Config
+        // Fallback to env ONLY if no credentials provided at all
+        const credentialsJson = creds.credentialsJson || (env.googleCredentialsJson ? JSON.parse(env.googleCredentialsJson) : undefined);
+        const serviceAccountFile = creds.serviceAccountFile || env.googleServiceAccountFile;
+
+        if (credentialsJson) {
+            this.auth = new googleMod.auth.GoogleAuth({
+                credentials: credentialsJson,
+                scopes,
+            });
+        } else if (serviceAccountFile) {
+            this.auth = new googleMod.auth.GoogleAuth({
+                keyFile: serviceAccountFile,
+                scopes,
+            });
         } else {
-            throw new source_config_error('no credentials: set GOOGLE_SERVICE_ACCOUNT_FILE or GOOGLE_CREDENTIALS_JSON', this.name);
+            throw new SourceConfigError(
+                "Google Sheets credentials are required (provide in Dashboard or OM_GOOGLE_...)",
+                this.name,
+            );
         }
 
-        this.service = google_mod.sheets({ version: 'v4', auth: this.auth });
+        this.service = googleMod.sheets({
+            version: "v4",
+            auth: this.auth as never, // type-safe cast for dynamically imported auth
+        });
         return true;
     }
 
-    async _list_items(filters: Record<string, any>): Promise<source_item[]> {
-        if (!this.service) throw new source_config_error('not connected', this.name);
-        if (!filters.spreadsheet_id) {
-            throw new source_config_error('spreadsheet_id is required', this.name);
+    /**
+     * Lists sheets within a specific Spreadsheet.
+     * @param filters - Must contain `spreadsheetId`.
+     */
+    async _listItems(filters: GoogleSheetsFilters): Promise<SourceItem[]> {
+        if (!this.service)
+            throw new SourceConfigError("not connected", this.name);
+        if (!filters.spreadsheetId) {
+            throw new SourceConfigError("spreadsheetId is required", this.name);
         }
 
         try {
-            const meta = await this.service.spreadsheets.get({ spreadsheetId: filters.spreadsheet_id as string });
+            const meta = await this.service.spreadsheets.get({
+                spreadsheetId: filters.spreadsheetId,
+            });
+            const sheets = meta.data.sheets || [];
 
-            return (meta.data.sheets || []).map((sheet: any, i: number) => ({
-                id: `${filters.spreadsheet_id}!${sheet.properties?.title || 'Sheet1'}`,
-                name: sheet.properties?.title || 'Sheet1',
-                type: 'sheet',
+            return sheets.map((sheet, i) => ({
+                id: `${filters.spreadsheetId}!${sheet.properties?.title || "Sheet1"}`,
+                name: sheet.properties?.title || "Sheet1",
+                type: "sheet",
                 index: i,
-                spreadsheet_id: filters.spreadsheet_id as string
+                spreadsheetId: filters.spreadsheetId as string,
             }));
         } catch (e: unknown) {
             const msg = e instanceof Error ? e.message : String(e);
@@ -60,40 +112,58 @@ export class google_sheets_source extends base_source {
         }
     }
 
-    async _fetch_item(item_id: string): Promise<source_content> {
-        if (!this.service) throw new source_config_error('not connected', this.name);
+    /**
+     * Fetches the content of a specific sheet or range.
+     * Converts the 2D grid value response into a Markdown table string.
+     *
+     * @param itemId - Format: `spreadsheetId` (all) or `spreadsheetId!SheetName`.
+     */
+    async _fetchItem(itemId: string): Promise<SourceContent> {
+        if (!this.service)
+            throw new SourceConfigError("not connected", this.name);
 
-        const [spreadsheet_id, sheet_range] = item_id.includes('!')
-            ? item_id.split('!', 2)
-            : [item_id, 'A:ZZ'];
+        const [spreadsheetId, sheetRange] = itemId.includes("!")
+            ? itemId.split("!", 2)
+            : [itemId, "A:ZZ"];
 
         try {
             const result = await this.service.spreadsheets.values.get({
-                spreadsheetId: spreadsheet_id,
-                range: sheet_range
+                spreadsheetId: spreadsheetId,
+                range: sheetRange,
             });
 
             const values = result.data.values || [];
 
-            // convert to markdown table
-            const lines = values.map((row: any[], i: number) => {
-                const line = row.map(String).join(' | ');
-                return i === 0 ? `${line}\n${row.map(() => '---').join(' | ')}` : line;
+            // convert to markdown table with escaping and alignment
+            const escapeTable = (s: string) => (s || "").replace(/\|/g, "\\|").replace(/\n/g, "<br>");
+
+            const lines = values.map((row: unknown[], i: number) => {
+                const line = "| " + row.map((c) => escapeTable(String(c))).join(" | ") + " |";
+                if (i === 0) {
+                    const separator = "| " + row.map(() => "---").join(" | ") + " |";
+                    return `${line}\n${separator}`;
+                }
+                return line;
             });
 
-            const text = lines.join('\n');
+            const text = lines.join("\n");
 
             return {
-                id: item_id,
-                name: sheet_range,
-                type: 'spreadsheet',
+                id: itemId,
+                name: sheetRange,
+                type: "spreadsheet",
                 text,
                 data: text,
-                meta: { source: 'google_sheets', spreadsheet_id, range: sheet_range, row_count: values.length }
+                metadata: {
+                    source: "google_sheets",
+                    spreadsheetId,
+                    range: sheetRange,
+                    rowCount: values.length,
+                },
             };
         } catch (e: unknown) {
             const msg = e instanceof Error ? e.message : String(e);
-            throw new Error(`[google_sheets] fetch failed: ${msg}`);
+            throw new SourceFetchError(msg, this.name, e instanceof Error ? e : undefined);
         }
     }
 }

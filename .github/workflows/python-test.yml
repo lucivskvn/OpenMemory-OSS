@@ -1,0 +1,36 @@
+name: Python SDK CI
+
+on:
+  push:
+    branches: ["next"]
+    paths:
+      - "packages/openmemory-py/**"
+  pull_request:
+    branches: ["next"]
+    paths:
+      - "packages/openmemory-py/**"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./packages/openmemory-py
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.10"
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install .[dev]
+        pip install pytest pytest-asyncio
+
+    - name: Run tests
+      run: |
+        pytest

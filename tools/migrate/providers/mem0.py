@@ -19,15 +19,15 @@ class Mem0Provider(BaseProvider):
         except Exception as e:
             raise Exception(f"Mem0 connection failed: {e}")
 
-    async def export(self) -> AsyncGenerator[MigrationRecord, None]:
+    async def export(self) -> AsyncGenerator[MigrationRecord, None]:  # type: ignore
         try:
             users = await self._fetch_all_users()
             logger.info(f"[MEM0] Found {len(users)} users")
-            
+
             for i, user in enumerate(users):
                 if i % 10 == 0:
                     logger.info(f"[MEM0] Processing user {i}/{len(users)}")
-                
+
                 user_id = user.get("user_id")
                 if not user_id: continue
 
@@ -82,12 +82,13 @@ class Mem0Provider(BaseProvider):
 
     def _transform(self, m: Dict, uid: str) -> MigrationRecord:
         from dateutil import parser
-        
+
         created_at = 0
         if m.get("created_at"):
             try:
                 created_at = int(parser.parse(m["created_at"]).timestamp() * 1000)
-            except: pass
+            except:
+                pass
 
         return MigrationRecord(
             id=str(m.get("id") or m.get("memory_id") or f"mem0_{created_at}"),

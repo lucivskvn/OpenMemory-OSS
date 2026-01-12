@@ -1,66 +1,110 @@
 /**
- * google slides source for openmemory - production grade
- * requires: googleapis
- * env vars: GOOGLE_SERVICE_ACCOUNT_FILE or GOOGLE_CREDENTIALS_JSON
+ * Google Slides Source Connector for OpenMemory.
+ * Ingests text content from Google Slides presentations.
+ * Requires: googleapis
+ * Environment: GOOGLE_SERVICE_ACCOUNT_FILE or GOOGLE_CREDENTIALS_JSON
  */
 
-import { base_source, source_config_error, source_item, source_content } from './base';
-import type { slides_v1, google as google_type } from 'googleapis';
+import type { google, slides_v1 } from "googleapis";
 
-interface GooglePresentation {
-    presentationId: string;
-    slides?: slides_v1.Schema$Page[];
-    title?: string;
+import { env } from "../core/cfg";
+import {
+    BaseSource,
+    SourceConfigError,
+    SourceContent,
+    SourceFetchError,
+    SourceItem,
+} from "./base";
+
+interface GoogleSlidesCreds {
+    credentialsJson?: Record<string, unknown>;
+    serviceAccountFile?: string;
 }
 
-export class google_slides_source extends base_source {
-    override name = 'google_slides';
+interface GoogleSlidesFilters {
+    presentationId?: string;
+    [key: string]: unknown;
+}
+
+/**
+ * Google Slides Source Connector.
+ * Ingests presentations from Google Slides.
+ */
+export class GoogleSlidesSource extends BaseSource<
+    GoogleSlidesCreds,
+    GoogleSlidesFilters
+> {
+    override name = "google_slides";
     private service: slides_v1.Slides | null = null;
-    private auth: any = null;
+    private auth: unknown = null;
 
-    async _connect(creds: Record<string, any>): Promise<boolean> {
-        let google_mod: typeof google_type;
+    async _connect(creds: GoogleSlidesCreds): Promise<boolean> {
+        let googleMod: typeof google;
         try {
-            google_mod = await import('googleapis').then(m => m.google);
+            googleMod = await import("googleapis").then((m) => m.google);
         } catch {
-            throw new source_config_error('missing deps: npm install googleapis', this.name);
+            throw new SourceConfigError(
+                "missing deps: npm install googleapis",
+                this.name,
+            );
         }
 
-        const scopes = ['https://www.googleapis.com/auth/presentations.readonly'];
+        const scopes = [
+            "https://www.googleapis.com/auth/presentations.readonly",
+        ];
 
-        if (creds.credentials_json) {
-            this.auth = new google_mod.auth.GoogleAuth({ credentials: creds.credentials_json, scopes });
-        } else if (creds.service_account_file) {
-            this.auth = new google_mod.auth.GoogleAuth({ keyFile: creds.service_account_file as string, scopes });
-        } else if (process.env.GOOGLE_CREDENTIALS_JSON) {
-            this.auth = new google_mod.auth.GoogleAuth({ credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS_JSON), scopes });
-        } else if (process.env.GOOGLE_SERVICE_ACCOUNT_FILE) {
-            this.auth = new google_mod.auth.GoogleAuth({ keyFile: process.env.GOOGLE_SERVICE_ACCOUNT_FILE, scopes });
+        // Security: BaseSource.connect has already hydrated creds from Persisted Config
+        // Fallback to env ONLY if no credentials provided at all
+        const credentialsJson = creds.credentialsJson || (env.googleCredentialsJson ? JSON.parse(env.googleCredentialsJson) : undefined);
+        const serviceAccountFile = creds.serviceAccountFile || env.googleServiceAccountFile;
+
+        if (credentialsJson) {
+            this.auth = new googleMod.auth.GoogleAuth({
+                credentials: credentialsJson,
+                scopes,
+            });
+        } else if (serviceAccountFile) {
+            this.auth = new googleMod.auth.GoogleAuth({
+                keyFile: serviceAccountFile,
+                scopes,
+            });
         } else {
-            throw new source_config_error('no credentials: set GOOGLE_SERVICE_ACCOUNT_FILE or GOOGLE_CREDENTIALS_JSON', this.name);
+            throw new SourceConfigError(
+                "Google Slides credentials are required (provide in Dashboard or OM_GOOGLE_...)",
+                this.name,
+            );
         }
 
-        this.service = google_mod.slides({ version: 'v1', auth: this.auth });
+        this.service = googleMod.slides({
+            version: "v1",
+            auth: this.auth as never, // type-safe cast for dynamically imported auth
+        });
         return true;
     }
 
-    async _list_items(filters: Record<string, any>): Promise<source_item[]> {
-        if (!this.service) throw new source_config_error('not connected', this.name);
-        if (!filters.presentation_id) {
-            throw new source_config_error('presentation_id is required', this.name);
+    async _listItems(filters: GoogleSlidesFilters): Promise<SourceItem[]> {
+        if (!this.service)
+            throw new SourceConfigError("not connected", this.name);
+        if (!filters.presentationId) {
+            throw new SourceConfigError(
+                "presentationId is required",
+                this.name,
+            );
         }
 
         try {
-            const pres = await this.service.presentations.get({ presentationId: filters.presentation_id as string });
-            const data = pres.data as GooglePresentation;
+            const pres = await this.service.presentations.get({
+                presentationId: filters.presentationId,
+            });
+            const data = pres.data as slides_v1.Schema$Presentation;
 
             return (data.slides || []).map((slide, i: number) => ({
-                id: `${filters.presentation_id}#${slide.objectId}`,
+                id: `${filters.presentationId}#${slide.objectId}`,
                 name: `Slide ${i + 1}`,
-                type: 'slide',
+                type: "slide",
                 index: i,
-                presentation_id: filters.presentation_id as string,
-                object_id: slide.objectId!
+                presentationId: filters.presentationId as string,
+                objectId: slide.objectId!,
             }));
         } catch (e: unknown) {
             const msg = e instanceof Error ? e.message : String(e);
@@ -68,23 +112,28 @@ export class google_slides_source extends base_source {
         }
     }
 
-    async _fetch_item(item_id: string): Promise<source_content> {
-        if (!this.service) throw new source_config_error('not connected', this.name);
+    async _fetchItem(itemId: string): Promise<SourceContent> {
+        if (!this.service)
+            throw new SourceConfigError("not connected", this.name);
 
-        const [presentation_id, slide_id] = item_id.includes('#')
-            ? item_id.split('#', 2)
-            : [item_id, null];
+        const [presentationId, slideId] = itemId.includes("#")
+            ? itemId.split("#", 2)
+            : [itemId, null];
 
         try {
-            const pres = await this.service.presentations.get({ presentationId: presentation_id });
-            const data = pres.data as GooglePresentation;
+            const pres = await this.service.presentations.get({
+                presentationId: presentationId,
+            });
+            const data = pres.data as slides_v1.Schema$Presentation;
 
-            const extract_text = (element: slides_v1.Schema$PageElement): string => {
+            const extractText = (
+                element: slides_v1.Schema$PageElement,
+            ): string => {
                 const texts: string[] = [];
 
                 if (element.shape?.text) {
                     for (const te of element.shape.text.textElements || []) {
-                        if (te.textRun) texts.push(te.textRun.content || '');
+                        if (te.textRun) texts.push(te.textRun.content || "");
                     }
                 }
 
@@ -93,45 +142,63 @@ export class google_slides_source extends base_source {
                         for (const cell of row.tableCells || []) {
                             if (cell.text) {
                                 for (const te of cell.text.textElements || []) {
-                                    if (te.textRun) texts.push(te.textRun.content || '');
+                                    if (te.textRun)
+                                        texts.push(te.textRun.content || "");
                                 }
                             }
                         }
                     }
                 }
 
-                return texts.join('');
+                return texts.join("");
             };
 
-            const all_text: string[] = [];
+            const allText: string[] = [];
 
             for (let i = 0; i < (data.slides || []).length; i++) {
                 const slide = (data.slides || [])[i];
-                if (slide_id && slide.objectId !== slide_id) continue;
+                if (slideId && slide.objectId !== slideId) continue;
 
-                const slide_texts = [`## Slide ${i + 1}`];
+                const slideTexts = [`## Slide ${i + 1}`];
 
                 for (const element of slide.pageElements || []) {
-                    const txt = extract_text(element);
-                    if (txt.trim()) slide_texts.push(txt.trim());
+                    const txt = extractText(element);
+                    if (txt.trim()) slideTexts.push(txt.trim());
                 }
 
-                all_text.push(...slide_texts);
+                // Extract Speaker Notes
+                const notesPage = slide.slideProperties?.notesPage;
+                if (notesPage) {
+                    const notesTexts: string[] = [];
+                    for (const element of notesPage.pageElements || []) {
+                        const txt = extractText(element);
+                        if (txt.trim()) notesTexts.push(txt.trim());
+                    }
+                    if (notesTexts.length > 0) {
+                        slideTexts.push("**Speaker Notes:**\n" + notesTexts.join("\n"));
+                    }
+                }
+
+                allText.push(...slideTexts);
             }
 
-            const text = all_text.join('\n\n');
+            const text = allText.join("\n\n");
 
             return {
-                id: item_id,
-                name: data.title || 'Untitled Presentation',
-                type: 'presentation',
+                id: itemId,
+                name: data.title || "Untitled Presentation",
+                type: "presentation",
                 text,
                 data: text,
-                meta: { source: 'google_slides', presentation_id, slide_count: data.slides?.length || 0 }
+                metadata: {
+                    source: "google_slides",
+                    presentationId,
+                    slideCount: data.slides?.length || 0,
+                },
             };
         } catch (e: unknown) {
             const msg = e instanceof Error ? e.message : String(e);
-            throw new Error(`[google_slides] fetch failed: ${msg}`);
+            throw new SourceFetchError(msg, this.name, e instanceof Error ? e : undefined);
         }
     }
 }

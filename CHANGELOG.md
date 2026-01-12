@@ -1,5 +1,41 @@
 # changelog
 
+## [2.3.0] - 2026-01-09
+
+### 🚀 Major "Deep Dive" Overhaul
+A massive system-wide audit and enhancement phase (40 phases) focusing on **Sustainability, Consistency, Confidentiality, and Integrity**.
+
+#### Security & Integrity
+- **Encryption-at-Rest**: Added AES-256-GCM encryption for memory content (`OM_ENCRYPTION_ENABLED`).
+- **Input Sanitization**: Strict HTML stripping in ingestion pipeline to prevent XSS.
+- **RBAC**: Enforced Role-Based Access Control for Admin API endpoints.
+- **Secret Management**: Secure handling of API keys and rotation support.
+
+#### Performance & Scalability
+- **Batch Ingestion**: Implemented `addBatch` in both Python and JS SDKs for high-throughput memory insertion.
+- **Async Database**: Migrated PostgreSQL operations to fully async `asyncpg` with connection pooling.
+- **Graph Optimization**: Refactored HSG traversal to use batched queries, eliminating N+1 performance bottlenecks.
+- **Docker**: Production-ready multi-stage Dockerfiles for Backend (Python 3.11-slim) and Dashboard (Bun/Next.js).
+
+#### Cognitive Architecture
+- **Temporal Knowledge Graph**: First-class support for generic time-ranged queries (`valid_from`, `valid_to`) and entity timelines.
+- **Reflective Memory**: Enhanced semantic clustering and consolidation logic.
+- **Hierarchical Semantic Graph (HSG)**: Hardened waypointing and reinforcement learning dynamics.
+
+#### Observability
+- **OpenTelemetry**: Full distributed tracing support (Backend -> SDK -> Dashboard).
+- **Structured Logging**: Standardized JSON logging with automatic PII redaction.
+
+#### Dashboard & UI
+- **Temporal Visualization**: Interactive stacked-bar timelines and force-directed graphs.
+- **UX Polish**: Integrated `sonner` for toast notifications; robust error handling with `safeRequest`.
+
+#### Ecosystem Parity
+- **SDK Sync**: Strict type parity between `openmemory-js` (TypeScript) and `openmemory-py` (Pydantic).
+- **VS Code Extension**: Updated to support full v2.3.0 API surface.
+
+---
+
 ## [1.3.0] - 2025-12-20
 
 ### 🎉 major refactors

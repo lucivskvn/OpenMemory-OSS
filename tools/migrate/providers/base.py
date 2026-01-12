@@ -13,7 +13,7 @@ class BaseProvider(ABC):
     async def close(self):
         await self.client.aclose()
 
-    async def _get(self, url: str, headers: Dict[str, str] = None) -> Any:
+    async def _get(self, url: str, headers: Dict[str, str] | None = None) -> Any:
         await self.rate_limiter.wait()
         try:
             response = await self.client.get(url, headers=headers)

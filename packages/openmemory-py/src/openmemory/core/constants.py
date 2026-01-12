@@ -1,5 +1,6 @@
 from typing import Dict, List, TypedDict, Pattern
 import re
+from .config import env
 
 # Ported from backend/src/memory/hsg.ts to avoid circular dep
 
@@ -12,7 +13,7 @@ class SectorCfg(TypedDict):
 SECTOR_CONFIGS: Dict[str, SectorCfg] = {
     "episodic": {
         "model": "episodic-optimized",
-        "decay_lambda": 0.015,
+        "decay_lambda": env.decay_episodic,
         "weight": 1.2,
         "patterns": [
             re.compile(r"\b(today|yesterday|tomorrow|last\s+(week|month|year)|next\s+(week|month|year))\b", re.I),
@@ -25,7 +26,7 @@ SECTOR_CONFIGS: Dict[str, SectorCfg] = {
     },
     "semantic": {
         "model": "semantic-optimized",
-        "decay_lambda": 0.005,
+        "decay_lambda": env.decay_semantic,
         "weight": 1.0,
         "patterns": [
             re.compile(r"\b(is\s+a|represents|means|stands\s+for|defined\s+as)\b", re.I),
@@ -38,7 +39,7 @@ SECTOR_CONFIGS: Dict[str, SectorCfg] = {
     },
     "procedural": {
         "model": "procedural-optimized",
-        "decay_lambda": 0.008,
+        "decay_lambda": env.decay_procedural,
         "weight": 1.1,
         "patterns": [
             re.compile(r"\b(how\s+to|step\s+by\s+step|guide|tutorial|manual|instructions)\b", re.I),
@@ -51,8 +52,8 @@ SECTOR_CONFIGS: Dict[str, SectorCfg] = {
     },
     "emotional": {
         "model": "emotional-optimized",
-        "decay_lambda": 0.02,
-        "weight": 1.3,
+        "decay_lambda": env.decay_emotional,
+        "weight": 0.9,
         "patterns": [
             re.compile(r"\b(feel|feeling|felt|emotions?|mood|vibe)\b", re.I),
             re.compile(r"\b(happy|sad|angry|mad|excited|scared|anxious|nervous|depressed)\b", re.I),
@@ -65,8 +66,8 @@ SECTOR_CONFIGS: Dict[str, SectorCfg] = {
     },
     "reflective": {
         "model": "reflective-optimized",
-        "decay_lambda": 0.001,
-        "weight": 0.8,
+        "decay_lambda": env.decay_reflective,
+        "weight": 1.3,
         "patterns": [
             re.compile(r"\b(realize|realized|realization|insight|epiphany)\b", re.I),
             re.compile(r"\b(think|thought|thinking|ponder|contemplate|reflect)\b", re.I),
@@ -80,3 +81,18 @@ SECTOR_CONFIGS: Dict[str, SectorCfg] = {
 }
 
 SEC_WTS = {k: v["weight"] for k, v in SECTOR_CONFIGS.items()}
+
+COGNITIVE_PARAMS = {
+    "EMA_ALPHA": 0.1,  # Factor for feedback_score (score * 0.1 + old * 0.9)
+    "REINFORCE_DECAY_LAMBDA": 0.02, # For context propagation
+    "QUERY_HIT_BOOST": 0.5, # Salience boost on successful retrieval
+    "DEDUPLICATION_BOOST": 0.15, # Salience boost for existing memory
+    "HAMMING_THRESHOLD": 3, # Distance for simhash deduplication
+    "WAYPOINT_DECAY": 0.8, # BFS expansion decay
+    "EXPAN_MIN_WEIGHT": 0.1, # Min weight to continue expansion
+    "DEFAULT_SALIENCE": 0.0,
+    "DEFAULT_DECAY_LAMBDA": 0.02,
+    "DEFAULT_VERSION": 1,
+    "DEFAULT_SEGMENT": 0,
+    "DEFAULT_LAST_SEEN_AT": 0,
+}

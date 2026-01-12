@@ -3,7 +3,9 @@ import asyncio
 from typing import List, Dict, Any, Optional
 
 from ..core.db import q, db
-from ..core.constants import SECTOR_CONFIGS
+from ..core.constants import SECTOR_CONFIGS, COGNITIVE_PARAMS
+
+from ..core.config import env
 
 # Port from backend/src/ops/dynamics.ts
 # Only porting unused functions if needed, but focusing on core ones used by HSG.
@@ -12,11 +14,11 @@ from ..core.constants import SECTOR_CONFIGS
 # Shared between hsg.py, decay.py and maintenance functions
 
 SCORING_WEIGHTS = {
-    "similarity": 0.35,
-    "overlap": 0.20,
-    "waypoint": 0.15,
-    "recency": 0.10,
-    "tag_match": 0.20,
+    "similarity": env.scoring_similarity,
+    "overlap": env.scoring_overlap,
+    "waypoint": env.scoring_waypoint,
+    "recency": env.scoring_recency,
+    "tag_match": env.scoring_tag_match,
 }
 
 HYBRID_PARAMS = {
@@ -24,7 +26,7 @@ HYBRID_PARAMS = {
     "beta": 2.0,
     "eta": 0.1,
     "gamma": 0.2,
-    "alpha_reinforce": 0.08,
+    "alpha_reinforce": env.reinf_salience_boost,
     "t_days": 7.0,
     "t_max_days": 60.0,
     "tau_hours": 1.0,
@@ -32,11 +34,11 @@ HYBRID_PARAMS = {
 }
 
 REINFORCEMENT = {
-    "salience_boost": 0.1,
-    "waypoint_boost": 0.05,
-    "max_salience": 1.0,
-    "max_waypoint_weight": 1.0,
-    "prune_threshold": 0.05,
+    "salience_boost": env.reinf_salience_boost,
+    "waypoint_boost": env.reinf_waypoint_boost,
+    "max_salience": env.reinf_max_salience,
+    "max_waypoint_weight": env.reinf_max_waypoint_weight,
+    "prune_threshold": env.reinf_prune_threshold,
 }
 
 SECTOR_RELATIONSHIPS = {
@@ -74,15 +76,35 @@ SECTOR_INDEX_MAPPING_FOR_MATRIX_LOOKUP = {
 }
 
 async def calculateCrossSectorResonanceScore(ms: str, qs: str, bs: float) -> float:
+    """
+    Calculate resonance between two sectors based on cognitive interdependence.
+    
+    Args:
+        ms: Memory sector.
+        qs: Query sector.
+        bs: Base score.
+    """
     si = SECTOR_INDEX_MAPPING_FOR_MATRIX_LOOKUP.get(ms, 1)
     ti = SECTOR_INDEX_MAPPING_FOR_MATRIX_LOOKUP.get(qs, 1)
     return bs * SECTORAL_INTERDEPENDENCE_MATRIX_FOR_COGNITIVE_RESONANCE[si][ti]
 
 async def applyRetrievalTraceReinforcementToMemory(mid: str, sal: float) -> float:
+    """
+    Calculate new salience for a memory after a successful retrieval (trace learning).
+    """
     # sal + ETA * (1 - sal)
     return min(1.0, sal + ETA_REINFORCEMENT_FACTOR_FOR_TRACE_LEARNING * (1.0 - sal))
 
 async def propagateAssociativeReinforcementToLinkedNodes(sid: str, ssal: float, wps: List[Dict], user_id: Optional[str] = None) -> List[Dict]:
+    """
+    Calculate salience updates for nodes connected to a reinforced source node.
+    
+    Args:
+        sid: Source memory ID.
+        ssal: Source salience after reinforcement.
+        wps: List of waypoints [{target_id, weight}].
+        user_id: Owner user ID for isolation.
+    """
     # wps: [{target_id, weight}]
     if not wps: return []
     
@@ -91,8 +113,9 @@ async def propagateAssociativeReinforcementToLinkedNodes(sid: str, ssal: float, 
     
     # Bulk fetch current saliences
     placeholders = ",".join(["?"] * len(tids))
-    sql = f"SELECT id, salience FROM memories WHERE id IN ({placeholders})"
-    params = tids
+    t = q.tables
+    sql = f"SELECT id, salience FROM {t['memories']} WHERE id IN ({placeholders})"
+    params = list(tids) # Ensure mutable list
     if user_id:
         sql += " AND user_id=?"
         params.append(user_id)

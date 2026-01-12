@@ -1,0 +1,8 @@
+{
+    "exclude": [
+        "**/anaconda3/Lib/**",
+        "sdk-py/.venv/**",
+        "**/.vscode/extensions/**"
+    ],
+    "reportMissingImports": "warning"
+}

@@ -1,174 +1,375 @@
 /**
- * web crawler source for openmemory - production grade
- * requires: cheerio (for html parsing)
- * no auth required for public urls
+ * Web Crawler Source Connector for OpenMemory.
+ * Provides production-grade crawling with HTML parsing via Cheerio.
+ * No authentication required for public URLs.
  */
 
-import { base_source, source_config_error, source_item, source_content, source_config, source_fetch_error } from './base';
-import { validate_url } from '../utils/security';
 // We use dynamic import for cheerio, but we can import types
-import type { CheerioAPI } from 'cheerio';
+import type { CheerioAPI } from "cheerio";
 
-export interface web_crawler_config extends source_config {
-    max_pages?: number;
-    max_depth?: number;
+import { env } from "../core/cfg";
+import { logger } from "../utils/logger";
+import { validateUrl } from "../utils/security";
+import {
+    BaseSource,
+    SourceConfig,
+    SourceConfigError,
+    SourceContent,
+    SourceFetchError,
+    SourceItem,
+} from "./base";
+import { extractHTML } from "../ops/extract";
+
+export interface WebCrawlerConfig extends SourceConfig {
+    maxPages?: number;
+    maxDepth?: number;
     timeout?: number;
+    delayMs?: number;
 }
 
-export class web_crawler_source extends base_source {
-    override name = 'web_crawler';
-    private max_pages: number;
-    private max_depth: number;
+/**
+ * Web Crawler Source Connector.
+ * Ingests content from public websites by crawling links up to a specified depth.
+ */
+export class WebCrawlerSource extends BaseSource {
+    override name = "web_crawler";
+    private maxPages: number;
+    private maxDepth: number;
     private timeout: number;
+    private delayMs: number;
     private visited: Set<string> = new Set();
-    private crawled: source_item[] = [];
+    private crawled: SourceItem[] = [];
+    private contentCache: Map<string, { text: string; title: string; metadata: Record<string, unknown> }> = new Map();
+    private robotsCache: Map<string, string[]> = new Map(); // domain -> disallowed patterns
 
-    constructor(
-        user_id?: string,
-        config?: web_crawler_config
-    ) {
-        super(user_id, config);
-        this.max_pages = config?.max_pages || 50;
-        this.max_depth = config?.max_depth || 3;
+    constructor(userId?: string | null, config?: WebCrawlerConfig) {
+        super(userId ?? undefined, config);
+        this.maxPages = config?.maxPages || 50;
+        this.maxDepth = config?.maxDepth || 3;
         this.timeout = config?.timeout || 30000;
+        this.delayMs = config?.delayMs ?? env.crawlerDelayMs ?? 1000;
     }
 
     async _connect(): Promise<boolean> {
         return true; // no auth needed
     }
 
-    async _list_items(filters: Record<string, any>): Promise<source_item[]> {
-        if (!filters.start_url) {
-            throw new source_config_error('start_url is required', this.name);
+    async _listItems(filters: {
+        startUrl?: string;
+        followLinks?: boolean;
+    }): Promise<SourceItem[]> {
+        if (!filters.startUrl) {
+            throw new SourceConfigError("startUrl is required", this.name);
         }
 
-        let cheerio_mod: typeof import('cheerio');
+        let cheerioMod: typeof import("cheerio");
         try {
-            cheerio_mod = await import('cheerio');
+            cheerioMod = await import("cheerio");
         } catch {
-            throw new source_config_error('missing deps: npm install cheerio', this.name);
+            throw new SourceConfigError(
+                "missing deps: npm install cheerio",
+                this.name,
+            );
         }
 
         this.visited.clear();
         this.crawled = [];
+        this.contentCache.clear();
 
-        const base_url = new URL(filters.start_url);
-        const base_domain = base_url.hostname;
-        const to_visit: { url: string; depth: number }[] = [{ url: filters.start_url, depth: 0 }];
-        const follow_links = filters.follow_links !== false;
+        const baseUrl = new URL(filters.startUrl);
+        const baseDomain = baseUrl.hostname;
+        const toVisit: { url: string; depth: number }[] = [
+            { url: filters.startUrl, depth: 0 },
+        ];
+        const robotsPatterns = await this._getRobots(baseUrl.origin);
+        const followLinks = filters.followLinks !== false;
 
-        while (to_visit.length > 0 && this.crawled.length < this.max_pages) {
-            const next_visit = to_visit.shift();
-            if (!next_visit) break;
-            const { url, depth } = next_visit;
+        while (toVisit.length > 0 && this.crawled.length < this.maxPages) {
+            const nextVisit = toVisit.shift();
+            if (!nextVisit) break;
+            const { url, depth } = nextVisit;
 
-            if (this.visited.has(url) || depth > this.max_depth) continue;
+            if (this.visited.has(url) || depth > this.maxDepth) continue;
+
+            // Robots.txt check
+            const urlPath = new URL(url).pathname;
+            if (robotsPatterns.some(p => urlPath.startsWith(p))) {
+                logger.info(`[web_crawler] Skipping ${url} (Disallowed by robots.txt)`);
+                continue;
+            }
+
             this.visited.add(url);
 
             try {
                 const controller = new AbortController();
-                const timeout_id = setTimeout(() => controller.abort(), this.timeout);
+                const timeoutId = setTimeout(
+                    () => controller.abort(),
+                    this.timeout,
+                );
 
-                await validate_url(url);
+                await validateUrl(url);
                 const resp = await fetch(url, {
-                    headers: { 'User-Agent': 'OpenMemory-Crawler/1.0 (compatible)' },
-                    signal: controller.signal
+                    headers: {
+                        "User-Agent": "OpenMemory-Crawler/1.0 (compatible)",
+                    },
+                    signal: controller.signal,
                 });
 
-                clearTimeout(timeout_id);
+                clearTimeout(timeoutId);
 
                 if (!resp.ok) continue;
 
-                const content_type = resp.headers.get('content-type') || '';
-                if (!content_type.includes('text/html')) continue;
+                const contentType = resp.headers.get("content-type") || "";
+                const contentLength = resp.headers.get("content-length");
 
-                const html = await resp.text();
-                const $: CheerioAPI = cheerio_mod.load(html);
+                // Limit to 10MB
+                if (
+                    contentLength &&
+                    parseInt(contentLength, 10) > 10 * 1024 * 1024
+                ) {
+                    logger.warn(
+                        `[web_crawler] Skipping ${url}: Content-Length ${contentLength} exceeds 10MB limit`,
+                    );
+                    continue;
+                }
 
-                const title = $('title').text() || url;
+                if (!contentType.includes("text/html")) continue;
+
+                const MAX_HTML_SIZE = 10 * 1024 * 1024;
+                let html = "";
+
+                if (!resp.body) continue;
+
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder();
+                let totalBytes = 0;
+
+                try {
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        totalBytes += value.byteLength;
+                        if (totalBytes > MAX_HTML_SIZE) {
+                            await reader.cancel();
+                            logger.warn(
+                                `[web_crawler] Skipping ${url}: Body exceeds 10MB limit (streamed check)`,
+                            );
+                            html = "";
+                            break;
+                        }
+                        html += decoder.decode(value, { stream: true });
+                    }
+                    html += decoder.decode(); // final flush
+                } catch (e: unknown) {
+                    const msg = e instanceof Error ? e.message : String(e);
+                    logger.error(
+                        `[web_crawler] Error reading stream from ${url}:`,
+                        { error: msg },
+                    );
+                    continue;
+                }
+
+                if (!html) continue;
+                const $: CheerioAPI = cheerioMod.load(html);
+
+                const title = $('meta[property="og:title"]').attr("content") || $("title").text() || url;
+                const description = $('meta[property="og:description"]').attr("content") || $('meta[name="description"]').attr("content") || "";
+                const canonical = $('link[rel="canonical"]').attr("href") || url;
+
+                const { text, metadata: extMetadata } = await extractHTML(html);
 
                 this.crawled.push({
                     id: url,
                     name: title.trim(),
-                    type: 'webpage',
+                    type: "webpage",
                     url,
-                    depth
+                    depth,
+                    metadata: {
+                        ...extMetadata,
+                        description: description.trim(),
+                        canonical
+                    },
+                });
+
+                // Cache the content to avoid re-fetching in _fetchItem
+                this.contentCache.set(url, {
+                    text,
+                    title: title.trim(),
+                    metadata: { ...extMetadata, description: description.trim(), canonical },
                 });
 
                 // find and queue links
-                if (follow_links && depth < this.max_depth) {
-                    $('a[href]').each((_idx: number, el: any) => {
+                if (followLinks && depth < this.maxDepth) {
+                    $("a[href]").each((_idx: number, el: unknown) => {
+                        // Element type depends on Cheerio version, treat as generic object for selector
+                        const $el = $(el as any);
                         try {
-                            const href = $(el).attr('href');
+                            const href = $el.attr("href");
                             if (!href) return;
 
-                            const full_url = new URL(href, url);
-                            if (full_url.hostname !== base_domain) return;
+                            const fullUrl = new URL(href, url);
+                            if (fullUrl.hostname.toLowerCase() !== baseDomain.toLowerCase()) return;
 
-                            const clean_url = `${full_url.protocol}//${full_url.hostname}${full_url.pathname}`;
-                            if (!this.visited.has(clean_url)) {
-                                to_visit.push({ url: clean_url, depth: depth + 1 });
+                            // Protocol safety
+                            if (fullUrl.protocol !== "http:" && fullUrl.protocol !== "https:") return;
+
+                            // Canonicalization
+                            let cleanUrl = `${fullUrl.protocol}//${fullUrl.hostname.toLowerCase()}${fullUrl.pathname.toLowerCase()}${fullUrl.search}`;
+                            if (cleanUrl.endsWith("/") && cleanUrl.length > (fullUrl.protocol.length + fullUrl.hostname.length + 3)) {
+                                cleanUrl = cleanUrl.slice(0, -1);
                             }
-                        } catch { }
+
+                            if (!this.visited.has(cleanUrl)) {
+                                if (toVisit.length < 500) {
+                                    toVisit.push({
+                                        url: cleanUrl,
+                                        depth: depth + 1,
+                                    });
+                                } else {
+                                    logger.warn(`[web_crawler] Queue full (500), skipping ${cleanUrl}`);
+                                }
+                            }
+                        } catch {
+                            // ignore
+                        }
                     });
+                }
+
+                // Sustainability: Respect rate limit and delay between requests
+                await this.rateLimiter.acquire();
+                if (this.delayMs > 0 && toVisit.length > 0) {
+                    await new Promise((x) => setTimeout(x, this.delayMs));
                 }
             } catch (e: unknown) {
                 const msg = e instanceof Error ? e.message : String(e);
-                console.warn(`[web_crawler] failed to fetch ${url}: ${msg}`);
+                logger.warn(`[web_crawler] Failed to fetch ${url}: ${msg}`);
             }
         }
 
         return this.crawled;
     }
 
-    async _fetch_item(item_id: string): Promise<source_content> {
-        let cheerio_mod: typeof import('cheerio');
+    async _fetchItem(itemId: string): Promise<SourceContent> {
+        // Optimization: Check cache first
+        if (this.contentCache.has(itemId)) {
+            const cached = this.contentCache.get(itemId)!;
+            return {
+                id: itemId,
+                name: cached.title,
+                type: "webpage",
+                text: cached.text,
+                data: cached.text,
+                metadata: {
+                    source: "web_crawler",
+                    url: itemId,
+                    charCount: cached.text.length,
+                    cached: true,
+                    ...cached.metadata,
+                },
+            };
+        }
+
+        let cheerioMod: typeof import("cheerio");
         try {
-            cheerio_mod = await import('cheerio');
+            cheerioMod = await import("cheerio");
         } catch {
-            throw new source_config_error('missing deps: npm install cheerio', this.name);
+            throw new SourceConfigError(
+                "missing deps: npm install cheerio",
+                this.name,
+            );
         }
 
         const controller = new AbortController();
-        const timeout_id = setTimeout(() => controller.abort(), this.timeout);
+        const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
         try {
-            await validate_url(item_id);
-            const resp = await fetch(item_id, {
-                headers: { 'User-Agent': 'OpenMemory-Crawler/1.0 (compatible)' },
-                signal: controller.signal
+            await validateUrl(itemId);
+            const resp = await fetch(itemId, {
+                headers: {
+                    "User-Agent": "OpenMemory-Crawler/1.0 (compatible)",
+                },
+                signal: controller.signal,
             });
 
-            clearTimeout(timeout_id);
+            clearTimeout(timeoutId);
 
-            if (!resp.ok) throw new Error(`http ${resp.status}: ${resp.statusText}`);
+            if (!resp.ok)
+                throw new Error(`http ${resp.status}: ${resp.statusText}`);
+
+            const contentLength = resp.headers.get("content-length");
+            if (
+                contentLength &&
+                parseInt(contentLength, 10) > 10 * 1024 * 1024
+            ) {
+                throw new Error(
+                    `Content-Length ${contentLength} exceeds 10MB limit`,
+                );
+            }
 
             const html = await resp.text();
-            const $: CheerioAPI = cheerio_mod.load(html);
+            if (html.length > 10 * 1024 * 1024) {
+                throw new Error(
+                    `Body length ${html.length} exceeds 10MB limit`,
+                );
+            }
+            const $: CheerioAPI = cheerioMod.load(html);
 
-            // remove noise
-            $('script, style, nav, footer, header, aside').remove();
-
-            const title = $('title').text() || item_id;
-
-            // get main content
-            const main = $('main').length ? $('main') : $('article').length ? $('article') : $('body');
-            let text = main.text();
-
-            // clean up whitespace
-            text = text.split('\n').map((l: string) => l.trim()).filter(Boolean).join('\n');
+            const { text, metadata: extMetadata } = await extractHTML(html);
 
             return {
-                id: item_id,
-                name: title.trim(),
-                type: 'webpage',
+                id: itemId,
+                name: (extMetadata.title as string) || itemId,
+                type: "webpage",
                 text,
                 data: text,
-                meta: { source: 'web_crawler', url: item_id, char_count: text.length }
+                metadata: {
+                    source: "web_crawler",
+                    url: itemId,
+                    ...extMetadata
+                },
             };
         } catch (e: unknown) {
             const msg = e instanceof Error ? e.message : String(e);
-            throw new source_fetch_error(msg, this.name, e instanceof Error ? e : undefined);
+            throw new SourceFetchError(
+                msg,
+                this.name,
+                e instanceof Error ? e : undefined,
+            );
+        }
+    }
+
+    private async _getRobots(origin: string): Promise<string[]> {
+        if (this.robotsCache.has(origin)) return this.robotsCache.get(origin)!;
+
+        try {
+            const resp = await fetch(`${origin}/robots.txt`, {
+                headers: { "User-Agent": "OpenMemory-Crawler/1.0" }
+            });
+            if (!resp.ok) {
+                this.robotsCache.set(origin, []);
+                return [];
+            }
+            const text = await resp.text();
+            const lines = text.split("\n");
+            const disallowed: string[] = [];
+            let isAmTarget = false;
+
+            for (const line of lines) {
+                const l = line.trim().toLowerCase();
+                if (l.startsWith("user-agent:")) {
+                    const ua = l.split(":")[1].trim();
+                    isAmTarget = ua === "*" || ua.includes("openmemory") || ua.includes("crawler");
+                } else if (isAmTarget && l.startsWith("disallow:")) {
+                    const path = l.split(":")[1].trim();
+                    if (path) disallowed.push(path);
+                }
+            }
+            this.robotsCache.set(origin, disallowed);
+            return disallowed;
+        } catch {
+            this.robotsCache.set(origin, []);
+            return [];
         }
     }
 }

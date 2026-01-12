@@ -1,5 +1,6 @@
 import asyncio
 import time
+import uuid
 import json
 import logging
 from typing import List, Dict, Any, Optional
@@ -12,6 +13,21 @@ logger = logging.getLogger("maintenance")
 
 # Concurrent training limit
 TRAINING_SEMAPHORE = asyncio.Semaphore(3)
+
+async def log_maintenance(op: str, details: Dict[str, Any], status: str = "success", error: Optional[str] = None):
+    """Log a maintenance operation to the database."""
+    try:
+        t = q.tables
+        now = int(time.time() * 1000)
+        if error:
+            details["error"] = error
+        await db.async_execute(
+            f"INSERT INTO {t['maint_logs']}(id, type, status, ts, details) VALUES (?,?,?,?,?)",
+            (str(uuid.uuid4()), op, status, now, json.dumps(details, default=str))
+        )
+        await db.async_commit()
+    except Exception as e:
+        logger.error(f"[maintenance] Failed to write to maint_logs: {e}")
 
 async def train_user_classifier(user_id: str, epochs: int = 20) -> Optional[Dict[str, Any]]:
     """
@@ -84,13 +100,37 @@ async def cleanup_stats(days: int = 30):
     limit_ts = int((time.time() - (days * 86400)) * 1000)
     logger.info(f"[maintenance] Cleaning up stats older than {days} days...")
     try:
-        await db.async_execute("DELETE FROM stats WHERE ts < ?", (limit_ts,))
-        await db.async_commit()
+        t = q.tables
+        async with db.transaction():
+            await db.async_execute(f"DELETE FROM {t['stats']} WHERE ts < ?", (limit_ts,))
+        logger.info(f"[maintenance] Stats cleanup complete.")
     except Exception as e:
         logger.error(f"[maintenance] Stats cleanup failed: {e}")
 
+async def cleanup_orphans():
+    """Removes records from secondary tables that refer to non-existent memories."""
+    logger.info("[maintenance] Starting orphan cleanup...")
+    t = q.tables
+    try:
+        async with db.transaction():
+            # 1. Clean vectors
+            v_ids = await db.async_execute(f"DELETE FROM {t['vectors']} WHERE id NOT IN (SELECT id FROM {t['memories']})")
+            # 2. Clean waypoints
+            w_ids = await db.async_execute(f"DELETE FROM {t['waypoints']} WHERE src_id NOT IN (SELECT id FROM {t['memories']}) OR dst_id NOT IN (SELECT id FROM {t['memories']})")
+            
+            # v_ids and w_ids are cursors in SQLite, rowcount matters
+            v_cnt = v_ids.rowcount if hasattr(v_ids, "rowcount") else 0
+            w_cnt = w_ids.rowcount if hasattr(w_ids, "rowcount") else 0
+            
+            await log_maintenance("cleanup_orphans", {"vectors_removed": v_cnt, "waypoints_removed": w_cnt})
+            logger.info(f"[maintenance] Orphan cleanup complete. Removed {v_cnt} vectors and {w_cnt} waypoints.")
+    except Exception as e:
+        logger.error(f"[maintenance] Orphan cleanup failed: {e}")
+        await log_maintenance("cleanup_orphans", {}, status="error", error=str(e))
+
 async def maintenance_retrain_all():
     """Routine retraining for all active users using concurrent semaphore."""
+    start_ts = int(time.time() * 1000)
     users = await q.get_active_users()
     if env.verbose: logger.info(f"[maintenance] Starting routine retraining for {len(users)} users")
     
@@ -111,8 +151,13 @@ async def maintenance_retrain_all():
         await asyncio.gather(*tasks)
     
     # Also run DB optimization and cleanup as part of house-keeping
+    await cleanup_orphans()
     await optimize_database()
     await cleanup_stats(days=env.stats_retention_days or 30)
+
+    # Log end of cycle
+    dur = (time.time() * 1000) - start_ts
+    await log_maintenance("retrain_all", {"user_count": len(users), "duration_ms": dur})
 
 # --- Loop Control ---
 

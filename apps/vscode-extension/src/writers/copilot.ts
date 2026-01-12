@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { resolveMcpPath } from '../utils/mcp';
 
 export interface CopilotConfig {
     name: string;
@@ -17,9 +18,17 @@ export interface CopilotConfig {
     };
 }
 
+/**
+ * Generates a GitHub Copilot configuration object for OpenMemory integration.
+ * @param backendUrl URL of the OpenMemory backend server
+ * @param apiKey Optional API key for authentication
+ * @param useMCP Whether to use MCP protocol instead of direct HTTP
+ * @param mcpServerPath Optional custom path to MCP server executable
+ * @returns Configuration object for GitHub Copilot
+ */
 export function generateCopilotConfig(backendUrl: string, apiKey?: string, useMCP = false, mcpServerPath?: string): CopilotConfig {
     if (useMCP) {
-        const backendMcpPath = mcpServerPath || path.join(process.cwd(), 'backend', 'dist', 'ai', 'mcp.js');
+        const backendMcpPath = resolveMcpPath(mcpServerPath);
         const config: CopilotConfig = {
             name: 'OpenMemory',
             type: 'mcp',
@@ -50,16 +59,32 @@ export function generateCopilotConfig(backendUrl: string, apiKey?: string, useMC
     return config;
 }
 
-export async function writeCopilotConfig(backendUrl: string, apiKey?: string, useMCP = false, mcpServerPath?: string): Promise<string> {
+/**
+ * Writes the OpenMemory configuration file for GitHub Copilot.
+ * Creates the necessary directories if they don't exist.
+ * @param backendUrl URL of the OpenMemory backend server
+ * @param apiKey Optional API key for authentication
+ * @param useMCP Whether to use MCP protocol instead of direct HTTP
+ * @param mcpServerPath Optional custom path to MCP server executable
+ * @returns Path to the created configuration file
+ * @throws Error if the configuration cannot be written (e.g., permission denied)
+ */
+export function writeCopilotConfig(backendUrl: string, apiKey?: string, useMCP = false, mcpServerPath?: string): string {
     const copilotDir = path.join(os.homedir(), '.github', 'copilot');
     const configFile = path.join(copilotDir, 'openmemory.json');
 
-    if (!fs.existsSync(copilotDir)) {
-        fs.mkdirSync(copilotDir, { recursive: true });
+    try {
+        if (!fs.existsSync(copilotDir)) {
+            fs.mkdirSync(copilotDir, { recursive: true });
+        }
+
+        const config = generateCopilotConfig(backendUrl, apiKey, useMCP, mcpServerPath);
+        fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
+
+        return configFile;
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(`Failed to write Copilot config to ${configFile}: ${message}`);
     }
-
-    const config = generateCopilotConfig(backendUrl, apiKey, useMCP, mcpServerPath);
-    fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
-
-    return configFile;
 }
+

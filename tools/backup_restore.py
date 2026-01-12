@@ -26,25 +26,34 @@ async def do_backup(filename: str):
     with gzip.open(filename, 'wt', encoding='utf-8') as f:
         # Get all users
         try:
-            user_list = mem.list_users()
+            user_list = await mem.list_users()
         except Exception as e:
             print(f"Warning: Failed to list users: {e}. Defaulting to demo user.")
             user_list = ["anonymous"]
 
         for uid in user_list:
             print(f"   Backing up user: {uid}")
-            # history is sync in current SDK
-            try:
-                curr_hist = mem.history(user_id=uid, limit=1000)
-                for item in curr_hist:
-                    # Convert types for JSON serialization if needed
-                    # item is already a dict from mem.history()
-                    f.write(json.dumps(item) + '\n')
-                    count += 1
-            except Exception as e:
-                print(f"   Error backing up user {uid}: {e}")
+            offset = 0
+            BATCH_SIZE = 100
             
-    print(f"-> Backup complete. {count} memories saved.")
+            while True:
+                try:
+                    curr_hist = await mem.history(user_id=uid, limit=BATCH_SIZE, offset=offset)
+                    if not curr_hist:
+                        break
+                        
+                    for item in curr_hist:
+                        # Convert MemoryItem to dict for JSON serialization
+                        item_dict = item.model_dump() if hasattr(item, 'model_dump') else dict(item)
+                        f.write(json.dumps(item_dict) + '\n')
+                        count += 1
+                    
+                    offset += BATCH_SIZE
+                    print(f"     Saved {count}...", end='\r')
+                except Exception as e:
+                    print(f"   Error backing up user {uid} at offset {offset}: {e}")
+                    break
+            print("") # Newline
             
     print(f"-> Backup complete. {count} memories saved.")
 
@@ -61,12 +70,24 @@ async def do_restore(filename: str):
             # Restore
             content = item.get('content')
             uid = item.get('user_id')
-            meta = item.get('metadata') or {}
+            meta = item.get('metadata') or item.get('meta') or {}
             tags = item.get('tags') or []
             
+            # Preserve Identity
+            mid = item.get('id')
+            created_at = item.get('created_at')
+            
             if content and uid:
-                await mem.add(content, user_id=uid, meta=meta, tags=tags)
-                count += 1
+                try:
+                    # Use import_memory to preserve ID/Timestamp
+                    if hasattr(mem, 'import_memory'):
+                        await mem.import_memory(content, user_id=uid, meta=meta, tags=tags, id=mid, created_at=created_at)
+                    else:
+                        # Fallback for older SDKs (should not reach here with updated codebase)
+                        await mem.add(content, user_id=uid, meta=meta, tags=tags)
+                    count += 1
+                except Exception as e:
+                    print(f"   Failed to restore {mid}: {e}")
             
             if count % 10 == 0:
                 print(f"   Restored {count}...", end='\r')

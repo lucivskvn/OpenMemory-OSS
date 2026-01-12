@@ -1,24 +1,48 @@
-import { OpenMemoryTools } from "../src/ai/agents";
+import { MemoryClient } from "../src/client";
+import { logger } from "../src/utils/logger";
 
-// Mock interaction demo
+// Runnable demo script
+// Run with: bun examples/agent_demo.ts
 async function main() {
-    console.log("Initializing Agent Tools...");
-    const tools = new OpenMemoryTools("agent_user_01");
+    console.log("Initializing Agent Demo...");
 
-    // 1. Definition check
-    const defs = tools.getFunctionDefinitions();
-    console.log(`Tools available: ${defs.map(d => d.name).join(", ")}`);
+    // Connect to local server
+    const client = new MemoryClient({ baseUrl: process.env.OM_URL || "http://localhost:8000", token: process.env.OM_API_KEY });
+
+    // Check health
+    const isHealthy = await client.health();
+    if (!isHealthy) {
+        logger.error("Server not reachable. Please start the server first.");
+        return;
+    }
+    console.log("Server connected ✅");
 
     try {
-        // 2. Mock Store (requires DB connection, which might fail without server context, 
-        //    but verifies TS compilation and integrity)
-        console.log("Storing memory...");
-        // const res = await tools.store("User prefers dark mode.", ["preference"]);
-        // console.log("Stored:", res);
-        console.log("(Skipping actual DB write to avoid setup overhead)");
+        // 1. Store Memory
+        console.log("Storing user preference...");
+        const mem = await client.add("User prefers dark mode and high contrast themes.", {
+            tags: ["preference", "ui"],
+            metadata: { source: "demo" }
+        });
+        console.log(`Stored memory: ${mem.id} (${mem.primarySector})`);
+
+        // 2. Search
+        console.log("Searching for 'ui'...");
+        const results = await client.search("ui preference", { limit: 1 });
+        console.log(`Found ${results.length} results. Top result: ${results[0]?.content}`);
+
+        // 3. Temporal Fact
+        console.log("Adding temporal fact...");
+        const fact = await client.addFact({
+            subject: "User",
+            predicate: "assigned_role",
+            object: "admin",
+            confidence: 0.95
+        });
+        console.log(`Fact created: ${fact.id}`);
 
     } catch (err) {
-        console.error("Agent op failed:", err);
+        console.error("Demo failed:", err);
     }
 }
 

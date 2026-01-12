@@ -27,7 +27,7 @@ class PlanningAgent:
         content = f"PLAN: {goal}\n" + "\n".join(f"- [ ] {s}" for s in steps)
         
         print(f"-> Creating plan for '{goal}'")
-        await self.mem.add(content, user_id=self.uid, meta=plan_doc, tags=["plan"])
+        await self.mem.add(content, user_id=self.uid, metadata=plan_doc, tags=["plan"])
 
     async def get_current_plan(self, goal_query: str):
         # Find the specific plan

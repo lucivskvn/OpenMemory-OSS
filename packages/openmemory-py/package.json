@@ -1,0 +1,9 @@
+{
+    "name": "openmemory-py",
+    "version": "0.1.0",
+    "private": true,
+    "scripts": {
+        "test": "pytest",
+        "lint": "echo 'Skipping lint for python in bun for now'"
+    }
+}

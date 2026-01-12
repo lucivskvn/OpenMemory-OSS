@@ -30,8 +30,10 @@ async def main():
     mem = Memory()
     uid = "hybrid_user"
     
-    await mem.add("The project code is named Project Falco.", user_id=uid)
-    await mem.add("Falcons are fast birds of prey.", user_id=uid)
+    await mem.add_batch([
+        {"content": "The project code is named Project Falco."},
+        {"content": "Falcons are fast birds of prey."}
+    ], user_id=uid)
     
     query = "Project Falco"
     print(f"Query: {query}")

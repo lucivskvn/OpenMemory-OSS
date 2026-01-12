@@ -20,15 +20,15 @@ class ZepProvider(BaseProvider):
         except Exception as e:
             raise Exception(f"Zep connection failed: {e}")
 
-    async def export(self) -> AsyncGenerator[MigrationRecord, None]:
+    async def export(self) -> AsyncGenerator[MigrationRecord, None]:  # type: ignore
         try:
             sessions = await self._fetch_all_sessions()
             logger.info(f"[ZEP] Found {len(sessions)} sessions")
-            
+
             for i, session in enumerate(sessions):
                 if i % 100 == 0:
                     logger.info(f"[ZEP] Processing session {i}/{len(sessions)}")
-                
+
                 memories = await self._fetch_session_memories(session["session_id"])
                 for mem in memories:
                     yield self._transform(mem, session)
@@ -62,7 +62,9 @@ class ZepProvider(BaseProvider):
 
     def _transform(self, m: Dict, s: Dict) -> MigrationRecord:
         return MigrationRecord(
-            id=m.get("uuid") or m.get("id") or f"{s['session_id']}_{m.get('created_at', '')}",
+            id=m.get("uuid")
+            or m.get("id")
+            or f"{s['session_id']}_{m.get('created_at', '')}",
             uid=s.get("user_id") or s.get("session_id") or "default",
             content=m.get("content") or m.get("text") or "",
             tags=m.get("metadata", {}).get("tags", []),
@@ -70,9 +72,9 @@ class ZepProvider(BaseProvider):
                 "provider": "zep",
                 "session_id": s.get("session_id"),
                 "role": m.get("role"),
-                "original_metadata": m.get("metadata", {})
+                "original_metadata": m.get("metadata", {}),
             },
-            created_at=m.get("created_at"), # String to pass through or parse? Schema said int.
+            created_at=m.get("created_at"),  # type: ignore
             # Schema says int (timestamp). Need to parse if string.
             # For simplicity let's store what we get or parse if easy. JS version used Date.parse
         )

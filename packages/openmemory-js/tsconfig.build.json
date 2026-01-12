@@ -1,0 +1,22 @@
+{
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "rootDir": "src",
+        "outDir": "dist",
+        "noEmit": false,
+        "declaration": true,
+        "emitDeclarationOnly": true,
+        "skipLibCheck": true,
+        "types": [
+            "bun-types"
+        ]
+    },
+    "include": [
+        "src"
+    ],
+    "exclude": [
+        "tests",
+        "**/*.test.ts",
+        "node_modules"
+    ]
+}

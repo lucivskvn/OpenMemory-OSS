@@ -241,9 +241,43 @@ remove a memory by id.
 mem.delete(memory_id)
 ```
 
+## mcp server
+
+openmemory-py includes a compliant mcp server:
+
+```bash
+# Install with MCP dependencies
+pip install "openmemory-py[mcp]"
+
+# Run the server
+python -m openmemory.ai.mcp
+```
+
+tools exposed: `openmemory_query`, `openmemory_store`, `openmemory_get`, `openmemory_temporal_fact_create`, etc.
+
+### `ingest_url(url, **options)`
+
+Ingest content directly from a URL.
+
+```python
+result = await mem.ingest_url("https://example.com/docs")
+```
+
+### `temporal` (Knowledge Graph)
+
+Manage time-aware facts and relationships.
+
+```python
+# Add a fact
+await mem.temporal.add_fact("Alice", "works_at", "Acme Corp", valid_from="2023-01-01")
+
+# Query timeline
+history = await mem.temporal.get_timeline("Alice")
+```
+
 ### `close()`
 
-close the database connection.
+Close the database connection (Local mode).
 
 ```python
 await mem.close()
@@ -262,18 +296,17 @@ await mem.close()
 
 ## examples
 
-check out the `examples/py-sdk/` directory for comprehensive examples:
+Check out the `examples/python/` directory for comprehensive examples:
 
-- **basic_usage.py** - crud operations
-- **advanced_features.py** - decay, compression, reflection
-- **brain_sectors.py** - multi-sector demonstration
-- **performance_benchmark.py** - performance testing
+- **agent_memory_core.py** - core cognitive memory patterns
+- **parity_check.py** - local vs remote parity validation
+- **integrations/** - langchain and other framework examples
 
 ---
 
 ## remote mode
 
-for production deployments with a centralized openmemory server:
+For production deployments with a centralized OpenMemory Server:
 
 ```python
 from openmemory.client import Memory
@@ -283,13 +316,16 @@ mem = Memory(
     url='https://your-backend.com',
     api_key='your-api-key'
 )
+
+# Admin operations (Remote Only)
+keys = await mem.users.list_api_keys()
 ```
 
 ---
 
 ## license
 
-apache 2.0
+Apache 2.0
 
 ---
 

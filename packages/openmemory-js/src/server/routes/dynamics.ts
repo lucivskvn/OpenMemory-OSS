@@ -1,367 +1,524 @@
-import { q } from "../../core/db";
-import type { AdvancedRequest, AdvancedResponse } from "../index";
-import { AppError, sendError } from "../errors";
-import {
-    calculateDynamicSalienceWithTimeDecay,
-    calculateCrossSectorResonanceScore,
-    retrieveMemoriesWithEnergyThresholding,
-    propagateAssociativeReinforcementToLinkedNodes,
-    performSpreadingActivationRetrieval,
-    buildAssociativeWaypointGraphFromMemories,
-    calculateAssociativeWaypointLinkWeight,
-    ALPHA_LEARNING_RATE_FOR_RECALL_REINFORCEMENT,
-    BETA_LEARNING_RATE_FOR_EMOTIONAL_FREQUENCY,
-    GAMMA_ATTENUATION_CONSTANT_FOR_GRAPH_DISTANCE,
-    THETA_CONSOLIDATION_COEFFICIENT_FOR_LONG_TERM,
-    ETA_REINFORCEMENT_FACTOR_FOR_TRACE_LEARNING,
-    LAMBDA_ONE_FAST_DECAY_RATE,
-    LAMBDA_TWO_SLOW_DECAY_RATE,
-    TAU_ENERGY_THRESHOLD_FOR_RETRIEVAL,
-    SECTORAL_INTERDEPENDENCE_MATRIX_FOR_COGNITIVE_RESONANCE,
-} from "../../ops/dynamics";
 import { z } from "zod";
 
+import { q } from "../../core/db";
+import {
+    alphaLearningRateForRecallReinforcement,
+    betaLearningRateForEmotionalFrequency,
+    buildAssociativeWaypointGraphFromMemories,
+    calculateAssociativeWaypointLinkWeight,
+    calculateCrossSectorResonance,
+    calculateDynamicSalienceWithTimeDecay,
+    etaReinforcementFactorForTraceLearning,
+    gammaAttenuationConstantForGraphDistance,
+    lambdaOneFastDecayRate,
+    lambdaTwoSlowDecayRate,
+    performSpreadingActivationRetrieval,
+    propagateReinforcementToNeighbors, // Added this import
+    retrieveMemoriesWithEnergyThresholding,
+    sectoralInterdependenceMatrixForCognitiveResonance,
+    tauEnergyThresholdForRetrieval,
+    thetaConsolidationCoefficientForLongTerm,
+} from "../../ops/dynamics";
+import { logger } from "../../utils/logger";
+import { AppError, sendError } from "../errors";
+import { validateBody, validateQuery } from "../middleware/validate";
+
 const SalienceSchema = z.object({
-    initial_salience: z.number().optional().default(0.5),
-    decay_lambda: z.number().optional().default(0.01),
-    recall_count: z.number().optional().default(0),
-    emotional_frequency: z.number().optional().default(0),
-    time_elapsed_days: z.number().optional().default(0)
+    initialSalience: z.number().optional().default(0.5),
+    decayLambda: z.number().optional().default(0.01),
+    recallCount: z.number().optional().default(0),
+    emotionalFrequency: z.number().optional().default(0),
+    timeElapsedDays: z.number().optional().default(0),
 });
 
 const ResonanceSchema = z.object({
-    memory_sector: z.string().optional().default("semantic"),
-    query_sector: z.string().optional().default("semantic"),
-    base_similarity: z.number().optional().default(0.8)
+    memorySector: z.string().optional().default("semantic"),
+    querySector: z.string().optional().default("semantic"),
+    baseSimilarity: z.number().optional().default(0.8),
 });
 
 const EnergyRetrievalSchema = z.object({
     query: z.string().min(1),
     sector: z.string().optional().default("semantic"),
-    min_energy: z.number().optional().default(TAU_ENERGY_THRESHOLD_FOR_RETRIEVAL)
+    minEnergy: z.number().optional().default(tauEnergyThresholdForRetrieval),
 });
 
 const SpreadingActivationSchema = z.object({
-    initial_memory_ids: z.array(z.string()).min(1),
-    max_iterations: z.number().optional().default(3)
+    initialMemoryIds: z.array(z.string()).min(1).max(50),
+    maxIterations: z.number().min(1).max(10).optional().default(3),
 });
 
-export function dynroutes(app: any) {
-    app.get("/dynamics/constants", async (req: AdvancedRequest, res: AdvancedResponse) => {
-        try {
-            const constants = {
-                alpha_learning_rate: ALPHA_LEARNING_RATE_FOR_RECALL_REINFORCEMENT,
-                beta_learning_rate: BETA_LEARNING_RATE_FOR_EMOTIONAL_FREQUENCY,
-                gamma_attenuation_constant: GAMMA_ATTENUATION_CONSTANT_FOR_GRAPH_DISTANCE,
-                theta_consolidation_coefficient: THETA_CONSOLIDATION_COEFFICIENT_FOR_LONG_TERM,
-                eta_reinforcement_factor: ETA_REINFORCEMENT_FACTOR_FOR_TRACE_LEARNING,
-                lambda_one_fast_decay: LAMBDA_ONE_FAST_DECAY_RATE,
-                lambda_two_slow_decay: LAMBDA_TWO_SLOW_DECAY_RATE,
-                tau_energy_threshold: TAU_ENERGY_THRESHOLD_FOR_RETRIEVAL,
-                sectoral_interdependence_matrix: SECTORAL_INTERDEPENDENCE_MATRIX_FOR_COGNITIVE_RESONANCE,
-            };
-            res.json({
-                success: true,
-                constants,
-            });
-        } catch (err) {
-            console.error("[DYNAMICS] Error retrieving dynamics constants:", err);
-            sendError(res, err);
-        }
-    });
+const TraceReinforceSchema = z.object({
+    memoryId: z.string().min(1),
+});
 
-    app.post("/dynamics/salience/calculate", async (req: AdvancedRequest, res: AdvancedResponse) => {
-        try {
-            const validated = SalienceSchema.safeParse(req.body);
-            if (!validated.success) {
-                return sendError(res, new AppError(400, "VALIDATION_ERROR", "Invalid salience parameters", validated.error.format()));
-            }
+const WaypointWeightSchema = z.object({
+    sourceMemoryId: z.string().min(1),
+    targetMemoryId: z.string().min(1),
+});
 
-            const { initial_salience, decay_lambda, recall_count, emotional_frequency, time_elapsed_days } = validated.data;
+import type { AdvancedRequest, AdvancedResponse, ServerApp } from "../server";
 
-            const result = await calculateDynamicSalienceWithTimeDecay(
-                initial_salience,
-                decay_lambda,
-                recall_count,
-                emotional_frequency,
-                time_elapsed_days,
-            );
+interface DynamicsGraphEdge {
+    targetNodeId: string;
+    linkWeightValue: number;
+    timeGapDeltaT: number;
+}
 
-            res.json({
-                success: true,
-                calculated_salience: result,
-                parameters: validated.data,
-            });
-        } catch (err) {
-            console.error("[DYNAMICS] Error calculating dynamic salience:", err);
-            sendError(res, err);
-        }
-    });
+interface DynamicsNodeData {
+    nodeMemoryId: string;
+    activationEnergyLevel: number;
+    connectedWaypointEdges: DynamicsGraphEdge[];
+}
 
-    app.post("/dynamics/resonance/calculate", async (req: AdvancedRequest, res: AdvancedResponse) => {
-        try {
-            const validated = ResonanceSchema.safeParse(req.body);
-            if (!validated.success) {
-                return sendError(res, new AppError(400, "VALIDATION_ERROR", "Invalid resonance parameters", validated.error.format()));
-            }
+interface WaypointNode {
+    memoryId: string;
+    edgeCount: number;
+    connections: {
+        targetId: string;
+        weight: number;
+        timeGapMs: number;
+    }[];
+}
 
-            const { memory_sector, query_sector, base_similarity } = validated.data;
-
-            const result = await calculateCrossSectorResonanceScore(
-                memory_sector,
-                query_sector,
-                base_similarity,
-            );
-
-            res.json({
-                success: true,
-                resonance_modulated_score: result,
-                parameters: validated.data,
-            });
-        } catch (err) {
-            console.error("[DYNAMICS] Error calculating cross-sector resonance:", err);
-            sendError(res, err);
-        }
-    });
-
-    app.post("/dynamics/retrieval/energy-based", async (req: AdvancedRequest, res: AdvancedResponse) => {
-        try {
-            const validated = EnergyRetrievalSchema.safeParse(req.body);
-            if (!validated.success) {
-                return sendError(res, new AppError(400, "VALIDATION_ERROR", "Invalid retrieval parameters", validated.error.format()));
-            }
-
-            const { query, sector, min_energy } = validated.data;
-            const user_id = req.user?.id;
-
-            const { embedForSector } = await import("../../memory/embed");
-            const query_vector = await embedForSector(query, sector);
-
-            const results = await retrieveMemoriesWithEnergyThresholding(
-                query_vector,
-                sector,
-                min_energy,
-                user_id,
-            );
-
-            res.json({
-                success: true,
-                query,
-                sector,
-                min_energy,
-                count: results.length,
-                memories: results.map((m) => ({
-                    id: m.id,
-                    content: m.content,
-                    primary_sector: m.primary_sector,
-                    salience: m.salience,
-                    activation_energy: (m as any).activation_energy,
-                })),
-            });
-        } catch (err) {
-            console.error("[DYNAMICS] Error performing energy-based retrieval:", err);
-            sendError(res, err);
-        }
-    });
-
-    app.post("/dynamics/reinforcement/trace", async (req: AdvancedRequest, res: AdvancedResponse) => {
-        try {
-            const memory_id = req.body.memory_id;
-            if (!memory_id) {
-                return sendError(res, new AppError(400, "MISSING_MEMORY_ID", "memory_id is required"));
-            }
-
-            const user_id = req.user?.id;
-            const memory = await q.get_mem.get(memory_id, user_id);
-
-            if (!memory) {
-                return sendError(res, new AppError(404, "NOT_FOUND", "Memory not found"));
-            }
-
-            const salience = memory.salience || 0.1;
-            const waypoints = await q.get_waypoints_by_src.all(memory_id, user_id);
-
-            const propagated_updates = await propagateAssociativeReinforcementToLinkedNodes(
-                memory_id,
-                salience,
-                waypoints.map((w) => ({ target_id: w.dst_id, weight: w.weight })),
-                user_id,
-            );
-
-            const now_sec = Math.floor(Date.now() / 1000);
-            for (const update of propagated_updates) {
-                await q.upd_seen.run(update.node_id, now_sec, update.new_salience, now_sec);
-            }
-
-            await q.upd_seen.run(memory_id, now_sec, Math.min(1, salience + 0.15), now_sec);
-
-            res.json({
-                success: true,
-                propagated_count: propagated_updates.length,
-                new_salience: Math.min(1, salience + 0.15),
-            });
-        } catch (err) {
-            console.error("[DYNAMICS] Error applying trace reinforcement:", err);
-            sendError(res, err);
-        }
-    });
-
-    app.post("/dynamics/activation/spreading", async (req: AdvancedRequest, res: AdvancedResponse) => {
-        try {
-            const validated = SpreadingActivationSchema.safeParse(req.body);
-            if (!validated.success) {
-                return sendError(res, new AppError(400, "VALIDATION_ERROR", "Invalid spreading activation parameters", validated.error.format()));
-            }
-
-            const { initial_memory_ids, max_iterations } = validated.data;
-            const user_id = req.user?.id;
-
-            const results_map = await performSpreadingActivationRetrieval(
-                initial_memory_ids,
-                max_iterations,
-                user_id,
-            );
-
-            const activation_results = Array.from(results_map.entries())
-                .map(([memory_id, activation_level]) => ({
-                    memory_id,
-                    activation_level,
-                }))
-                .sort((a, b) => b.activation_level - a.activation_level);
-
-            res.json({
-                success: true,
-                initial_count: initial_memory_ids.length,
-                iterations: max_iterations,
-                total_activated: activation_results.length,
-                results: activation_results,
-            });
-        } catch (err) {
-            console.error("[DYNAMICS] Error performing spreading activation:", err);
-            sendError(res, err);
-        }
-    });
-
+export function dynamicsRoutes(app: ServerApp) {
+    /**
+     * GET /dynamics/constants
+     * Returns the internal dynamics coefficients and matrices.
+     */
     app.get(
-        "/dynamics/waypoints/graph",
-        async (incoming_http_request: AdvancedRequest, outgoing_http_response: AdvancedResponse) => {
+        "/dynamics/constants",
+        async (_req: AdvancedRequest, res: AdvancedResponse) => {
             try {
-                const waypoint_graph_structure_from_database =
-                    await buildAssociativeWaypointGraphFromMemories(
-                        incoming_http_request.user?.id,
-                    );
-
-                const graph_statistics_summary = {
-                    total_nodes_in_graph:
-                        waypoint_graph_structure_from_database.size,
-                    total_edges_across_all_nodes: 0,
-                    average_edges_per_node: 0,
-                    nodes_with_no_connections: 0,
+                const constants = {
+                    alphaLearningRate: alphaLearningRateForRecallReinforcement,
+                    betaLearningRate: betaLearningRateForEmotionalFrequency,
+                    gammaAttenuationConstant:
+                        gammaAttenuationConstantForGraphDistance,
+                    thetaConsolidationCoefficient:
+                        thetaConsolidationCoefficientForLongTerm,
+                    etaReinforcementFactor:
+                        etaReinforcementFactorForTraceLearning,
+                    lambdaOneFastDecay: lambdaOneFastDecayRate,
+                    lambdaTwoSlowDecay: lambdaTwoSlowDecayRate,
+                    tauEnergyThreshold: tauEnergyThresholdForRetrieval,
+                    sectoralInterdependenceMatrix:
+                        sectoralInterdependenceMatrixForCognitiveResonance,
                 };
-
-                const detailed_graph_nodes_array: any[] = [];
-
-                for (const [
-                    memory_node_identifier,
-                    node_data_structure,
-                ] of waypoint_graph_structure_from_database) {
-                    const number_of_outgoing_edges =
-                        node_data_structure.connected_waypoint_edges.length;
-                    graph_statistics_summary.total_edges_across_all_nodes +=
-                        number_of_outgoing_edges;
-
-                    if (number_of_outgoing_edges === 0) {
-                        graph_statistics_summary.nodes_with_no_connections++;
-                    }
-
-                    detailed_graph_nodes_array.push({
-                        node_memory_id: memory_node_identifier,
-                        outgoing_edges_count: number_of_outgoing_edges,
-                        connected_targets:
-                            node_data_structure.connected_waypoint_edges.map(
-                                (edge_record) => ({
-                                    target_memory_id:
-                                        edge_record.target_node_id,
-                                    link_weight: edge_record.link_weight_value,
-                                    time_gap_milliseconds:
-                                        edge_record.time_gap_delta_t,
-                                }),
-                            ),
-                    });
-                }
-
-                if (graph_statistics_summary.total_nodes_in_graph > 0) {
-                    graph_statistics_summary.average_edges_per_node =
-                        graph_statistics_summary.total_edges_across_all_nodes /
-                        graph_statistics_summary.total_nodes_in_graph;
-                }
-
-                outgoing_http_response.json({
-                    success_status_indicator: true,
-                    graph_summary_statistics: graph_statistics_summary,
-                    detailed_node_information: detailed_graph_nodes_array,
+                res.json({
+                    success: true,
+                    constants,
                 });
-            } catch (unexpected_error_building_waypoint_graph) {
-                console.error(
-                    "[DYNAMICS] Error building waypoint graph:",
-                    unexpected_error_building_waypoint_graph,
+            } catch (err) {
+                logger.error(
+                    "[DYNAMICS] Error retrieving dynamics constants:",
+                    { error: err },
                 );
-                sendError(outgoing_http_response, unexpected_error_building_waypoint_graph);
+                sendError(res, err);
             }
         },
     );
 
-    app.post("/dynamics/waypoints/calculate-weight", async (req: AdvancedRequest, res: AdvancedResponse) => {
-        try {
-            const validated = z.object({
-                source_memory_id: z.string().min(1),
-                target_memory_id: z.string().min(1)
-            }).safeParse(req.body);
+    /**
+     * POST /dynamics/salience/calculate
+     * Calculates modulated salience for a hypothetical memory state.
+     * Useful for simulation or debugging decay mechanics.
+     */
+    app.post(
+        "/dynamics/salience/calculate",
+        validateBody(SalienceSchema),
+        async (req: AdvancedRequest, res: AdvancedResponse) => {
+            try {
+                const {
+                    initialSalience,
+                    decayLambda,
+                    recallCount,
+                    emotionalFrequency,
+                    timeElapsedDays,
+                } = req.body as z.infer<typeof SalienceSchema>;
 
-            if (!validated.success) {
-                return sendError(res, new AppError(400, "VALIDATION_ERROR", "Both memory IDs are required", validated.error.format()));
+                const result = await calculateDynamicSalienceWithTimeDecay(
+                    initialSalience,
+                    decayLambda,
+                    recallCount,
+                    emotionalFrequency,
+                    timeElapsedDays,
+                );
+
+                res.json({
+                    success: true,
+                    calculatedSalience: result,
+                    parameters: req.body,
+                });
+            } catch (err) {
+                logger.error("[DYNAMICS] Error calculating dynamic salience:", {
+                    error: err,
+                });
+                sendError(res, err);
             }
+        },
+    );
 
-            const { source_memory_id, target_memory_id } = validated.data;
-            const user_id = req.user?.id;
+    /**
+     * POST /dynamics/resonance/calculate
+     * Calculates cross-sector cognitive resonance scores.
+     * Determines how much a query in one sector resonates with memories in another.
+     */
+    app.post(
+        "/dynamics/resonance/calculate",
+        validateBody(ResonanceSchema),
+        async (req: AdvancedRequest, res: AdvancedResponse) => {
+            try {
+                const { memorySector, querySector, baseSimilarity } =
+                    req.body as z.infer<typeof ResonanceSchema>;
 
-            const source_memory = await q.get_mem.get(source_memory_id, user_id);
-            const target_memory = await q.get_mem.get(target_memory_id, user_id);
+                // Assuming calculateCrossSectorResonanceScore is a typo and should be calculateCrossSectorResonance
+                const result = await calculateCrossSectorResonance(
+                    memorySector,
+                    querySector,
+                    baseSimilarity,
+                );
 
-            if (!source_memory || !target_memory) {
-                return sendError(res, new AppError(404, "NOT_FOUND", "One or both memories not found"));
+                res.json({
+                    success: true,
+                    resonanceModulatedScore: result,
+                    parameters: req.body,
+                });
+            } catch (err) {
+                logger.error(
+                    "[DYNAMICS] Error calculating cross-sector resonance:",
+                    { error: err },
+                );
+                sendError(res, err);
             }
+        },
+    );
 
-            if (!source_memory.mean_vec || !target_memory.mean_vec) {
-                return sendError(res, new AppError(400, "MISSING_EMBEDDINGS", "Memories missing embeddings"));
+    /**
+     * POST /dynamics/retrieval/energy-based
+     * Performs retrieval using neural activation energy thresholds.
+     * Only returns memories that exceed `minEnergy` activation.
+     */
+    app.post(
+        "/dynamics/retrieval/energy-based",
+        validateBody(EnergyRetrievalSchema),
+        async (req: AdvancedRequest, res: AdvancedResponse) => {
+            try {
+                const { query, sector, minEnergy } = req.body as z.infer<
+                    typeof EnergyRetrievalSchema
+                >;
+                const userId = req.user?.id;
+
+                const { embedForSector } = await import("../../memory/embed");
+                const queryVector = await embedForSector(query, sector);
+
+                const results = await retrieveMemoriesWithEnergyThresholding(
+                    queryVector,
+                    sector,
+                    minEnergy,
+                    userId,
+                );
+
+                res.json({
+                    success: true,
+                    query,
+                    sector,
+                    minEnergy,
+                    count: results.length,
+                    memories: results.map((m) => {
+                        const memWithEnergy = m as typeof m & {
+                            activationEnergy: number;
+                        };
+                        return {
+                            id: m.id,
+                            content: m.content,
+                            primarySector: m.primarySector,
+                            salience: m.salience,
+                            activationEnergy: memWithEnergy.activationEnergy,
+                        };
+                    }),
+                });
+            } catch (err) {
+                logger.error(
+                    "[DYNAMICS] Error performing energy-based retrieval:",
+                    { error: err },
+                );
+                sendError(res, err);
             }
+        },
+    );
 
-            const { bufferToVector } = await import("../../memory/embed");
-            const source_vector = bufferToVector(source_memory.mean_vec);
-            const target_vector = bufferToVector(target_memory.mean_vec);
+    /**
+     * POST /dynamics/reinforcement/trace
+     * Manually triggers a trace reinforcement event for a memory.
+     */
+    app.post(
+        "/dynamics/reinforcement/trace",
+        validateBody(TraceReinforceSchema),
+        async (req: AdvancedRequest, res: AdvancedResponse) => {
+            try {
+                const { memoryId } = req.body as z.infer<
+                    typeof TraceReinforceSchema
+                >;
+                const userId = req.user?.id;
+                const memory = await q.getMem.get(memoryId, userId);
 
-            const time_gap_ms = Math.abs((source_memory.created_at || 0) - (target_memory.created_at || 0));
+                if (!memory) {
+                    return sendError(
+                        res,
+                        new AppError(404, "NOT_FOUND", "Memory not found"),
+                    );
+                }
 
-            const weight = await calculateAssociativeWaypointLinkWeight(
-                source_vector,
-                target_vector,
-                time_gap_ms,
-            );
+                const salience = memory.salience || 0.1;
+                const waypoints = await q.getWaypointsBySrc.all(
+                    memoryId,
+                    userId,
+                );
 
-            res.json({
-                success: true,
-                source_id: source_memory_id,
-                target_id: target_memory_id,
-                weight,
-                time_gap_days: time_gap_ms / 86400000,
-                details: {
-                    temporal_decay: true,
-                    cosine_similarity: true,
-                },
-            });
-        } catch (err) {
-            console.error("[DYNAMICS] Error calculating waypoint weight:", err);
-            sendError(res, err);
-        }
+                // Replaced propagateAssociativeReinforcementToLinkedNodes with propagateReinforcementToNeighbors
+                const propagatedUpdates =
+                    await propagateReinforcementToNeighbors(
+                        memoryId,
+                        salience,
+                        waypoints.map((w) => ({
+                            targetId: w.dstId,
+                            weight: w.weight,
+                        })),
+                        userId,
+                    );
+
+                const nowTimestamp = Date.now();
+                for (const update of propagatedUpdates) {
+                    await q.updSeen.run(
+                        update.nodeId,
+                        nowTimestamp,
+                        update.newSalience,
+                        nowTimestamp,
+                        userId,
+                    );
+                }
+
+                const boostedSalience = Math.min(1, salience + 0.15);
+                await q.updSeen.run(
+                    memoryId,
+                    nowTimestamp,
+                    boostedSalience,
+                    nowTimestamp,
+                    userId,
+                );
+
+                res.json({
+                    success: true,
+                    propagatedCount: propagatedUpdates.length,
+                    newSalience: boostedSalience,
+                });
+            } catch (err) {
+                logger.error("[DYNAMICS] Error applying trace reinforcement:", {
+                    error: err,
+                });
+                sendError(res, err);
+            }
+        },
+    );
+
+    /**
+     * POST /dynamics/activation/spreading
+     * Simulates spreading activation across the associative graph.
+     */
+    app.post(
+        "/dynamics/activation/spreading",
+        validateBody(SpreadingActivationSchema),
+        async (req: AdvancedRequest, res: AdvancedResponse) => {
+            try {
+                const { initialMemoryIds, maxIterations } = req.body as z.infer<
+                    typeof SpreadingActivationSchema
+                >;
+                const userId = req.user?.id;
+
+                const resultsMap = await performSpreadingActivationRetrieval(
+                    initialMemoryIds,
+                    maxIterations,
+                    userId,
+                );
+
+                const activationResults = Array.from(resultsMap.entries())
+                    .map(([memoryId, activationLevel]) => ({
+                        memoryId,
+                        activationLevel,
+                    }))
+                    .sort((a, b) => b.activationLevel - a.activationLevel);
+
+                res.json({
+                    success: true,
+                    initialCount: initialMemoryIds.length,
+                    iterations: maxIterations,
+                    totalActivated: activationResults.length,
+                    results: activationResults,
+                });
+            } catch (err) {
+                logger.error(
+                    "[DYNAMICS] Error performing spreading activation:",
+                    { error: err },
+                );
+                sendError(res, err);
+            }
+        },
+    );
+
+    const GraphQuerySchema = z.object({
+        limit: z
+            .string()
+            .optional()
+            .transform((val) => parseInt(val || "1000"))
+            .pipe(z.number().min(1).max(10000)),
     });
+
+    // ... inside dynroutes ...
+
+    /**
+     * GET /dynamics/waypoints/graph
+     * Exports the structural representation of the associative waypoint graph.
+     */
+    app.get(
+        "/dynamics/waypoints/graph",
+        validateQuery(GraphQuerySchema),
+        async (req: AdvancedRequest, res: AdvancedResponse) => {
+            try {
+                const { limit } = req.query as unknown as z.infer<
+                    typeof GraphQuerySchema
+                >;
+                const waypointGraph =
+                    await buildAssociativeWaypointGraphFromMemories(
+                        req.user?.id,
+                        limit,
+                    );
+
+                const stats = {
+                    totalNodes: waypointGraph.size,
+                    totalEdges: 0,
+                    averageEdgesPerNode: 0,
+                    disconnectedNodes: 0,
+                };
+
+                const nodes: WaypointNode[] = [];
+                // Cast the generic map to our specific structure
+                const graph = waypointGraph as unknown as Map<
+                    string,
+                    DynamicsNodeData
+                >;
+
+                for (const [memoryId, nodeData] of graph) {
+                    const edgeCount = nodeData.connectedWaypointEdges.length;
+                    stats.totalEdges += edgeCount;
+
+                    if (edgeCount === 0) {
+                        stats.disconnectedNodes++;
+                    }
+
+                    nodes.push({
+                        memoryId: memoryId,
+                        edgeCount: edgeCount,
+                        connections: nodeData.connectedWaypointEdges.map(
+                            (edge) => ({
+                                targetId: edge.targetNodeId,
+                                weight: edge.linkWeightValue,
+                                timeGapMs: edge.timeGapDeltaT,
+                            }),
+                        ),
+                    });
+                }
+
+                if (stats.totalNodes > 0) {
+                    stats.averageEdgesPerNode =
+                        stats.totalEdges / stats.totalNodes;
+                }
+
+                res.json({
+                    success: true,
+                    stats,
+                    nodes,
+                });
+            } catch (err) {
+                logger.error("[DYNAMICS] Error building waypoint graph:", {
+                    error: err,
+                });
+                sendError(res, err);
+            }
+        },
+    );
+
+    /**
+     * POST /dynamics/waypoints/calculate-weight
+     * Calculates the projected associative weight between two memories.
+     */
+    app.post(
+        "/dynamics/waypoints/calculate-weight",
+        validateBody(WaypointWeightSchema),
+        async (req: AdvancedRequest, res: AdvancedResponse) => {
+            try {
+                const { sourceMemoryId, targetMemoryId } = req.body as z.infer<
+                    typeof WaypointWeightSchema
+                >;
+                const userId = req.user?.id;
+
+                const sourceMemory = await q.getMem.get(sourceMemoryId, userId);
+                const targetMemory = await q.getMem.get(targetMemoryId, userId);
+
+                if (!sourceMemory || !targetMemory) {
+                    return sendError(
+                        res,
+                        new AppError(
+                            404,
+                            "NOT_FOUND",
+                            "One or both memories not found",
+                        ),
+                    );
+                }
+
+                if (!sourceMemory.meanVec || !targetMemory.meanVec) {
+                    return sendError(
+                        res,
+                        new AppError(
+                            400,
+                            "MISSING_EMBEDDINGS",
+                            "Memories missing embeddings",
+                        ),
+                    );
+                }
+
+                const { bufferToVector } = await import("../../memory/embed");
+                const sourceVector = bufferToVector(sourceMemory.meanVec);
+                const targetVector = bufferToVector(targetMemory.meanVec);
+
+                const timeGapMs = Math.abs(
+                    (sourceMemory.createdAt || 0) -
+                    (targetMemory.createdAt || 0),
+                );
+
+                const weight = await calculateAssociativeWaypointLinkWeight(
+                    sourceVector,
+                    targetVector,
+                    timeGapMs,
+                );
+
+                res.json({
+                    success: true,
+                    sourceId: sourceMemoryId,
+                    targetId: targetMemoryId,
+                    weight,
+                    timeGapDays: timeGapMs / 86400000,
+                    details: {
+                        temporalDecay: true,
+                        cosineSimilarity: true,
+                    },
+                });
+            } catch (err) {
+                logger.error("[DYNAMICS] Error calculating waypoint weight:", {
+                    error: err,
+                });
+                sendError(res, err);
+            }
+        },
+    );
 }

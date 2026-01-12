@@ -30,7 +30,7 @@ class ResearchAgent {
 
         // 1. Check Memory
         console.log("   [MEM] Checking existing knowledge...");
-        const existing = await this.mem.search(topic, { user_id: this.id, limit: 1, minSalience: 0.8 });
+        const existing = await this.mem.search(topic, { userId: this.id, limit: 1, minSalience: 0.8 });
 
         if (existing.length > 0) {
             console.log(`   [MEM] Found relevant info!`);
@@ -45,7 +45,7 @@ class ResearchAgent {
         // 3. Store new knowledge
         console.log("   [MEM] Storing new findings...");
         await this.mem.add(webData, {
-            user_id: this.id,
+            userId: this.id,
             metadata: { source: 'web_search', query: topic },
             tags: ['knowledge', 'research']
         });

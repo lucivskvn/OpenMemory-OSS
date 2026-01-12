@@ -1,74 +1,100 @@
-import { hsg_query, add_hsg_memory, hsg_q_result } from "../../memory/hsg";
-import { j } from "../../utils";
-import { AdvancedRequest, AdvancedResponse } from "../index";
-import { AppError, sendError } from "../errors";
 import { z } from "zod";
+
+import { HsgQueryResult } from "../../core/types";
+import { addHsgMemory, hsgQuery } from "../../memory/hsg";
+import { sendError } from "../errors";
+import { validateBody } from "../middleware/validate";
+import type { AdvancedRequest, AdvancedResponse, ServerApp } from "../server";
 
 const VercelQuerySchema = z.object({
     query: z.string().min(1).max(4000),
     k: z.number().min(1).max(32).optional().default(8),
     startTime: z.number().optional(),
     endTime: z.number().optional(),
-    user_id: z.string().optional()
+    userId: z.string().optional(),
 });
+
+type VercelQuery = z.infer<typeof VercelQuerySchema>;
 
 const VercelMemorySchema = z.object({
     content: z.string().min(1),
     tags: z.array(z.string()).optional().default([]),
-    metadata: z.record(z.any()).optional(),
-    user_id: z.string().optional()
+    metadata: z.record(z.string(), z.any()).optional(),
+    userId: z.string().optional(),
 });
 
-export function vercel(app: any) {
-    // Simple memory query endpoint for Vercel AI SDK adapters
-    app.post("/query", async (req: AdvancedRequest, res: AdvancedResponse) => {
-        try {
-            const validated = VercelQuerySchema.safeParse(req.body);
-            if (!validated.success) {
-                return sendError(res, new AppError(400, "VALIDATION_ERROR", "Invalid query parameters", validated.error.format()));
+type VercelMemory = z.infer<typeof VercelMemorySchema>;
+
+export function vercelRoutes(app: ServerApp) {
+    /**
+     * Simple memory query endpoint for Vercel AI SDK adapters.
+     * Supports filtering by time range and multi-tenant user isolation.
+     */
+    app.post(
+        "/query",
+        validateBody(VercelQuerySchema),
+        async (req: AdvancedRequest, res: AdvancedResponse) => {
+            try {
+                const { query, k, startTime, endTime, userId: bodyUserId } =
+                    req.body as VercelQuery;
+                const isAdmin = (req.user?.scopes || []).includes("admin:all");
+                const userId = isAdmin && bodyUserId ? bodyUserId : req.user?.id;
+
+                const matches = await hsgQuery(query, k, {
+                    userId,
+                    startTime,
+                    endTime,
+                });
+                const lines = matches.map(
+                    (m: HsgQueryResult) =>
+                        `- (${(m.score ?? 0).toFixed(2)}) ${m.content}`,
+                );
+                const result = lines.join("\n");
+
+                res.json({
+                    query,
+                    userId: userId || null,
+                    k,
+                    result,
+                    matches: matches.map((m: HsgQueryResult) => ({
+                        id: m.id,
+                        content: m.content,
+                        score: m.score,
+                        sectors: m.sectors,
+                        primarySector: m.primarySector,
+                        lastSeenAt: m.lastSeenAt,
+                    })),
+                });
+            } catch (e: unknown) {
+                sendError(res, e);
             }
+        },
+    );
 
-            const { query, k, startTime, endTime } = validated.data;
-            const user_id = req.user?.id; // Use authenticated user_id if present
+    /**
+     * Simple memory store endpoint for chat transcripts, summaries, or general ingest.
+     * Compatible with Vercel AI SDK 'save' callbacks.
+     */
+    app.post(
+        "/memories",
+        validateBody(VercelMemorySchema),
+        async (req: AdvancedRequest, res: AdvancedResponse) => {
+            try {
+                const { content, tags, metadata, userId: bodyUserId } = req.body as VercelMemory;
+                const isAdmin = (req.user?.scopes || []).includes("admin:all");
+                const userId = isAdmin && bodyUserId ? bodyUserId : req.user?.id;
 
-            const matches = await hsg_query(query, k, { user_id, startTime, endTime });
-            const lines = matches.map((m: hsg_q_result) => `- (${(m.score ?? 0).toFixed(2)}) ${m.content}`);
-            const result = lines.join("\n");
-
-            res.json({
-                query,
-                user_id: user_id || null,
-                k,
-                result,
-                matches: matches.map((m: hsg_q_result) => ({
-                    id: m.id,
-                    content: m.content,
-                    score: m.score,
-                    sectors: m.sectors,
-                    primary_sector: m.primary_sector,
-                    last_seen_at: m.last_seen_at,
-                })),
-            });
-        } catch (e: unknown) {
-            sendError(res, e);
-        }
-    });
-
-    // Simple memory store endpoint for chat transcripts or summaries
-    app.post("/memories", async (req: AdvancedRequest, res: AdvancedResponse) => {
-        try {
-            const validated = VercelMemorySchema.safeParse(req.body);
-            if (!validated.success) {
-                return sendError(res, new AppError(400, "VALIDATION_ERROR", "Invalid memory parameters", validated.error.format()));
+                // Pass tags via metadata to avoid double JSON serialization/parsing
+                const r = await addHsgMemory(
+                    content,
+                    null,
+                    { ...metadata, tags },
+                    userId,
+                );
+                res.json(r);
+            } catch (e: unknown) {
+                sendError(res, e);
             }
-
-            const { content, tags, metadata } = validated.data;
-            const user_id = req.user?.id;
-
-            const r = await add_hsg_memory(content, j(tags), metadata, user_id);
-            res.json(r);
-        } catch (e: unknown) {
-            sendError(res, e);
-        }
-    });
+        },
+    );
 }

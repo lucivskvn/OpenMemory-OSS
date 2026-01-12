@@ -109,7 +109,7 @@ This governance document may be amended through a pull request approved by **two
 | **nullure**   | Lead Maintainer   | Architecture & Vision       |
 | **CaviraOss** | Organization      | Infrastructure & Governance |
 | _(vacant)_    | Python Maintainer | SDK & API Sync              |
-| _(vacant)_    | JS Maintainer     | JS SDK, npm releases        |
+| _(vacant)_    | JS Maintainer     | JS SDK, package releases    |
 
 ---
 

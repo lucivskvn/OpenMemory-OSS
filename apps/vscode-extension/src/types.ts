@@ -1,48 +1,44 @@
-export interface Memory {
-    id: string;
-    content: string;
-    salience?: number;
-    primary_sector: string;
-    tags?: string[];
-    metadata?: Record<string, any>;
-    decay_lambda?: number;
-    version?: number;
-    created_at?: number;
-    updated_at?: number;
-    last_seen_at?: number;
-    compressed_vec?: string;
-    mean_dim?: number;
-    user_id?: string;
-}
+import { MemoryItem, IdePattern } from 'openmemory-js/client';
 
-export interface Pattern {
-    id?: string;
-    description: string;
-    frequency?: number;
-    context?: string;
-    confidence?: number;
-    metadata?: Record<string, any>;
-}
+export type Memory = MemoryItem;
+export type Pattern = IdePattern;
 
-export interface SessionConfig {
-    user_id: string;
-    project_name: string;
-    ide_name: string;
-}
-
+/**
+ * Data structure for IDE events sent to the backend.
+ * Used when tracking file saves, edits, and other coding activities.
+ */
 export interface EventData {
-    event_type: string;
-    file_path: string;
+    /** Type of event (e.g., 'save', 'edit', 'open') */
+    eventType: string;
+    /** Absolute path to the file */
+    filePath: string;
+    /** Language identifier (e.g., 'typescript', 'python') */
     language: string;
+    /** Content or diff of the change */
     content?: string;
-    metadata?: any;
+    /** Additional event metadata */
+    metadata?: {
+        lineCount?: number;
+        isDirty?: boolean;
+        workspaceFolder?: string;
+        /** Suggested memory sectors for classification */
+        sectorHints?: string[];
+        [key: string]: unknown;
+    };
+    /** ISO timestamp of the event */
     timestamp?: string;
 }
 
+/**
+ * Error response structure from the OpenMemory API.
+ */
 export interface ApiErrorResponse {
     error: {
+        /** Error code identifier */
         code: string;
+        /** Human-readable error message */
         message: string;
-        details?: any;
+        /** Additional error context */
+        details?: Record<string, unknown>;
     };
 }

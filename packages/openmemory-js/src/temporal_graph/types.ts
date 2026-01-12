@@ -1,44 +1,6 @@
-export interface TemporalFact {
-    id: string
-    user_id?: string
-    subject: string
-    predicate: string
-    object: string
-    valid_from: Date
-    valid_to: Date | null
-    confidence: number
-    last_updated: Date
-    metadata?: Record<string, any>
-}
+/**
+ * @file Re-export of Temporal Graph types from the core type definition.
+ * Maintained for backward compatibility and module structure.
+ */
 
-export interface TemporalEdge {
-    id: string
-    user_id?: string
-    source_id: string
-    target_id: string
-    relation_type: string
-    valid_from: Date
-    valid_to: Date | null
-    weight: number
-    metadata?: Record<string, any>
-}
-
-export interface TimelineEntry {
-    timestamp: Date
-    subject: string
-    predicate: string
-    object: string
-    confidence: number
-    change_type: 'created' | 'updated' | 'invalidated'
-}
-
-export interface TemporalQuery {
-    user_id?: string
-    subject?: string
-    predicate?: string
-    object?: string
-    at?: Date
-    from?: Date
-    to?: Date
-    min_confidence?: number
-}
+export * from "../core/types";

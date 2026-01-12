@@ -24,10 +24,13 @@ logger = logging.getLogger("openmemory.connectors")
 
 class SourceError(Exception):
     """Base exception for source errors"""
-    def __init__(self, msg: str, source: str = None, cause: Exception = None):
+    def __init__(
+        self, msg: str, source: Optional[str] = None, cause: Optional[Exception] = None
+    ):
         self.source = source
         self.cause = cause
         super().__init__(f"[{source}] {msg}" if source else msg)
+
 
 class SourceAuthError(SourceError):
     """Authentication failure"""
@@ -39,9 +42,15 @@ class SourceConfigError(SourceError):
 
 class SourceRateLimitError(SourceError):
     """Rate limit exceeded"""
-    def __init__(self, msg: str, retry_after: float = None, source: str = None):
+    def __init__(
+        self,
+        msg: str,
+        retry_after: Optional[float] = None,
+        source: Optional[str] = None,
+    ):
         self.retry_after = retry_after
         super().__init__(msg, source)
+
 
 class SourceFetchError(SourceError):
     """Failed to fetch data"""
@@ -68,7 +77,7 @@ class SourceContent(BaseModel):
     type: str
     text: str
     data: Optional[Any] = None
-    meta: Dict[str, Any] = {}
+    metadata: Dict[str, Any] = Field(default_factory=dict, alias="meta")
     
     model_config = ConfigDict(populate_by_name=True)
 
@@ -106,7 +115,7 @@ async def with_retry(
     max_delay: float = 60.0
 ):
     """Execute fn with exponential backoff retry"""
-    last_err = None
+    last_err: Optional[Exception] = None
     
     for attempt in range(max_attempts):
         try:
@@ -128,25 +137,32 @@ async def with_retry(
                 logger.warning(f"[retry] attempt {attempt + 1}/{max_attempts} failed: {e}, retrying in {delay}s")
                 await asyncio.sleep(delay)
     
-    raise last_err
+    if last_err:
+        raise last_err
+    raise RuntimeError("Max retries exceeded")
 
 # -- base connector --
 
-class base_connector(ABC):
+class BaseConnector(ABC):
     """base class for all connectors with production-grade features"""
-    
+
     name: str = "base"
-    
-    def __init__(self, user_id: str = None, max_retries: int = 3, requests_per_second: float = 10):
+
+    def __init__(
+        self,
+        user_id: Optional[str] = None,
+        max_retries: int = 3,
+        requests_per_second: float = 10,
+    ):
         self.user_id = user_id or "anonymous"
         self._connected = False
         self._max_retries = max_retries
         self._rate_limiter = RateLimiter(requests_per_second)
-    
+
     @property
     def connected(self) -> bool:
         return self._connected
-    
+
     async def connect(self, **creds) -> bool:
         """authenticate with the service"""
         logger.info(f"[{self.name}] connecting...")
@@ -159,19 +175,19 @@ class base_connector(ABC):
         except Exception as e:
             logger.error(f"[{self.name}] connection failed: {e}")
             raise SourceAuthError(str(e), self.name, e)
-    
+
     async def disconnect(self):
         """disconnect from the service"""
         self._connected = False
         logger.info(f"[{self.name}] disconnected")
-    
+
     async def list_items(self, **filters) -> List[SourceItem]:
         """list available items from the source with retry"""
         if not self._connected:
             await self.connect()
-        
+
         await self._rate_limiter.acquire()
-        
+
         try:
             items = await with_retry(
                 lambda: self._list_items(**filters),
@@ -181,14 +197,14 @@ class base_connector(ABC):
             return items
         except Exception as e:
             raise SourceFetchError(str(e), self.name, e)
-    
+
     async def fetch_item(self, item_id: str) -> SourceContent:
         """fetch a single item by id with retry"""
         if not self._connected:
             await self.connect()
-        
+
         await self._rate_limiter.acquire()
-        
+
         try:
             return await with_retry(
                 lambda: self._fetch_item(item_id),
@@ -196,17 +212,17 @@ class base_connector(ABC):
             )
         except Exception as e:
             raise SourceFetchError(str(e), self.name, e)
-    
+
     async def ingest_all(self, **filters) -> List[str]:
         """fetch and ingest all items matching filters with concurrency control"""
         from ..ops.ingest import ingest_document
-        
+
         items = await self.list_items(**filters)
-        
+
         logger.info(f"[{self.name}] ingesting {len(items)} items with parallel workers...")
-        
+
         semaphore = asyncio.Semaphore(5) # limit concurrency
-        
+
         async def _ingest_safe(item):
             async with semaphore:
                 try:
@@ -214,7 +230,7 @@ class base_connector(ABC):
                     result = await ingest_document(
                         t=content.type,
                         data=content.data or content.text,
-                        meta={"source": self.name, **content.meta},
+                        metadata={"source": self.name, **content.metadata},
                         user_id=self.user_id
                     )
                     return result["root_memory_id"]
@@ -224,10 +240,10 @@ class base_connector(ABC):
 
         tasks = [_ingest_safe(item) for item in items]
         results = await asyncio.gather(*tasks)
-        
+
         ids = [rid for rid in results if rid]
         error_count = len(items) - len(ids)
-        
+
         logger.info(f"[{self.name}] ingested {len(ids)} items, {error_count} errors")
         return ids
 
@@ -236,22 +252,22 @@ class base_connector(ABC):
         loop = asyncio.get_running_loop()
         pfunc = functools.partial(func, *args, **kwargs)
         return await loop.run_in_executor(None, pfunc)
-    
-    def _get_env(self, key: str, default: str = None) -> Optional[str]:
+
+    def _get_env(self, key: str, default: Optional[str] = None) -> Optional[str]:
         """helper to get env var"""
         return os.environ.get(key, default)
-    
+
     # abstract methods for subclasses
     @abstractmethod
     async def _connect(self, **creds) -> bool:
         """internal connect implementation"""
         pass
-    
+
     @abstractmethod
     async def _list_items(self, **filters) -> List[SourceItem]:
         """internal list implementation"""
         pass
-    
+
     @abstractmethod
     async def _fetch_item(self, item_id: str) -> SourceContent:
         """internal fetch implementation"""

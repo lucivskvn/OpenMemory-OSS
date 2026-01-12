@@ -22,31 +22,56 @@ your model stays stateless. **your app stops being amnesiac.**
 
 - **Runtime**: [Bun](https://bun.sh) v1.1+ (Recommended) or Node.js v20+
 - **Database**: SQLite (built-in) or PostgreSQL (optional w/ pgvector)
+- **Hardware**: Nvidia GPU (Optional) via Docker Toolkit for accelerated inference.
 
-## quick start
+## Usage Patterns
 
-```bash
-npm install openmemory-js@latest
-# or
-bun add openmemory-js@latest
-```
+OpenMemory can be used in two ways:
+1. **Embedded / Local**: Import directly into your Node/Bun app. No server required.
+2. **Client / Remote**: Connect to a running OpenMemory server via HTTP.
+
+### 1. Embedded (Local)
+Best for CLIs, local tools, or single-instance backends.
 
 ```typescript
-import { Memory } from "openmemory-js"
+import { Memory } from "openmemory-js";
 
-const mem = new Memory({ user_id: "u1" })
-await mem.add("user likes spicy food")
-const results = await mem.search("food?")
+// Initialize local engine (uses SQLite by default)
+const mem = new Memory({ user_id: "u1" });
+
+// Add a memory
+await mem.add("user prefers dark mode", {
+    tags: ["ui", "preference"],
+    metadata: { source: "settings_page" }
+});
+
+// Search
+const results = await mem.search("what is the user preference?");
+console.log(results[0].content);
 ```
 
-drop this into:
+### 2. Client SDK (Remote)
+Best for distributed apps, web frontends, or microservices connecting to a shared OpenMemory server.
 
-- node/bun backends
-- clis
-- local tools
-- anything that needs durable memory without running a separate service
+```typescript
+import { MemoryClient } from "openmemory-js";
 
-**that's it.** you're now running a fully local cognitive memory engine 🎉
+// Connect to server (defaults to http://localhost:8080)
+const client = new MemoryClient({
+    baseUrl: "http://localhost:8080",
+    apiKey: "your-api-key"
+});
+
+// Real-time Event Stream
+client.listen((event) => {
+    if (event.type === 'memory_added') {
+        console.log(`New Memory: ${event.data.content}`);
+    }
+});
+
+// Add Memory via API
+await client.add("project deadline is friday");
+```
 
 ---
 
@@ -59,7 +84,40 @@ export OM_ENCRYPTION_ENABLED=true
 export OM_ENCRYPTION_KEY=your-32-char-secret-key-must-be-long-enough-123
 ```
 
+On startup, OpenMemory performs a **Key Verification** check to ensure your key is valid and encryption roundtrips (encrypt -> decrypt) are successful. If this check fails, the server will warn you.
+
 when enabled, all memory content is encrypted before storage and decrypted only upon retrieval. vector embeddings remain unencrypted for searchability but contain no raw text.
+
+### 🔑 Authentication & RBAC
+
+Secure your memory server with granular access control:
+
+```bash
+# Admin Key (Full Access: memory:*, admin:*)
+OM_ADMIN_KEY=your-super-secret-admin-key
+
+# Standard API Key (Read/Write Memory)
+OM_API_KEY=your-app-key
+```
+
+- **Admin Key**: Grants `admin:all` scope. Can manage system settings and view audit logs.
+- **API Key**: Grants `memory:read` and `memory:write` scopes. Ideal for client applications.
+
+> [!NOTE]
+> **Admin Masquerade**: If you authenticate with an **Admin Key**, you can perform actions on behalf of other users by passing `userId` in the options of any method (e.g. `client.add(..., { userId: 'other' })`).
+
+> [!IMPORTANT]
+> **Production Safety**: When running in `NODE_ENV=production`, `OM_API_KEY` or `OM_ADMIN_KEY` **MUST** be set. The server will refuse to start without them to prevent insecure deployments.
+
+### 🕵️ Audit Logging
+
+All write operations (POST, PUT, DELETE) are automatically logged as Immutable Facts in the **Temporal Graph**.
+You can query usage history using the temporal API:
+
+```typescript
+// Who deleted memory X?
+const history = await mem.temporal.history("memory:uuid-123");
+```
 
 ## 📥 sources (connectors)
 
@@ -83,6 +141,7 @@ available sources: `github`, `notion`, `google_drive`, `google_sheets`, `google_
 ✅ **memory decay** - adaptive forgetting with sector-specific rates  
 ✅ **waypoint graph** - associative recall paths for better retrieval  
 ✅ **explainable traces** - see exactly why memories were recalled  
+✅ **hardware aware** - auto-detects Nvidia GPUs in Docker for 10x faster inference  
 ✅ **zero config** - works out of the box with sensible defaults  
 
 ---
@@ -113,7 +172,7 @@ OM_DB_URL=sqlite://:memory:          # or use in-memory db
 # embeddings
 OM_EMBEDDINGS=ollama                 # synthetic | openai | gemini | ollama
 OM_OLLAMA_URL=http://localhost:11434
-OM_OLLAMA_MODEL=embeddinggemma       # or nomic-embed-text, mxbai-embed-large
+OM_OLLAMA_MODEL=llama3.2             # Default: Llama 3.2 (3B)
 
 # openai
 OPENAI_API_KEY=sk-...
@@ -199,6 +258,27 @@ npx openmemory-js serve --port 3000
     }
   }
 }
+
+### Intelligent Sectoring
+OpenMemory now uses a **Learned Classifier** to automatically organize memories.
+- **Auto-Sectoring**: If you don't specify a sector, the system predicts one based on your history.
+- **Manual Training**: Use `opm train <userId>` to force a re-training session.
+
+### CLI
+The `opm` CLI tool manages your OpenMemory instance.
+
+```bash
+# Add a memory
+opm add "I need to buy groceries" --user_id=alice
+
+# Check System Health
+opm doctor
+
+# Train Classifier
+opm train alice
+
+# Wipe all data
+opm wipe
 ```
 
 available mcp tools:
@@ -208,6 +288,41 @@ available mcp tools:
 - `openmemory_list` - list all memories
 - `openmemory_get` - get memory by id
 - `openmemory_reinforce` - reinforce a memory
+- `openmemory_ide_context` - get relevant context for code files
+- `openmemory_ide_patterns` - get detected coding patterns
+
+### ⚡ Real-time Stream (SSE)
+Connect to the real-time event stream to receive live updates (new memories, suggested patterns). 
+The `MemoryClient` provides a strictly typed `listen()` method.
+
+```typescript
+import { MemoryClient } from 'openmemory-js';
+
+const client = new MemoryClient();
+
+client.listen((event) => {
+    switch (event.type) {
+        case 'memory_added':
+            console.log(`New Memory: ${event.data.content} (${event.data.id})`);
+            break;
+        case 'ide_suggestion':
+            console.log(`Suggestion: ${event.data.topPattern.description}`);
+            console.log(`Confidence: ${event.data.topPattern.salience}`);
+            break;
+        case 'ide_session_update':
+            console.log(`Session ${event.data.sessionId}: ${event.data.status}`);
+            break;
+    }
+}, { subscribe: 'all' }); // Optional: 'all' for Firehose (Admin only), or 'userId' to watch specific user.
+```
+
+**Event Types:**
+- `memory_added`: Triggered when new content is stored.
+- `memory_updated`: Triggered when content matches an existing memory and updates it.
+- `ide_suggestion`: Triggered when the AI detects a relevant pattern for the current context.
+- `ide_session_update`: Triggered when an IDE session starts or ends.
+
+See `examples/ide_plugin_demo.ts` for a full working implementation.
 
 ---
 
@@ -268,8 +383,9 @@ search for relevant memories.
 ingest documents or raw text.
 
 ```typescript
+```typescript
 await mem.ingest({
-  content_type: "text/plain",
+  contentType: "txt",
   data: "full document text...",
   metadata: { filename: "notes.txt" }
 })
@@ -302,7 +418,13 @@ Access temporal graph features:
 - `get(subject, predicate)`
 - `search(pattern, opts)`
 - `history(subject)`
-
+- `updateFact(id, updates)`: modify confidence or metadata
+- `updateEdge(id, updates)`: modify weight or metadata
+- `invalidateFact(id)`: close a fact's validity period
+- `invalidateEdge(id)`: close an edge's validity period
+- `compare(subject, time1, time2)`: see specific changes between timestamps
+- `timeline(subject)`: full chronological event list
+427: 
 ### `get compression`
 
 Access optimization features:
@@ -313,9 +435,78 @@ Access optimization features:
 
 ---
 
+### `async registerUser(userId: string, scope?: "admin" | "user")` (Admin Only)
+
+Manage users and authentication keys (requires `admin:all` scope).
+
+```typescript
+// Register a new user
+const { apiKey } = await client.registerUser("new-user", "user");
+
+// List all API keys
+const keys = await client.listApiKeys();
+
+// Revoke a key
+await client.revokeApiKey("om_123...");
+
+// Data Portability (Backup/Restore)
+const blob = await client.exportData(); // NDJSON Stream
+await client.importDatabase(blob);     // Restore (renamed from importData)
+
+/**
+ * System Health & Limits
+ * - Dashboard: Visit /dashboard
+ * - CLI: opm ingest-av (100MB limit)
+ * - Health: opm doctor
+ */
+```
+
+### `LangGraph Integration`
+
+Native support for LangGraph memory nodes.
+
+```typescript
+// Store a graph node state
+await client.lgStore("agent_conversation", "User asked for python helper", {
+    graphId: "thread_123"
+});
+
+// Reflect on graph state
+const reflection = await client.lgReflect("agent_conversation", "thread_123", {
+    depth: "deep"
+});
+```
+
+### `IDE Integration`
+
+Integrate with code editors/IDEs.
+
+```typescript
+// Start an IDE session
+await client.startIdeSession({
+    projectName: "my-project", 
+    ideName: "vscode"
+});
+
+// Send an event (e.g., file save, compile)
+await client.sendIdeEvent({
+    sessionId: "session-123",
+    eventType: "save",
+    filePath: "/path/to/script.ts",
+    metadata: { project: "my-project" }
+});
+
+// Get context for the current file
+const context = await client.getIdeContext("cursor position or query", {
+    filePath: "/path/to/script.ts"
+});
+```
+
+---
+
 ## license
 
-apache 2.0
+Apache 2.0
 
 ---
 

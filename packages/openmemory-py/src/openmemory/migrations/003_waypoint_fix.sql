@@ -1,5 +1,5 @@
 -- 003_waypoint_fix.sql
-CREATE TABLE IF NOT EXISTS waypoints_v2 (
+CREATE TABLE IF NOT EXISTS {w}_v2 (
     src_id TEXT,
     dst_id TEXT,
     dst_sector TEXT,
@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS waypoints_v2 (
     PRIMARY KEY (src_id, dst_id, user_id)
 );
 INSERT
-    OR IGNORE INTO waypoints_v2
+    OR IGNORE INTO {w}_v2
 SELECT src_id,
     dst_id,
     dst_sector,
@@ -18,10 +18,10 @@ SELECT src_id,
     weight,
     created_at,
     updated_at
-FROM waypoints;
-DROP TABLE waypoints;
-ALTER TABLE waypoints_v2
-    RENAME TO waypoints;
-CREATE INDEX IF NOT EXISTS idx_waypoints_src ON waypoints(src_id);
-CREATE INDEX IF NOT EXISTS idx_waypoints_dst ON waypoints(dst_id);
-CREATE INDEX IF NOT EXISTS idx_waypoints_user ON waypoints(user_id);
+FROM {w};
+DROP TABLE {w};
+ALTER TABLE {w}_v2
+    RENAME TO {w};
+CREATE INDEX IF NOT EXISTS idx_waypoints_src ON {w}(src_id);
+CREATE INDEX IF NOT EXISTS idx_waypoints_dst ON {w}(dst_id);
+CREATE INDEX IF NOT EXISTS idx_waypoints_user ON {w}(user_id);

@@ -15,7 +15,7 @@ OpenMemory is a **cognitive memory engine** for LLMs and agents.
 
 - 🧠 Real long-term memory (not just embeddings in a table)
 - 💾 Self-hosted, local-first (SQLite / Postgres)
-- 🐍 Python + 🟦 Node SDKs
+- 🐍 Python + 🟦 JavaScript SDKs
 - 🧩 Integrations: LangChain, CrewAI, AutoGen, Streamlit, MCP, VS Code
 - 📥 Sources: GitHub, Notion, Google Drive, OneDrive, Web Crawler
 - 🔍 Explainable traces (see *why* something was recalled)
@@ -33,6 +33,32 @@ Spin up a shared OpenMemory backend (HTTP API + MCP + dashboard):
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/CaviraOSS/OpenMemory)
 
 > Use the SDKs when you want **embedded local memory**. Use the server when you want **multi‑user org‑wide memory**.
+
+---
+
+## 🤖 AI & LangGraph Integration
+
+OpenMemory provides dedicated support for **LangGraph** workflows, allowing agents to maintain isolated state per node while sharing global context.
+
+```ts
+import { storeNodeMem, retrieveNodeMems, getGraphCtx } from "openmemory-js/ai/graph";
+
+// Store execution state for a specific graph node
+await storeNodeMem({
+  node: "plan",
+  content: "User requested a refund for order #123",
+  namespace: "agent-1"
+});
+
+// Retrieve context relevant to the current node
+const context = await retrieveNodeMems({
+  node: "plan",
+  query: "refund policy",
+  namespace: "agent-1"
+});
+```
+
+It automatically maps agent activities (plan, act, observe) to memory sectors (semantic, procedural, episodic).
 
 ---
 
@@ -57,6 +83,17 @@ results = mem.search("preferences", user_id="u1")
 ```
 
 > Note: `add`, `search`, `get`, `delete` are async. Use `await` in async contexts.
+
+#### 🌐 Connect to Server (HTTP)
+
+If running the OpenMemory backend (Docker/Cloud):
+
+```python
+from openmemory.client import MemoryClient
+
+client = MemoryClient(base_url="http://localhost:8080")
+await client.add("users prefer dark mode")
+```
 
 #### 🔗 OpenAI
 
@@ -86,27 +123,27 @@ See the integrations section in the docs for concrete patterns.
 
 ---
 
-### 🟦 Node / JavaScript (local-first)
+### 🟦 JavaScript / TypeScript (local-first)
 
 Install:
 
 ```bash
-npm install openmemory-js
+bun add openmemory-js
 ```
 
 Use:
 
 ```ts
-import { Memory } from "openmemory-js"
+import { MemoryClient } from "openmemory-js"
 
-const mem = new Memory()
-await mem.add("user likes spicy food", { user_id: "u1" })
-const results = await mem.search("food?", { user_id: "u1" })
+const client = new MemoryClient({ baseUrl: "http://localhost:8080" })
+await client.add("user likes spicy food", { userId: "u1" })
+const results = await client.search("food?", { userId: "u1" })
 ```
 
 Drop this into:
 
-- Node backends
+- Bun/Node backends
 - CLIs
 - local tools
 - anything that needs durable memory without running a separate service.
@@ -149,7 +186,7 @@ Docs: https://openmemory.cavira.app/docs/sdks/python
 
 ---
 
-### 2.2 Node SDK
+### 2.2 JavaScript SDK
 
 - Same cognitive model as Python
 - Ideal for JS/TS applications
@@ -287,6 +324,9 @@ results = mem.search("allergies", user_id="user123")
 
 - **Explainable recall**  
   “Waypoint” traces that show exactly which nodes were used in context.
+
+- **Hypergraph Visualizer**  
+  Interactive dashboard to explore connections between Entities, Facts, and Memories.
 
 - **Embeddings**  
   OpenAI, Gemini, Ollama, AWS, synthetic fallback.
@@ -534,6 +574,20 @@ Issues and PRs are welcome.
 
 ---
 
-## 13. License
+## 13. Telemetry & Privacy
+OpenMemory collects anonymous usage statistics to help improve the project.
+- **Scope**: OS, Memory Usage, Embedding Provider (generic name only), Version.
+- **Privacy**: No user content, no prompt data, no IP addresses (hostnames are hashed).
+- **Opt-out**: Set `OM_TELEMETRY=false` in your `.env`.
+
+## 14. Security
+OpenMemory supports enterprise-grade security features:
+- **Encryption-at-Rest**: AES-256-GCM for all vector content.
+  - Enable: `OM_ENCRYPTION_ENABLED=true`
+  - Key: `OM_ENCRYPTION_KEY` (32+ chars)
+  - Rotation: `OM_ENCRYPTION_SECONDARY_KEYS` (comma-separated old keys)
+- **Redaction**: sensitive keys (API keys, DSNs) are automatically redacted from logs.
+
+## 15. License
 
 OpenMemory is licensed under **Apache 2.0**. See [LICENSE](LICENSE) for details.

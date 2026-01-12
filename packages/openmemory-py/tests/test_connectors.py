@@ -1,13 +1,13 @@
 import asyncio
 import unittest
 from unittest.mock import MagicMock, patch
-from openmemory.connectors.base import base_connector, SourceItem, SourceContent
-from openmemory.connectors.github import github_connector
-from openmemory.connectors.notion import notion_connector
+from openmemory.connectors.base import BaseConnector, SourceItem, SourceContent
+from openmemory.connectors.github import GithubConnector
+from openmemory.connectors.notion import NotionConnector
 
 class TestBaseConnector(unittest.IsolatedAsyncioTestCase):
     async def test_run_blocking(self):
-        connector = github_connector("test_user")
+        connector = GithubConnector("test_user")
         
         def blocking_func(x):
             import time
@@ -47,7 +47,7 @@ class TestGithubConnector(unittest.IsolatedAsyncioTestCase):
         
         mock_repo.get_contents.return_value = [mock_content]
 
-        connector = github_connector("test_user")
+        connector = GithubConnector("test_user")
         connector.token = "fake_token"
         connector.github = mock_gh_instance
         connector._connected = True
@@ -84,7 +84,7 @@ class TestGithubConnector(unittest.IsolatedAsyncioTestCase):
         
         mock_repo.get_contents.return_value = mock_content
         
-        connector = github_connector("test_user")
+        connector = GithubConnector("test_user")
         connector.github = mock_gh_instance
         connector._connected = True
         
@@ -137,7 +137,7 @@ class TestNotionConnector(unittest.IsolatedAsyncioTestCase):
             "has_more": False
         }
         
-        connector = notion_connector("test_user")
+        connector = NotionConnector("test_user")
         connector.client = mock_client
         connector._connected = True
         

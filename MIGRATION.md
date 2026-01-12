@@ -12,7 +12,7 @@ Run the migration before starting your server:
 
 ```bash
 cd packages/openmemory-js
-npm run migrate
+bun run migrate
 ```
 
 **Console output:**
@@ -41,9 +41,9 @@ OpenMemory Database Migration Tool
 **After migration, start your server normally:**
 
 ```bash
-npm run dev
+bun run dev
 # or
-npm start
+bun start
 ```
 
 **Location:** `packages/openmemory-js/src/migrate.ts`

@@ -6,42 +6,44 @@ env vars: GITHUB_TOKEN
 from typing import List, Dict, Optional, Any
 import os
 import logging
-from .base import base_connector, SourceItem, SourceContent, SourceAuthError
+from .base import BaseConnector, SourceItem, SourceContent, SourceAuthError
 
 logger = logging.getLogger("openmemory.connectors.github")
 
-class github_connector(base_connector):
+class GithubConnector(BaseConnector):
     """connector for github repositories"""
-    
+
     name = "github"
-    
-    def __init__(self, user_id: str = None):
+
+    def __init__(self, user_id: Optional[str] = None):
         super().__init__(user_id)
         self.github = None
         self.token = None
-    
+
     async def _connect(self, **creds) -> bool:
         """authenticate with github api"""
         try:
             from github import Github, Auth
         except ImportError:
             raise ImportError("pip install PyGithub")
-        
+
         self.token = creds.get("token") or os.environ.get("GITHUB_TOKEN")
-        
+
         if not self.token:
             raise ValueError("no github token provided")
-        
+
+        token: str = self.token
+
         # Verify synchronously in thread to avoid block
         def _verify():
-            g = Github(auth=Auth.Token(self.token))
+            g = Github(auth=Auth.Token(token))
             # Just accessing a property to check connection
             _ = g.get_user().login
             return g
-            
+
         self.github = await self._run_blocking(_verify)
         return True
-    
+
     async def _list_items(self, **filters) -> List[SourceItem]:
         """
         List files and optionally issues from a repository.
@@ -62,17 +64,17 @@ class github_connector(base_connector):
         recursive = filters.get("recursive", False)
         include_issues = filters.get("include_issues", False)
         max_issues = filters.get("max_issues", 50)
-        
+
         if not repo_name:
             raise ValueError("repo is required (format: owner/repo)")
-        
+
         def _fetch_list():
             if not self.github:
-                 raise SourceAuthError("Not connected", self.name)
-                 
+                raise SourceAuthError("Not connected", self.name)
+
             repository = self.github.get_repo(repo_name)
             res = []
-            
+
             # 1. Files
             clean_path = path.lstrip("/") if path != "/" else ""
             try:
@@ -83,7 +85,7 @@ class github_connector(base_connector):
                         # Filter by path if provided
                         if clean_path and not element.path.startswith(clean_path):
                             continue
-                            
+
                         res.append(SourceItem(
                             id=f"{repo_name}:{element.path}",
                             name=os.path.basename(element.path),
@@ -97,7 +99,7 @@ class github_connector(base_connector):
                     contents = repository.get_contents(clean_path)
                     if not isinstance(contents, list):
                         contents = [contents]
-                    
+
                     for c in contents:
                         res.append(SourceItem(
                             id=f"{repo_name}:{c.path}",
@@ -110,7 +112,7 @@ class github_connector(base_connector):
                         ))
             except Exception as e:
                 logger.warning(f"failed to list paths for {repo_name}/{clean_path}: {e}")
-            
+
             # 2. Issues
             if include_issues:
                 try:
@@ -136,23 +138,23 @@ class github_connector(base_connector):
             return res
 
         return await self._run_blocking(_fetch_list)
-    
+
     async def _fetch_item(self, item_id: str) -> SourceContent:
         """fetch file or issue content"""
         parts = item_id.split(":")
         repo_name = parts[0]
-        
+
         def _fetch_one():
             if not self.github:
-                 raise SourceAuthError("Not connected", self.name)
-            
+                raise SourceAuthError("Not connected", self.name)
+
             repository = self.github.get_repo(repo_name)
-            
+
             # Is Issue?
             if len(parts) >= 3 and parts[1] == "issue":
                 issue_num = int(parts[2])
                 issue = repository.get_issue(number=issue_num)
-                
+
                 text_parts = [
                     f"# {issue.title}",
                     f"State: {issue.state}",
@@ -160,8 +162,7 @@ class github_connector(base_connector):
                     "",
                     issue.body or ""
                 ]
-                
-                
+
                 # Fetch comments with a safety limit
                 comments = issue.get_comments()
                 for i, comment in enumerate(comments):
@@ -169,7 +170,7 @@ class github_connector(base_connector):
                         text_parts.append("\n---\n*Truncated: too many comments*")
                         break
                     text_parts.append(f"\n---\n**{comment.user.login}:** {comment.body}")
-                
+
                 text = "\n".join(text_parts)
                 return SourceContent(
                     id=item_id,
@@ -177,19 +178,19 @@ class github_connector(base_connector):
                     type="issue",
                     text=text,
                     data=text,
-                    meta={
+                    metadata={
                         "source": "github",
                         "repo": repo_name,
                         "issue_number": issue_num,
                         "state": issue.state
                     }
                 )
-            
+
             # Is File/Dir
             else:
                 fpath = ":".join(parts[1:]) if len(parts) > 1 else ""
                 content = repository.get_contents(fpath)
-                
+
                 # Directory
                 if isinstance(content, list):
                     text = "\n".join([f"- {c.path}" for c in content])
@@ -199,22 +200,22 @@ class github_connector(base_connector):
                         type="directory",
                         text=text,
                         data=text,
-                        meta={"source": "github", "repo": repo_name, "path": fpath}
+                        metadata={"source": "github", "repo": repo_name, "path": fpath}
                     )
-                
+
                 # File
                 try:
                     text = content.decoded_content.decode("utf-8")
                 except:
                     text = ""
-                
+
                 return SourceContent(
                     id=item_id,
                     name=content.name,
                     type=content.encoding or "file",
                     text=text,
                     data=content.decoded_content,  # keeps bytes if binary
-                    meta={
+                    metadata={
                         "source": "github",
                         "repo": repo_name,
                         "path": content.path,
@@ -222,5 +223,5 @@ class github_connector(base_connector):
                         "size": content.size
                     }
                 )
-                
+
         return await self._run_blocking(_fetch_one)

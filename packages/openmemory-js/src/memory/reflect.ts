@@ -1,178 +1,337 @@
-import { q, log_maint_op, Memory } from "../core/db";
-import { add_hsg_memory } from "./hsg";
+import { get_generator } from "../ai/adapters";
 import { env } from "../core/cfg";
-import { j } from "../utils";
+import { logMaintOp, q } from "../core/db";
+import { registerInterval, unregisterInterval } from "../core/scheduler";
+import { getEncryption } from "../core/security";
+import { MemoryRow } from "../core/types";
+import { stringifyJSON } from "../utils";
+import { normalizeUserId, parseJSON } from "../utils";
+import { logger } from "../utils/logger";
+import { addHsgMemory } from "./hsg";
 
-const sim = (t1: string, t2: string): number => {
-    const s1 = new Set(t1.toLowerCase().split(/\s+/).filter(x => x.length > 0));
-    const s2 = new Set(t2.toLowerCase().split(/\s+/).filter(x => x.length > 0));
-    if (s1.size === 0 || s2.size === 0) return 0;
+/**
+ * Jaccard similarity between two strings based on tokens.
+ */
+const calculateSimilarity = (text1: string, text2: string): number => {
+    const tokenize = (s: string) =>
+        new Set(
+            s
+                .toLowerCase()
+                .replace(/[^\w\s]/g, "")
+                .split(/\s+/)
+                .filter((x) => x.length > 0),
+        );
+    const set1 = tokenize(text1);
+    const set2 = tokenize(text2);
+    if (set1.size === 0 || set2.size === 0) return 0;
 
-    let inter = 0;
-    for (const token of s1) {
-        if (s2.has(token)) inter++;
+    let intersectionCount = 0;
+    for (const token of set1) {
+        if (set2.has(token)) intersectionCount++;
     }
-    const union = new Set([...s1, ...s2]).size;
-    return union > 0 ? inter / union : 0;
+    const unionSize = new Set([...set1, ...set2]).size;
+    return unionSize > 0 ? intersectionCount / unionSize : 0;
 };
 
-const cluster = (mems: Memory[]): { mem: Memory[], n: number }[] => {
-    const cls: { mem: Memory[], n: number }[] = [];
-    const used = new Set<string>();
-    for (const m of mems) {
-        if (
-            used.has(m.id) ||
-            m.primary_sector === "reflective"
-        )
-            continue;
+/**
+ * Clusters memories based on content similarity and sector.
+ */
+const clusterMemories = (
+    memories: MemoryRow[],
+): { memories: MemoryRow[]; count: number }[] => {
+    const clusters: { memories: MemoryRow[]; count: number }[] = [];
+    const usedIds = new Set<string>();
 
-        let meta: any = {};
+    for (const m of memories) {
+        if (usedIds.has(m.id) || m.primarySector === "reflective") continue;
+
+        let metadata: Record<string, unknown> = {};
         try {
-            meta = m.meta ? (typeof m.meta === 'string' ? JSON.parse(m.meta) : m.meta) : {};
-        } catch (e) { /* ignore */ }
+            const raw = m.metadata
+                ? typeof m.metadata === "string"
+                    ? parseJSON(m.metadata)
+                    : m.metadata
+                : {};
+            if (typeof raw === "object" && raw !== null) {
+                metadata = raw as Record<string, unknown>;
+            }
+        } catch (e) {
+            logger.debug(`[REFLECT] Cluster meta parse error for ${m.id}: `, {
+                error: e,
+            });
+        }
 
-        if (meta.consolidated) continue;
-        const c = { mem: [m], n: 1 };
-        used.add(m.id);
-        for (const o of mems) {
-            if (used.has(o.id) || m.primary_sector !== o.primary_sector)
+        if (metadata.consolidated) continue;
+        const currentCluster = { memories: [m], count: 1 };
+        usedIds.add(m.id);
+
+        for (const o of memories) {
+            if (usedIds.has(o.id) || m.primarySector !== o.primarySector)
                 continue;
-            if (sim(m.content, o.content) > 0.8) {
-                c.mem.push(o);
-                c.n++;
-                used.add(o.id);
+            if (calculateSimilarity(m.content, o.content) > 0.8) {
+                currentCluster.memories.push(o);
+                currentCluster.count++;
+                usedIds.add(o.id);
             }
         }
-        if (c.n >= 2) cls.push(c);
+        if (currentCluster.count >= 2) clusters.push(currentCluster);
     }
-    return cls;
+    return clusters;
 };
 
-const sal = (c: { mem: Memory[], n: number }): number => {
+/**
+ * Calculates salience based on cluster density, recency, and emotional tags.
+ */
+const calculateReflectiveSalience = (cluster: {
+    memories: MemoryRow[];
+    count: number;
+}): number => {
     const now = Date.now();
-    const p = c.n / 10;
-    const r =
-        c.mem.reduce(
-            (s: number, m: Memory) =>
-                s +
-                Math.exp(-(now - Number(m.created_at)) / 43200000),
+    const densityPenalty = cluster.count / 10;
+    const recencyWeightedAverage =
+        cluster.memories.reduce(
+            (sum: number, m: MemoryRow) =>
+                sum + Math.exp(-(now - Number(m.createdAt)) / 43200000), // 12-hour decay constant
             0,
-        ) / c.n;
-    const e = c.mem.some(
-        (m: Memory) => {
-            const sectors = (m.tags ? j(m.tags) : []) as string[];
-            return sectors.includes("emotional");
-        }
-    )
+        ) / cluster.count;
+
+    const hasEmotionalContext = cluster.memories.some((m: MemoryRow) => {
+        const tags = (
+            m.tags
+                ? typeof m.tags === "string"
+                    ? parseJSON(m.tags)
+                    : m.tags
+                : []
+        ) as string[];
+        return tags.includes("emotional");
+    })
         ? 1
         : 0;
-    return Math.min(1, 0.6 * p + 0.3 * r + 0.1 * e);
+
+    return Math.min(
+        1,
+        0.6 * densityPenalty +
+        0.3 * recencyWeightedAverage +
+        0.1 * hasEmotionalContext,
+    );
 };
 
-const summ = (c: { mem: Memory[], n: number }): string => {
-    const sec = c.mem[0].primary_sector;
-    const n = c.n;
-    const txt = c.mem.map((m: Memory) => m.content.substring(0, 60)).join("; ");
-    return `${n} ${sec} pattern: ${txt.substring(0, 200)}`;
+/**
+ * Generates a summary for a cluster of memories.
+ */
+const summarizeCluster = async (
+    cluster: { memories: MemoryRow[]; count: number },
+    userId?: string | null,
+): Promise<string> => {
+    const sector = cluster.memories[0].primarySector;
+    const count = cluster.count;
+    const snippets = cluster.memories
+        .map((m: MemoryRow) => m.content)
+        .join("\n\n");
+
+    const gen = await get_generator(userId);
+    if (gen) {
+        try {
+            const prompt = `Analyze these ${count} related memories from the "${sector}" sector and synthesize a high-level cognitive pattern or insight.
+
+Memories:
+${snippets.slice(0, 3000)}
+
+Return a concise insight (1-2 sentences) starting with "${count} ${sector} pattern detected:".`;
+
+            return await gen.generate(prompt, { max_tokens: 150 });
+        } catch (e: unknown) {
+            const isRetryable = (e as Record<string, unknown>)?.retryable !== false;
+            const provider = (e as Record<string, unknown>)?.provider || "unknown";
+            logger.warn(`[REFLECT] AI generation failed (${provider}):`, {
+                error: (e as Error).message,
+                retryable: isRetryable,
+            });
+        }
+    }
+
+    return `${count} ${sector} pattern detected: ${snippets.substring(0, 200).replace(/\n/g, "; ")}...`;
 };
 
-const process_reflection_sources = async (ids: string[], user_id: string | undefined) => {
-    const now = Date.now();
+/**
+ * Marks source memories as consolidated and boosts their salience slightly.
+ */
+const processReflectionSources = async (
+    ids: string[],
+    userId: string | undefined | null,
+) => {
+    const timestamp = Date.now();
+    const uid = normalizeUserId(userId);
     for (const id of ids) {
-        const m = await q.get_mem.get(id, user_id);
+        const m = await q.getMem.get(id, uid);
         if (m) {
-            let meta: any = {};
+            let metadata: Record<string, unknown> = {};
             try {
-                meta = typeof m.meta === 'string' ? JSON.parse(m.meta || "{}") : (m.meta || {});
-            } catch (e) { /* ignore */ }
-            meta.consolidated = true;
-            // Combined update for marking consolidated and boosting salience
-            await q.upd_mem.run(
+                metadata =
+                    typeof m.metadata === "string"
+                        ? parseJSON(m.metadata || "{}")
+                        : m.metadata || {};
+            } catch (e) {
+                logger.debug(`[REFLECT] Metadata parse failed for ${id}: `, {
+                    error: e,
+                });
+            }
+            metadata.consolidated = true;
+
+            // Mark as consolidated
+            // Note: tags is guaranteed string by updated db.ts types but let's be safe
+            const tagsStr =
+                typeof m.tags === "string"
+                    ? m.tags
+                    : stringifyJSON(m.tags || []);
+
+            await q.updMem.run(
                 m.content,
-                m.tags || "",
-                JSON.stringify(meta),
-                now,
+                m.primarySector,
+                tagsStr,
+                stringifyJSON(metadata),
+                timestamp,
                 id,
-                user_id,
+                uid,
             );
-            await q.upd_seen.run(
+
+            // Refresh seen status and boost salience
+            await q.updSeen.run(
                 id,
-                Number(m.last_seen_at) || now,
+                Number(m.lastSeenAt) || timestamp,
                 Math.min(1, (m.salience ?? 0) * 1.1),
-                now,
-                user_id,
+                timestamp,
+                uid,
             );
         }
     }
 };
 
-export const run_reflection = async () => {
-    if (env.verbose) console.error("[REFLECT] Starting reflection job...");
-    const min = env.reflect_min || 20;
+/**
+ * Runs the global reflection job, clustering and synthesizing new memories.
+ */
+export const runReflection = async () => {
+    if (env.verbose) logger.info("[REFLECT] Starting reflection job...");
+    const minThreshold = env.reflectMin || 20;
 
-    // Fetch all active users to ensure multi-tenant isolation
-    const users = await q.get_active_users.all();
-    if (env.verbose) console.error(`[REFLECT] Found ${users.length} active users`);
+    const users = await q.getActiveUsers.all();
+    if (env.verbose)
+        logger.info(`[REFLECT] Found ${users.length} active users`);
 
-    let totalCreated = 0;
-    let totalClusters = 0;
+    let reflectionsCreated = 0;
+    let clustersFound = 0;
 
-    for (const { user_id } of users) {
-        if (env.verbose) console.error(`[REFLECT] Processing user: ${user_id}`);
-        const mems = (await q.all_mem_by_user.all(user_id, 100, 0)) as Memory[];
+    for (const { userId } of users) {
+        const uid = normalizeUserId(userId);
+        if (!uid) continue;
+        if (env.verbose) logger.info(`[REFLECT] Processing user: ${uid} `);
 
-        if (mems.length < min) {
-            if (env.verbose) console.error(`[REFLECT] User ${user_id}: Not enough memories (${mems.length}), skipping`);
+        const memories = await q.allMemByUser.all(uid, 100, 0);
+
+        if (memories.length < minThreshold) {
+            if (env.verbose)
+                logger.info(
+                    `[REFLECT] User ${userId}: Not enough memories(${memories.length}), skipping`,
+                );
             continue;
         }
 
-        const cls = cluster(mems);
-        if (env.verbose) console.error(`[REFLECT] User ${user_id}: Clustered into ${cls.length} groups`);
+        // Decrypt content for analysis
+        const enc = getEncryption();
+        const decryptedMemories = await Promise.all(
+            memories.map(async (m) => ({
+                ...m,
+                content: await enc.decrypt(m.content),
+            })),
+        );
 
-        for (const c of cls) {
-            const txt = summ(c);
-            const s = sal(c);
-            const src = c.mem.map((m: Memory) => m.id);
-            const meta = {
-                type: "auto_reflect",
-                sources: src,
-                freq: c.n,
-                at: new Date().toISOString(),
-                user_id, // Explicitly include user_id in metadata
-            };
-            if (env.verbose) {
-                console.error(
-                    `[REFLECT] User ${user_id}: Creating reflection: ${c.n} memories, salience=${s.toFixed(3)}, sector=${c.mem[0].primary_sector}`,
+        const clusters = clusterMemories(decryptedMemories);
+        if (env.verbose)
+            logger.info(
+                `[REFLECT] User ${userId}: Clustered into ${clusters.length} groups`,
+            );
+
+        for (const c of clusters) {
+            try {
+                const text = await summarizeCluster(c, uid);
+                const salience = calculateReflectiveSalience(c);
+                const sourceIds = c.memories.map((m) => m.id);
+                const meta = {
+                    type: "auto_reflect",
+                    sources: sourceIds,
+                    frequency: c.count,
+                    at: new Date().toISOString(),
+                    userId: uid,
+                };
+
+                if (env.verbose) {
+                    logger.info(
+                        `[REFLECT] User ${uid}: Creating reflection in ${c.memories[0].primarySector} (Sources: ${c.count}, Salience: ${salience.toFixed(3)})`,
+                    );
+                }
+
+                await addHsgMemory(
+                    text,
+                    stringifyJSON(["reflect:auto"]),
+                    meta,
+                    uid,
+                );
+                await processReflectionSources(sourceIds, uid);
+                reflectionsCreated++;
+            } catch (err: unknown) {
+                const msg = err instanceof Error ? err.message : String(err);
+                logger.error(
+                    `[REFLECT] User ${uid}: Failed to process cluster: ${msg} `,
+                    { error: err },
                 );
             }
-            // add_hsg_memory handles user_id internally via tags/meta if passed correctly
-            await add_hsg_memory(txt, j(["reflect:auto"]), meta, user_id as string);
-            await process_reflection_sources(src, user_id as string);
-            totalCreated++;
         }
-        totalClusters += cls.length;
+        if (clusters.length > 0) {
+            try {
+                await logMaintOp("reflect", clusters.length, uid);
+            } catch {
+                /* ignore */
+            }
+        }
+        clustersFound += clusters.length;
     }
 
-    if (totalCreated > 0) await log_maint_op("reflect", totalCreated);
-    if (env.verbose) console.error(`[REFLECT] Job complete: created ${totalCreated} reflections across users`);
-    return { created: totalCreated, clusters: totalClusters };
+    if (env.verbose)
+        logger.info(
+            `[REFLECT] Job complete: created ${reflectionsCreated} reflections across users`,
+        );
+    return { created: reflectionsCreated, clusters: clustersFound };
 };
 
-let timer: NodeJS.Timeout | null = null;
+let reflectionTimerId: string | null = null;
 
-export const start_reflection = () => {
-    if (!env.auto_reflect || timer) return;
-    const int = (env.reflect_interval || 10) * 60000;
-    timer = setInterval(
-        () => run_reflection().catch((e) => console.error("[REFLECT]", e)),
-        int,
+/**
+ * Starts the reflection service.
+ */
+export const startReflection = () => {
+    if (!env.autoReflect || reflectionTimerId) return;
+    const intervalMs = (env.reflectInterval || 10) * 60000;
+    reflectionTimerId = registerInterval(
+        "reflection",
+        async () => {
+            try {
+                await runReflection();
+            } catch (e) {
+                logger.error("[REFLECT] Job Failed:", { error: e });
+            }
+        },
+        intervalMs,
     );
-    if (env.verbose) console.error(`[REFLECT] Started: every ${env.reflect_interval || 10}m`);
+    if (env.verbose)
+        logger.info(`[REFLECT] Started: every ${env.reflectInterval || 10} m`);
 };
 
-export const stop_reflection = () => {
-    if (timer) {
-        clearInterval(timer);
-        timer = null;
+/**
+ * Stops the reflection service.
+ */
+export const stopReflection = () => {
+    if (reflectionTimerId) {
+        unregisterInterval(reflectionTimerId);
+        reflectionTimerId = null;
     }
 };

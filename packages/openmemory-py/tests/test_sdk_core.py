@@ -13,13 +13,39 @@ class TestPhase64(unittest.IsolatedAsyncioTestCase):
         cls.test_db = "test_phase_64.db"
         if os.path.exists(cls.test_db):
             os.remove(cls.test_db)
+        # Force synthetic
+        cls.original_emb = env.emb_kind
+        env.emb_kind = "synthetic"
+        # Reset any keys that might trigger auto-detect
+        env.openai_key = None
 
     @classmethod
     def tearDownClass(cls):
+        env.emb_kind = cls.original_emb
+        # Reset others
+        env.openai_key = None
+        env.tier = "hybrid"
+        from openmemory.core.db import db
+        import asyncio
+        try:
+            # We are in a sync classmethod, but db.disconnect is async
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(db.disconnect())
+            else:
+                asyncio.run(db.disconnect())
+        except:
+            pass
+
         if os.path.exists(cls.test_db):
-            os.remove(cls.test_db)
+            try: os.remove(cls.test_db)
+            except: pass
+        if os.path.exists("api_test.sqlite"):
+            try: os.remove("api_test.sqlite")
+            except: pass
         if os.path.exists("memory.sqlite"):
-            os.remove("memory.sqlite")
+            try: os.remove("memory.sqlite")
+            except: pass
 
     async def test_constructor_overrides(self):
         # Use constructor to set a custom path

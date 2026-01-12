@@ -1,1 +1,62 @@
-**/node_modules
+# Dependencies
+node_modules
+npm-debug.log
+yarn-error.log
+package-lock.json
+bun.lockb
+pnpm-lock.yaml
+
+# Build & Runtime
+dist
+coverage
+build
+target
+out
+
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+.git
+.gitignore
+.dockerignore
+.pypirc
+.npmrc
+
+# Tests & Artifacts
+test
+tests
+test_output/
+test_migrations/
+test_phase/
+*.sqlite
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.log
+trace.txt
+
+# Python / SDK Artifacts (Ignore in JS Docker builds)
+sdk-py/
+packages/openmemory-py/
+__pycache__/
+*.pyc
+.venv
+venv/
+
+# Legacy / Other
+sdk-js/
+backend/
+# apps/
+examples/
+docs/
+arch/
+tools/
+scripts/
+
+# IDE
+.vscode
+.idea
+.DS_Store
+*.swp

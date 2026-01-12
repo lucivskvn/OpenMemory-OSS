@@ -62,10 +62,20 @@ class Importer:
         async with semaphore:
             try:
                 # Transform to OpenMemory API format
+                # Safely parse created_at for override
+                ca_val = data.get("created_at")
+                ca_override = None
+                if isinstance(ca_val, int):
+                    ca_override = ca_val
+                elif isinstance(ca_val, (float, str)):
+                    try: ca_override = int(float(ca_val))
+                    except: pass
+
                 payload = {
                     "content": data.get("content", ""),
                     "tags": data.get("tags", []),
                     "user_id": data.get("uid", "default"),
+                    "createdAt": ca_override,
                     "metadata": {
                         **(data.get("metadata") or {}),
                         "migrated": True,

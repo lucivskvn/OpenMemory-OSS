@@ -1,294 +1,560 @@
-import { q, vector_store } from "../../core/db";
-import { get_encryption } from "../../core/security";
-import { now, rid, j, p } from "../../utils";
-import {
-    add_hsg_memory,
-    hsg_query,
-    reinforce_memory,
-    update_memory,
-} from "../../memory/hsg";
-import { ingestDocument, ingestURL } from "../../ops/ingest";
-import { env } from "../../core/cfg";
-import { update_user_summary } from "../../memory/user_summary";
-import { MemoryRow } from "../../core/types";
-import { AdvancedRequest, AdvancedResponse } from "../index";
-import { AppError, sendError } from "../errors";
 import { z } from "zod";
 
+import { env } from "../../core/cfg";
+import { vectorStore } from "../../core/db";
+import { Memory } from "../../core/memory";
+import { updateUserSummary } from "../../memory/user_summary";
+import { normalizeUserId } from "../../utils";
+import { logger } from "../../utils/logger";
+import { AppError, sendError } from "../errors";
+import {
+    validateBody,
+    validateParams,
+    validateQuery,
+} from "../middleware/validate";
+
 const AddMemorySchema = z.object({
-    content: z.string().min(1),
+    content: z.string().min(1).max(100000),
     tags: z.array(z.string()).optional().default([]),
-    metadata: z.record(z.any()).optional().default({})
+    metadata: z.record(z.string(), z.unknown()).optional().default({}),
+    userId: z.string().optional(),
+    id: z.string().optional(),
+    createdAt: z.number().int().optional(),
 });
 
 const IngestSchema = z.object({
-    content_type: z.string().min(1),
-    data: z.any(),
-    metadata: z.record(z.any()).optional().default({}),
-    config: z.record(z.any()).optional().default({})
+    contentType: z.string().min(1),
+    data: z.unknown(), // Can be any serializable data
+    metadata: z.record(z.string(), z.unknown()).optional().default({}),
+    config: z.record(z.string(), z.unknown()).optional().default({}),
+    userId: z.string().optional(),
+    id: z.string().optional(),
+    createdAt: z.number().int().optional(),
 });
 
 const IngestUrlSchema = z.object({
     url: z.string().url(),
-    metadata: z.record(z.any()).optional().default({}),
-    config: z.record(z.any()).optional().default({})
+    metadata: z.record(z.string(), z.unknown()).optional().default({}),
+    config: z.record(z.string(), z.unknown()).optional().default({}),
+    userId: z.string().optional(),
+    id: z.string().optional(),
+    createdAt: z.number().int().optional(),
 });
 
 const QueryMemorySchema = z.object({
     query: z.string().min(1),
     k: z.number().optional().default(8),
-    filters: z.object({
-        sector: z.string().optional(),
-        min_score: z.number().optional(),
-        user_id: z.string().optional(),
-        startTime: z.string().or(z.number()).optional(),
-        endTime: z.string().or(z.number()).optional()
-    }).optional()
+    filters: z
+        .object({
+            sector: z.string().optional(),
+            minScore: z.number().optional(),
+            userId: z.string().optional(),
+            startTime: z.string().or(z.number()).optional(),
+            endTime: z.string().or(z.number()).optional(),
+        })
+        .optional(),
 });
 
-export function mem(app: any) {
-    app.post("/memory/add", async (req: AdvancedRequest, res: AdvancedResponse) => {
+const ReinforceSchema = z.object({
+    boost: z.number().optional().default(0.1),
+});
+
+const UpdateMemorySchema = z.object({
+    content: z.string().max(100000).optional(),
+    tags: z.array(z.string()).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
+const ListMemorySchema = z.object({
+    u: z.coerce.number().default(0), // offset
+    l: z.coerce.number().min(1).max(1000).default(100), // limit
+    sector: z.string().optional(),
+    userId: z.string().optional(),
+});
+
+const IdParamsSchema = z.object({
+    id: z.string().min(1),
+});
+
+import type { AdvancedRequest, AdvancedResponse, ServerApp } from "../server";
+
+/**
+ * Registers Memory Operations routes.
+ * Includes Add, Ingest, Query, Reinforce, Update, List, Get, Delete.
+ * @param app Express/Server app instance
+ */
+export function memoryRoutes(app: ServerApp) {
+    /**
+     * Helper to resolve the user context based on auth scope and request parameters.
+     * Enforces tenant isolation for non-admin users.
+     */
+    const getEffectiveUserId = (req: AdvancedRequest, bodyUserId?: string): string | undefined => {
+        const isAdmin = (req.user?.scopes || []).includes("admin:all");
+        let userId = req.user?.id;
+
+        if (isAdmin && bodyUserId) {
+            userId = bodyUserId;
+        } else if (!userId) {
+            // Unauthenticated (Open Mode) or Fallback
+            userId = bodyUserId;
+        }
+
+        return normalizeUserId(userId) ?? undefined;
+    };
+
+    /**
+     * POST /memory/add
+     * Adds a new memory to the HSG.
+     */
+    // Handlers extracted for clarity and potential testing
+    const addMemoryHandler = async (
+        req: AdvancedRequest,
+        res: AdvancedResponse,
+    ) => {
         try {
-            const validated = AddMemorySchema.safeParse(req.body);
-            if (!validated.success) {
-                return sendError(res, new AppError(400, "VALIDATION_ERROR", "Invalid memory data", validated.error.format()));
-            }
+            const body = req.body as z.infer<typeof AddMemorySchema>;
+            const { content, tags, metadata, userId: bodyUserId, id, createdAt } = body;
 
-            const { content, tags, metadata } = validated.data;
-            const user_id = req.user?.id;
+            const normalizedUid = getEffectiveUserId(req, bodyUserId);
 
-            const m = await add_hsg_memory(
-                content,
-                j(tags),
-                metadata,
-                user_id,
-            );
-            res.json(m);
+            // Use Memory class which handles event emission and hydration
+            const m = new Memory(normalizedUid);
+            const item = await m.add(content, {
+                tags,
+                id,
+                createdAt,
+                ...metadata,
+            });
 
-            if (user_id) {
-                update_user_summary(user_id).catch((e) =>
-                    console.error("[mem] user summary update failed:", e),
+            res.json(item);
+
+            if (normalizedUid) {
+                updateUserSummary(normalizedUid).catch((e) =>
+                    logger.error("[mem] user summary update failed:", {
+                        error: e,
+                    }),
                 );
             }
         } catch (e: unknown) {
             sendError(res, e);
         }
-    });
+    };
 
-    app.post("/memory/ingest", async (req: AdvancedRequest, res: AdvancedResponse) => {
+    const ingestHandler = async (
+        req: AdvancedRequest,
+        res: AdvancedResponse,
+    ) => {
         try {
-            const validated = IngestSchema.safeParse(req.body);
-            if (!validated.success) {
-                return sendError(res, new AppError(400, "VALIDATION_ERROR", "Invalid ingestion data", validated.error.format()));
-            }
-
-            const { content_type, data, metadata, config } = validated.data;
-            const user_id = req.user?.id;
-
-            const r = await ingestDocument(
-                content_type,
+            const {
+                contentType,
                 data,
                 metadata,
                 config,
-                user_id,
+                userId: bodyUserId,
+                id,
+                createdAt,
+            } = req.body as z.infer<typeof IngestSchema>;
+
+            const normalizedUid = getEffectiveUserId(req, bodyUserId);
+
+            if (typeof data !== "string" && !Buffer.isBuffer(data)) {
+                return sendError(
+                    res,
+                    new AppError(
+                        400,
+                        "INVALID_PAYLOAD",
+                        "Data must be a string or Buffer",
+                    ),
+                );
+            }
+
+            // Use Memory Facade
+            const m = new Memory(normalizedUid);
+            const result = await m.ingest({
+                contentType,
+                data,
+                metadata,
+                config,
+                userId: normalizedUid ?? undefined,
+                id,
+                createdAt,
+            });
+            res.json(result);
+        } catch (e: unknown) {
+            sendError(
+                res,
+                new AppError(
+                    500,
+                    "INGEST_FAILED",
+                    "Ingestion failed",
+                    e instanceof Error ? e.message : String(e),
+                ),
             );
-            res.json(r);
-        } catch (e: unknown) {
-            sendError(res, new AppError(500, "INGEST_FAILED", "Ingestion failed", e instanceof Error ? e.message : String(e)));
         }
-    });
+    };
 
-    app.post("/memory/ingest/url", async (req: AdvancedRequest, res: AdvancedResponse) => {
+    const ingestUrlHandler = async (
+        req: AdvancedRequest,
+        res: AdvancedResponse,
+    ) => {
         try {
-            const validated = IngestUrlSchema.safeParse(req.body);
-            if (!validated.success) {
-                return sendError(res, new AppError(400, "VALIDATION_ERROR", "Invalid URL ingestion data", validated.error.format()));
-            }
+            const {
+                url,
+                metadata,
+                config,
+                userId: bodyUserId,
+                id,
+                createdAt,
+            } = req.body as z.infer<typeof IngestUrlSchema>;
 
-            const { url, metadata, config } = validated.data;
-            const user_id = req.user?.id;
+            const normalizedUid = getEffectiveUserId(req, bodyUserId);
 
-            const r = await ingestURL(url, metadata, config, user_id);
-            res.json(r);
+            // Use Memory Facade
+            const m = new Memory(normalizedUid);
+            const result = await m.ingestUrl(url, {
+                metadata,
+                config,
+                userId: normalizedUid ?? undefined,
+                id,
+                createdAt,
+            });
+            res.json(result);
         } catch (e: unknown) {
-            sendError(res, new AppError(500, "URL_INGEST_FAILED", "URL ingestion failed", e instanceof Error ? e.message : String(e)));
+            sendError(
+                res,
+                new AppError(
+                    500,
+                    "URL_INGEST_FAILED",
+                    "URL ingestion failed",
+                    e instanceof Error ? e.message : String(e),
+                ),
+            );
         }
-    });
+    };
 
-    app.post("/memory/query", async (req: AdvancedRequest, res: AdvancedResponse) => {
+    const queryMemoryHandler = async (
+        req: AdvancedRequest,
+        res: AdvancedResponse,
+    ) => {
         try {
-            const validated = QueryMemorySchema.safeParse(req.body);
-            if (!validated.success) {
-                return sendError(res, new AppError(400, "VALIDATION_ERROR", "Invalid query data", validated.error.format()));
-            }
+            const { query, k, filters } = req.body as z.infer<
+                typeof QueryMemorySchema
+            >;
 
-            const { query, k, filters } = validated.data;
-            const user_id = req.user?.id || filters?.user_id;
+            const normalizedUid = getEffectiveUserId(req, filters?.userId);
 
-            const f = {
+            const filter = {
                 sectors: filters?.sector ? [filters.sector] : undefined,
-                minSalience: filters?.min_score,
-                user_id,
-                startTime: filters?.startTime ? new Date(filters.startTime) : undefined,
-                endTime: filters?.endTime ? new Date(filters.endTime) : undefined,
+                minSalience: filters?.minScore,
+                userId: normalizedUid ?? undefined,
             };
 
-            const m = await hsg_query(query, k, f);
+            const m = new Memory(normalizedUid);
+            const matches = await m.search(query, {
+                ...filter,
+                limit: k,
+            });
+
             res.json({
                 query,
-                matches: m.map((x) => ({
+                matches: matches.map((x) => ({
                     id: x.id,
                     content: x.content,
                     score: x.score,
                     sectors: x.sectors,
-                    primary_sector: x.primary_sector,
+                    primarySector: x.primarySector,
                     path: x.path,
                     salience: x.salience,
-                    last_seen_at: x.last_seen_at,
+                    lastSeenAt: x.lastSeenAt,
+                    updatedAt: x.updatedAt,
+                    decayLambda: x.decayLambda,
+                    version: x.version,
+                    segment: x.segment,
+                    simhash: x.simhash,
+                    generatedSummary: x.generatedSummary,
                 })),
             });
         } catch (e: unknown) {
-            console.error("[query] error:", e);
-            res.json({ query: req.body.query || "", matches: [] });
+            logger.error("[query] error:", { error: e });
+            sendError(res, e instanceof Error ? e : new Error(String(e)));
         }
-    });
+    };
 
-    app.post("/memory/reinforce", async (req: AdvancedRequest, res: AdvancedResponse) => {
+    const reinforceHandler = async (
+        req: AdvancedRequest,
+        res: AdvancedResponse,
+    ) => {
         try {
-            const validated = z.object({
-                id: z.string().min(1),
-                boost: z.number().optional()
-            }).safeParse(req.body);
+            const { id } = req.params;
+            const { boost } = req.body as z.infer<typeof ReinforceSchema>;
 
-            if (!validated.success) {
-                return sendError(res, new AppError(400, "VALIDATION_ERROR", "ID is required", validated.error.format()));
-            }
+            const m = new Memory(req.user?.id);
+            await m.reinforce(id, boost);
 
-            const { id, boost } = validated.data;
-            await reinforce_memory(id, boost, req.user?.id);
             res.json({ ok: true });
         } catch (e: unknown) {
-            sendError(res, new AppError(404, "NOT_FOUND", "Memory not found for reinforcement"));
+            sendError(
+                res,
+                new AppError(
+                    404,
+                    "NOT_FOUND",
+                    "Memory not found for reinforcement",
+                ),
+            );
         }
-    });
+    };
 
-    app.patch("/memory/:id", async (req: AdvancedRequest, res: AdvancedResponse) => {
+    const updateMemoryHandler = async (
+        req: AdvancedRequest,
+        res: AdvancedResponse,
+    ) => {
         try {
             const id = req.params.id;
-            const user_id = req.user?.id;
-            if (!id) return sendError(res, new AppError(400, "MISSING_ID", "ID is required"));
+            const body = req.body as z.infer<typeof UpdateMemorySchema>;
+            const { content, tags, metadata } = body;
 
-            const validated = z.object({
-                content: z.string().optional(),
-                tags: z.array(z.string()).optional(),
-                metadata: z.record(z.any()).optional()
-            }).safeParse(req.body);
+            if (!id)
+                return sendError(
+                    res,
+                    new AppError(400, "MISSING_ID", "ID is required"),
+                );
 
-            if (!validated.success) {
-                return sendError(res, new AppError(400, "VALIDATION_ERROR", "Invalid update data", validated.error.format()));
-            }
+            const checkUserId = getEffectiveUserId(req);
 
-            const { content, tags, metadata } = validated.data;
+            const m = new Memory(checkUserId);
+            // Verify existence AND ownership via Facade get()
+            const existing = await m.get(id);
 
-            const m = await q.get_mem.get(id, user_id);
-            if (!m) return sendError(res, new AppError(404, "NOT_FOUND", "Memory not found"));
+            if (!existing)
+                return sendError(
+                    res,
+                    new AppError(404, "NOT_FOUND", "Memory not found"),
+                );
 
-            const r = await update_memory(id, content, tags, metadata, user_id);
-            res.json(r);
+            const result = await m.update(
+                id,
+                content,
+                tags,
+                metadata,
+                checkUserId ?? undefined,
+            );
+            res.json(result);
         } catch (e: unknown) {
             sendError(res, e);
         }
-    });
+    };
 
-    app.get("/memory/all", async (req: AdvancedRequest, res: AdvancedResponse) => {
+    const listMemoryHandler = async (
+        req: AdvancedRequest,
+        res: AdvancedResponse,
+    ) => {
         try {
-            const validated = z.object({
-                u: z.string().or(z.number()).optional().default(0),
-                l: z.string().or(z.number()).optional().default(100),
-                sector: z.string().optional(),
-                user_id: z.string().optional()
-            }).safeParse(req.query);
+            // zod validation ensures types
+            const query = req.query as unknown as z.infer<
+                typeof ListMemorySchema
+            >;
+            const { u, l, sector, userId: queryUserId } = query;
 
-            if (!validated.success) {
-                return sendError(res, new AppError(400, "VALIDATION_ERROR", "Invalid query parameters", validated.error.format()));
+            // Determine effective user context
+            const targetUserId = getEffectiveUserId(req, queryUserId);
+
+            // Regular users can ONLY see their own data if API Key is set
+            if (env.apiKey && !req.user?.id) {
+                return sendError(
+                    res,
+                    new AppError(
+                        401,
+                        "UNAUTHORIZED",
+                        "Authentication required",
+                    ),
+                );
             }
 
-            const u = typeof validated.data.u === 'string' ? parseInt(validated.data.u) : validated.data.u;
-            const l = typeof validated.data.l === 'string' ? parseInt(validated.data.l) : validated.data.l;
-            const s = validated.data.sector;
-            const user_id = req.user?.id || validated.data.user_id;
+            // Use Memory class for consistent hydration/decryption
+            const m = new Memory(targetUserId);
+            // If admin and no user specified, we might want global list, but Memory class defaults to "system" or specific user.
+            // We use hostList which supports the null/admin case better
+            const items = await m.hostList(l, u, sector, targetUserId);
 
-            let r;
-            if (user_id) {
-                r = await q.all_mem_by_user.all(user_id, l, u);
-            } else if (s) {
-                r = await q.all_mem_by_sector.all(s, l, u);
-            } else {
-                r = await q.all_mem.all(l, u);
-            }
-
-            const enc = get_encryption();
-            const i = await Promise.all(r.map(async (x: MemoryRow) => ({
-                id: x.id,
-                content: await enc.decrypt(x.content),
-                tags: p(x.tags || "[]"),
-                metadata: p(x.meta || "{}"),
-                created_at: x.created_at,
-                updated_at: x.updated_at,
-                last_seen_at: x.last_seen_at,
-                salience: x.salience,
-                decay_lambda: x.decay_lambda,
-                primary_sector: x.primary_sector,
-                version: x.version,
-                user_id: x.user_id,
-            })));
-            res.json({ items: i });
+            res.json({ items });
         } catch (e: unknown) {
             sendError(res, e);
         }
-    });
+    };
 
-    app.get("/memory/:id", async (req: AdvancedRequest, res: AdvancedResponse) => {
+    const getMemoryHandler = async (
+        req: AdvancedRequest,
+        res: AdvancedResponse,
+    ) => {
         try {
             const id = req.params.id;
-            const user_id = req.user?.id;
-            const m = await q.get_mem.get(id, user_id);
-            if (!m) return sendError(res, new AppError(404, "NOT_FOUND", "Memory not found"));
+            const isAdmin = (req.user?.scopes || []).includes("admin:all");
+            const userId = isAdmin ? undefined : req.user?.id;
 
-            const v = await vector_store.getVectorsById(id);
-            const sec = v.map((x: { sector: string }) => x.sector);
-            const enc = get_encryption();
+            // Use Memory class
+            const m = new Memory(userId);
+            const memory = await m.get(id);
+
+            if (!memory)
+                return sendError(
+                    res,
+                    new AppError(404, "NOT_FOUND", "Memory not found"),
+                );
+
+            // Hydration already done by Memory.get
+            // Just need to attach vectors if needed, but the route didn't seem to request them in the previous code?
+            // Actually previous code fetched vectors but didn't seem to use them in the response JSON explicitly
+            // except for mapping sectors? The sectors are already in the memory item (if we assume consistency).
+            // Retaining original behavior of fetching sectors from vectors to be safe, though strict MemoryItem might be enough.
+
+            const vectors = await vectorStore.getVectorsById(id);
+            const sectors = vectors.map((x: { sector: string }) => x.sector);
+
             res.json({
-                id: m.id,
-                content: await enc.decrypt(m.content),
-                primary_sector: m.primary_sector,
-                sectors: sec,
-                tags: p(m.tags || "[]"),
-                metadata: p(m.meta || "{}"),
-                created_at: m.created_at,
-                updated_at: m.updated_at,
-                last_seen_at: m.last_seen_at,
-                salience: m.salience,
-                decay_lambda: m.decay_lambda,
-                version: m.version,
-                user_id: m.user_id,
+                ...memory,
+                sectors, // augment with sectors found in vector store
             });
         } catch (e: unknown) {
             sendError(res, e);
         }
-    });
+    };
 
-    app.delete("/memory/:id", async (req: AdvancedRequest, res: AdvancedResponse) => {
+    const deleteMemoryHandler = async (
+        req: AdvancedRequest,
+        res: AdvancedResponse,
+    ) => {
         try {
             const id = req.params.id;
-            const user_id = req.user?.id;
-            const m = await q.get_mem.get(id, user_id);
-            if (!m) return sendError(res, new AppError(404, "NOT_FOUND", "Memory not found"));
+            const userId = getEffectiveUserId(req);
 
-            await q.del_mem.run(id, user_id);
+            const m = new Memory(userId);
+            const existing = await m.get(id); // Verification
+            if (!existing)
+                return sendError(
+                    res,
+                    new AppError(404, "NOT_FOUND", "Memory not found"),
+                );
+
+            await m.delete(id);
             res.json({ ok: true });
         } catch (e: unknown) {
             sendError(res, e);
         }
-    });
+    };
+
+    const deleteAllMemoryHandler = async (
+        req: AdvancedRequest,
+        res: AdvancedResponse,
+    ) => {
+        try {
+            const query = req.query as Record<string, string>;
+            const userId = getEffectiveUserId(req, query.userId); // Returns null if admin + no userId, or specific userId
+
+            const isAdmin = (req.user?.scopes || []).includes("admin:all");
+
+            if (!userId && !isAdmin) {
+                return sendError(
+                    res,
+                    new AppError(403, "FORBIDDEN", "Global wipe requires admin privileges"),
+                );
+            }
+
+            const m = new Memory(userId); // userId is normalized (null for global admin wipe)
+
+            let count = 0;
+            if (!userId && isAdmin) {
+                // Global Wipe
+                await m.wipe();
+                // Return 0 or undefined for count? wipe() is void. We can't easily get count for global wipe efficiently without pre-count.
+                // Let's assume OK.
+            } else {
+                count = await m.deleteAll(userId);
+            }
+            res.json({ ok: true, deleted: count });
+        } catch (e: unknown) {
+            sendError(res, e);
+        }
+    };
+
+    /**
+     * POST /memory/add
+     * Adds a new memory to the HSG.
+     */
+    app.post("/memory/add", validateBody(AddMemorySchema), addMemoryHandler);
+
+    /**
+     * POST /memory/ingest
+     * Ingests a document from raw data.
+     */
+    app.post("/memory/ingest", validateBody(IngestSchema), ingestHandler);
+
+    /**
+     * POST /memory/ingest/url
+     * Ingests content from a URL.
+     */
+    app.post(
+        "/memory/ingest/url",
+        validateBody(IngestUrlSchema),
+        ingestUrlHandler,
+    );
+
+    /**
+     * POST /memory/query
+     * Queries memories based on semantic similarity and filters.
+     */
+    app.post(
+        "/memory/query",
+        validateBody(QueryMemorySchema),
+        queryMemoryHandler,
+    );
+
+    /**
+     * POST /memory/:id/reinforce
+     * Reinforces a specific memory.
+     */
+    app.post(
+        "/memory/:id/reinforce",
+        validateParams(IdParamsSchema),
+        validateBody(ReinforceSchema),
+        reinforceHandler,
+    );
+
+    /**
+     * PATCH /memory/:id
+     * Updates an existing memory.
+     */
+    app.patch(
+        "/memory/:id",
+        validateParams(IdParamsSchema),
+        validateBody(UpdateMemorySchema),
+        updateMemoryHandler,
+    );
+
+    /**
+     * GET /memory/all
+     * Lists all memories with pagination and filtering.
+     */
+    app.get("/memory/all", validateQuery(ListMemorySchema), listMemoryHandler);
+
+    /**
+     * GET /memory/:id
+     * Retrieves a single memory by ID.
+     */
+    app.get("/memory/:id", validateParams(IdParamsSchema), getMemoryHandler);
+
+    /**
+     * DELETE /memory/all
+     * Deletes all memories for a user or global (admin only).
+     */
+    app.delete("/memory/all", deleteAllMemoryHandler);
+
+    /**
+     * DELETE /memory/:id
+     * Deletes a memory by ID.
+     */
+    app.delete(
+        "/memory/:id",
+        validateParams(IdParamsSchema),
+        deleteMemoryHandler,
+    );
 }

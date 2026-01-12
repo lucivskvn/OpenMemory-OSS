@@ -1,96 +1,96 @@
-import { canonical_tokens_from_text } from "./text";
 import { env } from "../core/cfg";
+import { canonicalTokensFromText } from "./text";
 
-export interface keyword_match {
+export interface KeywordMatch {
     id: string;
     score: number;
-    matched_terms: string[];
+    matchedTerms: string[];
 }
 
-export function extract_keywords(
+export function extractKeywords(
     text: string,
-    min_length: number = env.keyword_min_length,
+    minLength: number = env.keywordMinLength,
 ): Set<string> {
-    const tokens = canonical_tokens_from_text(text);
+    const tokens = canonicalTokensFromText(text);
     const keywords = new Set<string>();
 
     for (const token of tokens) {
-        if (token.length >= min_length) {
+        if (token.length >= minLength) {
             keywords.add(token);
+        }
+    }
 
-            if (token.length >= 3) {
-                for (let i = 0; i <= token.length - 3; i++) {
-                    keywords.add(token.slice(i, i + 3));
-                }
+    // Word-level N-Grams
+    if (tokens.length > 1) {
+        for (let i = 0; i < tokens.length - 1; i++) {
+            const bigram = `${tokens[i]}_${tokens[i + 1]}`;
+            if (bigram.length >= minLength) {
+                keywords.add(bigram);
             }
         }
     }
 
-    for (let i = 0; i < tokens.length - 1; i++) {
-        const bigram = `${tokens[i]}_${tokens[i + 1]}`;
-        if (bigram.length >= min_length) {
-            keywords.add(bigram);
+    if (tokens.length > 2) {
+        for (let i = 0; i < tokens.length - 2; i++) {
+            const trigram = `${tokens[i]}_${tokens[i + 1]}_${tokens[i + 2]}`;
+            if (trigram.length >= minLength) {
+                keywords.add(trigram);
+            }
         }
-    }
-
-    for (let i = 0; i < tokens.length - 2; i++) {
-        const trigram = `${tokens[i]}_${tokens[i + 1]}_${tokens[i + 2]}`;
-        keywords.add(trigram);
     }
 
     return keywords;
 }
 
-export function compute_keyword_overlap(
-    query_keywords: Set<string>,
-    content_keywords: Set<string>,
+export function computeKeywordOverlap(
+    queryKeywords: Set<string>,
+    contentKeywords: Set<string>,
 ): number {
     let matches = 0;
-    let total_weight = 0;
+    let totalWeight = 0;
 
-    for (const qk of query_keywords) {
-        if (content_keywords.has(qk)) {
+    for (const qk of queryKeywords) {
+        if (contentKeywords.has(qk)) {
             const weight = qk.includes("_") ? 2.0 : 1.0;
             matches += weight;
         }
-        total_weight += qk.includes("_") ? 2.0 : 1.0;
+        totalWeight += qk.includes("_") ? 2.0 : 1.0;
     }
 
-    if (total_weight === 0) return 0;
-    return matches / total_weight;
+    if (totalWeight === 0) return 0;
+    return matches / totalWeight;
 }
 
-export function exact_phrase_match(query: string, content: string): boolean {
-    const q_norm = query.toLowerCase().trim();
-    const c_norm = content.toLowerCase();
-    return c_norm.includes(q_norm);
+export function exactPhraseMatch(query: string, content: string): boolean {
+    const qNorm = query.toLowerCase().trim();
+    const cNorm = content.toLowerCase();
+    return cNorm.includes(qNorm);
 }
 
-export function compute_bm25_score(
-    query_terms: string[],
-    content_terms: string[],
-    corpus_size: number = 10000,
-    avg_doc_length: number = 100,
+export function computeBm25Score(
+    queryTerms: string[],
+    contentTerms: string[],
+    corpusSize: number = 10000,
+    avgDocLength: number = 100,
 ): number {
     const k1 = 1.5;
     const b = 0.75;
 
-    const term_freq = new Map<string, number>();
-    for (const term of content_terms) {
-        term_freq.set(term, (term_freq.get(term) || 0) + 1);
+    const termFreq = new Map<string, number>();
+    for (const term of contentTerms) {
+        termFreq.set(term, (termFreq.get(term) || 0) + 1);
     }
 
-    const doc_length = content_terms.length;
+    const docLength = contentTerms.length;
     let score = 0;
 
-    for (const q_term of query_terms) {
-        const tf = term_freq.get(q_term) || 0;
+    for (const qTerm of queryTerms) {
+        const tf = termFreq.get(qTerm) || 0;
         if (tf === 0) continue;
 
-        const idf = Math.log((corpus_size + 1) / (tf + 0.5));
+        const idf = Math.log((corpusSize + 1) / (tf + 0.5));
         const numerator = tf * (k1 + 1);
-        const denominator =
-            tf + k1 * (1 - b + b * (doc_length / avg_doc_length));
+        const denominator = tf + k1 * (1 - b + b * (docLength / avgDocLength));
 
         score += idf * (numerator / denominator);
     }
@@ -98,38 +98,38 @@ export function compute_bm25_score(
     return score;
 }
 
-export async function keyword_filter_memories(
+export async function keywordFilterMemories(
     query: string,
-    all_memories: Array<{ id: string; content: string }>,
+    allMemories: Array<{ id: string; content: string }>,
     threshold: number = 0.1,
 ): Promise<Map<string, number>> {
-    const query_keywords = extract_keywords(query, env.keyword_min_length);
-    const query_terms = canonical_tokens_from_text(query);
+    const queryKeywords = extractKeywords(query, env.keywordMinLength);
+    const queryTerms = canonicalTokensFromText(query);
     const scores = new Map<string, number>();
 
-    for (const mem of all_memories) {
-        let total_score = 0;
+    for (const mem of allMemories) {
+        let totalScore = 0;
 
-        if (exact_phrase_match(query, mem.content)) {
-            total_score += 1.0;
+        if (exactPhraseMatch(query, mem.content)) {
+            totalScore += 1.0;
         }
 
-        const content_keywords = extract_keywords(
+        const contentKeywords = extractKeywords(
             mem.content,
-            env.keyword_min_length,
+            env.keywordMinLength,
         );
-        const keyword_score = compute_keyword_overlap(
-            query_keywords,
-            content_keywords,
+        const keywordScore = computeKeywordOverlap(
+            queryKeywords,
+            contentKeywords,
         );
-        total_score += keyword_score * 0.8;
+        totalScore += keywordScore * 0.8;
 
-        const content_terms = canonical_tokens_from_text(mem.content);
-        const bm25_score = compute_bm25_score(query_terms, content_terms);
-        total_score += Math.min(1.0, bm25_score / 10) * 0.5;
+        const contentTerms = canonicalTokensFromText(mem.content);
+        const bm25Score = computeBm25Score(queryTerms, contentTerms);
+        totalScore += Math.min(1.0, bm25Score / 10) * 0.5;
 
-        if (total_score > threshold) {
-            scores.set(mem.id, total_score);
+        if (totalScore > threshold) {
+            scores.set(mem.id, totalScore);
         }
     }
 

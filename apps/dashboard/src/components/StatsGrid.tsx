@@ -1,6 +1,7 @@
 import { motion } from "framer-motion";
 import { Brain, Zap, Clock, TrendingUp } from "lucide-react";
-import { SystemStats } from "../lib/api";
+import type { SystemStats } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 interface StatsGridProps {
     stats: SystemStats | null;
@@ -27,9 +28,11 @@ export const StatsGrid = ({ stats }: StatsGridProps) => {
         },
         {
             label: "Uptime",
-            value: typeof stats?.system.uptime === 'object'
-                ? `${stats.system.uptime.hours}h ${stats.system.uptime.seconds % 60}s`
-                : `${Math.floor((stats?.system.uptime || 0) / 3600)}h`,
+            value: (() => {
+                const { days, hours, seconds } = stats?.system.uptime || { days: 0, hours: 0, seconds: 0 };
+                if (days > 0) return `${days}d ${hours}h`;
+                return `${hours}h ${(seconds || 0) % 60}s`;
+            })(),
             icon: Clock,
             color: "text-purple-400",
             bg: "bg-purple-400/10"
@@ -52,14 +55,18 @@ export const StatsGrid = ({ stats }: StatsGridProps) => {
                     animate={{ opacity: 1, y: 0 }}
                     whileHover={{ y: -5, transition: { type: "spring", stiffness: 300 } }}
                     transition={{ delay: i * 0.1 }}
-                    className="backdrop-blur-xl bg-white/5 border border-white/10 shadow-xl shadow-black/20 rounded-2xl p-6 flex items-center gap-5 hover:border-white/20 hover:bg-white/10 transition-colors group cursor-default"
+                    className="backdrop-blur-xl bg-white/5 border border-white/10 shadow-xl shadow-black/20 rounded-2xl p-6 flex items-center gap-5 hover:border-primary/30 hover:bg-white/10 transition-all group cursor-default"
                 >
-                    <div className={`p-4 rounded-xl ${stat.bg} ${stat.color} group-hover:scale-110 transition-transform duration-300 shadow-inner`}>
+                    <div className={cn(
+                        "p-4 rounded-xl group-hover:scale-110 transition-transform duration-300 shadow-inner",
+                        stat.bg,
+                        stat.color
+                    )}>
                         <stat.icon size={28} strokeWidth={1.5} />
                     </div>
                     <div>
-                        <p className="text-gray-400 text-xs uppercase tracking-wider font-semibold mb-1">{stat.label}</p>
-                        <h3 className="text-4xl font-bold tracking-tighter text-white group-hover:text-transparent group-hover:bg-clip-text group-hover:bg-gradient-to-r group-hover:from-white group-hover:to-gray-400 transition-all">
+                        <p className="text-zinc-500 text-[10px] uppercase tracking-widest font-black mb-1">{stat.label}</p>
+                        <h3 className="text-3xl font-black tracking-tighter text-white group-hover:text-primary transition-colors">
                             {stat.value}
                         </h3>
                     </div>

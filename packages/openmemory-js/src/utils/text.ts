@@ -1,3 +1,7 @@
+/**
+ * @file Text processing utilities for OpenMemory.
+ * Handles tokenization, stemming, synonym expansion, and FTS document building.
+ */
 const syn_grps = [
     ["prefer", "like", "love", "enjoy", "favor"],
     ["theme", "mode", "style", "layout"],
@@ -32,15 +36,18 @@ const stem_rules: Array<[RegExp, string]> = [
     [/ed$/, ""],
     [/s$/, ""],
 ];
-const tok_pat = /[a-z0-9]+/gi;
-
+/**
+ * Tokenizes text into a flat array of words.
+ * Supports unicode property escapes to handle international text (CJK, Emoji).
+ *
+ * @param text - The raw input string.
+ * @returns Array of lowercase tokens.
+ */
 export const tokenize = (text: string): string[] => {
-    const toks: string[] = [];
-    let m: RegExpExecArray | null;
-    while ((m = tok_pat.exec(text))) {
-        toks.push(m[0].toLowerCase());
-    }
-    return toks;
+    if (!text) return [];
+    // Use Unicode property escapes to support international languages (CJK, etc.)
+    const matches = text.match(/\p{L}+/gu);
+    return matches ? matches.map((m) => m.toLowerCase()) : [];
 };
 
 const stem = (tok: string): string => {
@@ -54,18 +61,25 @@ const stem = (tok: string): string => {
     return tok;
 };
 
-export const canonicalize_token = (tok: string): string => {
+/**
+ * Reduces a token to its canonical form using synonyms and stemming.
+ */
+export const canonicalizeToken = (tok: string): string => {
     if (!tok) return "";
     const low = tok.toLowerCase();
-    if (cmap.has(low)) return cmap.get(low)!;
+    const mapped = cmap.get(low);
+    if (mapped) return mapped;
     const st = stem(low);
     return cmap.get(st) || st;
 };
 
-export const canonical_tokens_from_text = (text: string): string[] => {
+/**
+ * Extracts a list of canonical tokens from a text string.
+ */
+export const canonicalTokensFromText = (text: string): string[] => {
     const res: string[] = [];
     for (const tok of tokenize(text)) {
-        const can = canonicalize_token(tok);
+        const can = canonicalizeToken(tok);
         if (can && can.length > 1) {
             res.push(can);
         }
@@ -73,13 +87,20 @@ export const canonical_tokens_from_text = (text: string): string[] => {
     return res;
 };
 
-export const synonyms_for = (tok: string): Set<string> => {
-    const can = canonicalize_token(tok);
+/**
+ * Returns a set of synonyms for a given token (including the token itself).
+ */
+export const synonymsFor = (tok: string): Set<string> => {
+    const can = canonicalizeToken(tok);
     return slook.get(can) || new Set([can]);
 };
 
-export const build_search_doc = (text: string): string => {
-    const can = canonical_tokens_from_text(text);
+/**
+ * Builds a search document string containing canonical tokens and their synonyms.
+ * Used for FTS indexing.
+ */
+export const buildSearchDoc = (text: string): string => {
+    const can = canonicalTokensFromText(text);
     const exp = new Set<string>();
     for (const tok of can) {
         exp.add(tok);
@@ -91,24 +112,34 @@ export const build_search_doc = (text: string): string => {
     return Array.from(exp).join(" ");
 };
 
-export const build_fts_query = (text: string): string => {
-    const can = canonical_tokens_from_text(text);
+/**
+ * Builds a FTS query string from text.
+ * @returns 'OR' separated quoted tokens.
+ */
+export const buildFtsQuery = (text: string): string => {
+    const can = canonicalTokensFromText(text);
     if (!can.length) return "";
     const uniq = Array.from(new Set(can.filter((t) => t.length > 1)));
     return uniq.map((t) => `"${t}"`).join(" OR ");
 };
 
-export const canonical_token_set = (text: string): Set<string> => {
-    return new Set(canonical_tokens_from_text(text));
+/**
+ * Returns a set of unique canonical tokens from text.
+ */
+export const canonicalTokenSet = (text: string): Set<string> => {
+    return new Set(canonicalTokensFromText(text));
 };
 
-export const add_synonym_tokens = (toks: Iterable<string>): Set<string> => {
+/**
+ * Expands a list of tokens with their synonyms.
+ */
+export const addSynonymTokens = (toks: Iterable<string>): Set<string> => {
     const res = new Set<string>();
     for (const tok of toks) {
         res.add(tok);
         const syns = slook.get(tok);
         if (syns) {
-            syns.forEach((s) => res.add(canonicalize_token(s)));
+            syns.forEach((s) => res.add(canonicalizeToken(s)));
         }
     }
     return res;

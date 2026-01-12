@@ -1,143 +1,307 @@
-import { env } from "../../core/cfg";
 import { timingSafeEqual } from "node:crypto";
 
-const rate_limit_store = new Map<
-    string,
-    { count: number; reset_time: number }
->();
-const auth_config = {
-    api_key: env.api_key,
-    api_key_header: "x-api-key",
-    rate_limit_enabled: env.rate_limit_enabled,
-    rate_limit_window_ms: env.rate_limit_window_ms,
-    rate_limit_max_requests: env.rate_limit_max_requests,
-    public_endpoints: [
+import { env } from "../../core/cfg";
+import { runInContext, SecurityContext } from "../../core/context";
+import { AuthScope, UserContext } from "../../core/types";
+import { logger } from "../../utils/logger";
+import { AppError, sendError } from "../errors";
+
+const authConfig = {
+    apiKeyHeader: "x-api-key",
+    // Rate limits can stay static or be dynamic too, but keys must be dynamic for sure
+    rateLimitEnabled: env.rateLimitEnabled,
+    rateLimitWindowMs: env.rateLimitWindowMs,
+    rateLimitMaxRequests: env.rateLimitMaxRequests,
+    publicEndpoints: [
         "/health",
         "/api/system/health",
         "/api/system/stats",
         "/dashboard/health",
+        "/setup/verify",
+        "/setup/status",
+        "/sources/webhook",
     ],
 };
 
-function is_public_endpoint(path: string): boolean {
-    return auth_config.public_endpoints.some(
+function isPublicEndpoint(path: string): boolean {
+    return authConfig.publicEndpoints.some(
         (e) => path === e || path.startsWith(e),
     );
 }
 
-function extract_api_key(req: any): string | null {
-    const x_api_key = req.headers[auth_config.api_key_header];
-    if (x_api_key) return x_api_key;
-    const auth_header = req.headers["authorization"];
-    if (auth_header) {
-        if (auth_header.startsWith("Bearer ")) return auth_header.slice(7);
-        if (auth_header.startsWith("ApiKey ")) return auth_header.slice(7);
+function extractApiKey(req: AdvancedRequest): string | null {
+    // 1. Check configured API key header
+    const headerKey = req.headers[authConfig.apiKeyHeader];
+    const apiKey = Array.isArray(headerKey) ? headerKey[0] : headerKey;
+    if (apiKey) return apiKey;
+
+    // 2. Check Authorization Header (Bearer/ApiKey scheme)
+    const authHeader = req.headers["authorization"];
+    const token = Array.isArray(authHeader) ? authHeader[0] : authHeader;
+
+    if (token) {
+        if (token.startsWith("Bearer ")) return token.slice(7);
+        if (token.startsWith("ApiKey ")) return token.slice(7);
+    }
+
+    // 3. Check Query Parameters (common for Streams/WebSockets)
+    if (req.query) {
+        // cast query to any or Record because Server update might allow it, but let's be safe
+        const q = req.query as Record<string, string | string[] | undefined>;
+        const queryToken = q.token || q.apiKey;
+        if (queryToken && typeof queryToken === "string") return queryToken;
     }
     return null;
 }
 
-function validate_api_key(provided: string, expected: string): boolean {
+function validateApiKey(provided: string, expected?: string): boolean {
     if (!provided || !expected || provided.length !== expected.length)
         return false;
     return timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
 }
 
-function check_rate_limit(client_id: string): {
-    allowed: boolean;
-    remaining: number;
-    reset_time: number;
-} {
-    if (!auth_config.rate_limit_enabled)
-        return { allowed: true, remaining: -1, reset_time: -1 };
-    const now = Date.now();
-    const data = rate_limit_store.get(client_id);
-    if (!data || now >= data.reset_time) {
-        const new_data = {
-            count: 1,
-            reset_time: now + auth_config.rate_limit_window_ms,
-        };
-        rate_limit_store.set(client_id, new_data);
-        return {
-            allowed: true,
-            remaining: auth_config.rate_limit_max_requests - 1,
-            reset_time: new_data.reset_time,
-        };
-    }
-    data.count++;
-    rate_limit_store.set(client_id, data);
-    const remaining = auth_config.rate_limit_max_requests - data.count;
-    return {
-        allowed: data.count <= auth_config.rate_limit_max_requests,
-        remaining: Math.max(0, remaining),
-        reset_time: data.reset_time,
-    };
-}
 
-async function get_client_id(req: any, api_key: string | null): Promise<string> {
-    if (api_key) {
-        const hash = await crypto.subtle.digest("SHA-256", Buffer.from(api_key));
+
+/**
+ * Derives a stable client ID.
+ * Uses SHA-256 hash of the API key if provided, otherwise falls back to IP address.
+ */
+async function getClientId(req: { ip?: string }, apiKey: string | null): Promise<string> {
+    if (apiKey) {
+        const hash = await crypto.subtle.digest("SHA-256", Buffer.from(apiKey));
         return Buffer.from(hash).toString("hex").slice(0, 16);
     }
-    return req.ip || req.connection.remoteAddress || "unknown";
+    return req.ip || "unknown";
 }
 
-export async function authenticate_api_request(req: any, res: any, next: any) {
-    try {
-        const path = req.path || req.url;
-        if (is_public_endpoint(path)) return next();
-        if (!auth_config.api_key || auth_config.api_key === "") {
-            return next();
-        }
-        const provided = extract_api_key(req);
-        if (!provided)
-            return res
-                .status(401)
-                .json({
-                    error: "authentication_required",
-                    message: "This server requires an API key for access. Please provide it in the 'x-api-key' header or as a Bearer token.",
-                });
-        if (!validate_api_key(provided, auth_config.api_key))
-            return res.status(403).json({ error: "invalid_api_key", message: "The provided API key is incorrect." });
-        const client_id = await get_client_id(req, provided);
-        req.user = { id: client_id };
+import { AdvancedRequest, AdvancedResponse, NextFunction } from "../server";
 
-        const rl = check_rate_limit(client_id);
-        if (auth_config.rate_limit_enabled) {
-            res.setHeader("X-RateLimit-Limit", auth_config.rate_limit_max_requests);
-            res.setHeader("X-RateLimit-Remaining", rl.remaining);
-            res.setHeader("X-RateLimit-Reset", Math.floor(rl.reset_time / 1000));
+/**
+ * Middleware to authenticate requests via API keys.
+ */
+export const authenticateApiRequest = async (
+    req: AdvancedRequest,
+    res: AdvancedResponse,
+    next: NextFunction,
+) => {
+    try {
+        const path = req.path || req.url || "";
+        const isPublic = isPublicEndpoint(path);
+
+        // Even for public/anonymous, we want a context for requestId traceability
+        const getBaseCtx = (): SecurityContext => ({
+            requestId: req.requestId,
+        });
+
+        if (isPublic) {
+            return await runInContext(getBaseCtx(), () => next());
         }
-        if (!rl.allowed)
-            return res.status(429).json({
-                error: "rate_limit_exceeded",
-                retry_after: Math.ceil((rl.reset_time - Date.now()) / 1000),
-            });
-        next();
+
+        // Dynamic check of env config
+        const currentApiKey = env.apiKey;
+        const currentAdminKey = env.adminKey;
+
+        // If no keys configured...
+        if (
+            (!currentApiKey || currentApiKey === "") &&
+            (!currentAdminKey || currentAdminKey === "")
+        ) {
+            // CRITICAL: Prevent insecure default in production
+            if (env.mode === "production" || env.isProd) {
+                logger.error(
+                    "[AUTH] 🚨 FATAL: No API keys configured in PRODUCTION mode. Request blocked.",
+                );
+                return sendError(
+                    res,
+                    new AppError(
+                        500,
+                        "CONFIGURATION_ERROR",
+                        "Server is running in PRODUCTION mode but no API keys are configured. Please set OM_API_KEY or OM_ADMIN_KEY.",
+                    ),
+                );
+            }
+
+            // In Dev/Test mode, REQUIRE explicit opt-in for anonymous admin
+            if (!env.noAuth) {
+                logger.error(
+                    "[AUTH] 🛑 Security Block: No API Keys set and OM_NO_AUTH is not enabled.",
+                );
+                return sendError(
+                    res,
+                    new AppError(
+                        500,
+                        "CONFIGURATION_ERROR",
+                        "Security Block: No API keys are configured. To run in insecure mode (Anonymous Admin), you MUST set OM_NO_AUTH=true. Otherwise, set OM_API_KEY or OM_ADMIN_KEY.",
+                    ),
+                );
+            }
+
+            if (!req.user) {
+                logger.warn(
+                    "[AUTH] ⚠️  Running in Anonymous Admin Mode (OM_NO_AUTH=true). Logic is open.",
+                );
+            }
+
+            // Assign default admin access if no auth configured (DEV MODE ONLY + OPT-IN)
+            req.user = {
+                id: "anonymous",
+                scopes: ["admin:all"] as AuthScope[],
+            };
+
+            const ctx: SecurityContext = {
+                ...getBaseCtx(),
+                userId: req.user.id,
+                scopes: req.user.scopes,
+                isAdmin: true,
+            };
+
+            return await runInContext(ctx, () => next());
+        }
+
+        const provided = extractApiKey(req);
+        if (!provided) {
+            return sendError(
+                res,
+                new AppError(
+                    401,
+                    "AUTHENTICATION_REQUIRED",
+                    "This server requires an API key for access. Please provide it in the 'x-api-key' header or as a Bearer token.",
+                ),
+            );
+        }
+
+        let scopes: AuthScope[] = [];
+        let isValid = false;
+
+        // Check Admin Key (Env)
+        if (currentAdminKey && validateApiKey(provided, currentAdminKey)) {
+            scopes = ["admin:all"];
+            isValid = true;
+        }
+        // Check Standard API Key (Env)
+        else if (currentApiKey && validateApiKey(provided, currentApiKey)) {
+            scopes = ["memory:read", "memory:write"];
+            isValid = true;
+        } else {
+            // Check DB for dynamic keys
+            // We need to hash the provided key to lookup (since we store hashes)
+            // But wait, the standard is usually to store the hash of the key.
+            // My previous logic in `users.ts` registers `om_hex` and stores `hash(om_hex)`.
+            // So we must hash `provided` here.
+
+            const hashBuffer = await crypto.subtle.digest(
+                "SHA-256",
+                Buffer.from(provided),
+            );
+            const hash = Buffer.from(hashBuffer).toString("hex");
+
+            // Import `q` dynamically to avoid circular issues if any (but auth -> db is usually fine)
+            const { q } = await import("../../core/db");
+            const dbKey = await q.getApiKey.get(hash);
+
+            if (dbKey) {
+                isValid = true;
+                // Identify the user explicitly from the DB record
+                // This SUPPORTS MULTI-TENANCY: The request is now tied to dbKey.userId
+                req.user = {
+                    id: dbKey.userId,
+                    scopes:
+                        dbKey.role === "admin"
+                            ? ["admin:all"]
+                            : ["memory:read", "memory:write"],
+                };
+
+                // Add note to logger?
+                // logger.debug(`[AUTH] Authenticated as ${dbKey.userId} (${dbKey.role})`);
+            }
+        }
+
+        if (!isValid) {
+            return sendError(
+                res,
+                new AppError(
+                    403,
+                    "INVALID_API_KEY",
+                    "The provided API key is incorrect.",
+                ),
+            );
+        }
+
+        // If we found the user in the DB, use that ID. Otherwise fallback to legacy hash (for Env keys)
+        let clientId = req.user?.id;
+        if (!clientId) {
+            clientId = await getClientId(req, provided);
+            const userCtx: UserContext = { id: clientId, scopes };
+            req.user = userCtx;
+        }
+
+
+
+        const ctx: SecurityContext = {
+            userId: req.user?.id,
+            scopes: req.user?.scopes,
+            isAdmin: (req.user?.scopes || []).includes("admin:all"),
+            requestId: req.requestId,
+        };
+
+        return await runInContext(ctx, () => next());
     } catch (e) {
         next(e);
     }
-}
+};
 
-export async function log_authenticated_request(req: any, res: any, next: any) {
+/**
+ * Middleware to log authenticated requests for audit trails.
+ */
+export async function logAuthenticatedRequest(
+    req: AdvancedRequest,
+    _res: AdvancedResponse,
+    next: NextFunction,
+) {
     try {
-        const key = extract_api_key(req);
+        const key = extractApiKey(req);
         if (key) {
-            const hash = await crypto.subtle.digest("SHA-256", Buffer.from(key));
+            const hash = await crypto.subtle.digest(
+                "SHA-256",
+                Buffer.from(key),
+            );
             const hex = Buffer.from(hash).toString("hex").slice(0, 8);
-            console.log(`[AUTH] ${req.method} ${req.path} [${hex}...]`);
+            logger.info(`[AUTH] ${req.method} ${req.path} `, { keyHash: hex });
         }
-        next();
+        await next();
     } catch (e) {
-        console.error("[AUTH] Logging failed:", e);
+        logger.error("[AUTH] Logging failed:", { error: e });
         next();
     }
 }
 
-setInterval(
-    () => {
-        const now = Date.now();
-        for (const [id, data] of rate_limit_store.entries())
-            if (now >= data.reset_time) rate_limit_store.delete(id);
-    },
-    5 * 60 * 1000,
-);
+/**
+ * Standardized RBAC check: Verifies if the requester is the target user or an admin.
+ * Throws 403 if access is denied.
+ */
+export function verifyUserAccess(req: AdvancedRequest, targetUserId: string | null | undefined): void {
+    const authUserId = req.user?.id; // IDs are normalized in middleware usually, but be safe?
+    // Middleware extractApiKey -> q.getApiKey -> returns ID from DB (normalized there?)
+    // Basic normalization:
+    const nAuth = authUserId ? authUserId.trim() : null;
+    const nTarget = targetUserId ? targetUserId.trim() : null;
+
+    const isAdmin = (req.user?.scopes || []).includes("admin:all");
+
+    if (nAuth && nAuth !== nTarget && !isAdmin) {
+        throw new AppError(403, "FORBIDDEN", "Access denied");
+    }
+}
+
+/**
+ * Middleware: Requires 'admin:all' scope.
+ */
+export const requireAdmin = (req: AdvancedRequest, res: AdvancedResponse, next: NextFunction) => {
+    const isAdmin = (req.user?.scopes || []).includes("admin:all");
+    if (!isAdmin) {
+        return sendError(res, new AppError(403, "FORBIDDEN", "Admin access required"));
+    }
+    next();
+};
+
+// Removed interval cleanup as cache now handles TTL expiration natively

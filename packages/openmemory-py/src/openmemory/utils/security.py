@@ -4,6 +4,9 @@ from typing import Tuple
 
 import asyncio
 import socket
+import logging
+
+logger = logging.getLogger("openmemory.utils.security")
 
 async def validate_url(url: str) -> Tuple[bool, str]:
     """
@@ -13,9 +16,9 @@ async def validate_url(url: str) -> Tuple[bool, str]:
     Blocks:
     - Non-HTTP/HTTPS protocols
     - Private IP ranges (RFC 1918, RFC 4193, RFC 4291)
-    - Loopback addresses
+    - Loopback and Unspecified addresses
     - Link-local addresses
-    - Resolves domains to check their IPs
+    - Resolves domains to check their IPs (A/AAAA)
     """
     try:
         parsed = urllib.parse.urlparse(url)
@@ -38,14 +41,21 @@ async def validate_url(url: str) -> Tuple[bool, str]:
              # Use loop.getaddrinfo to resolve
             loop = asyncio.get_running_loop()
             # This resolves to (family, type, proto, canonname, sockaddr)
-            # sockaddr is (address, port) for AF_INET
             infos = await loop.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
             
             for info in infos:
                 ip_str = info[4][0]
                 ip = ipaddress.ip_address(ip_str)
-                if ip.is_private or ip.is_loopback or ip.is_link_local:
-                     return False, f"Domain resolved to blocked IP: {hostname} -> {ip_str}"
+                
+                # Basic blocks
+                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_unspecified:
+                     return False, f"Access to forbidden IP {ip_str} is blocked."
+                
+                # IPv4-mapped checks
+                if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+                    m_ip = ip.ipv4_mapped
+                    if m_ip.is_private or m_ip.is_loopback or m_ip.is_link_local or m_ip.is_unspecified:
+                        return False, f"Access to forbidden IPv4-mapped IP {ip_str} is blocked."
                      
         except socket.gaierror:
              # DNS failure

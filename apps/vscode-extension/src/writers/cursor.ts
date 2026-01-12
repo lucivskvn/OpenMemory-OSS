@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { resolveMcpPath } from '../utils/mcp';
 
 export interface CursorConfig {
     name: string;
@@ -8,16 +9,24 @@ export interface CursorConfig {
     endpoint?: string;
     method?: string;
     headers?: Record<string, string>;
-    body_template?: Record<string, any>;
+    body_template?: Record<string, unknown>;
     mcp?: {
         server: string;
         tools: string[];
     };
 }
 
+/**
+ * Generates a Cursor IDE configuration object for OpenMemory integration.
+ * @param backendUrl URL of the OpenMemory backend server
+ * @param apiKey Optional API key for authentication
+ * @param useMCP Whether to use MCP protocol instead of direct HTTP
+ * @param mcpServerPath Optional custom path to MCP server executable
+ * @returns Configuration object for Cursor
+ */
 export function generateCursorConfig(backendUrl: string, apiKey?: string, useMCP = false, mcpServerPath?: string): CursorConfig {
     if (useMCP) {
-        const backendMcpPath = mcpServerPath || path.join(process.cwd(), 'backend', 'dist', 'ai', 'mcp.js');
+        const backendMcpPath = resolveMcpPath(mcpServerPath);
         return {
             name: 'OpenMemory',
             type: 'mcp',
@@ -40,21 +49,37 @@ export function generateCursorConfig(backendUrl: string, apiKey?: string, useMCP
         body_template: {
             query: '{{prompt}}',
             limit: 10,
-            session_id: '{{session_id}}'
+            sessionId: '{{session_id}}'
         }
     };
 }
 
-export async function writeCursorConfig(backendUrl: string, apiKey?: string, useMCP = false, mcpServerPath?: string): Promise<string> {
+/**
+ * Writes the OpenMemory configuration file for Cursor IDE.
+ * Creates the necessary directories if they don't exist.
+ * @param backendUrl URL of the OpenMemory backend server
+ * @param apiKey Optional API key for authentication
+ * @param useMCP Whether to use MCP protocol instead of direct HTTP
+ * @param mcpServerPath Optional custom path to MCP server executable
+ * @returns Path to the created configuration file
+ * @throws Error if the configuration cannot be written (e.g., permission denied)
+ */
+export function writeCursorConfig(backendUrl: string, apiKey?: string, useMCP = false, mcpServerPath?: string): string {
     const cursorDir = path.join(os.homedir(), '.cursor', 'context_providers');
     const configFile = path.join(cursorDir, 'openmemory.json');
 
-    if (!fs.existsSync(cursorDir)) {
-        fs.mkdirSync(cursorDir, { recursive: true });
+    try {
+        if (!fs.existsSync(cursorDir)) {
+            fs.mkdirSync(cursorDir, { recursive: true });
+        }
+
+        const config = generateCursorConfig(backendUrl, apiKey, useMCP, mcpServerPath);
+        fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
+
+        return configFile;
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(`Failed to write Cursor config to ${configFile}: ${message}`);
     }
-
-    const config = generateCursorConfig(backendUrl, apiKey, useMCP, mcpServerPath);
-    fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
-
-    return configFile;
 }
+

@@ -1,15 +1,31 @@
-#!/usr/bin/env bun
-const { detectBackend } = require('./out/detectors/openmemory');
-const { writeMCPConfig } = require('./out/mcp/generator');
-const { writeCursorConfig } = require('./out/writers/cursor');
-const { writeClaudeConfig } = require('./out/writers/claude');
-const { writeWindsurfConfig } = require('./out/writers/windsurf');
-const { writeCopilotConfig } = require('./out/writers/copilot');
-const { writeCodexConfig } = require('./out/writers/codex');
+const fs = require('fs');
+const path = require('path');
 
+const outDir = path.join(__dirname, 'out');
 const DEFAULT_URL = 'http://localhost:8080';
 
-async function postInstall() {
+async function main() {
+  if (!fs.existsSync(outDir)) {
+    console.log('Postinstall: ./out directory not found. Skipping auto-setup. (Please run compile first)');
+    process.exit(0);
+  }
+
+  try {
+    const { detectBackend } = require('./out/detectors/openmemory');
+    const { writeAntigravityConfig } = require('./out/writers/antigravity');
+    const { writeCursorConfig } = require('./out/writers/cursor');
+    const { writeClaudeConfig } = require('./out/writers/claude');
+    const { writeWindsurfConfig } = require('./out/writers/windsurf');
+    const { writeCopilotConfig } = require('./out/writers/copilot');
+    const { writeCodexConfig } = require('./out/writers/codex');
+
+    await postInstall(detectBackend, writeAntigravityConfig, writeCursorConfig, writeClaudeConfig, writeWindsurfConfig, writeCopilotConfig, writeCodexConfig);
+  } catch (e) {
+    console.log('Postinstall: Failed to load modules. Skipping.', e.message);
+  }
+}
+
+async function postInstall(detectBackend, writeAntigravityConfig, writeCursorConfig, writeClaudeConfig, writeWindsurfConfig, writeCopilotConfig, writeCodexConfig) {
   console.log('🧠 OpenMemory IDE Extension - Auto-Setup');
   console.log('=========================================\n');
 
@@ -21,8 +37,8 @@ async function postInstall() {
     console.log('\nAuto-linking AI tools...');
 
     try {
-      const mcpPath = await writeMCPConfig(DEFAULT_URL);
-      console.log(`  ✓ MCP config: ${mcpPath}`);
+      const antigravityPath = await writeAntigravityConfig(DEFAULT_URL, undefined, true);
+      console.log(`  ✓ Antigravity config (MCP): ${antigravityPath}`);
 
       const cursorPath = await writeCursorConfig(DEFAULT_URL);
       console.log(`  ✓ Cursor config: ${cursorPath}`);
@@ -65,4 +81,4 @@ async function postInstall() {
   console.log('\n📖 For more info: https://github.com/CaviraOSS/OpenMemory');
 }
 
-postInstall().catch(console.error);
+main().catch(console.error);

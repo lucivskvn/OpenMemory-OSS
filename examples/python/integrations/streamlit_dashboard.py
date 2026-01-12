@@ -14,7 +14,7 @@ async def get_memory_stats(uid: str):
     mem = Memory()
     
     # 1. Fetch recent history
-    history = mem.history(user_id=uid, limit=100)
+    history = await mem.history(user_id=uid, limit=100)
     
     # 2. Calculate Stats
     total_memories = len(history)
@@ -23,7 +23,7 @@ async def get_memory_stats(uid: str):
     # 3. Tag Distribution
     tags_count = {}
     for h in history:
-        tags = h.get('metadata', {}).get('tags', []) # assuming meta tags or top level
+        tags = (h.get('metadata') or {}).get('tags', []) # assuming meta tags or top level
         # In this SDK version, tags might be in metadata dict
         if isinstance(tags, list):
             for t in tags:

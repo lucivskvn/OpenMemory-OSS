@@ -1,47 +1,43 @@
-# ===== BUILD STAGE =====
-FROM oven/bun:1 AS builder
+# Use specific version for stability
+FROM oven/bun:1.1.29-alpine as base
+WORKDIR /usr/src/app
 
-WORKDIR /app
+# Install dependencies into temp directory
+FROM base AS install
+RUN mkdir -p /temp/dev
+COPY package.json bun.lockb /temp/dev/
+RUN cd /temp/dev && bun install --frozen-lockfile
 
-# Install system dependencies required for native modules if needed
-# oven/bun is based on debian
-RUN apt-get update && apt-get install -y python3 make g++ curl
+RUN mkdir -p /temp/prod
+COPY package.json bun.lockb /temp/prod/
+RUN cd /temp/prod && bun install --frozen-lockfile --production
 
-# Copy package manifests
-COPY package.json bun.lock* ./
-
-# Install dependencies
-RUN bun install --frozen-lockfile
-
-# Copy source
-COPY src/ ./src/
-COPY tsconfig.json ./
-
-# Build
+# Builder stage
+FROM base AS builder
+COPY --from=install /temp/dev/node_modules node_modules
+COPY . .
 RUN bun run build
 
-# ===== PRODUCTION STAGE =====
-FROM oven/bun:1-slim AS production
-
-WORKDIR /app
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y ca-certificates python3 make g++ curl && rm -rf /var/lib/apt/lists/*
-
-# Copy production artifacts
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/dist ./dist
-COPY package.json ./
+# Runtime stage
+FROM base AS release
+COPY --from=install /temp/prod/node_modules node_modules
+COPY --from=builder /usr/src/app/dist dist
+COPY --from=builder /usr/src/app/package.json .
 
 # Create data directory
-RUN mkdir -p /data \
-  && chown -R bun:bun /data /app
+RUN mkdir -p /usr/src/app/data
 
+# Environment Defaults
+ENV NODE_ENV=production
+ENV OM_PORT=8080
+ENV OM_DB_PATH=/usr/src/app/data/openmemory.sqlite
+
+# Security: Run as non-root user
+RUN chown -R bun:bun /usr/src/app
 USER bun
 
+# Expose port
 EXPOSE 8080
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-  CMD curl -f http://localhost:8080/health || exit 1
-
-ENTRYPOINT ["bun", "run", "start"]
+# Start command
+CMD ["bun", "dist/server/start.js"]

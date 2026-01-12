@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { resolveMcpPath } from '../utils/mcp';
 
 export interface CodexConfig {
     contextProviders?: {
@@ -21,9 +22,17 @@ export interface CodexConfig {
     };
 }
 
+/**
+ * Generates a Codex CLI configuration object for OpenMemory integration.
+ * @param backendUrl URL of the OpenMemory backend server
+ * @param apiKey Optional API key for authentication
+ * @param useMCP Whether to use MCP protocol instead of direct HTTP
+ * @param mcpServerPath Optional custom path to MCP server executable
+ * @returns Configuration object for Codex CLI
+ */
 export function generateCodexConfig(backendUrl: string, apiKey?: string, useMCP = false, mcpServerPath?: string): CodexConfig {
     if (useMCP) {
-        const backendMcpPath = mcpServerPath || path.join(process.cwd(), 'backend', 'dist', 'ai', 'mcp.js');
+        const backendMcpPath = resolveMcpPath(mcpServerPath);
         const config: CodexConfig = {
             mcpServers: {
                 openmemory: {
@@ -54,16 +63,32 @@ export function generateCodexConfig(backendUrl: string, apiKey?: string, useMCP 
     };
 }
 
-export async function writeCodexConfig(backendUrl: string, apiKey?: string, useMCP = false, mcpServerPath?: string): Promise<string> {
+/**
+ * Writes the OpenMemory configuration file for Codex CLI.
+ * Creates the necessary directories if they don't exist.
+ * @param backendUrl URL of the OpenMemory backend server
+ * @param apiKey Optional API key for authentication
+ * @param useMCP Whether to use MCP protocol instead of direct HTTP
+ * @param mcpServerPath Optional custom path to MCP server executable
+ * @returns Path to the created configuration file
+ * @throws Error if the configuration cannot be written (e.g., permission denied)
+ */
+export function writeCodexConfig(backendUrl: string, apiKey?: string, useMCP = false, mcpServerPath?: string): string {
     const codexDir = path.join(os.homedir(), '.codex');
     const configFile = path.join(codexDir, 'context.json');
 
-    if (!fs.existsSync(codexDir)) {
-        fs.mkdirSync(codexDir, { recursive: true });
+    try {
+        if (!fs.existsSync(codexDir)) {
+            fs.mkdirSync(codexDir, { recursive: true });
+        }
+
+        const config = generateCodexConfig(backendUrl, apiKey, useMCP, mcpServerPath);
+        fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
+
+        return configFile;
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(`Failed to write Codex config to ${configFile}: ${message}`);
     }
-
-    const config = generateCodexConfig(backendUrl, apiKey, useMCP, mcpServerPath);
-    fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
-
-    return configFile;
 }
+

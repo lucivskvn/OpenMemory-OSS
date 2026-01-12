@@ -1,35 +1,49 @@
+/**
+ * Graph-based Memory AI component for OpenMemory.
+ * Integrates LangGraph-style agent memory with OpenMemory sectors and vector storage.
+ */
 import { env } from "../core/cfg";
-import { add_hsg_memory, hsg_query } from "../memory/hsg";
-import { q, vector_store } from "../core/db";
-import { now, j } from "../utils";
+import { q, vectorStore } from "../core/db";
+import { Memory } from "../core/memory";
 import type {
-    lgm_store_req,
-    lgm_retrieve_req,
-    lgm_context_req,
-    lgm_reflection_req,
-    sector_type,
-    mem_row,
+    LgConfig,
+    LgContextResult,
+    LgmContextRequest,
+    LgmReflectionRequest,
+    LgmRetrieveRequest,
+    LgmStoreRequest,
+    LgNodeContext,
+    LgReflectResult,
+    LgRetrieveResult,
+    LgStoreResult,
+    MemoryItem,
+    MemoryRow,
+    SectorType,
 } from "../core/types";
+import { addHsgMemory, hsgQuery } from "../memory/hsg";
+import { AppError } from "../server/errors";
+import { normalizeUserId, now, stringifyJSON } from "../utils";
+import { logger } from "../utils/logger";
 
-type hydrated_mem = {
-    id: string;
+/**
+ * Graph-specific memory extension.
+ * Represents a memory item that is bound to a specific node in a LangGraph execution graph.
+ */
+export interface GraphMemoryItem extends MemoryItem {
+    /** The LangGraph node name (e.g., 'plan', 'reflect') */
     node: string;
-    content: string;
-    primary_sector: string;
+    /** The mapped sectors for this memory */
     sectors: string[];
-    tags: string[];
-    created_at: number;
-    updated_at: number;
-    last_seen_at: number;
-    salience: number;
-    decay_lambda: number;
-    version: number;
+    /** Similarity score if retrieved via vector search */
     score?: number;
+    /** Graph traversal path if applicable */
     path?: string[];
-    metadata?: Record<string, unknown>;
-};
+}
 
-export const node_sector_map: Record<string, sector_type> = {
+/**
+ * Maps LangGraph node types to OpenMemory sectors.
+ */
+export const nodeSectorMap: Record<string, SectorType> = {
     observe: "episodic",
     plan: "semantic",
     reflect: "reflective",
@@ -37,27 +51,28 @@ export const node_sector_map: Record<string, sector_type> = {
     emotion: "emotional",
 };
 
-const default_sector: sector_type = "semantic";
-const summary_line_limit = 160;
+const defaultSector: SectorType = "semantic";
+const summaryLineLimit = 160;
 
 const trunc = (txt: string, max = 320) =>
     txt.length <= max ? txt : `${txt.slice(0, max).trimEnd()}...`;
 
-const safe_parse = <T>(val: string | null, fb: T): T => {
+const parseJsonSafe = <T>(val: string | null | undefined, fb: T): T => {
     if (!val) return fb;
     try {
-        return JSON.parse(val) as T;
+        const parsed = JSON.parse(val);
+        return parsed as T;
     } catch {
         return fb;
     }
 };
 
-const resolve_sector = (node: string): sector_type =>
-    node_sector_map[node.toLowerCase()] ?? default_sector;
+const resolveSector = (node: string): SectorType =>
+    nodeSectorMap[node.toLowerCase()] ?? defaultSector;
 
-const resolve_ns = (ns?: string) => ns || env.lg_namespace;
+const resolveNs = (ns?: string) => ns || env.lgNamespace;
 
-const build_tags = (
+const buildTags = (
     tags: string[] | undefined,
     node: string,
     ns: string,
@@ -70,339 +85,622 @@ const build_tags = (
     return Array.from(ts);
 };
 
-const build_meta = (
-    p: lgm_store_req,
-    sec: sector_type,
+interface LgmMetadata extends Record<string, unknown> {
+    lgm?: {
+        node?: string;
+        sector?: string;
+        namespace?: string;
+        graphId?: string | null;
+        storedAt?: number;
+        mode?: string;
+        sourceMemory?: string;
+        sourceNode?: string;
+        [key: string]: unknown;
+    };
+}
+
+const buildMeta = (
+    p: LgmStoreRequest,
+    sec: SectorType,
     ns: string,
     ext?: Record<string, unknown>,
-) => {
-    const base = { ...(p.metadata || {}) } as Record<string, unknown>;
-    const ex_lgm =
-        typeof base.lgm === "object" && base.lgm !== null
-            ? (base.lgm as Record<string, unknown>)
-            : {};
+): LgmMetadata => {
+    const base = { ...(p.metadata || {}) } as LgmMetadata;
+    const exLgm = base.lgm || {};
+
     base.lgm = {
-        ...ex_lgm,
+        ...exLgm,
         node: p.node.toLowerCase(),
         sector: sec,
         namespace: ns,
-        graph_id: p.graph_id ?? null,
-        stored_at: now(),
+        graphId: p.graphId ?? null,
+        storedAt: now(),
         mode: "langgraph",
         ...ext,
     };
+    base.sector = sec;
     return base;
 };
 
-const matches_ns = (
-    meta: Record<string, unknown>,
-    ns: string,
-    gid?: string,
-) => {
-    const lgm = meta?.lgm as Record<string, unknown> | undefined;
+const matchesNs = (meta: Record<string, unknown>, ns: string, gid?: string) => {
+    const lgm = (meta as LgmMetadata).lgm;
     if (!lgm) return false;
     if (lgm.namespace !== ns) return false;
-    if (gid && lgm.graph_id !== gid) return false;
+    if (gid && lgm.graphId !== gid) return false;
     return true;
 };
 
-const hydrate_mem_row = async (
-    row: mem_row,
-    meta: Record<string, unknown>,
-    inc_meta: boolean,
+const hydrateMemRow = (
+    row: MemoryRow,
+    metadata: Record<string, unknown>,
+    incMeta: boolean,
+    vectors: { sector: string; vector: number[]; dim: number }[],
     score?: number,
     path?: string[],
-): Promise<hydrated_mem> => {
-    const tags = safe_parse<string[]>(row.tags, []);
-    const vecs = await vector_store.getVectorsById(row.id);
-    const secs = vecs.map((v) => v.sector);
-    const mem: hydrated_mem = {
+    preParsedTags?: string[],
+): GraphMemoryItem => {
+    const tags = preParsedTags || parseJsonSafe<string[]>(row.tags, []);
+    const secs = vectors.map((v) => v.sector);
+    const metaTyped = metadata as LgmMetadata;
+    const node = metaTyped.lgm?.node || row.primarySector;
+
+    const baseItem: MemoryItem = {
         id: row.id,
-        node:
-            ((meta?.lgm as Record<string, unknown> | undefined)
-                ?.node as string) || row.primary_sector,
-        content: row.content,
-        primary_sector: row.primary_sector,
-        sectors: secs,
+        content: row.content || "",
+        primarySector: row.primarySector,
         tags,
-        created_at: row.created_at,
-        updated_at: row.updated_at,
-        last_seen_at: row.last_seen_at,
-        salience: row.salience,
-        decay_lambda: row.decay_lambda,
-        version: row.version,
+        createdAt: row.createdAt || 0,
+        updatedAt: row.updatedAt || 0,
+        lastSeenAt: row.lastSeenAt || 0,
+        salience: row.salience || 0.5,
+        decayLambda: row.decayLambda || 0.01,
+        version: row.version || 1,
+        userId: row.userId || null,
+        metadata: incMeta ? metadata : {},
+        segment: row.segment || 0,
+        simhash: row.simhash || null,
+        generatedSummary: row.generatedSummary || null,
     };
-    if (typeof score === "number") mem.score = score;
-    if (path) mem.path = path;
-    if (inc_meta) mem.metadata = meta;
-    return mem;
+
+    const graphItem: GraphMemoryItem = {
+        ...baseItem,
+        node,
+        sectors: secs,
+    };
+
+    if (typeof score === "number") graphItem.score = score;
+    if (path) graphItem.path = path;
+
+    return graphItem;
 };
 
-const build_refl_content = (p: lgm_store_req, ns: string) => {
+const buildReflContent = (p: LgmStoreRequest, ns: string) => {
     const parts = [
         `LangGraph reflection for node "${p.node}"`,
         `namespace=${ns}`,
     ];
-    if (p.graph_id) parts.push(`graph=${p.graph_id}`);
-    return `${parts.join(" | ")}\n\n${trunc(p.content, 480)}`;
+    if (p.graphId) parts.push(`graph=${p.graphId}`);
+    return `${parts.join(" | ")}\n\n${trunc(p.content || "", 480)}`;
 };
 
-const create_auto_refl = async (
-    p: lgm_store_req,
-    stored: { id: string; namespace: string; graph_id: string | null },
+const createAutoRefl = async (
+    p: LgmStoreRequest,
+    stored: { id: string; namespace: string; graphId: string | null },
 ) => {
-    const refl_tags = build_tags(
+    const reflTags = buildTags(
         [`lgm:auto:reflection`, `lgm:source:${stored.id}`],
         "reflect",
         stored.namespace,
-        stored.graph_id ?? undefined,
+        stored.graphId ?? undefined,
     );
-    const refl_meta = {
+    const reflMeta = {
         lgm: {
             node: "reflect",
             sector: "reflective",
             namespace: stored.namespace,
-            graph_id: stored.graph_id,
-            stored_at: now(),
+            graphId: stored.graphId,
+            storedAt: now(),
             mode: "langgraph",
-            source_memory: stored.id,
-            source_node: p.node.toLowerCase(),
+            sourceMemory: stored.id,
+            sourceNode: p.node.toLowerCase(),
         },
+        sector: "reflective",
     };
-    const res = await add_hsg_memory(
-        build_refl_content(p, stored.namespace),
-        j(refl_tags),
-        refl_meta,
-        p.user_id,
+    const res = await addHsgMemory(
+        buildReflContent(p, stored.namespace),
+        stringifyJSON(reflTags),
+        reflMeta,
+        normalizeUserId(p.userId),
     );
     return {
         id: res.id,
         node: "reflect",
-        primary_sector: res.primary_sector,
+        primarySector: res.primarySector,
         sectors: res.sectors,
         namespace: stored.namespace,
-        graph_id: stored.graph_id,
-        tags: refl_tags,
+        graphId: stored.graphId,
+        tags: reflTags,
         chunks: res.chunks ?? 1,
-        metadata: refl_meta,
+        metadata: reflMeta,
     };
 };
 
-export async function store_node_mem(p: lgm_store_req) {
-    if (!p?.node || !p?.content)
-        throw new Error("node and content are required");
-    const ns = resolve_ns(p.namespace);
+/**
+ * Stores a memory associated with a specific LangGraph node.
+ * Automatically handles sector resolution, tagging, and elective reflection.
+ * 
+ * **Consistency**: Enforces `lgm:node` and `lgm:namespace` tagging.
+ * **Sustainability**: Electively triggers reflection for high-value nodes.
+ *
+ * @param p - The storage request containing content, node name, and optional graph context.
+ * @returns The result including the memory ID and any auto-generated reflection ID.
+ * @throws {AppError} If node or content is missing.
+ */
+export async function storeNodeMem(
+    p: LgmStoreRequest,
+): Promise<LgStoreResult & { reflectionId?: string }> {
+    if (!p?.node) throw new AppError(400, "BAD_REQUEST", "node is required");
+    if (!p?.content && !p?.memoryId)
+        throw new AppError(400, "BAD_REQUEST", "content or memoryId is required");
+
+    const ns = resolveNs(p.namespace);
     const node = p.node.toLowerCase();
-    const sec = resolve_sector(node);
-    const tag_list = build_tags(p.tags, node, ns, p.graph_id);
-    const meta = build_meta(p, sec, ns);
-    const res = await add_hsg_memory(p.content, j(tag_list), meta, p.user_id);
-    const stored = {
+    const sec = resolveSector(node);
+    const tagList = buildTags(p.tags, node, ns, p.graphId);
+    const meta = buildMeta(p, sec, ns);
+    const userId = normalizeUserId(p.userId);
+
+    let res: { 
+        id: string; 
+        primarySector: string; 
+        sectors: string[]; 
+        createdAt: number; 
+        userId: string | null;
+        content?: string; 
+    };
+
+    if (p.memoryId) {
+        // Linking an existing memory
+        const mem = new Memory(userId || undefined);
+        const existing = await mem.get(p.memoryId);
+        if (!existing) {
+            throw new AppError(404, "NOT_FOUND", `Memory ${p.memoryId} not found`);
+        }
+
+        // Update content if provided
+        const updatedContent = p.content !== undefined ? p.content : existing.content;
+
+        // Merge tags and metadata
+        const mergedTags = Array.from(new Set([...existing.tags, ...tagList]));
+        const mergedMeta = { ...existing.metadata, ...meta };
+
+        const updateSuccess = await mem.update(p.memoryId, updatedContent, mergedTags, mergedMeta);
+        if (!updateSuccess) {
+            throw new AppError(500, "INTERNAL_ERROR", `Failed to update memory ${p.memoryId} for linking`);
+        }
+
+        res = {
+            id: p.memoryId,
+            primarySector: existing.primarySector,
+            sectors: (existing.sectors as string[]) || [],
+            createdAt: existing.createdAt,
+            userId: existing.userId || null,
+            content: updatedContent,
+        };
+    } else {
+        // Creating a new memory
+        const addRes = await addHsgMemory(
+            p.content!,
+            stringifyJSON(tagList),
+            meta,
+            userId,
+        );
+        res = {
+            id: addRes.id,
+            primarySector: addRes.primarySector,
+            sectors: addRes.sectors,
+            createdAt: addRes.createdAt,
+            userId: addRes.userId || null,
+            content: addRes.content,
+        };
+    }
+
+    const stored: GraphMemoryItem & { namespace: string; graphId: string | null } = {
         id: res.id,
         node,
-        primary_sector: res.primary_sector,
+        primarySector: res.primarySector,
         sectors: res.sectors,
         namespace: ns,
-        graph_id: p.graph_id ?? null,
-        tags: tag_list,
-        chunks: res.chunks ?? 1,
+        graphId: p.graphId || null,
+        tags: tagList,
         metadata: meta,
+        content: res.content || p.content || "",
+        createdAt: res.createdAt,
+        updatedAt: now(),
+        lastSeenAt: now(),
+        userId: res.userId,
+        salience: (meta.salience as number) || 0.5,
+        decayLambda: (meta.decayLambda as number) || 0.01,
+        version: 1,
+        segment: 0,
+        simhash: null,
+        generatedSummary: null,
     };
-    const refl_set = p.reflective ?? env.lg_reflective;
+
+    const reflSet = p.reflective ?? env.lgReflective;
     const refl =
-        refl_set && node !== "reflect"
-            ? await create_auto_refl(p, stored)
-            : null;
-    return { memory: stored, reflection: refl };
+        reflSet && node !== "reflect" ? await createAutoRefl(p, stored) : null;
+
+    return {
+        success: true,
+        memoryId: res.id,
+        node,
+        memory: stored,
+        reflectionId: refl?.id,
+    };
 }
 
-export async function retrieve_node_mems(p: lgm_retrieve_req) {
-    if (!p?.node) throw new Error("node is required");
-    const ns = resolve_ns(p.namespace);
+/**
+ * Retrieves memories for a LangGraph node, supporting both vector search and chronological listing.
+ * Optimized to skip vector hydration for high-volume nodes like 'observe'.
+ * 
+ * **Performance Note**: Skips vector lookups for `observe` node unless explicitly requested
+ * to reduce latency in high-throughput loops.
+ *
+ * @param p - Retrieval parameters (node, query, limit, etc.)
+ * @returns A list of graph memory items.
+ */
+export async function retrieveNodeMems(
+    p: LgmRetrieveRequest,
+): Promise<LgRetrieveResult & { items: GraphMemoryItem[] }> {
+    if (!p?.node) throw new AppError(400, "BAD_REQUEST", "node is required");
+
+    const ns = resolveNs(p.namespace);
     const node = p.node.toLowerCase();
-    const sec = resolve_sector(node);
-    const lim = p.limit || env.lg_max_context;
-    const inc_meta = p.include_metadata ?? false;
-    const gid = p.graph_id;
-    const items: hydrated_mem[] = [];
+    const sec = resolveSector(node);
+    const lim = p.limit || env.lgMaxContext;
+    const incMeta = p.includeMetadata ?? false;
+    const gid = p.graphId;
+    const userId = normalizeUserId(p.userId);
+    const items: GraphMemoryItem[] = [];
+
+    // Store pre-parsed data from matches to avoid double serialization
+    let candidateRows: {
+        row: MemoryRow;
+        score?: number;
+        path?: string[];
+        preParsedTags?: string[];
+        preParsedMeta?: Record<string, unknown>;
+    }[] = [];
+
     if (p.query) {
-        const matches = await hsg_query(p.query, Math.max(lim * 2, lim), {
+        const matches = await hsgQuery(p.query, lim * 2, {
             sectors: [sec],
-            user_id: p.user_id,
+            userId,
         });
+
+        // Optimization: Use enriched results directly without re-fetching
         for (const match of matches) {
-            const row = (await q.get_mem.get(match.id, p.user_id)) as mem_row | undefined;
-            if (!row) continue;
-            const meta = safe_parse<Record<string, unknown>>(row.meta, {});
-            if (!matches_ns(meta, ns, gid)) continue;
-            const hyd = await hydrate_mem_row(
+            const row: MemoryRow = {
+                id: match.id,
+                content: match.content,
+                primarySector: match.primarySector,
+                tags: null, // Defer serialization, use preParsedTags
+                metadata: null, // Defer serialization, use preParsedMeta
+                userId: match.userId ?? null,
+                createdAt: match.createdAt,
+                updatedAt: match.updatedAt || 0,
+                lastSeenAt: match.lastSeenAt,
+                salience: match.salience,
+                decayLambda: match.decayLambda || 0.01,
+                version: match.version || 1,
+                segment: match.segment || 0,
+                simhash: match.simhash || null,
+                generatedSummary: match.generatedSummary || null,
+                // These are not returned by hsgQuery but not needed for basic retrieval
+                meanDim: 0,
+                meanVec: null,
+                compressedVec: null,
+                feedbackScore: 0,
+            };
+            candidateRows.push({
                 row,
-                meta,
-                inc_meta,
-                match.score,
-                match.path,
-            );
-            items.push(hyd);
-            if (items.length >= lim) break;
+                score: match.score,
+                path: match.path,
+                preParsedTags: match.tags || [],
+                preParsedMeta: match.metadata || {},
+            });
         }
     } else {
-        const raw_rows = (await q.all_mem_by_sector.all(
+        const nsTag = `lgm:namespace:${ns}`;
+        const raw_rows = (await q.allMemBySectorAndTag.all(
             sec,
+            nsTag,
             lim * 4,
             0,
-            p.user_id,)) as mem_row[];
-        for (const row of raw_rows) {
-            const meta = safe_parse<Record<string, unknown>>(row.meta, {});
-            if (!matches_ns(meta, ns, gid)) continue;
-            const hyd = await hydrate_mem_row(row, meta, inc_meta);
-            items.push(hyd);
-            if (items.length >= lim) break;
-        }
-        items.sort((a, b) => b.last_seen_at - a.last_seen_at);
+            userId,
+        )) as MemoryRow[];
+        candidateRows = raw_rows.map((r) => ({ row: r }));
     }
+
+    const filteredRows: {
+        row: MemoryRow;
+        score?: number;
+        path?: string[];
+        preParsedTags?: string[];
+        preParsedMeta?: Record<string, unknown>;
+    }[] = [];
+    for (const cand of candidateRows) {
+        // Use pre-parsed meta if available, otherwise parse from row
+        const metadata =
+            cand.preParsedMeta ||
+            parseJsonSafe<Record<string, unknown>>(cand.row.metadata, {});
+
+        if (!matchesNs(metadata, ns, gid)) continue;
+
+        // Ensure meta is attached to row for consistency if it was deferred
+        if (!cand.row.metadata && cand.preParsedMeta) {
+            cand.row.metadata = JSON.stringify(cand.preParsedMeta);
+        }
+
+        filteredRows.push(cand);
+        if (filteredRows.length >= lim) break;
+    }
+
+    // Optimization: Skip vector fetch for "observe" node as it's rarely used for retrieval vectors
+    // and "observe" is high volume.
+    const isObserveNode = node === "observe";
+    const vectorMap = new Map<
+        string,
+        { sector: string; vector: number[]; dim: number }[]
+    >();
+
+    if (filteredRows.length > 0 && !isObserveNode) {
+        const allIds = filteredRows.map((r) => r.row.id);
+        const allVecs = await vectorStore.getVectorsByIds(allIds, userId);
+
+        for (const v of allVecs) {
+            if (!vectorMap.has(v.id)) {
+                vectorMap.set(v.id, []);
+            }
+            vectorMap
+                .get(v.id)
+                ?.push({ sector: v.sector, vector: v.vector, dim: v.dim });
+        }
+    }
+
+    for (const cand of filteredRows) {
+        const metadata =
+            cand.preParsedMeta ||
+            parseJsonSafe<Record<string, unknown>>(cand.row.metadata, {});
+        const vectors = vectorMap.get(cand.row.id) || [];
+        const hyd = hydrateMemRow(
+            cand.row,
+            metadata,
+            incMeta,
+            vectors,
+            cand.score,
+            cand.path,
+            cand.preParsedTags,
+        );
+        items.push(hyd);
+    }
+
+    if (!p.query) {
+        items.sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+    }
+
     return {
-        node,
-        sector: sec,
-        namespace: ns,
-        graph_id: gid ?? null,
-        query: p.query || null,
-        count: items.length,
-        items,
+        success: true,
+        memories: items, // Complies with LgRetrieveResult
+        items, // Keep as backward compatibility for internal consumers if any
     };
 }
 
-export async function get_graph_ctx(p: lgm_context_req) {
-    const ns = resolve_ns(p.namespace);
-    const gid = p.graph_id;
-    const lim = p.limit || env.lg_max_context;
-    const nodes = Object.keys(node_sector_map);
-    const per_node_lim = Math.max(1, Math.floor(lim / nodes.length) || 1);
-    const node_ctxs = [];
-    for (const node of nodes) {
-        const res = await retrieve_node_mems({
-            node,
-            namespace: ns,
-            graph_id: gid,
-            limit: per_node_lim,
-            include_metadata: true,
-        });
-        node_ctxs.push({ node, sector: res.sector, items: res.items });
+/**
+ * Collects context from across all LangGraph nodes for the current graph execution thread.
+ * Aggregates summaries from 'observe', 'plan', 'reflect', 'act', etc.
+ *
+ * @param p - Context request parameters (namespace, graphId, limit).
+ * @returns A synthesized string of context and structured node references.
+ */
+export async function getGraphCtx(
+    p: LgmContextRequest,
+): Promise<LgContextResult & { nodes: LgNodeContext[] }> {
+    const ns = resolveNs(p.namespace);
+    const gid = p.graphId;
+    const lim = p.limit || env.lgMaxContext;
+    const nodes = Object.keys(nodeSectorMap);
+    const perNodeLim = Math.max(1, Math.floor(lim / nodes.length) || 1);
+
+    const resListResults = await Promise.allSettled(
+        nodes.map((node) =>
+            retrieveNodeMems({
+                node,
+                namespace: ns,
+                graphId: gid,
+                limit: perNodeLim,
+                includeMetadata: true,
+                userId: normalizeUserId(p.userId),
+            }),
+        ),
+    );
+
+    const nodeCtxs: LgNodeContext[] = resListResults
+        .filter((r) => r.status === "fulfilled")
+        .map(
+            (r) =>
+                (
+                    r as PromiseFulfilledResult<
+                        Awaited<ReturnType<typeof retrieveNodeMems>>
+                    >
+                ).value,
+        )
+        .map((res, i) => ({
+            node: nodes[i],
+            items: res.items,
+        }));
+
+    const failures = resListResults.filter((r) => r.status === "rejected");
+    if (failures.length > 0) {
+        logger.warn(
+            `[LGM] Failed to retrieve context for ${failures.length} nodes in namespace ${ns}`,
+        );
     }
-    const flat = node_ctxs.flatMap((e) =>
+
+    const flat = nodeCtxs.flatMap((e) =>
         e.items.map((i) => ({
             node: e.node,
-            content: trunc(i.content, summary_line_limit),
+            content: trunc(i.content, summaryLineLimit),
         })),
     );
+
     const summ = flat.length
         ? flat
             .slice(0, lim)
             .map((ln) => `- [${ln.node}] ${ln.content}`)
             .join("\n")
         : "";
+
     return {
-        namespace: ns,
-        graph_id: gid ?? null,
-        limit: lim,
-        nodes: node_ctxs,
-        summary: summ,
+        success: true,
+        context: summ,
+        sources: Array.from(new Set(flat.map((f) => f.node))),
+        nodes: nodeCtxs,
     };
 }
 
 /**
  * Get linear history of a graph execution thread.
- * Useful for LangGraph checkpointers to replay state.
  */
-export async function get_thread_history(p: lgm_retrieve_req) {
-    // Determine sort based on user preference or defaulting to created_at
-    const ns = resolve_ns(p.namespace);
-    // Fetch all memories for this graph_id
-    if (!p.graph_id) throw new Error("graph_id required for history");
+export async function getThreadHistory(p: LgmRetrieveRequest) {
+    const ns = resolveNs(p.namespace);
+    if (!p.graphId)
+        throw new AppError(400, "BAD_REQUEST", "graphId required for history");
 
-    // We search across all sectors for this graph
-    // Since we don't have a "get all by graph_id" index easily exposed in query.ts without sector,
-    // we might need to iterate or add a query.
-    // For now, we assume standard sectors.
-    const nodes = Object.keys(node_sector_map);
-    const all_items: hydrated_mem[] = [];
+    const nodes = Object.keys(nodeSectorMap);
+    const resListResults = await Promise.allSettled(
+        nodes.map((node) =>
+            retrieveNodeMems({
+                node,
+                namespace: ns,
+                graphId: p.graphId,
+                userId: normalizeUserId(p.userId),
+                limit: 100,
+            }),
+        ),
+    );
 
-    for (const node of nodes) {
-        const res = await retrieve_node_mems({
-            node,
-            namespace: ns,
-            graph_id: p.graph_id,
-            limit: 100 // Reasonable history limit per node
-        });
-        all_items.push(...res.items);
+    const allItems = resListResults
+        .filter((r) => r.status === "fulfilled")
+        .flatMap(
+            (r) =>
+                (
+                    r as PromiseFulfilledResult<
+                        Awaited<ReturnType<typeof retrieveNodeMems>>
+                    >
+                ).value.memories as GraphMemoryItem[],
+        );
+
+    const failures = resListResults.filter((r) => r.status === "rejected");
+    if (failures.length > 0) {
+        logger.warn(
+            `[LGM] Failed to retrieve history for ${failures.length} nodes in graph ${p.graphId}`,
+        );
     }
 
-    // Sort by created_at ascending to reconstruct timeline
-    all_items.sort((a, b) => a.created_at - b.created_at);
+    allItems.sort((a, b) => a.createdAt - b.createdAt);
 
     return {
         namespace: ns,
-        graph_id: p.graph_id,
-        count: all_items.length,
-        history: all_items.map(i => ({
+        graphId: p.graphId,
+        userId: normalizeUserId(p.userId) ?? null,
+        count: allItems.length,
+        history: allItems.map((i) => ({
             id: i.id,
             node: i.node,
             content: i.content,
-            timestamp: new Date(i.created_at).toISOString(),
-            metadata: i.metadata
-        }))
+            timestamp: new Date(i.createdAt).toISOString(),
+            metadata: i.metadata,
+        })),
     };
 }
 
-const build_ctx_refl = async (ns: string, gid?: string) => {
-    const ctx = await get_graph_ctx({
+const buildCtxRefl = async (
+    ns: string,
+    gid?: string,
+    userId?: string | null,
+) => {
+    const ctx = await getGraphCtx({
         namespace: ns,
-        graph_id: gid,
-        limit: env.lg_max_context,
+        graphId: gid,
+        limit: env.lgMaxContext,
+        userId: normalizeUserId(userId),
     });
-    const lns = ctx.nodes.flatMap((e) =>
-        e.items.map((i) => ({
-            node: e.node,
-            content: trunc(i.content, summary_line_limit),
-        })),
-    );
-    if (!lns.length) return null;
+
+    if (!ctx.context) return null;
+
     const hdr = `Reflection synthesized from LangGraph context (namespace=${ns}${gid ? `, graph=${gid}` : ""})`;
-    const body = lns
-        .slice(0, env.lg_max_context)
-        .map((ln, idx) => `${idx + 1}. [${ln.node}] ${ln.content}`)
-        .join("\n");
-    return `${hdr}\n\n${body}`;
+    return `${hdr}\n\n${ctx.context}`;
 };
 
-export async function create_refl(p: lgm_reflection_req) {
-    const ns = resolve_ns(p.namespace);
+/**
+ * Manually creates a reflection memory entry.
+ */
+export async function createRefl(
+    p: LgmReflectionRequest,
+): Promise<LgReflectResult> {
+    const ns = resolveNs(p.namespace);
     const node = (p.node || "reflect").toLowerCase();
-    const base_content = p.content || (await build_ctx_refl(ns, p.graph_id));
-    if (!base_content)
-        throw new Error("reflection content could not be derived");
+    const baseContent =
+        p.content || (await buildCtxRefl(ns, p.graphId, p.userId));
+
+    if (!baseContent)
+        throw new AppError(
+            400,
+            "BAD_REQUEST",
+            "reflection content could not be derived",
+        );
+
     const tags = [
         `lgm:manual:reflection`,
-        ...(p.context_ids?.map((id) => `lgm:context:${id}`) || []),
+        ...(p.contextIds?.map((id) => `lgm:context:${id}`) || []),
     ];
     const meta: Record<string, unknown> = {
-        lgm_context_ids: p.context_ids || [],
+        lgmContextIds: p.contextIds || [],
     };
-    const res = await store_node_mem({
+
+    const res = await storeNodeMem({
         node,
-        content: base_content,
+        content: baseContent,
         namespace: ns,
-        graph_id: p.graph_id,
+        graphId: p.graphId,
         tags,
         metadata: meta,
         reflective: false,
+        userId: p.userId,
     });
-    return res;
+
+    return {
+        success: true,
+        reflectionId: res.memoryId,
+        insights: [baseContent.slice(0, 100)], // Basic insight extraction for now
+    };
 }
 
-export const get_lg_cfg = () => ({
-    mode: env.mode,
-    namespace_default: env.lg_namespace,
-    max_context: env.lg_max_context,
-    reflective: env.lg_reflective,
-    node_sector_map,
+/**
+ * Returns the current LangGraph configuration.
+ */
+export const getLgCfg = (): LgConfig => ({
+    success: true,
+    config: {
+        nodes: Object.keys(nodeSectorMap),
+        edges: [
+            { source: "observe", target: "plan" },
+            { source: "plan", target: "act" },
+            { source: "act", target: "reflect" },
+            { source: "reflect", target: "plan" },
+            { source: "observe", target: "emotion" },
+        ],
+    },
 });

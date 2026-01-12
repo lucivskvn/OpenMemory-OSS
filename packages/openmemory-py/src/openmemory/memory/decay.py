@@ -5,13 +5,16 @@ import random
 import json
 import logging
 from typing import List, Dict, Any, Optional
-from ..core.db import q, db
+from ..core.db import q, db, transaction
 from ..core.config import env
 from ..core.vector_store import vector_store as store
 from ..utils.vectors import buf_to_vec, vec_to_buf, cos_sim
 from ..utils.text import canonical_tokens_from_text
+from ..ops.dynamics import COGNITIVE_PARAMS
 
 # Ported from backend/src/memory/decay.ts
+
+logger = logging.getLogger("openmemory.memory.decay")
 
 class DecayCfg:
     def __init__(self):
@@ -42,12 +45,36 @@ def dec_q():
     active_q = max(0, active_q - 1)
 
 def pick_tier(m: Dict, now_ts: int) -> str:
-    dt = max(0, now_ts - (m["last_seen_at"] or m["updated_at"] or now_ts))
+    dt = max(0, now_ts - (m.get("last_seen_at") or m.get("updated_at") or now_ts))
     recent = dt < 6 * 86_400_000
-    high = (m.get("coactivations") or 0) > 5 or (m["salience"] or 0) > 0.7
+    high = (m.get("coactivations") or 0) > 5 or (m.get("salience") or 0) > 0.7
     if recent and high: return "hot"
-    if recent or (m["salience"] or 0) > 0.4: return "warm"
+    if recent or (m.get("salience") or 0) > 0.4: return "warm"
     return "cold"
+
+def calc_decay(sec: str, init_sal: float, days_since: float, m_tier: Optional[str] = None) -> float:
+    """Standardized decay formula used for both live scoring and background maintenance."""
+    from ..core.constants import SECTOR_CONFIGS
+    from ..ops.dynamics import HYBRID_PARAMS
+    sec_cfg = SECTOR_CONFIGS.get(sec, {"decay_lambda": 0.02})
+    
+    # Base lambda
+    lam = sec_cfg.get("decay_lambda", 0.02)
+    
+    # Dynamic adjust if tier is provided
+    if m_tier == "hot": lam *= 0.5
+    elif m_tier == "cold": lam *= 1.5
+    
+    # Salience-weighted decay factor (higher salience decays slower)
+    # f = exp(-lam * (dt / (sal + 0.1)))
+    f = math.exp(-lam * (days_since / (init_sal + 0.1)))
+    decayed = init_sal * f
+    
+    # Reinforcement floor from HYBRID_PARAMS (Sustainability/Consistency)
+    reinf_alpha = HYBRID_PARAMS.get("alpha_reinforce", 0.1)
+    reinf = reinf_alpha * (1 - math.exp(-lam * days_since))
+    
+    return max(0.0, min(1.0, decayed + reinf))
 
 def mean(arr: List[float]) -> float:
     return sum(arr) / len(arr) if arr else 0
@@ -99,9 +126,9 @@ def top_keywords(t: str, k=5) -> List[str]:
     return [x[0] for x in items[:k]]
 
 def fingerprint_mem(m: Dict) -> Dict[str, Any]:
-    base = f"{m['id']}|{m.get('summary') or m['content'] or ''}".strip()
+    base = f"{m['id']}|{m.get('generated_summary') or m['content'] or ''}".strip()
     vec = hash_to_vec(base, 32)
-    summary = " ".join(top_keywords(m.get('summary') or m['content'] or "", 3))
+    summary = " ".join(top_keywords(m.get('generated_summary') or m['content'] or "", 3))
     return {"vector": vec, "summary": summary}
 
 def calc_recency_score(last_seen: int) -> float:
@@ -115,20 +142,21 @@ def calc_recency_score(last_seen: int) -> float:
 async def apply_decay():
     global last_decay
     if active_q > 0:
-        print(f"[decay] skipped - {active_q} active queries")
+        logger.debug(f"[decay] skipped - {active_q} active queries")
         return
         
     now_ts = int(time.time() * 1000)
     if now_ts - last_decay < COOLDOWN:
         rem = (COOLDOWN - (now_ts - last_decay)) / 1000
-        print(f"[decay] skipped - cooldown active ({rem:.0f}s left)")
+        logger.debug(f"[decay] skipped - cooldown active ({rem:.0f}s left)")
         return
         
     last_decay = now_ts
     t0 = time.time()
     
     # get segments
-    segments_rows = await db.async_fetchall("SELECT DISTINCT segment FROM memories ORDER BY segment DESC")
+    t = q.tables
+    segments_rows = await db.async_fetchall(f"SELECT DISTINCT segment FROM {t['memories']} ORDER BY segment DESC")
     segments = [r["segment"] for r in segments_rows]
     
     tot_proc = 0
@@ -138,116 +166,96 @@ async def apply_decay():
     tier_counts = {"hot": 0, "warm": 0, "cold": 0}
     
     for seg in segments:
-        rows = await db.async_fetchall("SELECT id,content,summary,salience,decay_lambda,last_seen_at,updated_at,primary_sector,feedback_score as coactivations FROM memories WHERE segment=?", (seg,))
-        # Schema note: TS referenced `coactivations` which maps to `feedback_score` in standard schema.
-        # Using aliased feedback_score or null default.
-        
-        decay_ratio = env.decay_ratio or 0.03
-        batch_sz = max(1, int(len(rows) * decay_ratio))
-        if not rows: continue
-        
-        start_idx = random.randint(0, max(0, len(rows) - batch_sz)) # fix range
-        batch = rows[start_idx : start_idx + batch_sz]
-        
-        # Parallel logic in Python: just await loop, or task group. 
-        # Since DB is sync (sqlite), concurrency is limited by I/O lock mostly.
-        # But computation (compress) is CPU.
-        
-        for m in batch: # simplified loop
-            dict_m = dict(m)
-            m_tier = pick_tier(dict_m, now_ts)
-            tier_counts[m_tier] += 1
+        async with transaction():
+            t = q.tables
+            # We fetch more fields to support the different logic paths
+            rows = await db.async_fetchall(f"SELECT id,content,generated_summary as summary,salience,decay_lambda,last_seen_at,updated_at,primary_sector,feedback_score as coactivations FROM {t['memories']} WHERE segment=?", (seg,))
             
-            lam = cfg.lambda_hot if m_tier == "hot" else (cfg.lambda_warm if m_tier == "warm" else cfg.lambda_cold)
-            dt = max(0, (now_ts - (dict_m["last_seen_at"] or dict_m["updated_at"] or 0)) / cfg.time_unit_ms)
-            act = max(0, dict_m.get("coactivations") or dict_m.get("feedback_score") or 0)
-            sal = max(0.0, min(1.0, (dict_m["salience"] or 0.5) * (1 + math.log1p(act))))
+            decay_ratio = env.decay_ratio or 0.03
+            batch_sz = max(1, int(len(rows) * decay_ratio))
+            if not rows: continue
             
-            f = math.exp(-lam * (dt / (sal + 0.1)))
-            new_sal = max(0.0, min(1.0, sal * f))
-            changed = abs(new_sal - (dict_m["salience"] or 0)) > 0.001
+            start_idx = random.randint(0, max(0, len(rows) - batch_sz))
+            batch = rows[start_idx : start_idx + batch_sz]
             
-            # Compression
-            if f < 0.7:
-                sector = dict_m["primary_sector"] or "semantic"
-                # Check if we already moved it to cold? 
-                # For now assume we might have. 
-                # But we want to get the CURRENT vector to compress it?
-                # Actually if it's already compressed, we shouldn't compress again unless f changed?
-                # The logic below gets vector from 'sector'. Use existing logic but safe store.
+            # Batch update list
+            salience_updates = []
+            
+            for m in batch:
+                dict_m = dict(m)
+                m_tier = pick_tier(dict_m, now_ts)
+                tier_counts[m_tier] += 1
                 
-                vec_row = await store.getVector(dict_m["id"], sector)
-                if not vec_row:
-                    # Try cold
-                    vec_row = await store.getVector(dict_m["id"], sector + "_cold")
+                # Standardize Lambda: Prefer Memory's own decay_lambda if set, then Sector config, then Tier defaults
+                sec = dict_m.get("primary_sector") or "semantic"
+                from ..core.constants import SECTOR_CONFIGS
+                sec_cfg = SECTOR_CONFIGS.get(sec, {"decay_lambda": 0.02})
                 
-                if vec_row and vec_row.vector:
-                    vec = vec_row.vector
-                    if len(vec) > cfg.min_vec_dim: # Only compress if not already minimal
-                         new_vec = compress_vector(vec, f, cfg.min_vec_dim, cfg.max_vec_dim)
-                         
-                         if len(new_vec) < len(vec):
-                             # Store in _cold sector if dimension reduced significantly or if already cold
-                             # To avoid mixing dimensions in 'sector', we ALWAYS store reduced dim in '_cold'
-                             # and REMOVE from main 'sector' if it was there.
-                             target_sector = sector + "_cold"
-                             await store.storeVector(dict_m["id"], target_sector, new_vec, len(new_vec))
-                             if target_sector != sector:
-                                 await store.deleteVectors(dict_m["id"]) # Optimization: delete from main table?? No, deleteVectors deletes ALL? 
-                                 # store.deleteVectors definition: "DELETE FROM {self.table} WHERE id=?" deletes ALL sectors for that ID?
-                                 # Wait, SQLiteVectorStore.deleteVectors deletes by ID. It removes ALL.
-                                 # So if we store in _cold, we must re-insert?
-                                 # Actually `storeVector` is "INSERT OR REPLACE".
-                                 # If we change sector, the old sector row REMAINS for SQLite if (id, sector) is key.
-                                 # But VectorStore usually assumes one vector per (id, sector).
-                                 # If we move to `sector_cold`, we should delete `sector` row.
-                                 # Helper needed: deleteVector(id, sector).
-                                 pass 
+                lam = dict_m.get("decay_lambda") or sec_cfg.get("decay_lambda") or \
+                      (cfg.lambda_hot if m_tier == "hot" else (cfg.lambda_warm if m_tier == "warm" else cfg.lambda_cold))
+                
+                dt = max(0, (now_ts - (dict_m["last_seen_at"] or dict_m["updated_at"] or 0)) / cfg.time_unit_ms)
+                act = max(0, dict_m.get("coactivations") or dict_m.get("feedback_score") or 0)
+                
+                # Consistency with hsg.py's calc_decay (but keeping f-factor for tiered logic)
+                sal = max(0.0, min(1.0, (dict_m["salience"] or 0.5) * (1 + math.log1p(act))))
+                f = math.exp(-lam * (dt / (sal + 0.1)))
+                new_sal = max(0.0, min(1.0, sal * f))
+                
+                changed = abs(new_sal - (dict_m["salience"] or 0)) > 0.001
+                
+                # Compression / Cold storage logic
+                if f < 0.7:
+                    sector = dict_m["primary_sector"] or "semantic"
+                    vec_row = await store.getVector(dict_m["id"], sector)
+                    if not vec_row:
+                        vec_row = await store.getVector(dict_m["id"], sector + "_cold")
+                    
+                    if vec_row and vec_row.vector:
+                        vec = vec_row.vector
+                        if len(vec) > cfg.min_vec_dim:
+                             new_vec = compress_vector(vec, f, cfg.min_vec_dim, cfg.max_vec_dim)
+                             if len(new_vec) < len(vec):
+                                 target_sector = sector + "_cold"
+                                 await store.storeVector(dict_m["id"], target_sector, new_vec, len(new_vec))
+                                 if target_sector != sector:
+                                     await store.deleteVectors(dict_m["id"], sector)
+                                 tot_comp += 1
+                                 changed = True
+                                 
+                if f < max(0.3, cfg.cold_threshold):
+                    sector = dict_m["primary_sector"] or "semantic"
+                    fp = fingerprint_mem(dict_m)
+                    target_sector = sector + "_cold"
+                    await store.storeVector(dict_m["id"], target_sector, fp["vector"], len(fp["vector"]))
+                    if target_sector != sector:
+                        await store.deleteVectors(dict_m["id"], sector)
+                    
+                    await db.async_execute(f"UPDATE {t['memories']} SET generated_summary=? WHERE id=?", (fp["summary"], dict_m["id"]))
+                    tot_fp += 1
+                    changed = True
 
-                             tot_comp += 1
-                             changed = True
-                             
-            # Fingerprinting (Cold storage)
-            if f < max(0.3, cfg.cold_threshold):
-                sector = dict_m["primary_sector"] or "semantic"
-                fp = fingerprint_mem(dict_m)
-                target_sector = sector + "_cold"
+                if changed:
+                    salience_updates.append((new_sal, now_ts, dict_m["id"]))
+                    tot_chg += 1
                 
-                await store.storeVector(dict_m["id"], target_sector, fp["vector"], len(fp["vector"]))
-                # Cleanup main sector if exists
-                # We can't easily delete specific sector row via generic API yet (deleteVectors is by ID).
-                # Assuming simple overwrite if ID is PK?
-                # Postgres: PRIMARY KEY (id). So generic deleteVectors deletes the ID.
-                # If we store new sector, it updates the row? 
-                # Postgres logic: ON CONFLICT (id) DO UPDATE SET sector=...
-                # So for Postgres, storing in new sector AUTOMATICALLY updates the row and changes sector. 
-                # Perfect.
-                # SQLite logic: INSERT OR REPLACE INTO ... (id, sector ...).
-                # SQLite PK is likely (id, sector) or just ID? 
-                # vector_store.py SQLite schema: "CREATE TABLE vectors (id TEXT, sector TEXT...)" <- No PK defined in checked code? 
-                # Wait, I didn't see CREATE TABLE in SQLiteVectorStore. It implies it exists.
-                # Let's assume Postgres behavior (One vector per ID usually).
-                
-                await db.async_execute("UPDATE memories SET summary=? WHERE id=?", (fp["summary"], dict_m["id"]))
-                tot_fp += 1
-                changed = True
-
-            if changed:
-                await db.async_execute("UPDATE memories SET salience=?, updated_at=? WHERE id=?", (new_sal, int(time.time()*1000), dict_m["id"]))
-                tot_chg += 1
+                tot_proc += 1
             
-            tot_proc += 1
-            await asyncio.sleep(0) # yield
+            # Batch execute salience updates
+            if salience_updates:
+                await db.async_executemany(f"UPDATE {t['memories']} SET salience=?, updated_at=? WHERE id=?", salience_updates)
             
-    await db.async_commit()
+            # Yield once per segment instead of once per memory
+            await asyncio.sleep(0.05)
     dur = (time.time() - t0) * 1000
-    print(f"[decay] {tot_chg}/{tot_proc} | tiers: {tier_counts} | comp={tot_comp} fp={tot_fp} | {dur:.1f}ms")
+    if tot_proc > 0:
+        logger.info(f"[decay] {tot_chg}/{tot_proc} | tiers: {tier_counts} | comp={tot_comp} fp={tot_fp} | {dur:.1f}ms")
 
-async def on_query_hit(mem_id: str, sector: str, reembed_fn = None):
+async def on_query_hit(mem_id: str, sector: str, reembed_fn = None, user_id: Optional[str] = None):
     # reembed_fn: async (text) -> list[float]
     if not cfg.regeneration_enabled and not cfg.reinforce_on_query: return
     
-    m = await q.get_mem(mem_id)
+    m = await q.get_mem(mem_id, user_id=user_id)
     if not m: return
     
     updated = False
@@ -255,31 +263,32 @@ async def on_query_hit(mem_id: str, sector: str, reembed_fn = None):
     # Regeneration (if vector degraded/compressed but accessed again)
     if cfg.regeneration_enabled and reembed_fn:
         # Check main sector
-        vec_row = await store.getVector(mem_id, sector)
+        vec_row = await store.getVector(mem_id, sector, user_id=user_id)
         if not vec_row:
              # Check cold sector
-             vec_row = await store.getVector(mem_id, sector + "_cold")
+             vec_row = await store.getVector(mem_id, sector + "_cold", user_id=user_id)
              
         if vec_row and vec_row.vector and len(vec_row.vector) <= 64:
              # it was compressed/cold, regenerate full
              try:
-                 base = m["summary"] or m["content"] or ""
+                 base = m["generated_summary"] or m["content"] or ""
                  new_vec = await reembed_fn(base)
                  # Restore to MAIN sector
                  await store.storeVector(mem_id, sector, new_vec, len(new_vec))
+                 # Clean up cold vector
+                 await store.deleteVectors(mem_id, sector + "_cold")
                  updated = True
-             except Exception:
+             except Exception as e:
+                 logger.warning(f"[decay] regeneration failed: {e}")
                  pass
 
     # Reinforcement
     if cfg.reinforce_on_query:
-        new_sal = min(1.0, (m["salience"] or 0.5) + 0.15) # increased boost slightly from TS logic of +0.5?? TS line 415 says +0.5, line 1042 says +0.15. I'll stick to conservative +0.15 matching 1042.
-        # Actually TS line 415: `clamp_f((m.salience || 0.5) + 0.5, 0, 1)`. That's huge!
-        # Maybe it means "boost TO at least 0.5"? No, `+ 0.5`.
-        # I'll use 0.5 boost if TS does.
-        new_sal = min(1.0, (m["salience"] or 0.5) + 0.5)
+        new_sal = min(1.0, (m["salience"] or 0.5) + COGNITIVE_PARAMS["QUERY_HIT_BOOST"])
         
-        await db.async_execute("UPDATE memories SET salience=?, last_seen_at=? WHERE id=?", (new_sal, int(time.time()*1000), mem_id))
+        t = q.tables
+        await db.async_execute(f"UPDATE {t['memories']} SET salience=?, last_seen_at=? WHERE id=? AND (user_id=? OR user_id IS NULL)", (new_sal, int(time.time()*1000), mem_id, user_id))
+        await db.async_commit()
         updated = True
         
     if updated:
@@ -292,7 +301,7 @@ _decay_task = None
 
 async def decay_loop():
     interval = (env.decay_interval or 5) * 60 # default 5 minutes
-    logger = logging.getLogger("decay")
+    # logger already defined at module level
     while True:
         try:
             await apply_decay()
@@ -304,7 +313,7 @@ def start_decay():
     global _decay_task
     if _decay_task: return
     _decay_task = asyncio.create_task(decay_loop())
-    print(f"[decay] Started: every {(env.decay_interval or 5)}m")
+    logger.info(f"[decay] Started: every {(env.decay_interval or 5)}m")
 
 def stop_decay():
     global _decay_task

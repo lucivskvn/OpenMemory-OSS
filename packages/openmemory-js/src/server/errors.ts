@@ -1,10 +1,17 @@
-
+/**
+ * Application-specific error class for carrying HTTP status and error codes.
+ */
 export class AppError extends Error {
     public statusCode: number;
     public code: string;
-    public details?: any;
+    public details?: unknown;
 
-    constructor(statusCode: number, code: string, message: string, details?: any) {
+    constructor(
+        statusCode: number,
+        code: string,
+        message: string,
+        details?: unknown,
+    ) {
         super(message);
         this.statusCode = statusCode;
         this.code = code;
@@ -17,46 +24,87 @@ export interface ErrorResponse {
     error: {
         code: string;
         message: string;
-        details?: any;
+        details?: unknown;
     };
+    // RFC 7807 fields
+    type?: string;
+    title?: string;
+    status: number;
+    instance?: string;
 }
 
-export function sendError(res: any, err: unknown) {
+import { env } from "../core/cfg";
+import { logger } from "../utils/logger";
+
+/**
+ * Standardized error sender for API responses.
+ * Masks internal details in production to prevent data leakage.
+ */
+export const sendError = (
+    res: {
+        status: (code: number) => { json: (body: unknown) => void };
+        json: (body: unknown) => void;
+    },
+    error: unknown,
+) => {
+    // logger.debug("[DEBUG] sendError called with:", error);
     let appError: AppError;
 
-    if (err instanceof AppError) {
-        appError = err;
-    } else if (err instanceof Error) {
+    const isProd = env.isProd;
+
+    if (error instanceof AppError) {
+        appError = error;
+    } else if (error instanceof Error) {
         // Wrap generic errors
-        const msg = err.message || "Internal Server Error";
+        const msg = error.message || "Internal Server Error";
         if (msg.includes("not found") || msg === "nf") {
-            appError = new AppError(404, "NOT_FOUND", "Resource not found");
+            appError = new AppError(404, "NOT_FOUND", msg);
         } else if (msg.includes("unauthorized") || msg === "auth") {
-            appError = new AppError(401, "UNAUTHORIZED", "Unauthorized access");
+            appError = new AppError(401, "UNAUTHORIZED", msg);
+        } else if (msg.includes("forbidden") || msg === "noperm") {
+            appError = new AppError(403, "FORBIDDEN", msg);
         } else {
             appError = new AppError(500, "INTERNAL_ERROR", msg);
         }
+        // In dev, attach stack
+        if (!isProd) {
+            appError.details = { stack: error.stack };
+        }
     } else {
-        appError = new AppError(500, "UNKNOWN_ERROR", String(err));
+        // Unknown type
+        appError = new AppError(500, "INTERNAL_ERROR", String(error));
     }
 
-    // Log server errors
-    if (appError.statusCode >= 500) {
-        console.error(`[ERROR] ${appError.code}: ${appError.message}`, err);
-    }
-
-    const response: ErrorResponse = {
+    const body: ErrorResponse = {
         error: {
             code: appError.code,
             message: appError.message,
-            details: appError.details,
         },
+        status: appError.statusCode,
+        title: appError.code,
+        type: "about:blank",
     };
 
-    // If 'res' is an AdvancedResponse-like object (Express/Bun)
-    if (res && typeof res.status === "function" && typeof res.json === "function") {
-        res.status(appError.statusCode).json(response);
-    } else {
-        console.error("[sendError] Invalid response object:", err);
+    if (appError.details) {
+        body.error.details = appError.details;
     }
-}
+
+    // Only log actual 500s or unexpected errors
+    if (appError.statusCode >= 500) {
+        logger.error(
+            `[API] Error ${appError.code}: ${appError.message}`,
+            { error },
+        );
+    }
+
+    // If 'res' is an AdvancedResponse-like object (Express/Bun)
+    if (
+        res &&
+        typeof res.status === "function" &&
+        typeof res.json === "function"
+    ) {
+        res.status(appError.statusCode).json(body);
+    } else {
+        logger.error("[sendError] Invalid response object:", { error });
+    }
+};

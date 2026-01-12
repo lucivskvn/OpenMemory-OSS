@@ -1,8 +1,18 @@
-
 import asyncio
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.runnables.history import RunnableWithMessageHistory
-from langchain_openai import ChatOpenAI
+
+try:
+    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder  # type: ignore[import]
+    from langchain_core.runnables.history import RunnableWithMessageHistory  # type: ignore[import]
+    from langchain_openai import ChatOpenAI  # type: ignore[import]
+
+    LANGCHAIN_AVAILABLE = True
+except ImportError:
+    LANGCHAIN_AVAILABLE = False
+    ChatPromptTemplate = None  # type: ignore[assignment]
+    MessagesPlaceholder = None  # type: ignore[assignment]
+    RunnableWithMessageHistory = None  # type: ignore[assignment]
+    ChatOpenAI = None  # type: ignore[assignment]
+
 from openmemory.integrations.langchain import OpenMemoryChatMessageHistory
 
 # ==================================================================================
@@ -12,37 +22,57 @@ from openmemory.integrations.langchain import OpenMemoryChatMessageHistory
 # Uses `OpenMemoryChatMessageHistory` to automatically load/save history.
 # ==================================================================================
 
-# 1. Setup Model
-model = ChatOpenAI(model="gpt-4o", temperature=0)
+chain_with_history = None
 
-# 2. Setup Prompt
-prompt = ChatPromptTemplate.from_messages([
-    ("system", "You are a helpful assistant with long-term memory."),
-    MessagesPlaceholder(variable_name="history"),
-    ("human", "{input}"),
-])
+if (
+    LANGCHAIN_AVAILABLE
+    and ChatPromptTemplate
+    and MessagesPlaceholder
+    and RunnableWithMessageHistory
+    and ChatOpenAI
+):
+    # 1. Setup Model
+    model = ChatOpenAI(model="gpt-4o", temperature=0)
 
-# 3. Create Chain
-chain = prompt | model
+    # 2. Setup Prompt
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", "You are a helpful assistant with long-term memory."),
+            MessagesPlaceholder(variable_name="history"),
+            ("human", "{input}"),
+        ]
+    )
 
-# 4. Wrap with History
-# This wrapper will:
-# - Call `history.messages` (or equivalent) to get context.
-# - Call `history.add_user_message` / `add_ai_message` after generation.
-chain_with_history = RunnableWithMessageHistory(
-    chain,
-    lambda session_id: OpenMemoryChatMessageHistory(session_id=session_id),
-    input_messages_key="input",
-    history_messages_key="history",
-)
+    # 3. Create Chain
+    chain = prompt | model
+
+    # 4. Wrap with History
+    # This wrapper will:
+    # - Call `history.messages` (or equivalent) to get context.
+    # - Call `history.add_user_message` / `add_ai_message` after generation.
+    chain_with_history = RunnableWithMessageHistory(
+        chain,
+        lambda session_id: OpenMemoryChatMessageHistory(memory=None, user_id="user", session_id=session_id),  # type: ignore[arg-type]
+        input_messages_key="input",
+        history_messages_key="history",
+    )
 
 async def main():
+    if not LANGCHAIN_AVAILABLE:
+        print(
+            "LangChain dependencies not installed. Install with: pip install langchain-openai langchain-core"
+        )
+        return
+    if chain_with_history is None:
+        print("LangChain chain failed to initialize")
+        return
+
     session_id = "user_langchain_01"
     print(f"Starting chat session: {session_id}")
 
     # First turn
     print("\nUser: Hi, I'm Bob and I like Python.")
-    await chain_with_history.ainvoke(
+    await chain_with_history.ainvoke(  # type: ignore[union-attr]
         {"input": "Hi, I'm Bob and I like Python."},
         config={"configurable": {"session_id": session_id}},
     )
@@ -52,7 +82,7 @@ async def main():
 
     # Second turn (New session instance, but same ID -> Recall)
     print("\nUser: What is my name?")
-    response = await chain_with_history.ainvoke(
+    response = await chain_with_history.ainvoke(  # type: ignore[union-attr]
         {"input": "What is my name?"},
         config={"configurable": {"session_id": session_id}},
     )

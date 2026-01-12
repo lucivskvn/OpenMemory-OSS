@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { Sidebar } from "../components/Sidebar";
+import { StatusIndicator } from "../components/StatusIndicator";
+import { Toaster } from "sonner";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -26,10 +28,7 @@ export default function RootLayout({
                         <header className="glass-header">
                             <h1 className="text-lg font-medium">System Overview</h1>
                             <div className="flex items-center gap-4">
-                                <div className="px-3 py-1 rounded-full bg-green-500/10 text-green-500 text-xs flex items-center gap-2 border border-green-500/20">
-                                    <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                                    Backend Online
-                                </div>
+                                <StatusIndicator />
                             </div>
                         </header>
                         <div className="p-8">
@@ -37,6 +36,7 @@ export default function RootLayout({
                         </div>
                     </main>
                 </div>
+                <Toaster richColors position="top-right" />
             </body>
         </html>
     );

@@ -6,14 +6,14 @@ env vars: GOOGLE_SERVICE_ACCOUNT_FILE or GOOGLE_CREDENTIALS_JSON
 from typing import List, Dict, Optional
 import os
 import json
-from .base import base_connector
+from .base import BaseConnector, SourceContent
 
-class google_slides_connector(base_connector):
+class GoogleSlidesConnector(BaseConnector):
     """connector for google slides presentations"""
     
     name = "google_slides"
     
-    def __init__(self, user_id: str = None):
+    def __init__(self, user_id: Optional[str] = None):
         super().__init__(user_id)
         self.service = None
         self.creds = None
@@ -56,18 +56,21 @@ class google_slides_connector(base_connector):
         self._connected = True
         return True
     
-    async def list_items(self, presentation_id: str = None, **filters) -> List[Dict]:
+    async def list_items(self, presentation_id: Optional[str] = None, **filters) -> List[Dict]:  # type: ignore[override]
         """
         list slides in a presentation
         
         args:
             presentation_id: the presentation id to list slides from
         """
-        if not self._connected:
+        if not self._connected or not self.service:
             await self.connect()
         
         if not presentation_id:
             raise ValueError("presentation_id is required")
+        
+        if not self.service:
+            raise ValueError("Service not initialized")
         
         pres = self.service.presentations().get(presentationId=presentation_id).execute()
         
@@ -84,7 +87,7 @@ class google_slides_connector(base_connector):
         
         return slides
     
-    async def fetch_item(self, item_id: str) -> Dict:
+    async def fetch_item(self, item_id: str) -> SourceContent:  # type: ignore[override]
         """
         fetch presentation or single slide text
         
@@ -101,6 +104,9 @@ class google_slides_connector(base_connector):
             presentation_id = item_id
             slide_id = None
             single_slide = False
+        
+        if not self.service:
+            raise ValueError("Service not initialized")
         
         pres = self.service.presentations().get(presentationId=presentation_id).execute()
         
@@ -143,15 +149,15 @@ class google_slides_connector(base_connector):
         
         text = "\n\n".join(all_text)
         
-        return {
-            "id": item_id,
-            "name": pres.get("title", "Untitled Presentation"),
-            "type": "presentation",
-            "text": text,
-            "data": text,
-            "meta": {
+        return SourceContent(
+            id=item_id,
+            name=pres.get("title", "Untitled Presentation"),
+            type="presentation",
+            text=text,
+            data=text,
+            metadata={
                 "source": "google_slides",
                 "presentation_id": presentation_id,
                 "slide_count": len(pres.get("slides", []))
             }
-        }
+        )

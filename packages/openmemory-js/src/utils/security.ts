@@ -1,6 +1,13 @@
 import { lookup } from "dns/promises";
 import { isIP } from "net";
 
+export class NetworkError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = "NetworkError";
+    }
+}
+
 const PRIVATE_RANGES = [
     { start: 0x7f000000, end: 0x7fffffff }, // 127.0.0.0/8
     { start: 0x0a000000, end: 0x0affffff }, // 10.0.0.0/8
@@ -10,9 +17,11 @@ const PRIVATE_RANGES = [
 ];
 
 function ipToInt(ip: string): number {
-    return ip
-        .split(".")
-        .reduce((sum, part) => (sum << 8) + parseInt(part, 10), 0) >>> 0;
+    return (
+        ip
+            .split(".")
+            .reduce((sum, part) => (sum << 8) + parseInt(part, 10), 0) >>> 0
+    );
 }
 
 function isPrivateIP(ip: string): boolean {
@@ -20,11 +29,11 @@ function isPrivateIP(ip: string): boolean {
     return PRIVATE_RANGES.some(({ start, end }) => num >= start && num <= end);
 }
 
-export async function validate_url(url_string: string): Promise<string> {
+export async function validateUrl(url_string: string): Promise<string> {
     const url = new URL(url_string);
 
     if (url.protocol !== "http:" && url.protocol !== "https:") {
-        throw new Error(`Invalid protocol: ${url.protocol}`);
+        throw new NetworkError(`Invalid protocol: ${url.protocol}`);
     }
 
     const hostname = url.hostname;
@@ -35,15 +44,15 @@ export async function validate_url(url_string: string): Promise<string> {
         try {
             const { address } = await lookup(hostname);
             ip = address;
-        } catch (e) {
-            throw new Error(`DNS resolution failed for ${hostname}`);
+        } catch {
+            throw new NetworkError(`DNS resolution failed for ${hostname}`);
         }
     }
 
     // IPv4 checks
     if (isIP(ip) === 4) {
         if (isPrivateIP(ip)) {
-            throw new Error(`Access to private IP ${ip} is forbidden`);
+            throw new NetworkError(`Access to private IP ${ip} is forbidden`);
         }
     }
 
@@ -56,20 +65,33 @@ export async function validate_url(url_string: string): Promise<string> {
         // - fc00::/7 (Unique local)
         // - ::ffff:0:0/96 (IPv4-mapped)
         const normalized = ip.toLowerCase();
-        const is_loopback = normalized === "::1" || normalized === "0:0:0:0:0:0:0:1";
-        const is_unspecified = normalized === "::" || normalized === "0:0:0:0:0:0:0:0";
+        const is_loopback =
+            normalized === "::1" || normalized === "0:0:0:0:0:0:0:1";
+        const is_unspecified =
+            normalized === "::" || normalized === "0:0:0:0:0:0:0:0";
         const is_link_local = normalized.startsWith("fe80:");
-        const is_unique_local = normalized.startsWith("fc") || normalized.startsWith("fd");
+        const is_unique_local =
+            normalized.startsWith("fc") || normalized.startsWith("fd");
         const is_ipv4_mapped = normalized.startsWith("::ffff:");
 
-        if (is_loopback || is_unspecified || is_link_local || is_unique_local || is_ipv4_mapped) {
+        if (
+            is_loopback ||
+            is_unspecified ||
+            is_link_local ||
+            is_unique_local ||
+            is_ipv4_mapped
+        ) {
             if (is_ipv4_mapped) {
                 const ipv4 = ip.split(":").pop();
                 if (ipv4 && isIP(ipv4) === 4 && isPrivateIP(ipv4)) {
-                    throw new Error(`Access to private IPv4-mapped IP ${ip} is forbidden`);
+                    throw new NetworkError(
+                        `Access to private IPv4-mapped IP ${ip} is forbidden`,
+                    );
                 }
             }
-            throw new Error(`Access to forbidden IPv6 address ${ip} is forbidden`);
+            throw new NetworkError(
+                `Access to forbidden IPv6 address ${ip} is forbidden`,
+            );
         }
     }
 

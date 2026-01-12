@@ -14,6 +14,28 @@ export type SectorType =
     | "reflective";
 
 /**
+ * Access control scopes for granular permissions.
+ */
+export type AuthScope = "memory:read" | "memory:write" | "admin:all";
+
+/**
+ * Context of the authenticated user.
+ */
+export interface UserContext {
+    id: string;
+    scopes: AuthScope[];
+}
+
+/**
+ * Result of an embedding operation.
+ */
+export interface EmbeddingResult {
+    sector: string;
+    vector: number[];
+    dim: number;
+}
+
+/**
  * Standard request for adding a new memory.
  */
 export interface AddMemoryRequest {
@@ -26,9 +48,17 @@ export interface AddMemoryRequest {
     /** Initial salience (importance) score (0-1) */
     salience?: number;
     /** Frequency of decay for this memory */
-    decay_lambda?: number;
-    /** Owner of the memory */
-    user_id?: string;
+    decayLambda?: number;
+    /** Owner of the memory or 'null' for anonymous */
+    userId?: string | null;
+}
+
+/**
+ * Request for batch memory insertion.
+ */
+export interface BatchAddRequest {
+    items: AddMemoryRequest[];
+    userId?: string | null;
 }
 
 /**
@@ -44,18 +74,18 @@ export interface QueryMemoryRequest {
         /** Search only memories with these tags */
         tags?: string[];
         /** Minimum similarity/relevance score */
-        min_score?: number;
+        minScore?: number;
         /** Specific sector to search in */
         sector?: SectorType | string;
         /** Filter by owner */
-        user_id?: string;
+        userId?: string | null;
         /** Start timestamp for temporal filtering */
         startTime?: number;
         /** End timestamp for temporal filtering */
         endTime?: number;
     };
-    /** Global user context for the query */
-    user_id?: string;
+    /** Global user context for the query (Anonymous if null, System if undefined) */
+    userId?: string | null;
 }
 
 /**
@@ -65,64 +95,115 @@ export interface QueryMemoryRequest {
 export interface MemoryRow {
     id: string;
     content: string;
-    primary_sector: string;
+    primarySector: string;
     /** JSON serialized string or null */
     tags: string | null;
     /** JSON serialized string or null */
-    meta: string | null;
-    user_id: string | null;
+    metadata: string | null;
+    userId: string | null;
     segment: number;
     simhash: string | null;
-    created_at: number;
-    updated_at: number;
-    last_seen_at: number;
+    createdAt: number;
+    updatedAt: number;
+    lastSeenAt: number;
     salience: number;
-    decay_lambda: number;
+    decayLambda: number;
     version: number;
-    generated_summary: string | null;
+    generatedSummary: string | null;
     /** Dimension count of the mean embedding */
-    mean_dim?: number;
+    meanDim?: number;
     /** Vector blob/buffer */
-    mean_vec?: Buffer | Uint8Array | null;
+    meanVec?: Buffer | Uint8Array | null;
     /** Compressed vector blob/buffer */
-    compressed_vec?: Buffer | Uint8Array | null;
+    compressedVec?: Buffer | Uint8Array | null;
     /** Learned relevance/feedback score */
-    feedback_score?: number;
+    feedbackScore?: number;
+}
+
+/**
+ * Item structure for batch memory insertion.
+ * Aligns with the arguments of `insMem`.
+ */
+export interface BatchMemoryInsertItem {
+    id: string;
+    content: string;
+    primarySector: string; // Renamed from sector for DB parity
+    tags: string | null;
+    metadata: string | null;
+    userId: string | null;
+    segment: number;
+    simhash: string | null;
+    createdAt: number;
+    updatedAt: number;
+    lastSeenAt: number;
+    salience: number;
+    decayLambda: number;
+    version: number;
+    meanDim: number;
+    meanVec: Buffer | Uint8Array;
+    compressedVec: Buffer | Uint8Array;
+    feedbackScore: number;
+    generatedSummary: string | null;
+}
+
+/**
+ * Item structure for batch waypoint insertion.
+ * Aligns with the arguments of `insWaypoint`.
+ */
+export interface BatchWaypointInsertItem {
+    srcId: string;
+    dstId: string;
+    userId: string | null | undefined;
+    weight: number;
+    createdAt: number;
+    updatedAt: number;
 }
 
 /**
  * Hydrated memory object used in business logic and APIs.
  */
-export interface MemoryItem extends Omit<MemoryRow, "tags" | "meta" | "mean_vec" | "compressed_vec"> {
+export interface MemoryItem extends Omit<
+    MemoryRow,
+    "tags" | "metadata" | "meanVec" | "compressedVec"
+> {
     /** Parsed tags as array */
     tags: string[];
     /** Parsed metadata as record */
-    meta: Record<string, unknown>;
+    metadata: Record<string, unknown>;
     /** Base64 encoded compressed vector for API transit */
-    compressed_vec_str?: string;
+    compressedVecStr?: string;
+    [key: string]: unknown; // Allow for dynamic payload properties
 }
 
 /**
  * Standard RPC error codes following JSON-RPC 2.0.
+ * @see https://www.jsonrpc.org/specification#error_object
+ *
+ * -32700: Parse error - Invalid JSON
+ * -32600: Invalid Request - Not a valid Request object
+ * -32601: Method not found
+ * -32602: Invalid params
+ * -32603: Internal error
  */
-export type RpcErrorCode = -32600 | -32603;
+export type RpcErrorCode =
+    | -32700 // Parse error
+    | -32600 // Invalid Request
+    | -32601 // Method not found
+    | -32602 // Invalid params
+    | -32603; // Internal error
 
 /**
  * Knowledge ingestion request for files, links, or external connectors.
  */
 export interface IngestRequest {
-    source: "file" | "link" | "connector";
-    content_type: "pdf" | "docx" | "html" | "md" | "txt" | "audio";
-    /** Data payload (base64 for files, URI for links) */
-    data: string;
+    source: "file" | "link" | "connector" | string;
+    contentType: string;
+    /** Data payload (base64 for files, URI for links, or Buffer) */
+    data: string | Buffer | Uint8Array;
     metadata?: Record<string, unknown>;
     /** Optional extraction configuration */
-    config?: {
-        force_root?: boolean;
-        sec_sz?: number;
-        lg_thresh?: number
-    };
-    user_id?: string;
+    config?: IngestionConfig;
+    userId?: string | null;
 }
 
 /**
@@ -131,12 +212,29 @@ export interface IngestRequest {
 export interface IngestUrlRequest {
     url: string;
     metadata?: Record<string, unknown>;
-    config?: {
-        force_root?: boolean;
-        sec_sz?: number;
-        lg_thresh?: number
-    };
-    user_id?: string;
+    config?: IngestionConfig;
+    userId?: string | null;
+}
+
+/**
+ * Configuration for document and URL ingestion.
+ */
+export interface IngestionConfig {
+    forceRoot?: boolean;
+    secSz?: number;
+    lgThresh?: number;
+    fastSummarize?: boolean;
+}
+
+/**
+ * Result of the ingestion process.
+ */
+export interface IngestionResult {
+    rootMemoryId: string;
+    childCount: number;
+    totalTokens: number;
+    strategy: "single" | "root-child";
+    extraction: Record<string, unknown>;
 }
 
 /**
@@ -145,16 +243,17 @@ export interface IngestUrlRequest {
 export interface LgmStoreRequest {
     /** Node name in the graph (e.g., 'observe', 'plan') */
     node: string;
-    content: string;
+    content?: string;
+    memoryId?: string;
     tags?: string[];
     metadata?: Record<string, unknown>;
     /** Logical grouping of context */
     namespace?: string;
     /** Specific graph instance ID */
-    graph_id?: string;
+    graphId?: string;
     /** Whether to trigger automatic reflection */
     reflective?: boolean;
-    user_id?: string;
+    userId?: string | null;
 }
 
 /**
@@ -165,19 +264,20 @@ export interface LgmRetrieveRequest {
     /** Semantic query for retrieval */
     query?: string;
     namespace?: string;
-    graph_id?: string;
+    graphId?: string;
     limit?: number;
-    include_metadata?: boolean;
-    user_id?: string;
+    includeMetadata?: boolean;
+    userId?: string | null;
 }
 
 /**
  * Request for building context for a graph node.
  */
 export interface LgmContextRequest {
-    node: string;
-    graph_id?: string;
-    user_id?: string;
+    node?: string;
+    graphId?: string;
+    namespace?: string;
+    userId?: string | null;
     limit?: number;
 }
 
@@ -185,11 +285,13 @@ export interface LgmContextRequest {
  * Request for tracking reflection status.
  */
 export interface LgmReflectionRequest {
-    graph_id: string;
+    graphId?: string;
     node: string;
-    content: string;
-    context_ids?: string[];
-    user_id?: string;
+    content?: string;
+    contextIds?: string[];
+    namespace?: string;
+    userId?: string | null;
+    depth?: "shallow" | "deep";
 }
 
 /**
@@ -217,7 +319,33 @@ export interface IdeEventRequest {
         timestamp?: number;
         [key: string]: unknown;
     };
-    session_id?: string;
+    sessionId?: string;
+}
+
+export interface TemporalFactRow {
+    id: string;
+    userId: string | null;
+    subject: string;
+    predicate: string;
+    object: string;
+    validFrom: number;
+    validTo: number | null;
+    confidence: number;
+    lastUpdated: number;
+    metadata: string | null;
+}
+
+export interface TemporalEdgeRow {
+    id: string;
+    userId: string | null;
+    sourceId: string;
+    targetId: string;
+    relationType: string;
+    validFrom: number;
+    validTo: number | null;
+    weight: number;
+    lastUpdated: number;
+    metadata: string | null;
 }
 
 /**
@@ -225,19 +353,19 @@ export interface IdeEventRequest {
  */
 export interface TemporalFact {
     id: string;
-    user_id?: string;
+    userId?: string | null;
     subject: string;
     predicate: string;
     object: string;
     /** Start of fact validity (milliseconds) */
-    valid_from: number;
+    validFrom: number;
     /** End of fact validity or NULL if still valid (milliseconds) */
-    valid_to: number | null;
+    validTo: number | null;
     confidence: number;
     /** Source memory ID if derived */
-    source_id?: string;
+    sourceId?: string;
     /** Timestamp of last modification */
-    last_updated: number;
+    lastUpdated: number;
     metadata?: Record<string, unknown>;
 }
 
@@ -246,15 +374,17 @@ export interface TemporalFact {
  */
 export interface TemporalEdge {
     id: string;
-    user_id?: string;
-    source_id: string;
-    target_id: string;
-    relation_type: string;
+    userId?: string | null;
+    sourceId: string;
+    targetId: string;
+    relationType: string;
     /** When the relation became valid */
-    valid_from: number;
+    validFrom: number;
     /** When the relation ceased to be valid */
-    valid_to: number | null;
+    validTo: number | null;
     weight: number;
+    /** Timestamp of last modification */
+    lastUpdated: number;
     metadata?: Record<string, unknown>;
 }
 
@@ -267,14 +397,14 @@ export interface TimelineEntry {
     predicate: string;
     object: string;
     confidence: number;
-    change_type: 'created' | 'updated' | 'invalidated';
+    changeType: "created" | "updated" | "invalidated";
 }
 
 /**
  * Query parameters for temporal retrieval.
  */
 export interface TemporalQuery {
-    user_id?: string;
+    userId?: string | null;
     subject?: string;
     predicate?: string;
     object?: string;
@@ -284,7 +414,7 @@ export interface TemporalQuery {
     from?: number | Date;
     /** Time range end */
     to?: number | Date;
-    min_confidence?: number;
+    minConfidence?: number;
 }
 
 /**
@@ -305,7 +435,8 @@ export interface GraphNode {
 export interface GraphLink {
     source: string;
     target: string;
-    label?: string;
+    /** Relationship label (required for visualization) */
+    label: string;
     confidence?: number;
 }
 
@@ -322,7 +453,7 @@ export interface GraphData {
  */
 export interface SectorConfig {
     model: string;
-    decay_lambda: number;
+    decayLambda: number;
     weight: number;
     patterns: RegExp[];
 }
@@ -344,49 +475,609 @@ export interface HsgQueryResult {
     content: string;
     score: number;
     sectors: string[];
-    primary_sector: string;
+    primarySector: string;
     path: string[];
     salience: number;
-    last_seen_at: number;
+    lastSeenAt: number;
+    createdAt: number;
     tags?: string[];
-    meta?: Record<string, unknown>;
+    metadata?: Record<string, unknown>;
+    userId?: string | null;
+    updatedAt: number;
+    decayLambda?: number;
+    version?: number;
+    segment?: number;
+    simhash?: string | null;
+    generatedSummary?: string | null;
 }
 
 /**
  * Weights for multi-vector fusion scoring.
  */
 export interface MultiVecFusionWeights {
-    semantic_dimension_weight: number;
-    emotional_dimension_weight: number;
-    procedural_dimension_weight: number;
-    temporal_dimension_weight: number;
-    reflective_dimension_weight: number;
+    semanticDimensionWeight: number;
+    emotionalDimensionWeight: number;
+    proceduralDimensionWeight: number;
+    temporalDimensionWeight: number;
+    reflectiveDimensionWeight: number;
 }
 
 /**
  * Waypoint in the associative memory graph.
  */
 export interface Waypoint {
-    src_id: string;
-    dst_id: string;
-    user_id: string | null;
+    srcId: string;
+    dstId: string;
+    userId: string | null;
     weight: number;
-    created_at: number;
-    updated_at: number;
+    createdAt: number;
+    updatedAt: number;
 }
 
-// --- Backward Compatibility Aliases ---
-export type add_req = AddMemoryRequest;
-export type q_req = QueryMemoryRequest;
-export type mem_row = MemoryRow;
-export type sector_type = SectorType;
-export type rpc_err_code = RpcErrorCode;
-export type ingest_req = IngestRequest;
-export type ingest_url_req = IngestUrlRequest;
-export type lgm_store_req = LgmStoreRequest;
-export type lgm_retrieve_req = LgmRetrieveRequest;
-export type ide_event_req = IdeEventRequest;
-export type hsg_q_result = HsgQueryResult;
-export type sector_class = SectorClassification;
-export type lgm_context_req = LgmContextRequest;
-export type lgm_reflection_req = LgmReflectionRequest;
+/**
+ * Statistics for a cognitive sector.
+ */
+export interface SectorStat {
+    sector: string;
+    count: number;
+    avgSalience: number;
+}
+
+/**
+ * Entry in the embedding logs.
+ */
+export interface LogEntry {
+    id: string;
+    model: string;
+    status: string;
+    ts: number;
+    err: string | null;
+    userId?: string | null;
+}
+
+/**
+ * Statistics relative to Temporal Graph data.
+ */
+export interface TemporalStatsResult {
+    activeFacts: number;
+    historicalFacts: number;
+    totalFacts: number;
+    historicalPercentage: string;
+}
+
+/**
+ * Analysis of fact volatility over time.
+ */
+export interface VolatileFactsResult {
+    subject?: string;
+    limit: number;
+    volatileFacts: {
+        fact: TemporalFact;
+        changeCount: number;
+        frequency: number;
+    }[];
+    count: number;
+}
+
+export interface SystemStats {
+    totalMemories: number;
+    recentMemories: number;
+    sectorCounts: Record<string, number>;
+    avgSalience: string;
+    decayStats: {
+        total: number;
+        avgLambda: string;
+        minSalience: string;
+        maxSalience: string;
+    };
+    requests: {
+        total: number;
+        errors: number;
+        errorRate: string;
+        lastHour: number;
+    };
+    qps: {
+        peak: number;
+        average: number;
+        cacheHitRate: number;
+    };
+    counts: {
+        memories: number;
+        vectors: number;
+        facts: number;
+        edges: number;
+    };
+    system: {
+        memoryUsage: number;
+        heapUsed: number;
+        heapTotal: number;
+        uptime: {
+            seconds: number;
+            days: number;
+            hours: number;
+        };
+    };
+    config: {
+        port: number;
+        vecDim: number;
+        cacheSegments: number;
+        maxActive: number;
+        decayInterval: number;
+        embedProvider: string;
+        embedModel: string;
+        embedKind: string;
+    };
+}
+
+export interface SystemMetrics {
+    memory: {
+        rss: number;
+        heapTotal: number;
+        heapUsed: number;
+        external: number;
+    };
+    cpu: {
+        user: number;
+        system: number;
+    };
+    uptime: number;
+    connections: {
+        active: number;
+        pool: Record<string, unknown>;
+    };
+    jobs: {
+        active: number;
+        names: string[];
+    };
+    version: string;
+}
+
+export interface ActivityItem {
+    id: string;
+    type: string;
+    sector: string;
+    content: string;
+    salience: number;
+    timestamp: number;
+}
+
+export interface TopMemory {
+    id: string;
+    content: string;
+    sector: string;
+    salience: number;
+    lastSeen: number;
+}
+
+export interface TimelineBucket {
+    primarySector: string;
+    label: string;
+    sortKey: string;
+    count: number;
+    hour: string;
+}
+
+export interface SystemTimelineBucket {
+    bucket_key: string;
+    timestamp_ms: number;
+    counts: Record<string, number>;
+}
+
+export interface MaintenanceStats {
+    operations: {
+        hour: string;
+        decay: number;
+        reflection: number;
+        consolidation: number;
+    }[];
+    totals: {
+        cycles: number;
+        reflections: number;
+        consolidations: number;
+    };
+}
+
+/**
+ * Result of comparing facts between two timepoints.
+ */
+export interface TemporalComparisonResult {
+    subject: string;
+    time1: string;
+    time2: string;
+    added: TemporalFact[];
+    removed: TemporalFact[];
+    changed: {
+        predicate: string;
+        old: TemporalFact;
+        new: TemporalFact;
+    }[];
+    unchanged: TemporalFact[];
+    summary: {
+        added: number;
+        removed: number;
+        changed: number;
+        unchanged: number;
+    };
+}
+
+/**
+ * Metadata about a configured data source.
+ */
+export interface SourceRegistryEntry {
+    userId: string;
+    type: string;
+    config: string;
+    status: "enabled" | "disabled" | string;
+    createdAt: number;
+    updatedAt: number;
+}
+
+/**
+ * Result of a resonance calculation.
+ */
+export interface ResonanceResult {
+    success: boolean;
+    resonanceModulatedScore: number;
+    parameters: Record<string, unknown>;
+}
+
+/**
+ * Result of energy-based memory retrieval.
+ */
+export interface RetrievalResult {
+    success: boolean;
+    query: string;
+    sector: string;
+    minEnergy: number;
+    count: number;
+    memories: {
+        id: string;
+        content: string;
+        primarySector: string;
+        salience: number;
+        activationEnergy: number;
+    }[];
+}
+
+/**
+ * Result of a reinforcement operation.
+ */
+export interface ReinforcementResult {
+    success: boolean;
+    propagatedCount: number;
+    newSalience: number;
+}
+
+/**
+ * Result of a spreading activation simulation.
+ */
+export interface SpreadingActivationResult {
+    success: boolean;
+    initialCount: number;
+    iterations: number;
+    totalActivated: number;
+    results: {
+        memoryId: string;
+        activationLevel: number;
+    }[];
+}
+
+/**
+ * Associative Waypoint Graph structure.
+ */
+export interface WaypointGraphResult {
+    success: boolean;
+    stats: {
+        totalNodes: number;
+        totalEdges: number;
+        averageEdgesPerNode: number;
+        disconnectedNodes: number;
+    };
+    nodes: {
+        memoryId: string;
+        edgeCount: number;
+        connections: {
+            targetId: string;
+            weight: number;
+            timeGapMs: number;
+        }[];
+    }[];
+}
+
+/**
+ * Result of a waypoint weight calculation.
+ */
+export interface WaypointWeightResult {
+    success: boolean;
+    sourceId: string;
+    targetId: string;
+    weight: number;
+    timeGapDays: number;
+    details: {
+        temporalDecay: boolean;
+        cosineSimilarity: boolean;
+    };
+}
+
+/**
+ * Configuration constants for the Dynamics module.
+ */
+export interface DynamicsConstants {
+    decay: {
+        lambda: number;
+        halflife: number;
+        minSalience: number;
+    };
+    weights: {
+        recency: number;
+        frequency: number;
+        emotional: number;
+    };
+    thresholds: {
+        retrieval: number;
+        consolidation: number;
+    };
+}
+
+/**
+ * Result of a salience calculation.
+ */
+export interface SalienceResult {
+    success: boolean;
+    calculatedSalience: number;
+    parameters: Record<string, unknown>;
+}
+
+// --- Client/Event DTOs (Moved from Client SDK) ---
+
+export interface MemoryAddedPayload {
+    id: string;
+    primarySector: string;
+    content: string;
+    userId?: string | null;
+    [key: string]: unknown;
+}
+
+export interface IdeSuggestionPayload {
+    sessionId: string;
+    count: number;
+    topPattern: IdePattern;
+    userId?: string;
+}
+
+export interface IdeSessionPayload {
+    sessionId: string;
+    status: "started" | "ended";
+    projectName?: string;
+    summary?: string;
+    userId?: string;
+}
+
+export type OpenMemoryEvent =
+    | { type: "connected"; timestamp: number }
+    | { type: "heartbeat"; timestamp: number }
+    | { type: "memory_added"; data: MemoryAddedPayload; timestamp: number }
+    | {
+        type: "memory_updated";
+        data: { id: string; userId?: string | null };
+        timestamp: number;
+    }
+    | { type: "ide_suggestion"; data: IdeSuggestionPayload; timestamp: number }
+    | { type: "ide_session_update"; data: IdeSessionPayload; timestamp: number }
+    | {
+        type: "temporal:fact:created";
+        data: {
+            id: string;
+            userId?: string | null;
+            subject: string;
+            predicate: string;
+            object: string;
+            validFrom: number;
+            validTo: number | null;
+            confidence: number;
+            metadata?: Record<string, unknown>;
+        };
+        timestamp: number;
+    }
+    | {
+        type: "temporal:fact:updated";
+        data: {
+            id: string;
+            userId?: string | null;
+            confidence?: number;
+            metadata?: Record<string, unknown>;
+        };
+        timestamp: number;
+    }
+    | {
+        type: "temporal:fact:deleted";
+        data: { id: string; userId?: string | null; validTo: number };
+        timestamp: number;
+    }
+    | {
+        type: "temporal:edge:created";
+        data: {
+            id: string;
+            userId?: string | null;
+            sourceId: string;
+            targetId: string;
+            relationType: string;
+            validFrom: number;
+            weight: number;
+            metadata?: Record<string, unknown>;
+            validTo: number | null;
+        };
+        timestamp: number;
+    }
+    | {
+        type: "temporal:edge:updated";
+        data: {
+            id: string;
+            userId?: string | null;
+            weight?: number;
+            metadata?: Record<string, unknown>;
+        };
+        timestamp: number;
+    }
+    | {
+        type: "temporal:edge:deleted";
+        data: { id: string; userId?: string | null; validTo: number };
+        timestamp: number;
+    };
+
+export interface MaintLogEntry {
+    id: number;
+    op: string; // 'routine', 'decay', etc.
+    status: string;
+    details: string;
+    ts: number;
+    userId: string | null;
+}
+
+export interface IdeContextItem {
+    memoryId: string;
+    content: string;
+    primarySector: string;
+    sectors: string[];
+    score: number;
+    salience: number;
+    lastSeenAt: number;
+    path: string[];
+}
+
+export interface IdeContextResult {
+    success: boolean;
+    context: IdeContextItem[];
+    query: string;
+}
+
+// --- Compression Types ---
+
+export interface CompressionMetrics {
+    originalTokens: number;
+    compressedTokens: number;
+    ratio: number;
+    saved: number;
+    pct: number;
+    latency: number;
+    algorithm: string;
+    timestamp: number;
+}
+
+export interface CompressionResult {
+    og: string;
+    comp: string;
+    metrics: CompressionMetrics;
+    hash: string;
+}
+
+export interface CompressionStats {
+    total: number;
+    originalTokens: number;
+    compressedTokens: number;
+    saved: number;
+    avgRatio: number;
+    latency: number;
+    algorithms: Record<string, number>;
+    updated: number;
+}
+
+export interface IdePattern {
+    patternId: string;
+    description: string;
+    salience: number;
+    detectedAt: number;
+    lastReinforced: number;
+    confidence?: number;
+    affectedFiles?: string[];
+}
+
+export interface IdePatternsResult {
+    success: boolean;
+    sessionId: string;
+    patternCount: number;
+    patterns: IdePattern[];
+}
+
+// --- LangGraph Interfaces ---
+
+export interface LgConfig {
+    success: boolean;
+    config: {
+        nodes: string[];
+        edges: { source: string; target: string }[];
+    };
+}
+
+export interface LgStoreResult {
+    success: boolean;
+    memoryId: string;
+    node: string;
+    memory?: MemoryItem | null;
+}
+
+export interface LgRetrieveResult {
+    success: boolean;
+    memories: MemoryItem[];
+}
+
+/**
+ * Context item for a specific LangGraph node.
+ */
+export interface LgNodeContext {
+    /** Node name (e.g., 'observe', 'plan', 'reflect') */
+    node: string;
+    /** Memory items associated with this node */
+    items: MemoryItem[];
+}
+
+export interface LgContextResult {
+    success: boolean;
+    /** Combined context string from all nodes */
+    context: string;
+    /** List of node names that contributed to the context */
+    sources: string[];
+    /** Detailed context per node */
+    nodes?: LgNodeContext[];
+}
+
+export interface LgReflectResult {
+    success: boolean;
+    reflectionId: string;
+    insights: string[];
+}
+
+// --- User Interfaces ---
+
+export interface UserProfile {
+    id: string;
+    username: string;
+    email?: string;
+    createdAt: number;
+    metadata?: Record<string, unknown>;
+    preferences?: Record<string, unknown>;
+}
+
+export interface UserSummary {
+    userId: string | null;
+    summary: string;
+    lastUpdated: number;
+    generatedAt: number;
+}
+
+export interface UserMemoriesResult {
+    memories: MemoryItem[];
+    total: number;
+}
+
+// --- Sources Interfaces ---
+
+export interface SourceListResult {
+    sources: string[];
+    usage: Record<string, number>;
+}
+
+export interface IngestSourceResult {
+    success: boolean;
+    result: unknown;
+}

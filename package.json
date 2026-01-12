@@ -1,0 +1,16 @@
+{
+    "name": "openmemory-monorepo",
+    "private": true,
+    "workspaces": [
+        "packages/*",
+        "apps/*"
+    ],
+    "scripts": {
+        "build": "bun run --filter '*' build",
+        "test": "bun run --filter '*' test",
+        "lint": "bun run --filter '*' lint",
+        "dev": "bun run --cwd packages/openmemory-js dev",
+        "dev:dashboard": "bun run --cwd apps/dashboard dev",
+        "typecheck": "bun run --filter '*' typecheck"
+    }
+}

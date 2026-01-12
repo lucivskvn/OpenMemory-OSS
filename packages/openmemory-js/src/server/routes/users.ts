@@ -1,88 +1,115 @@
-import { q, vector_store } from "../../core/db";
-import { MemoryRow } from "../../core/types";
-import { p } from "../../utils";
-import {
-    update_user_summary,
-    auto_update_user_summaries,
-} from "../../memory/user_summary";
-import { AdvancedRequest, AdvancedResponse } from "../index";
-import { AppError, sendError } from "../errors";
 import { z } from "zod";
 
-export const usr = (app: any) => {
+import { q } from "../../core/db";
+import { Memory } from "../../core/memory";
+// MemoryRow unused after refactor to Memory Facade
+import {
+    autoUpdateUserSummaries,
+    updateUserSummary,
+} from "../../memory/user_summary";
+import { normalizeUserId } from "../../utils";
+import { AppError, sendError } from "../errors";
+import { verifyUserAccess } from "../middleware/auth";
+import {
+    validateParams,
+    validateQuery,
+} from "../middleware/validate";
+
+const UserIdSchema = z.object({
+    userId: z.string().min(1),
+});
+
+const ListMemoriesQuerySchema = z.object({
+    l: z.coerce.number().default(100), // limit
+    u: z.coerce.number().default(0), // offset
+});
+
+import type { AdvancedRequest, AdvancedResponse, ServerApp } from "../server";
+
+export const userRoutes = (app: ServerApp) => {
+    /**
+     * GET /users
+     * Lists all active users in the system.
+     */
     app.get("/users", async (req: AdvancedRequest, res: AdvancedResponse) => {
         try {
-            const users = await q.get_active_users.all();
-            res.json({ users: users.map(u => u.user_id) });
-        } catch (err: unknown) {
-            sendError(res, err);
-        }
-    });
-
-    app.get("/users/:user_id", async (req: AdvancedRequest, res: AdvancedResponse) => {
-        try {
-            const { user_id } = req.params;
-            const auth_user_id = req.user?.id;
-
-            // Security: Users can only see their own profile unless unauthenticated (open mode)
-            if (auth_user_id && auth_user_id !== user_id) {
-                return sendError(res, new AppError(403, "FORBIDDEN", "Forbidden"));
+            const isAdmin = (req.user?.scopes || []).includes("admin:all");
+            if (!isAdmin) {
+                return sendError(
+                    res,
+                    new AppError(403, "FORBIDDEN", "Admin access required"),
+                );
             }
 
-            const user = await q.get_user.get(user_id);
-            if (!user) return sendError(res, new AppError(404, "NOT_FOUND", "user not found"));
-            res.json(user);
+            const users = await q.getActiveUsers.all();
+            res.json({ users: users.map((u) => u.userId) });
         } catch (err: unknown) {
             sendError(res, err);
         }
     });
 
-    app.get("/users/:user_id/summary", async (req: AdvancedRequest, res: AdvancedResponse) => {
-        try {
-            const { user_id } = req.params;
-            const auth_user_id = req.user?.id;
-
-            if (!user_id) return sendError(res, new AppError(400, "MISSING_USER_ID", "user_id required"));
-
-            if (auth_user_id && auth_user_id !== user_id) {
-                return sendError(res, new AppError(403, "FORBIDDEN", "forbidden"));
-            }
-
-            const user = await q.get_user.get(user_id);
-            if (!user) return sendError(res, new AppError(404, "NOT_FOUND", "user not found"));
-
-            res.json({
-                user_id: user.user_id,
-                summary: user.summary,
-                reflection_count: user.reflection_count,
-                updated_at: user.updated_at,
-            });
-        } catch (err: unknown) {
-            sendError(res, err);
-        }
-    });
-
-    app.post(
-        "/users/:user_id/summary/regenerate",
+    /**
+     * GET /users/:userId
+     * Retrieves the profile and metadata for a specific user.
+     */
+    app.get(
+        "/users/:userId",
+        validateParams(UserIdSchema),
         async (req: AdvancedRequest, res: AdvancedResponse) => {
             try {
-                const { user_id } = req.params;
-                const auth_user_id = req.user?.id;
+                const userId = normalizeUserId(req.params.userId);
+                // Security: Users can only see their own profile, unless they are admin
+                verifyUserAccess(req, userId);
 
-                if (!user_id) return sendError(res, new AppError(400, "MISSING_USER_ID", "user_id required"));
+                if (userId === null)
+                    return sendError(
+                        res,
+                        new AppError(400, "INVALID_ID", "Invalid user ID"),
+                    );
 
-                if (auth_user_id && auth_user_id !== user_id) {
-                    return sendError(res, new AppError(403, "FORBIDDEN", "forbidden"));
-                }
+                const user = await q.getUser.get(userId);
+                if (!user)
+                    return sendError(
+                        res,
+                        new AppError(404, "NOT_FOUND", "user not found"),
+                    );
+                res.json(user);
+            } catch (err: unknown) {
+                sendError(res, err);
+            }
+        },
+    );
 
-                await update_user_summary(user_id);
-                const user = await q.get_user.get(user_id);
+    /**
+     * GET /users/:userId/summary
+     * Retrieves the AI-generated personality/activity summary for a user.
+     */
+    app.get(
+        "/users/:userId/summary",
+        validateParams(UserIdSchema),
+        async (req: AdvancedRequest, res: AdvancedResponse) => {
+            try {
+                const userId = normalizeUserId(req.params.userId);
+                verifyUserAccess(req, userId);
+
+                if (userId === null)
+                    return sendError(
+                        res,
+                        new AppError(400, "INVALID_ID", "Invalid user ID"),
+                    );
+
+                const user = await q.getUser.get(userId);
+                if (!user)
+                    return sendError(
+                        res,
+                        new AppError(404, "NOT_FOUND", "User not found"),
+                    );
 
                 res.json({
-                    ok: true,
-                    user_id,
-                    summary: user?.summary,
-                    reflection_count: user?.reflection_count,
+                    userId: user.userId,
+                    summary: user.summary,
+                    reflectionCount: user.reflectionCount,
+                    updatedAt: user.updatedAt,
                 });
             } catch (err: unknown) {
                 sendError(res, err);
@@ -90,81 +117,129 @@ export const usr = (app: any) => {
         },
     );
 
-    app.post("/users/summaries/regenerate-all", async (req: AdvancedRequest, res: AdvancedResponse) => {
-        try {
-            const result = await auto_update_user_summaries();
-            res.json({ ok: true, updated: result.updated });
-        } catch (err: unknown) {
-            sendError(res, err);
-        }
-    });
+    /**
+     * POST /users/:userId/summary/regenerate
+     * Manually triggers a regeneration of the user summary.
+     */
+    app.post(
+        "/users/:userId/summary/regenerate",
+        validateParams(UserIdSchema),
+        async (req: AdvancedRequest, res: AdvancedResponse) => {
+            try {
+                const userId = normalizeUserId(req.params.userId);
 
-    app.get("/users/:user_id/memories", async (req: AdvancedRequest, res: AdvancedResponse) => {
-        try {
-            const { user_id } = req.params;
-            const auth_user_id = req.user?.id;
-            if (!user_id)
-                return sendError(res, new AppError(400, "MISSING_USER_ID", "user_id required"));
+                verifyUserAccess(req, userId);
 
-            if (auth_user_id && auth_user_id !== user_id) {
-                return sendError(res, new AppError(403, "FORBIDDEN", "forbidden"));
+                if (userId === null || userId === undefined)
+                    return sendError(
+                        res,
+                        new AppError(400, "INVALID_ID", "Invalid user ID"),
+                    );
+
+                await updateUserSummary(userId);
+                const user = await q.getUser.get(userId);
+
+                res.json({
+                    ok: true,
+                    userId,
+                    summary: user?.summary,
+                    reflectionCount: user?.reflectionCount,
+                });
+            } catch (err: unknown) {
+                sendError(res, err);
             }
+        },
+    );
 
-            const validated = z.object({
-                l: z.string().or(z.number()).optional().default(100),
-                u: z.string().or(z.number()).optional().default(0)
-            }).safeParse(req.query)
+    /**
+     * POST /users/summaries/regenerate-all
+     * Triggers summary regeneration for all active users (Admin only recommended).
+     */
+    app.post(
+        "/users/summaries/regenerate-all",
+        async (req: AdvancedRequest, res: AdvancedResponse) => {
+            try {
+                const isAdmin = (req.user?.scopes || []).includes("admin:all");
+                if (!isAdmin) {
+                    return sendError(
+                        res,
+                        new AppError(403, "FORBIDDEN", "Admin access required"),
+                    );
+                }
 
-            if (!validated.success) {
-                return sendError(res, new AppError(400, "VALIDATION_ERROR", "Invalid pagination parameters", validated.error.format()));
+                const result = await autoUpdateUserSummaries();
+                res.json({ ok: true, updated: result.updated });
+            } catch (err: unknown) {
+                sendError(res, err);
             }
+        },
+    );
 
-            const l = typeof validated.data.l === 'string' ? parseInt(validated.data.l) : validated.data.l;
-            const u = typeof validated.data.u === 'string' ? parseInt(validated.data.u) : validated.data.u;
+    /**
+     * GET /users/:userId/memories
+     * Lists memories owned by a specific user.
+     */
+    app.get(
+        "/users/:userId/memories",
+        validateParams(UserIdSchema),
+        validateQuery(ListMemoriesQuerySchema),
+        async (req: AdvancedRequest, res: AdvancedResponse) => {
+            try {
+                const userId = normalizeUserId(req.params.userId);
 
-            const r = await q.all_mem_by_user.all(user_id, l, u);
-            const i = r.map((x: MemoryRow) => ({
-                id: x.id,
-                content: x.content,
-                tags: p(x.tags || "[]"),
-                metadata: p(x.meta || "{}"),
-                created_at: x.created_at,
-                updated_at: x.updated_at,
-                last_seen_at: x.last_seen_at,
-                salience: x.salience,
-                decay_lambda: x.decay_lambda,
-                primary_sector: x.primary_sector,
-                version: x.version,
-            }));
-            res.json({ user_id, items: i });
-        } catch (err: any) {
-            sendError(res, err);
-        }
-    });
+                verifyUserAccess(req, userId);
 
-    app.delete("/users/:user_id/memories", async (req: AdvancedRequest, res: AdvancedResponse) => {
-        try {
-            const { user_id } = req.params;
-            const auth_user_id = req.user?.id;
+                if (userId === null)
+                    return sendError(
+                        res,
+                        new AppError(400, "INVALID_ID", "Invalid user ID"),
+                    );
 
-            if (!user_id) return sendError(res, new AppError(400, "MISSING_USER_ID", "user_id required"));
+                const { l, u } = req.query as unknown as z.infer<
+                    typeof ListMemoriesQuerySchema
+                >;
 
-            if (auth_user_id && auth_user_id !== user_id) {
-                return sendError(res, new AppError(403, "FORBIDDEN", "forbidden"));
+                const m = new Memory(userId);
+                const items = await m.list(l, u);
+
+                res.json({ userId, items });
+            } catch (err: unknown) {
+                sendError(res, err);
             }
+        },
+    );
 
-            const mems = await q.all_mem_by_user.all(user_id, 10000, 0);
-            let deleted = 0;
+    /**
+     * DELETE /users/:userId/memories
+     * Wipes all memories and associated vectors for a specific user.
+     */
+    app.delete(
+        "/users/:userId/memories",
+        validateParams(UserIdSchema),
+        async (req: AdvancedRequest, res: AdvancedResponse) => {
+            try {
+                const userId = normalizeUserId(req.params.userId);
+                verifyUserAccess(req, userId);
 
-            for (const m of mems) {
-                await q.del_mem.run(m.id, user_id);
-                await vector_store.deleteVectors(m.id);
-                deleted++;
+                if (userId === null)
+                    return sendError(
+                        res,
+                        new AppError(400, "INVALID_ID", "Invalid user ID"),
+                    );
+
+                // Use Core Memory logic
+                const m = new Memory(userId);
+                const deleted = await m.wipeUserContent(userId!);
+
+                res.json({ ok: true, deleted });
+            } catch (err: unknown) {
+                sendError(res, err);
             }
+        },
+    );
 
-            res.json({ ok: true, deleted });
-        } catch (err: unknown) {
-            sendError(res, err);
-        }
-    });
+    /*
+     * Deprecated routes (register, keys) have been removed.
+     * Please use /admin/users and /admin/keys routes instead.
+     */
 };

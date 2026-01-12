@@ -1,146 +1,246 @@
 /**
- * onedrive source for openmemory - production grade
- * requires: @azure/msal-node
- * env vars: AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID
+ * OneDrive Source Connector for OpenMemory.
+ * Ingests files from Microsoft OneDrive using the Graph API.
+ * Requires: @azure/msal-node
+ * Environment: AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID
  */
 
-import { base_source, source_config_error, source_auth_error, source_item, source_content } from './base';
-import type * as msal_type from '@azure/msal-node';
+import type * as msalType from "@azure/msal-node";
 
-export class onedrive_source extends base_source {
-    override name = 'onedrive';
-    private access_token: string | null = null;
-    private graph_url = 'https://graph.microsoft.com/v1.0';
+import { env } from "../core/cfg";
+import { logger } from "../utils/logger";
+import {
+    BaseSource,
+    SourceAuthError,
+    SourceConfigError,
+    SourceContent,
+    SourceFetchError,
+    SourceItem,
+} from "./base";
 
-    async _connect(creds: Record<string, any>): Promise<boolean> {
-        if (creds.access_token) {
-            this.access_token = creds.access_token as string;
+export interface OneDriveCreds {
+    clientId?: string;
+    clientSecret?: string;
+    tenantId?: string;
+    accessToken?: string;
+}
+
+export interface OneDriveFilters {
+    folderPath?: string;
+    userPrincipal?: string;
+}
+
+/**
+ * OneDrive Source Connector.
+ * Ingests files from Microsoft OneDrive using the Graph API.
+ * Features: App-only authentication, Folder traversal, and Rate Limiting.
+ */
+export class OneDriveSource extends BaseSource<OneDriveCreds, OneDriveFilters> {
+    override name = "onedrive";
+    private accessToken: string | null = null;
+    private graphUrl = "https://graph.microsoft.com/v1.0";
+
+    /**
+     * Authenticates with Microsoft Graph API using Client Credentials flow (App-only).
+     * Uses `azure-msal-node`.
+     */
+    async _connect(creds: OneDriveCreds): Promise<boolean> {
+        if (creds.accessToken) {
+            this.accessToken = creds.accessToken;
             return true;
         }
 
-        let msal_mod: typeof msal_type;
+        let msalMod: typeof msalType;
         try {
-            msal_mod = await import('@azure/msal-node');
+            msalMod = await import("@azure/msal-node");
         } catch {
-            throw new source_config_error('missing deps: npm install @azure/msal-node', this.name);
-        }
-
-        const client_id = (creds.client_id as string) || process.env.AZURE_CLIENT_ID;
-        const client_secret = (creds.client_secret as string) || process.env.AZURE_CLIENT_SECRET;
-        const tenant_id = (creds.tenant_id as string) || process.env.AZURE_TENANT_ID;
-
-        if (!client_id || !client_secret || !tenant_id) {
-            throw new source_config_error(
-                'no credentials: set AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID',
-                this.name
+            throw new SourceConfigError(
+                "missing deps: npm install @azure/msal-node",
+                this.name,
             );
         }
 
-        const app = new msal_mod.ConfidentialClientApplication({
+        // Security: BaseSource.connect has already hydrated creds from Persisted Config
+        // Fallback to env ONLY if no credentials provided at all
+        const cId = creds.clientId || env.azureClientId;
+        const cSec = creds.clientSecret || env.azureClientSecret;
+        const tId = creds.tenantId || env.azureTenantId;
+
+        if (!cId || !cSec || !tId) {
+            throw new SourceConfigError(
+                "Azure credentials are required (provide in Dashboard or AZURE_...)",
+                this.name,
+            );
+        }
+
+        const app = new msalMod.ConfidentialClientApplication({
             auth: {
-                clientId: client_id,
-                clientSecret: client_secret,
-                authority: `https://login.microsoftonline.com/${tenant_id}`
-            }
+                clientId: cId as string,
+                clientSecret: cSec as string,
+                authority: `https://login.microsoftonline.com/${tId}`,
+            },
         });
 
         const result = await app.acquireTokenByClientCredential({
-            scopes: ['https://graph.microsoft.com/.default']
+            scopes: ["https://graph.microsoft.com/.default"],
         });
 
         if (result?.accessToken) {
-            this.access_token = result.accessToken;
+            this.accessToken = result.accessToken;
             return true;
         }
 
-        throw new source_auth_error('auth failed: no access token returned', this.name);
+        throw new SourceAuthError(
+            "auth failed: no access token returned",
+            this.name,
+        );
     }
 
-    async _list_items(filters: Record<string, any>): Promise<source_item[]> {
-        if (!this.access_token) throw new source_config_error('not connected', this.name);
+    /**
+     * Lists files from OneDrive.
+     * Supports recursive folder traversal (manual recursion upstream? no, iterative via nextLink).
+     *
+     * @param filters - Options: `folderPath` (starts at root if empty), `userPrincipal` (for admin multi-user access).
+     */
+    async _listItems(filters: OneDriveFilters): Promise<SourceItem[]> {
+        if (!this.accessToken)
+            throw new SourceConfigError("not connected", this.name);
 
-        const folder_path = (filters.folder_path as string) || '/';
-        const user_principal = filters.user_principal as string | undefined;
+        const folderPath = (filters.folderPath as string) || "/";
+        const userPrincipal = filters.userPrincipal as string | undefined;
 
-        const base = user_principal
-            ? `${this.graph_url}/users/${user_principal}/drive`
-            : `${this.graph_url}/me/drive`;
+        const base = userPrincipal
+            ? `${this.graphUrl}/users/${userPrincipal}/drive`
+            : `${this.graphUrl}/me/drive`;
 
-        const url = folder_path === '/'
-            ? `${base}/root/children`
-            : `${base}/root:/${folder_path.replace(/^\/|\/$/g, '')}:/children`;
+        const url =
+            folderPath === "/"
+                ? `${base}/root/children`
+                : `${base}/root:/${folderPath.replace(/^\/|\/$/g, "")}:/children`;
 
-        const results: source_item[] = [];
-        let next_url: string | null = url;
+        const results: SourceItem[] = [];
+        let nextUrl: string | null = url;
 
         try {
-            while (next_url) {
-                const resp: Response = await fetch(next_url, {
-                    headers: { Authorization: `Bearer ${this.access_token}` }
+            while (nextUrl) {
+                const resp: Response = await fetch(nextUrl, {
+                    headers: { Authorization: `Bearer ${this.accessToken}` },
                 });
 
-                if (!resp.ok) throw new Error(`http ${resp.status}: ${resp.statusText}`);
+                if (!resp.ok)
+                    throw new Error(`http ${resp.status}: ${resp.statusText}`);
 
-                const data: any = await resp.json();
+                const data = (await resp.json()) as {
+                    value?: Record<string, unknown>[];
+                    "@odata.nextLink"?: string;
+                };
 
                 for (const item of data.value || []) {
+                    const driveId = (item.parentReference as { driveId?: string })?.driveId;
                     results.push({
-                        id: item.id,
-                        name: item.name,
-                        type: 'folder' in item ? 'folder' : item.file?.mimeType || 'file',
-                        size: item.size || 0,
-                        modified: item.lastModifiedDateTime,
-                        path: item.parentReference?.path || ''
+                        id: driveId ? `${driveId}:${item.id}` : String(item.id),
+                        name: String(item.name || "untitled"),
+                        type:
+                            "folder" in item
+                                ? "folder"
+                                : (item.file as { mimeType?: string })
+                                    ?.mimeType || "file",
+                        size: Number(item.size || 0),
+                        modified: String(item.lastModifiedDateTime || ""),
+                        path:
+                            (item.parentReference as { path?: string })?.path ||
+                            "",
+                        userPrincipal,
                     });
                 }
 
-                next_url = (data['@odata.nextLink'] as string) || null;
+                nextUrl = (data["@odata.nextLink"] as string) || null;
+                await this.rateLimiter.acquire();
             }
         } catch (e: unknown) {
             const msg = e instanceof Error ? e.message : String(e);
-            console.warn(`[onedrive] list failed: ${msg}`);
+            logger.warn(`[onedrive] List failed: ${msg}`);
         }
 
         return results;
     }
 
-    async _fetch_item(item_id: string): Promise<source_content> {
-        if (!this.access_token) throw new source_config_error('not connected', this.name);
+    /**
+     * Fetches file content using Graph API `/content` endpoint.
+     *
+     * @param itemId - Drive Item ID.
+     */
+    async _fetchItem(itemId: string): Promise<SourceContent> {
+        if (!this.accessToken)
+            throw new SourceConfigError("not connected", this.name);
 
-        const base = `${this.graph_url}/me/drive`;
+        const [driveId, actualId] = itemId.includes(":") ? itemId.split(":") : [null, itemId];
+
+        const base = driveId
+            ? `${this.graphUrl}/drives/${driveId}`
+            : `${this.graphUrl}/me/drive`;
 
         try {
-            const meta_resp = await fetch(`${base}/items/${item_id}`, {
-                headers: { Authorization: `Bearer ${this.access_token}` }
+            const metaResponse = await fetch(`${base}/items/${actualId}`, {
+                headers: { Authorization: `Bearer ${this.accessToken}` },
             });
 
-            if (!meta_resp.ok) throw new Error(`http ${meta_resp.status}`);
-            const meta: any = await meta_resp.json();
+            if (!metaResponse.ok)
+                throw new Error(`http ${metaResponse.status}`);
+            const itemMeta = (await metaResponse.json()) as {
+                name?: string;
+                file?: { mimeType: string };
+                size?: number;
+            };
 
-            const content_resp = await fetch(`${base}/items/${item_id}/content`, {
-                headers: { Authorization: `Bearer ${this.access_token}` },
-                redirect: 'follow'
-            });
+            const size = itemMeta.size || 0;
+            if (size > 10 * 1024 * 1024) {
+                throw new SourceFetchError(
+                    `File too large: ${size} bytes (max 10MB)`,
+                    this.name,
+                );
+            }
 
-            if (!content_resp.ok) throw new Error(`http ${content_resp.status}`);
-            const data = Buffer.from(await content_resp.arrayBuffer());
+            const contentResponse = await fetch(
+                `${base}/items/${actualId}/content`,
+                {
+                    headers: { Authorization: `Bearer ${this.accessToken}` },
+                    redirect: "follow",
+                },
+            );
 
-            let text = '';
+            if (!contentResponse.ok)
+                throw new Error(`http ${contentResponse.status}`);
+            const data = Buffer.from(await contentResponse.arrayBuffer());
+
+            let text = "";
             try {
-                text = data.toString('utf-8');
-            } catch { }
+                text = data.toString("utf-8");
+            } catch {
+                // ignore
+            }
 
             return {
-                id: item_id,
-                name: meta.name || 'unknown',
-                type: meta.file?.mimeType || 'unknown',
+                id: itemId,
+                name: itemMeta.name || "unknown",
+                type: itemMeta.file?.mimeType || "unknown",
                 text,
                 data,
-                meta: { source: 'onedrive', item_id, size: meta.size || 0, mime_type: meta.file?.mimeType || '' }
+                metadata: {
+                    source: "onedrive",
+                    driveId,
+                    itemId: actualId,
+                    size: itemMeta.size || 0,
+                    mimeType: itemMeta.file?.mimeType || "",
+                },
             };
         } catch (e: unknown) {
             const msg = e instanceof Error ? e.message : String(e);
-            throw new Error(`[onedrive] fetch failed: ${msg}`);
+            throw new SourceFetchError(
+                msg,
+                this.name,
+                e instanceof Error ? e : undefined,
+            );
         }
     }
 }

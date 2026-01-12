@@ -1,13 +1,36 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as crypto from 'crypto';
+import { MemoryClient, SystemStats } from 'openmemory-js/client';
+import { getBackendInfo } from '../detectors/openmemory';
 
+/**
+ * Supported messages from the webview.
+ */
+type WebviewMessage =
+    | { command: 'refresh' }
+    | { command: 'quickNote' }
+    | { command: 'query' }
+    | { command: 'patterns' }
+    | { command: 'settings' };
+
+/**
+ * Manages the OpenMemory Dashboard webview panel.
+ */
 export class DashboardPanel {
     public static currentPanel: DashboardPanel | undefined;
-    private readonly _panel: vscode.WebviewPanel;
+    private _panel: vscode.WebviewPanel;
     private readonly _extensionUri: vscode.Uri;
+    private _client: MemoryClient;
     private _disposables: vscode.Disposable[] = [];
+    private _stats: SystemStats | null = null;
+    private _backendInfo: { version?: string; status?: string } | null = null;
 
-    public static createOrShow(extensionUri: vscode.Uri) {
+    /**
+     * Creates or shows the dashboard panel.
+     * @param extensionUri The URI of the extension.
+     */
+    public static createOrShow(extensionUri: vscode.Uri, client: MemoryClient) {
         const column = vscode.window.activeTextEditor
             ? vscode.window.activeTextEditor.viewColumn
             : undefined;
@@ -27,20 +50,25 @@ export class DashboardPanel {
             }
         );
 
-        DashboardPanel.currentPanel = new DashboardPanel(panel, extensionUri);
+        DashboardPanel.currentPanel = new DashboardPanel(panel, extensionUri, client);
     }
 
-    private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri) {
+    private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri, client: MemoryClient) {
         this._panel = panel;
         this._extensionUri = extensionUri;
+        this._client = client;
 
         this._update();
+        this._fetchStats();
 
         this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
 
         this._panel.webview.onDidReceiveMessage(
-            message => {
+            async (message: WebviewMessage) => {
                 switch (message.command) {
+                    case 'refresh':
+                        await this._fetchStats();
+                        return;
                     case 'quickNote':
                         vscode.commands.executeCommand('openmemory.quickNote');
                         return;
@@ -60,6 +88,9 @@ export class DashboardPanel {
         );
     }
 
+    /**
+     * Disposes the panel resources.
+     */
     public dispose() {
         DashboardPanel.currentPanel = undefined;
         this._panel.dispose();
@@ -71,14 +102,29 @@ export class DashboardPanel {
         }
     }
 
-    private _update() {
+    private async _update() {
         const webview = this._panel.webview;
         this._panel.webview.html = this._getHtmlForWebview(webview);
     }
 
+    private async _fetchStats() {
+        try {
+            // Fetch both stats and backend info in parallel
+            const [stats, backendInfo] = await Promise.all([
+                this._client.getStats(),
+                getBackendInfo(this._client.apiBaseUrl)
+            ]);
+            this._stats = stats;
+            this._backendInfo = backendInfo;
+            this._update();
+        } catch (e) {
+            console.error('Failed to fetch dashboard stats:', e);
+        }
+    }
+
     private _getHtmlForWebview(webview: vscode.Webview) {
-        // Use a nonce to only allow specific scripts to be run
-        const nonce = getNonce();
+        // Use crypto for secure nonce generation
+        const nonce = crypto.randomBytes(32).toString('hex');
 
         return `<!DOCTYPE html>
             <html lang="en">
@@ -127,14 +173,55 @@ export class DashboardPanel {
                         background-color: #4caf50;
                         margin-right: 5px;
                     }
+                    .stats-grid {
+                        display: grid;
+                        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+                        gap: 10px;
+                        margin-top: 10px;
+                    }
+                    .stat-item {
+                        text-align: center;
+                        padding: 10px;
+                        background: rgba(255,255,255,0.05);
+                        border-radius: 4px;
+                    }
+                    .stat-value {
+                        font-size: 1.2rem;
+                        font-weight: bold;
+                        display: block;
+                    }
+                    .stat-label {
+                        font-size: 0.7rem;
+                        opacity: 0.7;
+                    }
                 </style>
             </head>
             <body>
-                <h1>OpenMemory Dashboard</h1>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h1>OpenMemory Dashboard</h1>
+                    <button onclick="sendMessage('refresh')">🔄 Refresh</button>
+                </div>
                 
                 <div class="card">
-                    <h2>Status</h2>
-                    <p><span class="status-indicator"></span> Active and Tracking</p>
+                    <h2>System Status</h2>
+                    <p><span class="status-indicator"></span> ${this._stats ? 'Connected' : 'Connecting...'}${this._backendInfo?.version ? ` (v${this._backendInfo.version})` : ''}</p>
+                    
+                    ${this._stats ? `
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <span class="stat-value">${this._stats.totalMemories}</span>
+                            <span class="stat-label">Total Memories</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-value">${this._stats.sectorCounts?.semantic || 0}</span>
+                            <span class="stat-label">Semantic Node</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-value">${this._stats.system?.uptime ? (this._stats.system.uptime.seconds / 3600).toFixed(1) : 0}h</span>
+                            <span class="stat-label">Uptime</span>
+                        </div>
+                    </div>
+                    ` : '<p>Loading system metrics...</p>'}
                 </div>
 
                 <div class="card">
@@ -161,13 +248,4 @@ export class DashboardPanel {
             </body>
             </html>`;
     }
-}
-
-function getNonce() {
-    let text = '';
-    const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    for (let i = 0; i < 32; i++) {
-        text += possible.charAt(Math.floor(Math.random() * possible.length));
-    }
-    return text;
 }

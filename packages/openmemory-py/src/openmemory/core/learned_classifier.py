@@ -37,7 +37,8 @@ class LearnedClassifier:
             return {"primary": "semantic", "additional": [], "confidence": 0.0}
 
         # Softmax-like normalization for confidence
-        exp_scores = {s: np.exp(sc) for s, sc in scores.items()}
+        max_sc = max(scores.values()) if scores else 0
+        exp_scores = {s: np.exp(sc - max_sc) for s, sc in scores.items()}
         sum_exp = sum(exp_scores.values())
         
         normalized = [
@@ -95,7 +96,8 @@ class LearnedClassifier:
                 
                 # Forward pass
                 scores = {s: np.dot(vec, w_np[s]) + b_np[s] for s in sectors}
-                exp_scores = {s: np.exp(sc) for s, sc in scores.items()}
+                max_sc = max(scores.values()) if scores else 0
+                exp_scores = {s: np.exp(sc - max_sc) for s, sc in scores.items()}
                 sum_exp = sum(exp_scores.values())
                 probs = {s: exp_scores[s] / (sum_exp if sum_exp > 0 else 1.0) for s in sectors}
                 

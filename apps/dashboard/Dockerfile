@@ -1,44 +1,39 @@
 # ===== BUILD STAGE =====
-FROM node:20-alpine AS builder
-
+FROM oven/bun:1 AS builder
 WORKDIR /app
 
+# Copy dependency files
+COPY package.json bun.lock ./
 # Install dependencies
-COPY package*.json ./
-RUN npm install
+RUN bun install --frozen-lockfile
 
-# Copy source code
+# Copy source
 COPY . .
 
-# Build the Next.js application
-RUN npm run build
+# Disable telemetry during build
+ENV NEXT_TELEMETRY_DISABLED 1
 
-# ===== PRODUCTION STAGE =====
-FROM node:20-alpine AS production
+# Build Next.js app
+RUN bun run build
 
+# ===== RUNNER STAGE =====
+FROM oven/bun:1-slim AS runner
 WORKDIR /app
 
-# Install only production dependencies
-COPY package*.json ./
-RUN npm install --omit=dev
+ENV NODE_ENV production
+ENV NEXT_TELEMETRY_DISABLED 1
+ENV HOST 0.0.0.0
 
-# Copy built assets from builder
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/next.config.ts ./next.config.ts
+# Set up user
+RUN addgroup --system --gid 1001 nodejs
+RUN adduser --system --uid 1001 nextjs
 
-# Create a dedicated non-root user for security
-RUN addgroup -g 1001 -S nodejs \
-    && adduser -u 1001 -S nextjs -G nodejs \
-    && chown -R nextjs:nodejs /app
+# Copy standalone output
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 
 USER nextjs
-
-# Expose the application port
 EXPOSE 3000
 
-# Set environment to production
-ENV NODE_ENV=production
-
-# Start the Next.js application
-CMD ["npm", "start"]
+CMD ["bun", "server.js"]

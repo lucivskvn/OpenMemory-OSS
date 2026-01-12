@@ -1,6 +1,6 @@
 -- Migration: Learned Sector Classifier Models
 -- Added: 2024-12-31
-CREATE TABLE IF NOT EXISTS learned_models (
+CREATE TABLE IF NOT EXISTS {lm} (
     user_id TEXT PRIMARY KEY,
     weights TEXT,
     -- JSON string of sector weights

@@ -21,7 +21,7 @@ def analyze_sentiment(text: str) -> float:
 
 async def track_mood(mem: Memory, uid: str):
     # Fetch chronological history
-    history = mem.history(user_id=uid, limit=20)
+    history = await mem.history(user_id=uid, limit=20)
     # history usually returns newest first? Let's check docs or assume.
     # We want chronological for plotting.
     chronological = reversed(history)

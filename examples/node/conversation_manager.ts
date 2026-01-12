@@ -1,5 +1,5 @@
 
-import { Memory } from 'openmemory-js';
+import { MemoryClient } from 'openmemory-js';
 
 // ==================================================================================
 // CONVERSATION MANAGER
@@ -19,32 +19,31 @@ interface Message {
 }
 
 export class ConversationManager {
-    private mem: Memory;
+    private client: MemoryClient;
     private userId: string;
 
     constructor(userId: string) {
-        this.mem = new Memory();
+        // Assumes OpenMemory server is running at default localhost:8080
+        this.client = new MemoryClient({ baseUrl: 'http://localhost:8080' });
         this.userId = userId;
     }
 
     /**
      * Store a message and optionally summarize if the session is getting long.
      */
-    async addMessage(role: 'user' | 'assistant', content: string) {
-        await this.mem.add(content, {
-            user_id: this.userId,
+    async addMessagesBatch(messages: { role: 'user' | 'assistant', content: string }[]) {
+        const batch = messages.map(msg => ({
+            content: msg.content,
             metadata: {
-                role: role,
+                role: msg.role,
                 timestamp: Date.now(),
                 type: 'chat_message'
             },
-            tags: ['chat', role]
-        });
+            tags: ['chat', msg.role]
+        }));
 
-        // In a real app, you might check token count here.
-        // If > 4000 tokens, trigger a summarization task.
-        // For this example, we just log.
-        // console.log(`[Manager] Stored ${role} message.`);
+        const results = await this.client.addBatch(batch);
+        console.log(`[Manager] Batch stored ${results.length} messages.`);
     }
 
     /**
@@ -63,8 +62,8 @@ export class ConversationManager {
         // Let's use search for "relevant past" and assume the app maintains local state for immediate history
         // OR we use semantic search to find *related* past conversations.
 
-        const relevantMemories = await this.mem.search(currentQuery, {
-            user_id: this.userId,
+        const relevantMemories = await this.client.search(currentQuery, {
+            userId: this.userId,
             limit: 5,
             minSalience: 0.5 // Only high relevance
         });
@@ -77,8 +76,9 @@ export class ConversationManager {
         } else {
             console.log(`[Manager] Found ${relevantMemories.length} relevant memories for context.`);
             for (const mem of relevantMemories) {
-                const meta = mem.metadata || {};
-                const date = meta.timestamp ? new Date(meta.timestamp).toISOString() : 'Unknown Time';
+                // Ensure metadata is treated as a Record if possible, though SDK returns generic type
+                const meta = (mem.metadata || {}) as Record<string, any>;
+                const date = meta.timestamp ? new Date(Number(meta.timestamp)).toISOString() : 'Unknown Time';
                 contextBlocks.push(`[${date}] ${mem.content}`);
             }
         }
@@ -94,12 +94,24 @@ export class ConversationManager {
         // We simulate the output.
         const summary = `Generated Summary: User discussed ${conversationText.slice(0, 20)}...`;
 
-        await this.mem.add(summary, {
-            user_id: this.userId,
+        await this.client.add(summary, {
+            userId: this.userId,
             metadata: { type: 'summary' },
             tags: ['summary', 'long_term']
         });
         console.log("[Manager] Conversation segment summarized and stored.");
+    }
+
+    /**
+     * Demo new System Timeline capability
+     */
+    async showTimelineStats() {
+        console.log("\n-> Fetching System Timeline Stats...");
+        const timeline = await this.client.getSystemTimeline(24);
+        console.log(`[Manager] Timeline has ${timeline.length} time buckets active in last 24h.`);
+        if (timeline.length > 0) {
+            console.log("Sample Bucket:", JSON.stringify(timeline[0], null, 2));
+        }
     }
 }
 
@@ -109,31 +121,42 @@ export class ConversationManager {
 
 async function runDemo() {
     console.log("Initializing Conversation Manager...");
+    console.log("NOTE: Ensure OpenMemory server is running on http://localhost:8080");
     const mgr = new ConversationManager("user_architect_01");
 
-    // 1. Simulate an old conversation about architecture
-    console.log("-> Simulating past conversations...");
-    await mgr.addMessage("user", "We need to use microservices for the payment gateway.");
-    await mgr.addMessage("assistant", "Agreed. I suggest using gRPC for inter-service comms.");
-    await mgr.summarizeSegment("Payment gateway microservices using gRPC.");
+    try {
+        // 1. Simulate an old conversation about architecture using BATCH add
+        console.log("-> Simulating past conversations (Batch Mode)...");
+        await mgr.addMessagesBatch([
+            { role: "user", content: "We need to use microservices for the payment gateway." },
+            { role: "assistant", content: "Agreed. I suggest using gRPC for inter-service comms." }
+        ]);
+        await mgr.summarizeSegment("Payment gateway microservices using gRPC.");
 
-    // 2. New conversation days later
-    console.log("\n-> New Session Started.");
-    const userQuery = "What protocol did we decide on for payments?";
-    console.log(`User asks: "${userQuery}"`);
+        // 2. New conversation days later
+        console.log("\n-> New Session Started.");
+        const userQuery = "What protocol did we decide on for payments?";
+        console.log(`User asks: "${userQuery}"`);
 
-    // 3. Build Context
-    console.log("-> Building Infinite Context...");
-    const context = await mgr.getContext(userQuery);
+        // 3. Build Context
+        console.log("-> Building Infinite Context...");
+        const context = await mgr.getContext(userQuery);
 
-    console.log("\n[LLM PROMPT CONTEXT]");
-    console.log(context);
-    console.log("--------------------");
+        console.log("\n[LLM PROMPT CONTEXT]");
+        console.log(context);
+        console.log("--------------------");
 
-    if (context.includes("gRPC")) {
-        console.log("SUCCESS: Context contains the retrieved memory about gRPC.");
-    } else {
-        console.log("WARNING: Semantic search might need tuning/more data.");
+        if (context.includes("gRPC")) {
+            console.log("SUCCESS: Context contains the retrieved memory about gRPC.");
+        } else {
+            console.log("WARNING: Semantic search might need tuning/more data.");
+        }
+
+        // 4. Show new Timeline feature
+        await mgr.showTimelineStats();
+
+    } catch (e) {
+        console.error("Demo failed (Is the server running?):", e);
     }
 }
 

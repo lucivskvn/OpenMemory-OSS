@@ -1,22 +1,77 @@
-﻿import { env, tier } from "../core/cfg";
-import { get_model } from "../core/models";
-import { sector_configs } from "./hsg";
+﻿/**
+ * @file Multi-provider embedding logic for OpenMemory.
+ * Handles semantic vector generation with robust fallback chains and batching support.
+ */
+import { env, tier } from "../core/cfg";
 import { q } from "../core/db";
-import { canonical_tokens_from_text, add_synonym_tokens } from "../utils/text";
-import { cosineSimilarity, vectorToBuffer, bufferToVector } from "../utils/vectors";
-export { cosineSimilarity, vectorToBuffer, bufferToVector };
+import { sectorConfigs } from "../core/hsg_config";
+import { getModel } from "../core/models";
+import { normalizeUserId, retry } from "../utils";
+import { addSynonymTokens, canonicalTokensFromText } from "../utils/text";
 import {
-    BedrockRuntimeClient,
-    InvokeModelCommand,
-} from "@aws-sdk/client-bedrock-runtime";
+    aggregateVectors,
+    bufferToVector,
+    cosineSimilarity,
+    vectorToBuffer,
+} from "../utils/vectors";
+export { aggregateVectors, bufferToVector, cosineSimilarity, vectorToBuffer };
+import { BedrockRuntimeClient, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
+import { env as hfEnv, pipeline } from "@huggingface/transformers";
 import OpenAI from "openai";
 
-let gem_q: Promise<any> = Promise.resolve();
-export const emb_dim = () => env.vec_dim;
+import { logger } from "../utils/logger";
+
+// Basic typing for HF pipeline functionality
+type FeatureExtractor = (text: string | string[], options?: { pooling?: string; normalize?: boolean }) => Promise<{ data: Float32Array | number[] }>;
+
+let extractor: FeatureExtractor | null = null;
+/**
+ * Initializes and caches the local embedding model extractor.
+ * Configures ONNX Runtime with hardware acceleration and thread limits for resource-constrained environments.
+ * 
+ * @returns {Promise<any>} The Transformers.js pipeline instance.
+ */
+const getExtractor = async () => {
+    if (!extractor) {
+        if (env.verbose)
+            logger.info(
+                `[EMBED] Initializing local embedding model: ${env.localEmbeddingModel} (Device: ${env.localEmbeddingDevice}, Threads: ${env.localEmbeddingThreads})`,
+            );
+
+        /**
+         * Configure ONNX Runtime for CPU-only or restricted core environments (Sustainability).
+         * Note: hfEnv.backends might be used in some versions, but hfEnv.onnx is common.
+         * Using type assertion to bypass environment-specific type detection.
+         */
+        try {
+            // @ts-expect-error - Transformers.js v3 env properties
+            hfEnv.onnx = hfEnv.onnx || {};
+            // @ts-expect-error - Transformers.js v3 type workaround
+            hfEnv.onnx.numThreads = env.localEmbeddingThreads;
+        } catch (e) {
+            logger.warn("[EMBED] Failed to configure ONNX thread limits:", { error: e });
+        }
+
+        extractor = (await pipeline(
+            "feature-extraction",
+            env.localEmbeddingModel,
+            {
+                device: env.localEmbeddingDevice === "auto" ? undefined : env.localEmbeddingDevice,
+            }
+        )) as any;
+    }
+    return extractor;
+};
+
+let gemQ: Promise<void> = Promise.resolve();
+export const embDim = () => env.vecDim;
 
 // Fetch with timeout to prevent hanging requests and enable fallback chain
-const EMBED_TIMEOUT_MS = Number(process.env.OM_EMBED_TIMEOUT_MS) || 30000;
-async function fetchWithTimeout(url: string, options: RequestInit): Promise<Response> {
+const EMBED_TIMEOUT_MS = env.embedTimeoutMs;
+async function fetchWithTimeout(
+    url: string,
+    options: RequestInit,
+): Promise<Response> {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), EMBED_TIMEOUT_MS);
     try {
@@ -32,7 +87,7 @@ export interface EmbeddingResult {
     dim: number;
 }
 
-const compress_vec = (v: number[], td: number): number[] => {
+const compressVec = (v: number[], td: number): number[] => {
     if (v.length <= td) return v;
     const c = new Float32Array(td),
         bs = v.length / td;
@@ -54,7 +109,7 @@ const compress_vec = (v: number[], td: number): number[] => {
     return Array.from(c);
 };
 
-const fuse_vecs = (syn: number[], sem: number[]): number[] => {
+const fuseVecs = (syn: number[], sem: number[]): number[] => {
     const synLength = syn.length;
     const semLength = sem.length;
     const totalLength = synLength + semLength;
@@ -80,17 +135,20 @@ const fuse_vecs = (syn: number[], sem: number[]): number[] => {
 };
 
 export async function embedForSector(t: string, s: string): Promise<number[]> {
-    if (env.verbose) console.error(`[EMBED] Provider: ${env.emb_kind}, Tier: ${tier}, Sector: ${s}`);
-    if (!sector_configs[s]) throw new Error(`Unknown sector: ${s}`);
-    if (tier === "hybrid") return gen_syn_emb(t, s);
-    if (tier === "smart" && env.emb_kind !== "synthetic") {
-        const syn = gen_syn_emb(t, s),
-            sem = await get_sem_emb(t, s),
-            comp = compress_vec(sem, 128);
-        return fuse_vecs(syn, comp);
+    if (env.verbose)
+        logger.debug(
+            `[EMBED] Provider: ${env.embKind}, Tier: ${tier}, Sector: ${s}`,
+        );
+    if (!sectorConfigs[s]) throw new Error(`Unknown sector: ${s}`);
+    if (tier === "hybrid") return genSynEmb(t, s);
+    if (tier === "smart" && env.embKind !== "synthetic") {
+        const syn = genSynEmb(t, s),
+            sem = await getSemEmb(t, s),
+            comp = compressVec(sem, 128);
+        return fuseVecs(syn, comp);
     }
-    if (tier === "fast") return gen_syn_emb(t, s);
-    return await get_sem_emb(t, s);
+    if (tier === "fast") return genSynEmb(t, s);
+    return await getSemEmb(t, s);
 }
 
 /**
@@ -101,96 +159,119 @@ export async function embedForSector(t: string, s: string): Promise<number[]> {
 export async function embedQueryForAllSectors(
     query: string,
     sectors: string[],
-): Promise<Record<string, number[]>> {
+): Promise<EmbeddingResult[]> {
     // For hybrid/fast tiers, use synthetic embeddings (already fast)
     if (tier === "hybrid" || tier === "fast") {
-        const result: Record<string, number[]> = {};
-        for (const s of sectors) result[s] = gen_syn_emb(query, s);
-        return result;
+        return sectors.map((s) => ({
+            sector: s,
+            vector: genSynEmb(query, s),
+            dim: env.vecDim || 768,
+        }));
     }
 
-    // For deep/smart tiers with Gemini, batch all sectors in ONE API call
-    if (env.emb_kind === "gemini" && env.gemini_key) {
-        try {
-            const txts: Record<string, string> = {};
-            for (const s of sectors) txts[s] = query;
-            return await emb_gemini(txts);
-        } catch (e) {
-            console.error(`[EMBED] Gemini batch failed, falling back to sequential: ${e}`);
-        }
+    // Use the robust batch fallback mechanism to ensure both speed and reliability
+    try {
+        const tb: Record<string, string> = {};
+        for (const s of sectors) tb[s] = query;
+        const resMap = await embBatchWithFallback(tb);
+        return Object.entries(resMap).map(([s, v]) => ({
+            sector: s,
+            vector: v,
+            dim: v.length,
+        }));
+    } catch (e) {
+        logger.error(
+            "[EMBED] Batch query embedding failed, using sequential fallback:",
+            { error: e },
+        );
     }
 
     // Fallback: sequential embedding for each sector
-    const result: Record<string, number[]> = {};
-    for (const s of sectors) result[s] = await embedForSector(query, s);
+    const result: EmbeddingResult[] = [];
+    for (const s of sectors) {
+        const v = await embedForSector(query, s);
+        result.push({ sector: s, vector: v, dim: v.length });
+    }
     return result;
 }
 
 // Embed with a specific provider (throws on failure)
-async function embed_with_provider(
+async function embedWithProvider(
     provider: string,
     t: string,
     s: string,
 ): Promise<number[]> {
     switch (provider) {
         case "openai":
-            return await emb_openai(t, s);
+            return await embOpenAI(t, s);
         case "gemini":
-            return (await emb_gemini({ [s]: t }))[s];
+            return (await embGemini({ [s]: t }))[s];
         case "ollama":
-            return await emb_ollama(t, s);
+            return await embOllama(t, s);
         case "aws":
-            return await emb_aws(t, s);
+            return await embAWS(t, s);
         case "local":
-            return await emb_local(t, s);
+            return await embLocal(t, s);
         case "synthetic":
-            return gen_syn_emb(t, s);
+            return genSynEmb(t, s);
         default:
             throw new Error(`Unknown embedding provider: ${provider}`);
     }
 }
 
 // Get semantic embedding with configurable fallback chain
-async function get_sem_emb(t: string, s: string): Promise<number[]> {
+async function getSemEmb(t: string, s: string): Promise<number[]> {
     // Deduplicate providers to avoid wasteful retries (e.g., gemini,gemini,synthetic)
-    const providers = [...new Set([env.emb_kind, ...env.embedding_fallback])];
+    const providers = [...new Set([env.embKind, ...env.embeddingFallback])];
 
     for (let i = 0; i < providers.length; i++) {
         const provider = providers[i];
         try {
-            const result = await embed_with_provider(provider, t, s);
+            const result = await retry(
+                () => embedWithProvider(provider, t, s),
+                {
+                    retries: env.maxRetries,
+                    delay: 500,
+                    onRetry: (e, att) =>
+                        logger.warn(
+                            `[EMBED] ${provider} retry ${att}/${env.maxRetries}:`,
+                            { error: e },
+                        ),
+                },
+            );
             if (i > 0) {
-                console.error(
+                logger.info(
                     `[EMBED] Fallback to ${provider} succeeded for sector: ${s}`,
                 );
             }
             return result;
         } catch (e) {
-            const errMsg = e instanceof Error ? e.message : String(e);
+            // const _errMsg = e instanceof Error ? e.message : String(e);
             const nextProvider = providers[i + 1];
 
             if (nextProvider) {
-                console.error(
-                    `[EMBED] ${provider} failed: ${errMsg}, trying ${nextProvider}`,
+                logger.error(
+                    `[EMBED] ${provider} failed after retries, trying ${nextProvider}:`,
+                    { error: e },
                 );
             } else {
-                console.error(
-                    `[EMBED] All providers failed. Last error (${provider}): ${errMsg}. Using synthetic.`,
+                logger.error(
+                    `[EMBED] All providers failed. Last error (${provider}), using synthetic:`,
+                    { error: e },
                 );
-                return gen_syn_emb(t, s);
+                return genSynEmb(t, s);
             }
         }
     }
     // Fallback if providers array is empty (shouldn't happen with defaults)
-    return gen_syn_emb(t, s);
+    return genSynEmb(t, s);
 }
 
-
 // Batch embedding with fallback chain support (for simple mode)
-async function emb_batch_with_fallback(
+async function embBatchWithFallback(
     txts: Record<string, string>,
 ): Promise<Record<string, number[]>> {
-    const providers = [...new Set([env.emb_kind, ...env.embedding_fallback])];
+    const providers = [...new Set([env.embKind, ...env.embeddingFallback])];
 
     for (let i = 0; i < providers.length; i++) {
         const provider = providers[i];
@@ -198,54 +279,67 @@ async function emb_batch_with_fallback(
             let result: Record<string, number[]>;
             switch (provider) {
                 case "gemini":
-                    result = await emb_gemini(txts);
+                    // Use Gemini batch function
+                    // Note: embGemini assumes env.geminiKey is set
+                    result = await embGemini(txts);
                     break;
                 case "openai":
-                    result = await emb_batch_openai(txts);
+                    // Use OpenAI batch function
+                    result = await embBatchOpenAI(txts);
                     break;
-                default:
+                case "ollama":
+                    // Use Ollama batch function
+                    result = await embBatchOllama(txts, null); // Global context for now in simple batch
+                    break;
+                default: {
                     // For providers without batch support, embed each sector individually
+                    // We must wait for all promises
                     result = {};
-                    for (const [s, t] of Object.entries(txts)) {
-                        result[s] = await embed_with_provider(provider, t, s);
+                    const entries = Object.entries(txts);
+                    // Process in parallel or serial depending on support?
+                    // Let's do serial for safety as default fallback often implies reliability > speed
+                    for (const [s, t] of entries) {
+                        result[s] = await embedWithProvider(provider, t, s);
                     }
+                    break;
+                }
             }
             if (i > 0) {
-                console.error(
+                logger.info(
                     `[EMBED] Fallback to ${provider} succeeded for batch`,
                 );
             }
             return result;
         } catch (e) {
             const errMsg = e instanceof Error ? e.message : String(e);
+
+            // Log fallback attempt
             const nextProvider = providers[i + 1];
 
             if (nextProvider) {
-                console.error(
+                logger.error(
                     `[EMBED] ${provider} batch failed: ${errMsg}, trying ${nextProvider}`,
                 );
             } else {
-                console.error(
+                logger.error(
                     `[EMBED] All providers failed for batch. Last error (${provider}): ${errMsg}. Using synthetic.`,
                 );
                 // Fall back to synthetic for all sectors
                 const result: Record<string, number[]> = {};
                 for (const [s, t] of Object.entries(txts)) {
-                    result[s] = gen_syn_emb(t, s);
+                    result[s] = genSynEmb(t, s);
                 }
                 return result;
             }
         }
     }
-    // Fallback if providers array is empty
+    // Fallback if providers array is empty (should not happen if synthetic is default)
     const result: Record<string, number[]> = {};
     for (const [s, t] of Object.entries(txts)) {
-        result[s] = gen_syn_emb(t, s);
+        result[s] = genSynEmb(t, s);
     }
     return result;
 }
-
-
 
 interface GeminiEmbeddingResponse {
     embeddings: Array<{ values: number[] }>;
@@ -255,47 +349,46 @@ interface OllamaEmbeddingResponse {
     embedding: number[];
 }
 
-
-
-async function emb_openai(t: string, s: string): Promise<number[]> {
-    if (!env.openai_key) throw new Error("OpenAI key missing");
-    const m = get_model(s, "openai");
+async function embOpenAI(t: string, s: string): Promise<number[]> {
+    if (!env.openaiKey) throw new Error("OpenAI key missing");
+    const m = getModel(s, "openai");
     const openai = new OpenAI({
-        apiKey: env.openai_key,
-        baseURL: env.openai_base_url || undefined,
+        apiKey: env.openaiKey,
+        baseURL: env.openaiBaseUrl || undefined,
         timeout: EMBED_TIMEOUT_MS,
     });
 
     // Check if model supports dimensions (v3 only)
-    const isV3 = (env.openai_model || m).includes("text-embedding-3");
-    const params: any = {
+    const isV3 = (env.openaiModel || m).includes("text-embedding-3");
+    const params: OpenAI.Embeddings.EmbeddingCreateParams = {
         input: t,
-        model: env.openai_model || m,
+        model: env.openaiModel || m,
     };
-    if (isV3 && env.vec_dim) params.dimensions = env.vec_dim;
+    if (isV3 && env.vecDim) params.dimensions = env.vecDim;
 
     const response = await openai.embeddings.create(params);
     return response.data[0].embedding;
 }
 
-async function emb_batch_openai(
+async function embBatchOpenAI(
     txts: Record<string, string>,
 ): Promise<Record<string, number[]>> {
-    if (!env.openai_key) throw new Error("OpenAI key missing");
+    const apiKey = env.openaiKey;
+    if (!apiKey) throw new Error("OpenAI key missing");
     const secs = Object.keys(txts);
-    const m = get_model("semantic", "openai");
+    const m = getModel("semantic", "openai");
     const openai = new OpenAI({
-        apiKey: env.openai_key,
-        baseURL: env.openai_base_url || undefined,
+        apiKey,
+        baseURL: env.openaiBaseUrl || undefined,
         timeout: EMBED_TIMEOUT_MS,
     });
 
-    const isV3 = (env.openai_model || m).includes("text-embedding-3");
-    const params: any = {
+    const isV3 = (env.openaiModel || m).includes("text-embedding-3");
+    const params: OpenAI.Embeddings.EmbeddingCreateParams = {
         input: Object.values(txts),
-        model: env.openai_model || m,
+        model: env.openaiModel || m,
     };
-    if (isV3 && env.vec_dim) params.dimensions = env.vec_dim;
+    if (isV3 && env.vecDim) params.dimensions = env.vecDim;
 
     const response = await openai.embeddings.create(params);
     const out: Record<string, number[]> = {};
@@ -303,7 +396,7 @@ async function emb_batch_openai(
     return out;
 }
 
-const task_map: Record<string, string> = {
+const taskMap: Record<string, string> = {
     episodic: "RETRIEVAL_DOCUMENT",
     semantic: "SEMANTIC_SIMILARITY",
     procedural: "RETRIEVAL_DOCUMENT",
@@ -311,20 +404,20 @@ const task_map: Record<string, string> = {
     reflective: "SEMANTIC_SIMILARITY",
 };
 
-async function emb_gemini(
+async function embGemini(
     txts: Record<string, string>,
 ): Promise<Record<string, number[]>> {
-    if (!env.gemini_key) throw new Error("Gemini key missing");
-    const prom = gem_q.then(async () => {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents?key=${env.gemini_key}`;
+    if (!env.geminiKey) throw new Error("Gemini key missing");
+    const prom = gemQ.then(async () => {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents?key=${env.geminiKey}`;
         for (let a = 0; a < 3; a++) {
             try {
                 const reqs = Object.entries(txts).map(([s, t]) => {
-                    const m = get_model(s, "gemini");
+                    const m = getModel(s, "gemini");
                     return {
                         model: m.startsWith("models/") ? m : `models/${m}`,
                         content: { parts: [{ text: t }] },
-                        taskType: task_map[s] || task_map.semantic,
+                        taskType: taskMap[s] || taskMap.semantic,
                     };
                 });
                 const r = await fetchWithTimeout(url, {
@@ -335,14 +428,17 @@ async function emb_gemini(
                 if (!r.ok) {
                     if (r.status === 429) {
                         const d = Math.min(
-                            parseInt(r.headers.get("retry-after") || "2") *
-                            1000,
+                            parseInt(r.headers.get("retry-after") || "2") * 1000,
                             1000 * Math.pow(2, a),
                         );
-                        console.error(
+                        logger.warn(
                             `[EMBED] Gemini rate limit (${a + 1}/3), waiting ${d}ms`,
                         );
-                        await new Promise((x) => setTimeout(x, d));
+                        if (typeof Bun !== "undefined" && Bun.sleep) {
+                            await Bun.sleep(d);
+                        } else {
+                            await new Promise((x) => setTimeout(x, d));
+                        }
                         continue;
                     }
                     throw new Error(`Gemini: ${r.status}`);
@@ -351,11 +447,8 @@ async function emb_gemini(
                 const out: Record<string, number[]> = {};
                 let i = 0;
                 for (const s of Object.keys(txts))
-                    out[s] = resize_vec(
-                        data.embeddings[i++].values,
-                        env.vec_dim,
-                    );
-                await new Promise((x) => setTimeout(x, 1500));
+                    out[s] = resizeVec(data.embeddings[i++].values, env.vecDim);
+                await Bun.sleep(1500);
                 return out;
             } catch (e) {
                 const errMsg = e instanceof Error ? e.message : String(e);
@@ -364,35 +457,121 @@ async function emb_gemini(
                         `Gemini failed after 3 attempts: ${errMsg}`,
                     );
                 }
-                console.error(`[EMBED] Gemini error (${a + 1}/3): ${errMsg}`);
-                await new Promise((x) => setTimeout(x, 1000 * Math.pow(2, a)));
+                logger.error(`[EMBED] Gemini error (${a + 1}/3):`, {
+                    error: e,
+                });
+                await Bun.sleep(1000 * Math.pow(2, a));
             }
         }
         throw new Error("Gemini: exhausted retries");
     });
-    gem_q = prom.catch(() => { });
+    gemQ = prom.then(() => { }).catch(() => { });
     return prom;
 }
 
-async function emb_ollama(t: string, s: string): Promise<number[]> {
-    const m = get_model(s, "ollama");
-    const r = await fetchWithTimeout(`${env.ollama_url}/api/embeddings`, {
+/**
+ * Resolves the best Ollama model for a given scenario.
+ * Automates selection based on text length and sector.
+ */
+async function resolveOllamaModel(t: string, s: string, userId?: string | null): Promise<string> {
+    // 1. Try Persistent Config (populated by discovery or manually)
+    const { getPersistedConfig } = await import("../core/persisted_cfg");
+    const pConfig = await getPersistedConfig<Record<string, string>>(normalizeUserId(userId) || null, "ollama_embeddings");
+
+    // 2. Try Env Config (OM_OLLAMA_EMBED_MODELS)
+    const eConfig = env.ollamaEmbedModels as Record<string, string>;
+
+    const config = { ...eConfig, ...pConfig };
+
+    // A. Sector-specific override from config
+    if (config[s]) return config[s];
+
+    // B. Scenario automation (Length-based)
+    const isLong = t.length > 2000;
+    if (isLong && config.large) return config.large;
+    if (!isLong && config.fast) return config.fast;
+
+    // C. Fallback to default
+    return getModel(s, "ollama");
+}
+
+async function embOllama(t: string, s: string, userId?: string | null): Promise<number[]> {
+    const m = await resolveOllamaModel(t, s, userId);
+    // Use the newer /api/embed endpoint which is more robust and supports options
+    const r = await fetchWithTimeout(`${env.ollamaUrl}/api/embed`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: m, prompt: t }),
+        body: JSON.stringify({
+            model: m,
+            input: t,
+            options: {
+                num_gpu: env.ollamaNumGpu
+            }
+        }),
     });
-    if (!r.ok) throw new Error(`Ollama: ${r.status}`);
-    const data = (await r.json()) as OllamaEmbeddingResponse;
-    return resize_vec(data.embedding, env.vec_dim);
+
+    if (!r.ok) {
+        // Fallback to legacy /api/embeddings if /api/embed fails
+        if (r.status === 404) {
+            const r2 = await fetchWithTimeout(`${env.ollamaUrl}/api/embeddings`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ model: m, prompt: t }),
+            });
+            if (!r2.ok) throw new Error(`Ollama legacy: ${r2.status}`);
+            const data = (await r2.json()) as OllamaEmbeddingResponse;
+            return resizeVec(data.embedding, env.vecDim);
+        }
+        throw new Error(`Ollama: ${r.status}`);
+    }
+    const data = (await r.json()) as { embeddings: number[][] };
+    return resizeVec(data.embeddings[0], env.vecDim);
 }
-async function emb_aws(t: string, s: string): Promise<number[]> {
-    if (!env.AWS_REGION) throw new Error("AWS_REGION missing");
-    if (!env.AWS_ACCESS_KEY_ID) throw new Error("AWS_ACCESS_KEY_ID missing");
-    if (!env.AWS_SECRET_ACCESS_KEY)
-        throw new Error("AWS_SECRET_ACCESS_KEY missing");
-    const m = get_model(s, "aws");
-    const client = new BedrockRuntimeClient({ region: process.env.AWS_REGION });
-    const dim = [256, 512, 1024].find((x) => x >= env.vec_dim) ?? 1024;
+
+async function embBatchOllama(
+    txts: Record<string, string>,
+    userId?: string | null,
+): Promise<Record<string, number[]>> {
+    const secs = Object.keys(txts);
+    const inputs = Object.values(txts);
+    // Use first sector to resolve model (assuming homogeneous batch for now)
+    const m = await resolveOllamaModel(inputs[0], secs[0], userId);
+
+    const r = await fetchWithTimeout(`${env.ollamaUrl}/api/embed`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+            model: m,
+            input: inputs,
+            options: {
+                num_gpu: env.ollamaNumGpu
+            }
+        }),
+    });
+
+    if (!r.ok) throw new Error(`Ollama Batch: ${r.status}`);
+    const data = (await r.json()) as { embeddings: number[][] };
+
+    const out: Record<string, number[]> = {};
+    secs.forEach((s, i) => (out[s] = resizeVec(data.embeddings[i], env.vecDim)));
+    return out;
+}
+
+async function embAWS(t: string, s: string): Promise<number[]> {
+    if (!env.awsRegion) throw new Error("AWS region missing");
+    if (!env.awsAccessKeyId) throw new Error("AWS access key ID missing");
+    if (!env.awsSecretAccessKey)
+        throw new Error("AWS secret access key missing");
+
+    const m = getModel(s, "aws");
+    const client = new BedrockRuntimeClient({
+        region: env.awsRegion,
+        credentials: {
+            accessKeyId: env.awsAccessKeyId,
+            secretAccessKey: env.awsSecretAccessKey,
+        },
+    });
+    const dim = [256, 512, 1024].find((x) => x >= env.vecDim) ?? 1024;
     const params = {
         modelId: m,
         contentType: "application/json",
@@ -406,36 +585,34 @@ async function emb_aws(t: string, s: string): Promise<number[]> {
 
     try {
         const response = await client.send(command);
-
         const jsonString = new TextDecoder().decode(response.body);
         const parsedResponse = JSON.parse(jsonString);
-        return resize_vec(parsedResponse.embedding, env.vec_dim);
+        return resizeVec(parsedResponse.embedding, env.vecDim);
     } catch (error) {
-        throw new Error(`AWS: ${error}`);
+        throw new Error(
+            `AWS error: ${error instanceof Error ? error.message : String(error)}`,
+        );
     }
 }
 
-async function emb_local(t: string, s: string): Promise<number[]> {
-    if (!env.local_model_path) {
-        console.error("[EMBED] Local model missing, using synthetic");
-        return gen_syn_emb(t, s);
-    }
+async function embLocal(t: string, s: string): Promise<number[]> {
     try {
-        const encoder = new TextEncoder();
-        const data = encoder.encode(t + s);
-        const hashBuffer = await globalThis.crypto.subtle.digest("SHA-256", data);
-        const h = new Uint8Array(hashBuffer);
-        const e: number[] = [];
-        for (let i = 0; i < env.vec_dim; i++) {
-            const b1 = h[i % h.length],
-                b2 = h[(i + 1) % h.length];
-            e.push(((b1 * 256 + b2) / 65535) * 2 - 1);
+        const pipe = await getExtractor();
+        if (!pipe) throw new Error("Local model not initialized");
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const output = await pipe(t, { pooling: "mean", normalize: true } as any);
+        const v = Array.from(output.data as Float32Array);
+
+        if (env.localEmbeddingResize) {
+            return resizeVec(v, env.vecDim);
         }
-        const n = Math.sqrt(e.reduce((sum, v) => sum + v * v, 0));
-        return e.map((v) => v / n);
-    } catch {
-        console.error("[EMBED] Local embedding failed, using synthetic");
-        return gen_syn_emb(t, s);
+        return v;
+    } catch (e) {
+        logger.error(
+            `[EMBED] Local embedding (${env.localEmbeddingModel}) failed, using synthetic:`,
+            { error: e },
+        );
+        return genSynEmb(t, s);
     }
 }
 
@@ -453,37 +630,32 @@ const h2 = (v: string, sd: number) => {
     }
     return h >>> 0;
 };
-const add_feat = (vec: Float32Array, dim: number, k: string, w: number) => {
+const addFeat = (vec: Float32Array, dim: number, k: string, w: number) => {
     const h = h1(k),
-        h_2 = h2(k, 0xdeadbeef),
+        h2Val = h2(k, 0xdeadbeef),
         val = w * (1 - ((h & 1) << 1));
     if (dim > 0 && (dim & (dim - 1)) === 0) {
         vec[h & (dim - 1)] += val;
-        vec[h_2 & (dim - 1)] += val * 0.5;
+        vec[h2Val & (dim - 1)] += val * 0.5;
     } else {
         vec[h % dim] += val;
-        vec[h_2 % dim] += val * 0.5;
+        vec[h2Val % dim] += val * 0.5;
     }
 };
-const add_pos_feat = (
-    vec: Float32Array,
-    dim: number,
-    pos: number,
-    w: number,
-) => {
+const addPosFeat = (vec: Float32Array, dim: number, pos: number, w: number) => {
     const idx = pos % dim,
         ang = pos / Math.pow(10000, (2 * idx) / dim);
     vec[idx] += w * Math.sin(ang);
     vec[(idx + 1) % dim] += w * Math.cos(ang);
 };
-const sec_wts: Record<string, number> = {
+const secWts: Record<string, number> = {
     episodic: 1.3,
     semantic: 1.0,
     procedural: 1.2,
     emotional: 1.4,
     reflective: 0.9,
 };
-const norm_v = (v: Float32Array) => {
+const normV = (v: Float32Array) => {
     let n = 0;
     for (let i = 0; i < v.length; i++) n += v[i] * v[i];
     if (n === 0) return;
@@ -491,114 +663,149 @@ const norm_v = (v: Float32Array) => {
     for (let i = 0; i < v.length; i++) v[i] *= inv;
 };
 
-export function gen_syn_emb(t: string, s: string): number[] {
-    const d = env.vec_dim || 768,
-        v = new Float32Array(d).fill(0),
-        ct = canonical_tokens_from_text(t);
+export function genSynEmb(t: string, s: string): number[] {
+    const d = env.vecDim || 768,
+        v = new Float32Array(d).fill(0);
+    const ct = canonicalTokensFromText(t);
     if (!ct.length) {
         const x = 1 / Math.sqrt(d);
         return Array.from({ length: d }, () => x);
     }
-    const et = Array.from(add_synonym_tokens(ct)),
+    const et = Array.from(addSynonymTokens(ct)),
         tc = new Map<string, number>(),
         el = et.length;
     for (let i = 0; i < el; i++) {
         const tok = et[i];
         tc.set(tok, (tc.get(tok) || 0) + 1);
     }
-    const sw = sec_wts[s] || 1.0,
+    const sw = secWts[s] || 1.0,
         dl = Math.log(1 + el);
     for (const [tok, c] of tc) {
         const tf = c / el,
             idf = Math.log(1 + el / c),
             w = (tf * idf + 1) * sw;
-        add_feat(v, d, `${s}|tok|${tok}`, w);
+        addFeat(v, d, `${s}|tok|${tok}`, w);
         if (tok.length >= 3)
             for (let i = 0; i < tok.length - 2; i++)
-                add_feat(v, d, `${s}|c3|${tok.slice(i, i + 3)}`, w * 0.4);
+                addFeat(v, d, `${s}|c3|${tok.slice(i, i + 3)}`, w * 0.4);
         if (tok.length >= 4)
             for (let i = 0; i < tok.length - 3; i++)
-                add_feat(v, d, `${s}|c4|${tok.slice(i, i + 4)}`, w * 0.3);
+                addFeat(v, d, `${s}|c4|${tok.slice(i, i + 4)}`, w * 0.3);
     }
     for (let i = 0; i < ct.length - 1; i++) {
         const a = ct[i],
             b = ct[i + 1];
         if (a && b) {
             const pw = 1.0 / (1.0 + i * 0.1);
-            add_feat(v, d, `${s}|bi|${a}_${b}`, 1.4 * sw * pw);
+            addFeat(v, d, `${s}|bi|${a}_${b}`, 1.4 * sw * pw);
         }
     }
     for (let i = 0; i < ct.length - 2; i++) {
         const a = ct[i],
             b = ct[i + 1],
             c = ct[i + 2];
-        if (a && b && c) add_feat(v, d, `${s}|tri|${a}_${b}_${c}`, 1.0 * sw);
+        if (a && b && c) addFeat(v, d, `${s}|tri|${a}_${b}_${c}`, 1.0 * sw);
     }
     for (let i = 0; i < Math.min(ct.length - 2, 20); i++) {
         const a = ct[i],
             c = ct[i + 2];
-        if (a && c) add_feat(v, d, `${s}|skip|${a}_${c}`, 0.7 * sw);
+        if (a && c) addFeat(v, d, `${s}|skip|${a}_${c}`, 0.7 * sw);
     }
     for (let i = 0; i < Math.min(ct.length, 50); i++)
-        add_pos_feat(v, d, i, (0.5 * sw) / dl);
+        addPosFeat(v, d, i, (0.5 * sw) / dl);
     const lb = Math.min(Math.floor(Math.log2(el + 1)), 10);
-    add_feat(v, d, `${s}|len|${lb}`, 0.6 * sw);
+    addFeat(v, d, `${s}|len|${lb}`, 0.6 * sw);
     const dens = tc.size / el,
         db = Math.floor(dens * 10);
-    add_feat(v, d, `${s}|dens|${db}`, 0.5 * sw);
-    norm_v(v);
+    addFeat(v, d, `${s}|dens|${db}`, 0.5 * sw);
+    normV(v);
     return Array.from(v);
 }
 
-const resize_vec = (v: number[], t: number) => {
+const resizeVec = (v: number[], t: number) => {
     if (v.length === t) return v;
     if (v.length > t) return v.slice(0, t);
     return [...v, ...Array(t - v.length).fill(0)];
 };
 
+const CACHE = new Map<string, { val: EmbeddingResult[]; ts: number }>();
+const CACHE_TTL = 5 * 60 * 1000;
+const CACHE_SIZE = 500;
+
+/**
+ * Generates embeddings for multiple sectors with concurrency control and hardware awareness.
+ * 
+ * @param txt - The text to embed.
+ * @param sectors - List of sectors (aspects) to analyze.
+ * @param userId - Optional user context for model selection.
+ * @returns {Promise<EmbeddingResult[]>} Array of sector-specific vectors.
+ */
 export async function embedMultiSector(
     id: string,
     txt: string,
     secs: string[],
     chunks?: Array<{ text: string }>,
-    user_id?: string,
+    userId?: string | null,
 ): Promise<EmbeddingResult[]> {
+    const uid = normalizeUserId(userId);
+    // Cache Check (only if no chunks, as chunks complicate cache keys)
+    if ((!chunks || chunks.length <= 1) && CACHE.has(txt)) {
+        const c = CACHE.get(txt)!;
+        if (Date.now() - c.ts < CACHE_TTL) {
+            // LRU: Refresh position
+            CACHE.delete(txt);
+            CACHE.set(txt, c);
+            return c.val;
+        } else {
+            CACHE.delete(txt); // Expired
+        }
+    }
+
     const r: EmbeddingResult[] = [];
-    await q.ins_log.run(id, user_id || null, "multi-sector", "pending", Date.now(), null);
+    await q.insLog.run(id, uid, "multi-sector", "pending", Date.now(), null);
     for (let a = 0; a < 3; a++) {
         try {
-            const simp = env.embed_mode === "simple";
+            const simp = env.embedMode === "simple";
             if (
                 simp &&
-                (env.emb_kind === "gemini" || env.emb_kind === "openai")
+                (env.embKind === "gemini" || env.embKind === "openai")
             ) {
                 if (env.verbose) {
-                    console.error(
+                    logger.debug(
                         `[EMBED] Simple mode (1 batch for ${secs.length} sectors)`,
                     );
                 }
                 const tb: Record<string, string> = {};
                 secs.forEach((s) => (tb[s] = txt));
                 // Use batch embedding with fallback support
-                const b = await emb_batch_with_fallback(tb);
+                const b = await embBatchWithFallback(tb);
                 Object.entries(b).forEach(([s, v]) =>
                     r.push({ sector: s, vector: v, dim: v.length }),
                 );
             } else {
-                if (env.verbose) console.error(`[EMBED] Advanced mode (${secs.length} calls)`);
-                const par = env.adv_embed_parallel && env.emb_kind !== "gemini";
+                if (env.verbose)
+                    logger.debug(
+                        `[EMBED] Advanced mode (${secs.length} calls)`,
+                    );
+                const par = env.advEmbedParallel && env.embKind !== "gemini";
                 if (par) {
-                    const p = secs.map(async (s) => {
-                        let v: number[];
-                        if (chunks && chunks.length > 1) {
-                            const cv: number[][] = [];
-                            for (const c of chunks)
-                                cv.push(await embedForSector(c.text, s));
-                            v = agg_chunks(cv);
-                        } else v = await embedForSector(txt, s);
-                        return { sector: s, vector: v, dim: v.length };
-                    });
-                    r.push(...(await Promise.all(p)));
+                    const CONCURRENCY = env.localEmbeddingDevice === "cpu" ? 2 : 4;
+                    const results: EmbeddingResult[] = [];
+                    for (let i = 0; i < secs.length; i += CONCURRENCY) {
+                        const batch = secs.slice(i, i + CONCURRENCY);
+                        const p = batch.map(async (s) => {
+                            let v: number[];
+                            if (chunks && chunks.length > 1) {
+                                const cv: number[][] = [];
+                                for (const c of chunks)
+                                    cv.push(await embedForSector(c.text, s));
+                                v = aggregateVectors(cv);
+                            } else v = await embedForSector(txt, s);
+                            return { sector: s, vector: v, dim: v.length };
+                        });
+                        results.push(...(await Promise.all(p)));
+                    }
+                    r.push(...results);
                 } else {
                     for (let i = 0; i < secs.length; i++) {
                         const s = secs[i];
@@ -607,100 +814,99 @@ export async function embedMultiSector(
                             const cv: number[][] = [];
                             for (const c of chunks)
                                 cv.push(await embedForSector(c.text, s));
-                            v = agg_chunks(cv);
+                            v = aggregateVectors(cv);
                         } else v = await embedForSector(txt, s);
                         r.push({ sector: s, vector: v, dim: v.length });
-                        if (env.embed_delay_ms > 0 && i < secs.length - 1)
-                            await new Promise((x) =>
-                                setTimeout(x, env.embed_delay_ms),
-                            );
+                        if (env.embedDelayMs > 0 && i < secs.length - 1)
+                            await Bun.sleep(env.embedDelayMs);
                     }
                 }
             }
-            await q.upd_log.run("completed", null, id);
+            await q.updLog.run(id, "completed", null);
+
+            // Update Cache
+            if ((!chunks || chunks.length <= 1) && r.length > 0) {
+                if (CACHE.size >= CACHE_SIZE) {
+                    const first = CACHE.keys().next().value;
+                    if (first) CACHE.delete(first);
+                }
+                CACHE.set(txt, { val: r, ts: Date.now() });
+            }
+
             return r;
         } catch (e) {
             if (a === 2) {
-                await q.upd_log.run(
+                await q.updLog.run(
+                    id,
                     "failed",
                     e instanceof Error ? e.message : String(e),
-                    id,
                 );
                 throw e;
             }
-            await new Promise((x) => setTimeout(x, 1000 * Math.pow(2, a)));
+            await Bun.sleep(1000 * Math.pow(2, a));
         }
     }
     throw new Error("Embedding failed after retries");
 }
 
-const agg_chunks = (vecs: number[][]): number[] => {
-    if (!vecs.length) throw new Error("No vectors");
-    if (vecs.length === 1) return vecs[0];
-    const d = vecs[0].length,
-        r = Array(d).fill(0);
-    for (const v of vecs) for (let i = 0; i < d; i++) r[i] += v[i];
-    return r.map((x) => x / vecs.length);
-};
+// aggregateVectors imported from src/utils/vectors.ts
 
 export const embed = (t: string) => embedForSector(t, "semantic");
-export const getEmbeddingProvider = () => env.emb_kind;
+export const getEmbeddingProvider = () => env.embKind;
 
 export const getEmbeddingInfo = () => {
-    const i: Record<string, any> = {
-        provider: env.emb_kind,
-        fallback_chain: env.embedding_fallback,
-        dimensions: env.vec_dim,
-        mode: env.embed_mode,
-        batch_support:
-            env.embed_mode === "simple" &&
-            (env.emb_kind === "gemini" || env.emb_kind === "openai"),
-        advanced_parallel: env.adv_embed_parallel,
-        embed_delay_ms: env.embed_delay_ms,
+    const i: Record<string, unknown> = {
+        provider: env.embKind,
+        fallbackChain: env.embeddingFallback,
+        dimensions: env.vecDim,
+        mode: env.embedMode,
+        batchSupport:
+            env.embedMode === "simple" &&
+            (env.embKind === "gemini" || env.embKind === "openai"),
+        advancedParallel: env.advEmbedParallel,
+        embedDelayMs: env.embedDelayMs,
     };
-    if (env.emb_kind === "openai") {
-        i.configured = !!env.openai_key;
-        i.base_url = env.openai_base_url;
-        i.model_override = env.openai_model || null;
-        i.batch_api = env.embed_mode === "simple";
+    if (env.embKind === "openai") {
+        i.configured = !!env.openaiKey;
+        i.baseUrl = env.openaiBaseUrl;
+        i.modelOverride = env.openaiModel || null;
+        i.batchApi = env.embedMode === "simple";
         i.models = {
-            episodic: get_model("episodic", "openai"),
-            semantic: get_model("semantic", "openai"),
-            procedural: get_model("procedural", "openai"),
-            emotional: get_model("emotional", "openai"),
-            reflective: get_model("reflective", "openai"),
+            episodic: getModel("episodic", "openai"),
+            semantic: getModel("semantic", "openai"),
+            procedural: getModel("procedural", "openai"),
+            emotional: getModel("emotional", "openai"),
+            reflective: getModel("reflective", "openai"),
         };
-    } else if (env.emb_kind === "gemini") {
-        i.configured = !!env.gemini_key;
-        i.batch_api = env.embed_mode === "simple";
-        i.model = env.gemini_model || "models/text-embedding-004";
+    } else if (env.embKind === "gemini") {
+        i.configured = !!env.geminiKey;
+        i.batchApi = env.embedMode === "simple";
+        i.model = env.geminiModel || "models/text-embedding-004";
         i.models = {
-            episodic: get_model("episodic", "gemini"),
-            semantic: get_model("semantic", "gemini"),
-            procedural: get_model("procedural", "gemini"),
-            emotional: get_model("emotional", "gemini"),
-            reflective: get_model("reflective", "gemini"),
+            episodic: getModel("episodic", "gemini"),
+            semantic: getModel("semantic", "gemini"),
+            procedural: getModel("procedural", "gemini"),
+            emotional: getModel("emotional", "gemini"),
+            reflective: getModel("reflective", "gemini"),
         };
-    } else if (env.emb_kind === "aws") {
+    } else if (env.embKind === "aws") {
         i.configured =
-            !!env.AWS_REGION &&
-            !!env.AWS_ACCESS_KEY_ID &&
-            !!env.AWS_SECRET_ACCESS_KEY;
-        i.batch_api = env.embed_mode === "simple";
+            !!env.awsRegion && !!env.awsAccessKeyId && !!env.awsSecretAccessKey;
+        i.batchApi = env.embedMode === "simple";
         i.model = "amazon.titan-embed-text-v2:0";
-    } else if (env.emb_kind === "ollama") {
+    } else if (env.embKind === "ollama") {
         i.configured = true;
-        i.url = env.ollama_url;
+        i.url = env.ollamaUrl;
         i.models = {
-            episodic: get_model("episodic", "ollama"),
-            semantic: get_model("semantic", "ollama"),
-            procedural: get_model("procedural", "ollama"),
-            emotional: get_model("emotional", "ollama"),
-            reflective: get_model("reflective", "ollama"),
+            episodic: getModel("episodic", "ollama"),
+            semantic: getModel("semantic", "ollama"),
+            procedural: getModel("procedural", "ollama"),
+            emotional: getModel("emotional", "ollama"),
+            reflective: getModel("reflective", "ollama"),
         };
-    } else if (env.emb_kind === "local") {
-        i.configured = !!env.local_model_path;
-        i.path = env.local_model_path;
+    } else if (env.embKind === "local") {
+        i.configured = !!env.localModelPath;
+        i.path = env.localModelPath;
     } else {
         i.configured = true;
         i.type = "synthetic";

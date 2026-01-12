@@ -4,29 +4,17 @@ build-backend = "hatchling.build"
 
 [project]
 name = "openmemory-py"
-version = "2.1.0"
-description = "OpenMemory Python SDK"
+version = "2.3.0"
+description = "Real long-term memory for AI agents (MCP, Temporal Graph, Semantic Search). Self-hosted & Local-first."
+authors = [
+    { name = "Nullure", email = "dev@cavira.app" }
+]
 dependencies = [
-    "fastapi>=0.111.0",
-    "uvicorn>=0.29.0",
-    "pydantic>=2.7.0",
-    "numpy>=1.26",
-    "httpx>=0.27",
-    "google-api-python-client>=2.130.0",
-    "google-auth>=2.29.0",
-    "notion-client>=2.2.0",
-    "msal>=1.28.0",
-    "PyGithub>=2.3.0",
-    "beautifulsoup4>=4.12.0",
-    "pypdf>=4.2.0",
-    "mammoth>=1.8",
-    "markdownify>=0.13",
-    "openai>=1.55.0",
-    "mcp>=1.0.0",
     "psycopg2-binary>=2.9.9",
     "redis>=5.0.4",
     "asyncpg>=0.29.0",
     "cryptography>=42.0.7",
+    "python-dotenv>=1.0.0",
 ]
 
 [tool.hatch.build.targets.wheel]

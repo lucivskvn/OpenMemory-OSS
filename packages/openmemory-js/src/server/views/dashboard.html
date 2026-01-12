@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="OpenMemory: Real-time Memory Graph & Agent Intelligence Console">
+    <title>OpenMemory Console</title>
+    <link rel="icon" type="image/svg+xml"
+        href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%233b82f6' stroke-width='2'><path d='M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+    <!-- Premium Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="/public/css/dashboard.css">
+</head>
+
+<body>
+
+    <!-- Auth Modal -->
+    <div class="modal-overlay active" id="authModal">
+        <div class="modal">
+            <h2 style="text-align: center;">Welcome Back</h2>
+            <p class="text-muted" style="text-align: center; margin-bottom: 24px;">Enter your API Key to access the
+                console.</p>
+            <form id="authForm">
+                <div class="form-group">
+                    <input type="password" id="apiKeyInput" class="input" placeholder="sk-..." required autofocus>
+                </div>
+                <div id="authError"
+                    style="color: var(--error); font-size: 13px; margin-bottom: 16px; display: none; text-align: center;">
+                    Connection failed</div>
+                <button type="submit" class="btn btn-primary" style="width: 100%;">Connect to System</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Header -->
+    <header>
+        <div class="logo">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke-linecap="round"
+                    stroke-linejoin="round" />
+            </svg>
+            OpenMemory <span class="badge badge-success" style="margin-left: 8px;">v2.3</span>
+        </div>
+        <div class="text-sm text-muted">
+            <span id="gpuBadge" class="badge" style="background:#333; color:#aaa; margin-right:8px; display:none;">CPU
+                Mode</span>
+            <span id="modelBadge" class="badge"
+                style="background:var(--accent-glow); color:var(--accent-primary); margin-right:8px; display:none;">-</span>
+            Status: <span style="color: var(--success);">Online</span> <span id="connTime" class="mono"
+                style="margin-left: 8px; opacity: 0.5;">0ms</span>
+        </div>
+    </header>
+
+    <main>
+        <!-- Sidebar -->
+        <aside>
+            <div class="nav-group">
+                <div class="nav-label">Platform</div>
+                <a href="#overview" class="nav-link active" data-tab="tab-overview">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="7" height="7" />
+                        <rect x="14" y="3" width="7" height="7" />
+                        <rect x="14" y="14" width="7" height="7" />
+                        <rect x="3" y="14" width="7" height="7" />
+                    </svg>
+                    Overview
+                </a>
+                <a href="#explorer" class="nav-link" data-tab="tab-explorer">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8" />
+                        <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                    </svg>
+                    Memory Explorer
+                </a>
+                <a href="#temporal" class="nav-link" data-tab="tab-temporal">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10" />
+                        <polyline points="12 6 12 12 16 14" />
+                    </svg>
+                    Timeline
+                </a>
+            </div>
+
+            <div class="nav-group">
+                <div class="nav-label">Configuration</div>
+                <a href="#sources" class="nav-link" data-tab="tab-sources">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+                    </svg>
+                    Sources & Integrations
+                </a>
+                <div class="nav-label">System</div>
+                <a href="#config" class="nav-link" data-tab="tab-config">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path
+                            d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.1a2 2 0 0 1-1-1.72v-.51a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+                        <circle cx="12" cy="12" r="3" />
+                    </svg>
+                    Configuration
+                </a>
+                <!-- Admin Only -->
+                <div id="adminNav" style="display: none;">
+                    <div class="nav-label" style="margin-top: 16px;">Administration</div>
+                    <a href="#admin-users" class="nav-link" data-tab="tab-admin-users">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                            <circle cx="9" cy="7" r="4" />
+                            <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                            <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                        </svg>
+                        User Management
+                    </a>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Content Area -->
+        <div class="content-scroll">
+
+            <!-- OVERVIEW TAB -->
+            <section id="tab-overview" class="section active">
+                <div class="card-header">
+                    <h2>System Overview</h2>
+                    <button class="btn btn-ghost btn-sm" onclick="updateStats()">Refresh</button>
+                </div>
+
+                <div class="metric-grid">
+                    <div class="card metric">
+                        <span class="value" id="statTotal">-</span>
+                        <span class="label">Total Memories</span>
+                    </div>
+                    <div class="card metric">
+                        <span class="value" id="statHistorical">-</span>
+                        <span class="label">Temporal Facts</span>
+                    </div>
+                    <div class="card metric">
+                        <span class="value" id="statQPS">-</span>
+                        <span class="label">Req/Sec (Current)</span>
+                    </div>
+                </div>
+
+                <div class="card" style="margin-top: 24px;">
+                    <div class="card-header">
+                        <h3>System Health</h3>
+                    </div>
+                    <div class="metric-grid">
+                        <div class="card metric" style="background:var(--bg-elevated); border:none;">
+                            <span class="value" id="sysCpu">-</span>
+                            <span class="label">CPU Usage</span>
+                        </div>
+                        <div class="card metric" style="background:var(--bg-elevated); border:none;">
+                            <span class="value" id="sysRam">-</span>
+                            <span class="label">RAM Usage (RSS)</span>
+                        </div>
+                        <div class="card metric" style="background:var(--bg-elevated); border:none;">
+                            <span class="value" id="sysUptime">-</span>
+                            <span class="label">Uptime</span>
+                        </div>
+                        <div class="card metric" style="background:var(--bg-elevated); border:none;">
+                            <span class="value" id="sysJobs">-</span>
+                            <span class="label">Active Jobs</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3>Ingestion Activity (24h)</h3>
+                    </div>
+                    <div class="bars" id="timelineChart"></div>
+                </div>
+            </section>
+
+            <!-- EXPLORER TAB -->
+            <section id="tab-explorer" class="section">
+                <div class="card">
+                    <div class="card-header">
+                        <h2>Memory Explorer</h2>
+                        <div style="display: flex; gap: 8px;">
+                            <input type="text" id="searchQuery" class="input" placeholder="Search content or tags..."
+                                style="width: 300px;">
+                            <button class="btn btn-primary" onclick="searchMemories()">Search</button>
+                        </div>
+                    </div>
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th width="100">ID</th>
+                                    <th>Content</th>
+                                    <th width="120">Sector</th>
+                                    <th width="80">Salience</th>
+                                </tr>
+                            </thead>
+                            <tbody id="explorerTable">
+                                <tr>
+                                    <td colspan="4"
+                                        style="text-align: center; color: var(--text-tertiary); padding: 32px;">Enter a
+                                        query to search memories</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TEMPORAL TAB (Knowledge Graph Manager) -->
+            <section id="tab-temporal" class="section">
+                <!-- Toolbar -->
+                <div class="card" style="margin-bottom: 24px;">
+                    <div class="card-header" style="margin-bottom: 0;">
+                        <div style="display: flex; align-items: center; gap: 16px;">
+                            <h2>Graph Manager</h2>
+                            <div class="btn-group"
+                                style="background: var(--bg-elevated); padding: 4px; border-radius: 6px;">
+                                <button class="btn btn-sm btn-primary" id="btnModeFacts"
+                                    onclick="setTemporalMode('facts')">Facts</button>
+                                <button class="btn btn-sm btn-ghost" id="btnModeEdges"
+                                    onclick="setTemporalMode('edges')">Edges</button>
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 8px;">
+                            <input type="text" id="temporalSearch" class="input"
+                                placeholder="Search Subject/Predicate..." style="width: 250px;">
+                            <button class="btn btn-primary" onclick="loadTemporal()">Search</button>
+                            <button class="btn btn-success" style="background: var(--success); color: #fff;"
+                                onclick="openTemporalModal()">+ Add New</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Facts Table -->
+                <div id="panelFacts" class="card">
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th width="80">ID</th>
+                                    <th>Subject</th>
+                                    <th>Predicate</th>
+                                    <th>Object</th>
+                                    <th width="80">Conf.</th>
+                                    <th width="150">Validity</th>
+                                    <th width="120">Updated</th>
+                                    <th width="100">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="factsTable">
+                                <tr>
+                                    <td colspan="7" class="text-center p-4">Loading facts...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="pagination"
+                        style="margin-top: 16px; display: flex; justify-content: flex-end; gap: 8px;">
+                        <button class="btn btn-ghost btn-sm" onclick="changeTemporalPage(-1)">Previous</button>
+                        <span id="temporalPageNum"
+                            style="display: flex; align-items: center; color: var(--text-secondary);">Page 1</span>
+                        <button class="btn btn-ghost btn-sm" onclick="changeTemporalPage(1)">Next</button>
+                    </div>
+                </div>
+
+                <!-- Edges Table -->
+                <div id="panelEdges" class="card" style="display: none;">
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th width="80">ID</th>
+                                    <th>Source ID</th>
+                                    <th>Target ID</th>
+                                    <th>Relation</th>
+                                    <th width="80">Weight</th>
+                                    <th width="150">Validity</th>
+                                    <th width="120">Updated</th>
+                                    <th width="100">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="edgesTable">
+                                <tr>
+                                    <td colspan="7" class="text-center p-4">Loading edges...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="pagination"
+                        style="margin-top: 16px; display: flex; justify-content: flex-end; gap: 8px;">
+                        <button class="btn btn-ghost btn-sm" onclick="changeTemporalPage(-1)">Previous</button>
+                        <span id="edgePageNum"
+                            style="display: flex; align-items: center; color: var(--text-secondary);">Page 1</span>
+                        <button class="btn btn-ghost btn-sm" onclick="changeTemporalPage(1)">Next</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Modals for Graph Manager -->
+
+            <!-- Fact Modal -->
+            <div class="modal-overlay" id="factModal">
+                <div class="modal" style="max-width: 500px;">
+                    <h2 id="factModalTitle">Add Temporal Fact</h2>
+                    <form id="factForm" style="margin-top: 20px;">
+                        <input type="hidden" id="factId">
+                        <div class="form-group">
+                            <label class="form-label">Subject</label>
+                            <input type="text" id="factSubject" class="input" required placeholder="e.g. user_123">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Predicate</label>
+                            <input type="text" id="factPredicate" class="input" required
+                                placeholder="e.g. prefers_theme">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Object</label>
+                            <input type="text" id="factObject" class="input" required placeholder="e.g. dark_mode">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Confidence (0.0 - 1.0)</label>
+                            <input type="number" id="factConfidence" class="input" step="0.1" min="0" max="1"
+                                value="1.0">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Metadata (JSON)</label>
+                            <textarea id="factMetadata" class="input" rows="3" placeholder="{}"></textarea>
+                        </div>
+                        <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 24px;">
+                            <button type="button" class="btn btn-ghost"
+                                onclick="closeModal('factModal')">Cancel</button>
+                            <button type="submit" class="btn btn-primary">Save Fact</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Edge Modal -->
+            <div class="modal-overlay" id="edgeModal">
+                <div class="modal" style="max-width: 500px;">
+                    <h2 id="edgeModalTitle">Add Temporal Edge</h2>
+                    <form id="edgeForm" style="margin-top: 20px;">
+                        <input type="hidden" id="edgeId">
+                        <div class="form-group">
+                            <label class="form-label">Source ID</label>
+                            <input type="text" id="edgeSource" class="input" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Target ID</label>
+                            <input type="text" id="edgeTarget" class="input" required>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Relation Type</label>
+                            <input type="text" id="edgeRelation" class="input" required placeholder="e.g. causes">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Weight (0.0 - 1.0)</label>
+                            <input type="number" id="edgeWeight" class="input" step="0.1" min="0" max="1" value="1.0">
+                        </div>
+                        <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 24px;">
+                            <button type="button" class="btn btn-ghost"
+                                onclick="closeModal('edgeModal')">Cancel</button>
+                            <button type="submit" class="btn btn-primary">Save Edge</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <!-- SOURCES TAB -->
+            <section id="tab-sources" class="section">
+                <div class="card">
+                    <div class="card-header">
+                        <h2>Sources & Integrations</h2>
+                        <button class="btn btn-primary btn-sm" onclick="showAddSourceModal()">+ Add Source</button>
+                    </div>
+                    <div class="table-container">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Type</th>
+                                    <th>Status</th>
+                                    <th>Last Updated</th>
+                                    <th width="80">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="sourcesTable"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card" id="addSourcePanel" style="display:none; border-color: var(--accent-primary);">
+                    <div class="card-header">
+                        <h3>Configure New Source</h3>
+                    </div>
+                    <form id="addSourceForm">
+                        <div class="form-group">
+                            <label class="form-label">Source Type</label>
+                            <select id="sourceType" class="select">
+                                <option value="github">GitHub</option>
+                                <option value="notion">Notion</option>
+                                <option value="google_drive">Google Drive</option>
+                                <option value="openai">LLM (OpenAI)</option>
+                                <option value="anthropic">LLM (Anthropic)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Configuration (JSON)</label>
+                            <textarea id="sourceConfig" class="input" rows="5" placeholder='{"apiKey": "..."}'
+                                style="font-family: monospace;"></textarea>
+                        </div>
+                        <div style="display: flex; gap: 10px;">
+                            <button type="submit" class="btn btn-primary">Save Configuration</button>
+                            <button type="button" class="btn btn-ghost"
+                                onclick="document.getElementById('addSourcePanel').style.display='none'">Cancel</button>
+                        </div>
+                    </form>
+                </div>
+            </section>
+
+            <!-- CONFIG TAB (System) -->
+            <section id="tab-config" class="section">
+                <div class="card">
+                    <div class="card-header">
+                        <h2>AI Model Configuration</h2>
+                    </div>
+                    <div class="metric-grid">
+                        <div class="card metric" style="background:var(--bg-elevated); border:none;">
+                            <span class="value" id="currentModel" style="font-size:20px;">-</span>
+                            <span class="label">Current LLM</span>
+                        </div>
+                        <div class="card metric" style="background:var(--bg-elevated); border:none;">
+                            <span class="value" id="currentAccel" style="font-size:20px;">-</span>
+                            <span class="label">Hardware Acceleration</span>
+                        </div>
+                    </div>
+
+                    <form id="modelConfigForm" style="margin-top:24px;">
+                        <div class="form-group">
+                            <label class="form-label">Switch Local Model (Ollama)</label>
+                            <div style="display:flex; gap:10px;">
+                                <select id="modelSelect" class="select">
+                                    <option value="llama3.2">Llama 3.2 (Recommended)</option>
+                                    <option value="ministral">Mistral / Ministral</option>
+                                    <option value="gemma2:2b">Gemma 2 (2B)</option>
+                                    <option value="qwen2.5:3b">Qwen 2.5 (3B)</option>
+                                    <option value="custom">Custom...</option>
+                                </select>
+                                <input type="text" id="customModelInput" class="input" placeholder="Model Name"
+                                    style="display:none;">
+                            </div>
+                            <p class="text-muted text-xs" style="margin-top:8px;">Note: Identifying a new model may
+                                trigger a download (pull) on the server. Please wait patiently.</p>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Update Configuration</button>
+                    </form>
+                </div>
+            </section>
+
+            <!-- ADMIN: USERS -->
+            <section id="tab-admin-users" class="section">
+                <div class="metric-grid">
+                    <div class="card">
+                        <h3>Create User</h3>
+                        <form id="regUserForm"
+                            style="display: flex; flex-direction: column; gap: 16px; margin-top: 16px;">
+                            <div>
+                                <label class="form-label">User ID (Email/Handle)</label>
+                                <input type="text" id="regUserId" class="input" required>
+                            </div>
+                            <div>
+                                <label class="form-label">Initial Scope</label>
+                                <select id="regScope" class="select">
+                                    <option value="user">User (Standard)</option>
+                                    <option value="admin">Administrator</option>
+                                </select>
+                            </div>
+                            <button type="submit" class="btn btn-primary">Create User</button>
+                            <div id="regResult" class="text-sm"></div>
+                        </form>
+                    </div>
+
+                    <div class="card" style="grid-column: span 2;">
+                        <h3>User & Key Management</h3>
+                        <button class="btn btn-ghost btn-sm" onclick="fetchAllUsers()"
+                            style="margin-bottom: 12px;">Refresh list</button>
+                        <div class="table-container">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>User ID</th>
+                                        <th>Role</th>
+                                        <th>Status</th>
+                                        <th width="100">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="usersTable"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        </div>
+    </main>
+
+    <script src="/public/js/dashboard.js"></script>
+</body>
+
+</html>

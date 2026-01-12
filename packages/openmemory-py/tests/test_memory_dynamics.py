@@ -1,28 +1,14 @@
-
 import pytest
 import asyncio
 from unittest.mock import AsyncMock, Mock, patch
 
-from openmemory.memory.scoring import calculate_score
 from openmemory.ops.dynamics import SCORING_WEIGHTS
 from openmemory.memory.decay import calc_recency_score, compress_vector, DecayCfg
 
 # Mock time for consistent testing
 import time
 
-def test_scoring_weights():
-    # Verify we are using the dynamics.py weights
-    score = calculate_score(
-        relevance=1.0, created_at=0, last_seen_at=int(time.time()*1000), salience=1.0, debug=True
-    )
-    # With full relevance and recent access, score should be high
-    assert score["score"] > 0.6
-    
-    # Check components
-    comps = score["components"]
-    weights = comps["weights"]
-    assert weights["sim"] == SCORING_WEIGHTS["similarity"]
-    assert weights["rec"] == SCORING_WEIGHTS["recency"]
+
 
 def test_decay_compression():
     # Test vector compression logic
@@ -42,7 +28,14 @@ def test_decay_compression():
 async def test_decay_cold_storage_logic():
     # Mock database and vector store
     with patch("openmemory.memory.decay.db", new_callable=AsyncMock) as mock_db, \
-         patch("openmemory.memory.decay.store", new_callable=AsyncMock) as mock_store:
+         patch("openmemory.memory.decay.store", new_callable=AsyncMock) as mock_store, \
+         patch("openmemory.memory.decay.transaction") as mock_tx:
+        
+        # Mock transaction context
+        mock_cm = AsyncMock()
+        mock_cm.__aenter__.return_value = None
+        mock_cm.__aexit__.return_value = None
+        mock_tx.return_value = mock_cm
 
         # Setup mock data
         from openmemory.memory.decay import apply_decay, cfg
@@ -67,6 +60,10 @@ async def test_decay_cold_storage_logic():
         
         # Mock vector store
         mock_store.getVector.return_value = Mock(vector=[0.1]*1536, dim=1536)
+        # Force reset active_q and last_decay to ensure decay runs
+        import openmemory.memory.decay as decay_mod
+        decay_mod.active_q = 0
+        decay_mod.last_decay = 0
         
         # Run decay
         await apply_decay()

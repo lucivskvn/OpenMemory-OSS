@@ -1,140 +1,177 @@
-import { env } from '../core/cfg';
+/**
+ * Base Source Connector Framework for OpenMemory.
+ * Provides abstraction for authentication, rate limiting, retries, and ingestion flows.
+ */
+import { normalizeUserId } from "../utils";
+import { logger } from "../utils/logger";
 
 // -- exceptions --
 
 /**
  * Base error class for all Source/Connector related exceptions.
  */
-export class source_error extends Error {
+export class SourceError extends Error {
     source?: string;
     cause?: Error;
 
     constructor(msg: string, source?: string, cause?: Error) {
         super(source ? `[${source}] ${msg}` : msg);
-        this.name = 'source_error';
+        this.name = "SourceError";
         this.source = source;
         this.cause = cause;
     }
 }
 
-export class source_auth_error extends source_error {
+export class SourceAuthError extends SourceError {
     constructor(msg: string, source?: string, cause?: Error) {
         super(msg, source, cause);
-        this.name = 'source_auth_error';
+        this.name = "SourceAuthError";
     }
 }
 
-export class source_config_error extends source_error {
+export class SourceConfigError extends SourceError {
     constructor(msg: string, source?: string, cause?: Error) {
         super(msg, source, cause);
-        this.name = 'source_config_error';
+        this.name = "SourceConfigError";
     }
 }
 
-export class source_rate_limit_error extends source_error {
-    retry_after?: number;
+export class SourceRateLimitError extends SourceError {
+    retryAfter?: number;
 
-    constructor(msg: string, retry_after?: number, source?: string) {
+    constructor(msg: string, retryAfter?: number, source?: string) {
         super(msg, source);
-        this.name = 'source_rate_limit_error';
-        this.retry_after = retry_after;
+        this.name = "SourceRateLimitError";
+        this.retryAfter = retryAfter;
     }
 }
 
-export class source_fetch_error extends source_error {
+export class SourceFetchError extends SourceError {
     constructor(msg: string, source?: string, cause?: Error) {
         super(msg, source, cause);
-        this.name = 'source_fetch_error';
+        this.name = "SourceFetchError";
     }
 }
 
 // -- types --
 
-export interface source_item {
+export interface SourceItem {
     id: string;
     name: string;
     type: string;
-    [key: string]: any;
+    [key: string]: unknown;
 }
 
-export interface source_content {
+export interface SourceContent {
     id: string;
     name: string;
     type: string;
     text: string;
     data: string | Buffer;
-    meta: Record<string, any>;
+    metadata: Record<string, unknown>;
 }
 
-export interface source_config {
-    max_retries?: number;
-    requests_per_second?: number;
-    log_level?: 'debug' | 'info' | 'warn' | 'error';
+export interface SourceConfig {
+    maxRetries?: number;
+    requestsPerSecond?: number;
+    logLevel?: "debug" | "info" | "warn" | "error";
 }
 
 // -- rate limiter --
 
-export class rate_limiter {
-    private rps: number;
+/**
+ * Token bucket rate limiter implementation.
+ * Ensures that requests do not exceed a specified rate per second.
+ */
+export class RateLimiter {
+    private requestsPerSecond: number;
     private tokens: number;
-    private last_update: number;
+    private lastUpdate: number;
 
-    constructor(requests_per_second: number = 10) {
-        this.rps = requests_per_second;
-        this.tokens = requests_per_second;
-        this.last_update = Date.now();
+    /**
+     * @param requestsPerSecond Max requests allowed per second. Default 10.
+     */
+    constructor(requestsPerSecond: number = 10) {
+        this.requestsPerSecond = requestsPerSecond;
+        this.tokens = requestsPerSecond;
+        this.lastUpdate = Date.now();
     }
 
+    /**
+     * Acquire a token. Blocks if rate limit is exceeded.
+     */
     async acquire(): Promise<void> {
         const now = Date.now();
-        const elapsed = (now - this.last_update) / 1000;
-        this.tokens = Math.min(this.rps, this.tokens + elapsed * this.rps);
-        this.last_update = now;
+        const elapsed = (now - this.lastUpdate) / 1000;
 
-        if (this.tokens < 1) {
-            const wait_time = ((1 - this.tokens) / this.rps) * 1000;
-            await new Promise(r => setTimeout(r, wait_time));
-            this.tokens = 0;
-        } else {
-            this.tokens -= 1;
+        // Refill tokens
+        this.tokens = Math.min(
+            this.requestsPerSecond,
+            this.tokens + elapsed * this.requestsPerSecond,
+        );
+        this.lastUpdate = now;
+
+        // Claim a token immediately (can go negative for queueing)
+        this.tokens -= 1;
+
+        if (this.tokens < 0) {
+            // How long to wait until this token is available?
+            // If tokens = -1, wait = 1/RPS
+            // If tokens = -5, wait = 5/RPS
+            const waitTime = Math.abs(this.tokens / this.requestsPerSecond) * 1000;
+
+            if (typeof Bun !== 'undefined' && Bun.sleep) {
+                await Bun.sleep(waitTime);
+            } else {
+                await new Promise((r) => setTimeout(r, waitTime));
+            }
         }
     }
 }
 
 // -- retry helper --
 
-export async function with_retry<T>(
+/**
+ * Executes a function with exponential backoff retry logic.
+ * @param fn Async function to execute
+ * @param maxAttempts Maximum number of attempts (default 3)
+ * @param baseDelay Initial delay in ms (default 1000)
+ * @param maxDelay Maximum delay cap in ms (default 60000)
+ */
+export async function withRetry<T>(
     fn: () => Promise<T>,
-    max_attempts: number = 3,
-    base_delay: number = 1000,
-    max_delay: number = 60000
+    maxAttempts: number = 3,
+    baseDelay: number = 1000,
+    maxDelay: number = 60000,
 ): Promise<T> {
-    let last_err: Error | null = null;
+    let lastError: Error | null = null;
 
-    for (let attempt = 0; attempt < max_attempts; attempt++) {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
         try {
             return await fn();
-        } catch (e: any) {
-            last_err = e;
+        } catch (e: unknown) {
+            lastError = e instanceof Error ? e : new Error(String(e));
 
-            if (e instanceof source_auth_error) {
+            if (e instanceof SourceAuthError) {
                 throw e; // don't retry auth errors
             }
 
-            if (attempt < max_attempts - 1) {
-                const delay = e instanceof source_rate_limit_error && e.retry_after
-                    ? e.retry_after * 1000
-                    : Math.min(base_delay * Math.pow(2, attempt), max_delay);
+            if (attempt < maxAttempts - 1) {
+                const delay =
+                    e instanceof SourceRateLimitError && e.retryAfter
+                        ? e.retryAfter * 1000
+                        : Math.min(baseDelay * Math.pow(2, attempt), maxDelay);
 
-                if (env.verbose) {
-                    console.warn(`[retry] attempt ${attempt + 1}/${max_attempts} failed: ${e.message}, retrying in ${delay}ms`);
-                }
-                await new Promise(r => setTimeout(r, delay));
+                const msg = e instanceof Error ? e.message : String(e);
+                logger.warn(
+                    `[RETRY] Attempt ${attempt + 1}/${maxAttempts} failed: ${msg}. Retrying in ${delay}ms`,
+                );
+                await new Promise((r) => setTimeout(r, delay));
             }
         }
     }
 
-    throw last_err;
+    throw lastError;
 }
 
 // -- base source --
@@ -144,119 +181,183 @@ export async function with_retry<T>(
  * Handles:
  * - Connection management
  * - Rate limiting
- * - Retry logic
- * - Common Ingestion flow
+ * Base class for all OpenMemory Source Connectors.
+ * Provides a standardized interface for authentication, rate limiting, and item ingestion.
+ * Implements a "Dashboard-First" integration strategy, prioritizing database-backed config.
+ *
+ * @template TCreds - The credential type for the source.
+ * @template TFilters - The filter type for listing items.
  */
-export abstract class base_source {
-    name: string = 'base';
-    user_id: string;
+export abstract class BaseSource<
+    TCreds = Record<string, unknown>,
+    TFilters = Record<string, unknown>,
+> {
+    name: string = "base";
+    userId: string | null | undefined;
     protected _connected: boolean = false;
-    protected _max_retries: number;
-    protected _rate_limiter: rate_limiter;
+    protected _maxRetries: number;
+    protected _rateLimiter: RateLimiter;
 
-    constructor(user_id?: string, config?: source_config) {
-        this.user_id = user_id || 'anonymous';
-        this._max_retries = config?.max_retries || 3;
-        this._rate_limiter = new rate_limiter(config?.requests_per_second || 10);
+    constructor(userId?: string | null, config?: SourceConfig) {
+        this.userId = normalizeUserId(userId);
+        this._maxRetries = config?.maxRetries || 3;
+        const rps = config?.requestsPerSecond || 5; // Sustainabilty default: 5 req/sec
+        this._rateLimiter = new RateLimiter(rps);
+    }
+
+    get rateLimiter(): RateLimiter {
+        return this._rateLimiter;
     }
 
     get connected(): boolean {
         return this._connected;
     }
 
-    async connect(creds?: Record<string, any>): Promise<boolean> {
-        if (env.verbose) console.log(`[${this.name}] connecting...`);
+    /**
+     * Authenticates the source connector.
+     * Automatically hydrates credentials from the database (Dashboard-First) if available.
+     *
+     * @param creds - Explicitly provided credentials (optional).
+     * @returns {Promise<boolean>} True if connection succeeded.
+     * @throws {SourceAuthError} If authentication fails.
+     */
+    async connect(creds?: TCreds): Promise<boolean> {
+        logger.info(`[${this.name}] Connecting (centralized auth)...`);
         try {
-            const result = await this._connect(creds || {});
+            // 1. Try to hydrate from DB first (Dashboard-First Integration Strategy)
+            const { getPersistedConfig } = await import("../core/persisted_cfg");
+            const persisted = await getPersistedConfig<TCreds>(
+                this.userId ?? null,
+                this.name,
+            );
+
+            // 2. Priority: Provided > Persisted > (Subclass fallback to Env)
+            const finalCreds = { ...persisted, ...creds } as TCreds;
+
+            const result = await this._connect(finalCreds);
             this._connected = result;
-            if (result && env.verbose) {
-                console.log(`[${this.name}] connected`);
+            if (result) {
+                logger.info(`[${this.name}] Connected successfully`);
             }
             return result;
-        } catch (e: any) {
-            console.error(`[${this.name}] connection failed: ${e.message}`);
-            throw new source_auth_error(e.message, this.name, e);
+        } catch (e: unknown) {
+            const err = e instanceof Error ? e : new Error(String(e));
+            logger.error(`[${this.name}] Connection failed: ${err.message}`);
+            throw new SourceAuthError(err.message, this.name, err);
         }
     }
 
     async disconnect(): Promise<void> {
         this._connected = false;
-        if (env.verbose) console.log(`[${this.name}] disconnected`);
+        logger.info(`[${this.name}] Disconnected`);
     }
 
-    async list_items(filters?: Record<string, any>): Promise<source_item[]> {
+    async listItems(filters?: TFilters): Promise<SourceItem[]> {
         if (!this._connected) {
             await this.connect();
         }
 
-        await this._rate_limiter.acquire();
+        await this._rateLimiter.acquire();
 
         try {
-            const items = await with_retry(
-                () => this._list_items(filters || {}),
-                this._max_retries
+            const items = await withRetry(
+                () => this._listItems(filters || ({} as TFilters)),
+                this._maxRetries,
             );
-            if (env.verbose) console.log(`[${this.name}] found ${items.length} items`);
+            logger.info(`[${this.name}] Found ${items.length} items`);
             return items;
-        } catch (e: any) {
-            throw new source_fetch_error(e.message, this.name, e);
+        } catch (e: unknown) {
+            const err = e instanceof Error ? e : new Error(String(e));
+            throw new SourceFetchError(err.message, this.name, err);
         }
     }
 
-    async fetch_item(item_id: string): Promise<source_content> {
+    async fetchItem(itemId: string): Promise<SourceContent> {
         if (!this._connected) {
             await this.connect();
         }
 
-        await this._rate_limiter.acquire();
+        await this._rateLimiter.acquire();
 
         try {
-            return await with_retry(
-                () => this._fetch_item(item_id),
-                this._max_retries
+            return await withRetry(
+                () => this._fetchItem(itemId),
+                this._maxRetries,
             );
-        } catch (e: any) {
-            throw new source_fetch_error(e.message, this.name, e);
+        } catch (e: unknown) {
+            const err = e instanceof Error ? e : new Error(String(e));
+            throw new SourceFetchError(err.message, this.name, err);
         }
     }
 
-    async ingest_all(filters?: Record<string, any>): Promise<string[]> {
-        const { ingestDocument } = await import('../ops/ingest');
+    async ingestAll(filters?: TFilters): Promise<{
+        successfulIds: string[];
+        errors: { id: string; error: string }[];
+    }> {
+        const { ingestDocument } = await import("../ops/ingest");
 
-        const items = await this.list_items(filters);
-        const ids: string[] = [];
+        const items = await this.listItems(filters);
+        const successfulIds: string[] = [];
         const errors: { id: string; error: string }[] = [];
+        const CONCURRENCY_LIMIT = 5;
 
-        if (env.verbose) console.log(`[${this.name}] ingesting ${items.length} items...`);
+        logger.info(`[${this.name}] Ingesting ${items.length} items (pool concurrency=${CONCURRENCY_LIMIT})...`);
 
-        for (let i = 0; i < items.length; i++) {
-            const item = items[i];
-            try {
-                const content = await this.fetch_item(item.id);
-                const result = await ingestDocument(
-                    content.type || 'text',
-                    content.data || content.text || '',
-                    { source: this.name, ...content.meta },
-                    undefined,
-                    this.user_id
-                );
-                ids.push(result.root_memory_id);
-            } catch (e: any) {
-                console.warn(`[${this.name}] failed to ingest ${item.id}: ${e.message}`);
-                errors.push({ id: item.id, error: e.message });
-            }
-        }
+        let activeCount = 0;
+        let index = 0;
 
-        if (env.verbose) console.log(`[${this.name}] ingested ${ids.length} items, ${errors.length} errors`);
-        return ids;
+        return new Promise((resolve) => {
+            const next = async () => {
+                if (index >= items.length && activeCount === 0) {
+                    logger.info(`[${this.name}] Ingested ${successfulIds.length} items, ${errors.length} errors`);
+                    resolve({ successfulIds, errors });
+                    return;
+                }
+
+                while (activeCount < CONCURRENCY_LIMIT && index < items.length) {
+                    const item = items[index++];
+                    activeCount++;
+
+                    void (async () => {
+                        try {
+                            const content = await this.fetchItem(item.id);
+                            const result = await ingestDocument(
+                                content.type || "text",
+                                content.data || content.text || "",
+                                { source: this.name, ...content.metadata },
+                                undefined,
+                                this.userId,
+                            );
+                            successfulIds.push(result.rootMemoryId);
+                        } catch (e: unknown) {
+                            const err = e instanceof Error ? e : new Error(String(e));
+                            logger.warn(
+                                `[${this.name}] Failed to ingest ${item.id}: ${err.message}`,
+                            );
+                            errors.push({ id: item.id, error: err.message });
+                        } finally {
+                            activeCount--;
+                            void next();
+                        }
+                    })();
+                }
+            };
+
+            void next();
+        });
+
+        logger.info(
+            `[${this.name}] Ingested ${successfulIds.length} items, ${errors.length} errors`,
+        );
+        return { successfulIds, errors };
     }
 
-    protected _get_env(key: string, default_val?: string): string | undefined {
+    protected _getEnv(key: string, default_val?: string): string | undefined {
         return process.env[key] || default_val;
     }
 
     // abstract methods for subclasses
-    protected abstract _connect(creds: Record<string, any>): Promise<boolean>;
-    protected abstract _list_items(filters: Record<string, any>): Promise<source_item[]>;
-    protected abstract _fetch_item(item_id: string): Promise<source_content>;
+    protected abstract _connect(creds: TCreds): Promise<boolean>;
+    protected abstract _listItems(filters: TFilters): Promise<SourceItem[]>;
+    protected abstract _fetchItem(itemId: string): Promise<SourceContent>;
 }

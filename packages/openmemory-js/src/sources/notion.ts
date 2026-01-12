@@ -1,165 +1,304 @@
 /**
- * notion source for openmemory - production grade
- * requires: @notionhq/client
- * env vars: NOTION_API_KEY
+ * Notion Source Connector for OpenMemory.
+ * Ingests pages and databases from Notion workspaces.
+ * Requires: @notionhq/client
+ * Environment: NOTION_API_KEY (optional fallback)
  */
 
-import { base_source, source_config_error, source_item, source_content } from './base';
-import type { Client } from '@notionhq/client';
+import type { Client } from "@notionhq/client";
+
+import { env } from "../core/cfg";
+import { logger } from "../utils/logger";
+import {
+    BaseSource,
+    SourceConfigError,
+    SourceContent,
+    SourceFetchError,
+    SourceItem,
+} from "./base";
 
 interface NotionPage {
     id: string;
     url: string;
     last_edited_time: string;
-    properties: Record<string, any>;
+    properties: Record<string, unknown>;
 }
 
 interface NotionBlock {
     type: string;
-    [key: string]: any;
+    [key: string]: unknown;
 }
 
-export class notion_source extends base_source {
-    override name = 'notion';
+interface NotionCreds {
+    apiKey?: string;
+}
+
+interface NotionFilters {
+    databaseId?: string;
+}
+
+/**
+ * Notion Source Connector.
+ * Ingests pages and databases from Notion.
+ */
+export class NotionSource extends BaseSource<NotionCreds, NotionFilters> {
+    override name = "notion";
     private client: Client | null = null;
 
-    async _connect(creds: Record<string, any>): Promise<boolean> {
+    /**
+     * Authenticates with Notion API.
+     * Uses `process.env.NOTION_API_KEY` or passed `apiKey`.
+     */
+    async _connect(creds: NotionCreds): Promise<boolean> {
         let ClientConstructor: typeof Client;
         try {
-            ClientConstructor = await import('@notionhq/client').then(m => m.Client);
+            ClientConstructor = await import("@notionhq/client").then(
+                (m) => m.Client,
+            );
         } catch {
-            throw new source_config_error('missing deps: npm install @notionhq/client', this.name);
+            throw new SourceConfigError(
+                "missing deps: npm install @notionhq/client",
+                this.name,
+            );
         }
 
-        const api_key = (creds.api_key as string) || process.env.NOTION_API_KEY;
+        // Security: BaseSource.connect has already hydrated creds from Persisted Config
+        // Fallback to env.notionApiKey if no apiKey provided at all
+        const apiKey = creds.apiKey || env.notionApiKey;
 
-        if (!api_key) {
-            throw new source_config_error('no credentials: set NOTION_API_KEY', this.name);
+        if (!apiKey) {
+            throw new SourceConfigError(
+                "Notion API key is required (provide in Dashboard or OM_NOTION_API_KEY)",
+                this.name,
+            );
         }
 
-        this.client = new ClientConstructor({ auth: api_key });
+        this.client = new ClientConstructor({ auth: apiKey });
         return true;
     }
 
-    private extract_title(page: NotionPage): string {
+    private extractTitle(page: NotionPage): string {
         const props = page.properties || {};
-        for (const prop of Object.values(props) as any[]) {
-            if (prop && typeof prop === 'object' && prop.type === 'title' && Array.isArray(prop.title) && prop.title[0]) {
-                return prop.title[0].plain_text || '';
+        for (const prop of Object.values(props)) {
+            const p = prop as {
+                type: string;
+                title?: { plain_text: string }[];
+            };
+            if (
+                p &&
+                typeof p === "object" &&
+                p.type === "title" &&
+                Array.isArray(p.title) &&
+                p.title[0]
+            ) {
+                return p.title[0].plain_text || "";
             }
         }
-        return '';
+        return "";
     }
 
-    async _list_items(filters: Record<string, any>): Promise<source_item[]> {
-        if (!this.client) throw new source_config_error('not connected', this.name);
+    /**
+     * Lists Pages or Database Entries.
+     * If `databaseId` is provided, queries that specific database.
+     * Otherwise, searches for all accessible pages (Search API).
+     *
+     * @param filters - Filter constraints (databaseId).
+     */
+    async _listItems(filters: NotionFilters): Promise<SourceItem[]> {
+        if (!this.client)
+            throw new SourceConfigError("not connected", this.name);
 
-        const results: source_item[] = [];
+        const results: SourceItem[] = [];
 
-        if (filters.database_id) {
-            let has_more = true;
-            let start_cursor: string | undefined;
+        if (filters.databaseId) {
+            let hasMore = true;
+            let startCursor: string | undefined;
 
-            while (has_more) {
-                const resp: any = await this.client.databases.query({
-                    database_id: filters.database_id as string,
-                    start_cursor
+            while (hasMore) {
+                const resp = await (this.client.databases as any).query({
+                    database_id: filters.databaseId,
+                    start_cursor: startCursor,
                 });
 
-                for (const page of resp.results as NotionPage[]) {
-                    results.push({
-                        id: page.id,
-                        name: this.extract_title(page) || 'Untitled',
-                        type: 'page',
-                        url: page.url || '',
-                        last_edited: page.last_edited_time
-                    });
+                for (const page of resp.results) {
+                    if ("properties" in page) {
+                        const p = page as unknown as NotionPage;
+                        results.push({
+                            id: page.id,
+                            name: this.extractTitle(p) || "Untitled",
+                            type: "page",
+                            url: p.url || "",
+                            lastEdited: p.last_edited_time,
+                        });
+                    }
                 }
 
-                has_more = resp.has_more;
-                start_cursor = resp.next_cursor || undefined;
+                if (results.length >= 1000) {
+                    logger.warn(`[notion] Hit hard limit of 1000 items`);
+                    break;
+                }
+
+                hasMore = resp.has_more;
+                startCursor = resp.next_cursor || undefined;
+                await this.rateLimiter.acquire();
             }
         } else {
-            const resp: any = await this.client.search({ filter: { property: 'object', value: 'page' } });
+            let hasMore = true;
+            let startCursor: string | undefined;
 
-            for (const page of resp.results as NotionPage[]) {
-                results.push({
-                    id: page.id,
-                    name: this.extract_title(page) || 'Untitled',
-                    type: 'page',
-                    url: page.url || '',
-                    last_edited: page.last_edited_time
+            while (hasMore) {
+                const resp = await this.client.search({
+                    filter: { property: "object", value: "page" },
+                    start_cursor: startCursor,
                 });
+
+                for (const page of resp.results) {
+                    if ("properties" in page) {
+                        const p = page as unknown as NotionPage;
+                        results.push({
+                            id: page.id,
+                            name: this.extractTitle(p) || "Untitled",
+                            type: "page",
+                            url: p.url || "",
+                            lastEdited: p.last_edited_time,
+                        });
+                    }
+                }
+
+                if (results.length >= 1000) {
+                    logger.warn(`[notion] Hit hard limit of 1000 items (search)`);
+                    break;
+                }
+
+                hasMore = resp.has_more;
+                startCursor = resp.next_cursor || undefined;
+                await this.rateLimiter.acquire();
             }
         }
 
         return results;
     }
 
-    private block_to_text(block: NotionBlock): string {
+    private blockToText(block: NotionBlock): string {
         const texts: string[] = [];
         const type = block.type;
 
-        const text_blocks = ['paragraph', 'heading_1', 'heading_2', 'heading_3',
-            'bulleted_list_item', 'numbered_list_item', 'quote', 'callout'];
+        const textBlocks = [
+            "paragraph",
+            "heading_1",
+            "heading_2",
+            "heading_3",
+            "bulleted_list_item",
+            "numbered_list_item",
+            "quote",
+            "callout",
+        ];
 
-        if (text_blocks.includes(type)) {
-            const rich_text = (block[type] as any)?.rich_text || [];
-            for (const rt of rich_text) {
-                texts.push(rt.plain_text || '');
+        if (textBlocks.includes(type)) {
+            const content = block[type as keyof NotionBlock] as {
+                rich_text?: { plain_text: string }[];
+            };
+            const richText = content?.rich_text || [];
+            for (const rt of richText) {
+                texts.push(rt.plain_text || "");
             }
-        } else if (type === 'code') {
-            const rich_text = block.code?.rich_text || [];
-            const lang = block.code?.language || '';
-            const code = rich_text.map((rt: any) => rt.plain_text || '').join('');
+        } else if (type === "code") {
+            const content = block.code as {
+                rich_text?: { plain_text: string }[];
+                language?: string;
+            };
+            const richText = content?.rich_text || [];
+            const lang = content?.language || "";
+            const code = richText
+                .map((rt: { plain_text: string }) => rt.plain_text || "")
+                .join("");
             texts.push(`\`\`\`${lang}\n${code}\n\`\`\``);
-        } else if (type === 'to_do') {
-            const checked = block.to_do?.checked || false;
-            const rich_text = block.to_do?.rich_text || [];
-            const prefix = checked ? '[x] ' : '[ ] ';
-            texts.push(prefix + rich_text.map((rt: any) => rt.plain_text || '').join(''));
+        } else if (type === "to_do") {
+            const content = block.to_do as {
+                checked?: boolean;
+                rich_text?: { plain_text: string }[];
+            };
+            const checked = content?.checked || false;
+            const richText = content?.rich_text || [];
+            const prefix = checked ? "[x] " : "[ ] ";
+            texts.push(
+                prefix +
+                richText
+                    .map(
+                        (rt: { plain_text: string }) => rt.plain_text || "",
+                    )
+                    .join(""),
+            );
         }
 
-        return texts.join('');
+        return texts.join("");
     }
 
-    async _fetch_item(item_id: string): Promise<source_content> {
-        if (!this.client) throw new source_config_error('not connected', this.name);
+    /**
+     * Fetches a Notion Page and converts its child blocks to Markdown.
+     *
+     * @param itemId - The UUID of the page.
+     */
+    async _fetchItem(itemId: string): Promise<SourceContent> {
+        if (!this.client)
+            throw new SourceConfigError("not connected", this.name);
 
-        const page: NotionPage = await (this.client.pages.retrieve({ page_id: item_id }) as Promise<any>);
-        const title = this.extract_title(page);
-
-        // get all blocks
-        const blocks: NotionBlock[] = [];
-        let has_more = true;
-        let start_cursor: string | undefined;
-
-        while (has_more) {
-            const resp: any = await this.client.blocks.children.list({
-                block_id: item_id,
-                start_cursor
-            });
-            blocks.push(...(resp.results as NotionBlock[]));
-            has_more = resp.has_more;
-            start_cursor = resp.next_cursor || undefined;
+        let page: unknown;
+        try {
+            page = await this.client.pages.retrieve({ page_id: itemId });
+        } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e);
+            throw new SourceFetchError(
+                msg,
+                this.name,
+                e instanceof Error ? e : undefined,
+            );
         }
 
-        const text_parts = title ? [`# ${title}`] : [];
+        if (!page || typeof page !== "object" || !("properties" in page)) {
+            throw new Error(`Item ${itemId} is not a valid page`);
+        }
+
+        const p = page as unknown as NotionPage;
+        const title = this.extractTitle(p);
+        const url = p.url || "";
+
+        const blocks: NotionBlock[] = [];
+        let hasMore = true;
+        let startCursor: string | undefined;
+
+        while (hasMore) {
+            const resp = await this.client.blocks.children.list({
+                block_id: itemId,
+                start_cursor: startCursor,
+            });
+            blocks.push(...(resp.results as unknown as NotionBlock[]));
+            hasMore = resp.has_more;
+            startCursor = resp.next_cursor || undefined;
+            await this.rateLimiter.acquire();
+        }
+
+        const textParts = title ? [`# ${title}`] : [];
 
         for (const block of blocks) {
-            const txt = this.block_to_text(block);
-            if (txt.trim()) text_parts.push(txt);
+            const txt = this.blockToText(block);
+            if (txt.trim()) textParts.push(txt);
         }
 
-        const text = text_parts.join('\n\n');
+        const text = textParts.join("\n\n");
 
         return {
-            id: item_id,
-            name: title || 'Untitled',
-            type: 'notion_page',
+            id: itemId,
+            name: title || "Untitled",
+            type: "notion_page",
             text,
             data: text,
-            meta: { source: 'notion', page_id: item_id, url: page.url || '', block_count: blocks.length }
+            metadata: {
+                source: "notion",
+                pageId: itemId,
+                url,
+                blockCount: blocks.length,
+            },
         };
     }
 }

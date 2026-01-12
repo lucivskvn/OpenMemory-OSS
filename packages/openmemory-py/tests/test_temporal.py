@@ -88,7 +88,25 @@ class TestTemporalGraph(unittest.IsolatedAsyncioTestCase):
             res = await get_related_facts("f1", user_id=self.user_id)
             self.assertEqual(len(res), 1)
             self.assertEqual(res[0]["fact"]["id"], "f2")
+            self.assertEqual(res[0]["fact"]["id"], "f2")
             self.assertEqual(res[0]["relation"], "causes")
+
+    async def test_batch_insert(self):
+        """Verify batch_insert_facts atomic behavior."""
+        from openmemory.temporal_graph.store import batch_insert_facts
+        
+        facts = [
+            {"subject": "S_B1", "predicate": "P_B1", "object": "O_B1"},
+            {"subject": "S_B2", "predicate": "P_B2", "object": "O_B2"}
+        ]
+        
+        ids = await batch_insert_facts(facts, user_id=self.user_id)
+        self.assertEqual(len(ids), 2)
+        
+        # Verify persistence
+        t = self.mem.temporal
+        hits = await t.search("S_B")
+        self.assertEqual(len(hits), 2)
 
 if __name__ == '__main__':
     unittest.main()

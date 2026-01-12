@@ -1,149 +1,278 @@
-import mammoth from "mammoth";
 import * as fs from "node:fs";
-import * as path from "path";
-import * as os from "os";
-import { validate_url } from "../utils/security";
+import * as os from "node:os";
+import * as path from "node:path";
+
+import * as cheerio from "cheerio";
 import ffmpeg from "fluent-ffmpeg";
+import mammoth from "mammoth";
 import OpenAI from "openai";
+import TurndownService from "turndown";
+
 import { env } from "../core/cfg";
-const TurndownService = require("turndown");
+import { logger } from "../utils/logger";
+import { validateUrl } from "../utils/security";
 
 // Bun native file helpers
-const bunWrite = async (path: string, data: Buffer | string) => {
-    await Bun.write(path, data);
-};
-const bunRead = async (path: string) => {
-    return Buffer.from(await Bun.file(path).arrayBuffer());
-};
 const bunExists = async (path: string) => {
     return await Bun.file(path).exists();
 };
 const bunUnlink = async (path: string) => {
-    try { await Bun.file(path).writer().end(); } catch { } // unlink via fs for now
-    if (fs.existsSync(path)) fs.unlinkSync(path);
+    try {
+        if (await bunExists(path)) {
+            await fs.promises.unlink(path);
+        }
+    } catch (e) {
+        if (env.verbose)
+            logger.warn(`[EXTRACT] Failed to unlink ${path}:`, { error: e });
+    }
 };
+
+export interface ExtractionConfig {
+    maxSizeBytes?: number;
+    // Add more config options as needed
+}
 
 export interface ExtractionResult {
     text: string;
     metadata: {
-        content_type: string;
-        char_count: number;
-        estimated_tokens: number;
-        extraction_method: string;
-        [key: string]: string | number | boolean | null | undefined | object;
+        contentType: string;
+        charCount: number;
+        estimatedTokens: number;
+        extractionMethod: string;
+        [key: string]: unknown;
     };
+}
+
+interface OpenAIAudioResponse {
+    text: string;
+    duration?: number;
+    language?: string;
+    [key: string]: unknown;
 }
 
 function estimateTokens(text: string): number {
     return Math.ceil(text.length / 4);
 }
 
-export async function extractPDF(buffer: Buffer): Promise<ExtractionResult> {
-    const { PDFParse } = await import("pdf-parse");
-    const parser = new PDFParse({ data: buffer });
-    const textResult = await parser.getText();
-    const infoResult = await parser.getInfo();
+/**
+ * Extracts text and metadata from a PDF buffer.
+ * Uses `pdf-parse`.
+ *
+ * @param buffer - The raw PDF file buffer.
+ * @param config - Optional configuration (size limits).
+ */
+export async function extractPDF(
+    buffer: Buffer,
+    config?: { maxSizeBytes?: number },
+): Promise<ExtractionResult> {
+    const maxSize = config?.maxSizeBytes || 50 * 1024 * 1024; // Default 50MB
+    if (buffer.length > maxSize) {
+        throw new Error(
+            `PDF file too large: ${(buffer.length / 1024 / 1024).toFixed(2)}MB. Limit is ${(maxSize / 1024 / 1024).toFixed(2)}MB.`,
+        );
+    }
+    const pdf = (await import("pdf-parse")).default;
+    const data = await pdf(buffer);
 
     return {
-        text: textResult.text,
+        text: data.text,
         metadata: {
-            content_type: "pdf",
-            char_count: textResult.text.length,
-            estimated_tokens: estimateTokens(textResult.text),
-            extraction_method: "pdf-parse",
-            pages: textResult.total,
-            info: infoResult,
+            contentType: "pdf",
+            charCount: data.text.length,
+            estimatedTokens: estimateTokens(data.text),
+            extractionMethod: "pdf-parse",
+            pages: data.numpages,
+            info: data.info,
+            version: data.version,
         },
     };
 }
 
-export async function extractDOCX(buffer: Buffer): Promise<ExtractionResult> {
+/**
+ * Extracts text from a DOCX buffer using `mammoth`.
+ *
+ * @param buffer - The raw DOCX file buffer.
+ * @param config - Optional configuration (size limits).
+ */
+export async function extractDOCX(
+    buffer: Buffer,
+    config?: { maxSizeBytes?: number },
+): Promise<ExtractionResult> {
+    const maxSize = config?.maxSizeBytes || 20 * 1024 * 1024; // Default 20MB
+    if (buffer.length > maxSize) {
+        throw new Error(
+            `DOCX file too large: ${(buffer.length / 1024 / 1024).toFixed(2)}MB. Limit is ${(maxSize / 1024 / 1024).toFixed(2)}MB.`,
+        );
+    }
     const result = await mammoth.extractRawText({ buffer });
 
     return {
         text: result.value,
         metadata: {
-            content_type: "docx",
-            char_count: result.value.length,
-            estimated_tokens: estimateTokens(result.value),
-            extraction_method: "mammoth",
+            contentType: "docx",
+            charCount: result.value.length,
+            estimatedTokens: estimateTokens(result.value),
+            extractionMethod: "mammoth",
             messages: result.messages,
         },
     };
 }
 
 export async function extractHTML(html: string): Promise<ExtractionResult> {
-    const turndown = new TurndownService({
-        headingStyle: "atx",
-        codeBlockStyle: "fenced",
-    });
+    const $ = cheerio.load(html);
 
-    const markdown = turndown.turndown(html);
+    // 1. Remove obvious noise globally
+    $(
+        "script, style, iframe, noscript, .ads, .cookie-banner, .sidebar, [role='complementary'], aside",
+    ).remove();
 
-    return {
-        text: markdown,
-        metadata: {
-            content_type: "html",
-            char_count: markdown.length,
-            estimated_tokens: estimateTokens(markdown),
-            extraction_method: "turndown",
-            original_html_length: html.length,
-        },
-    };
-}
+    // 2. Identify main content candidates
+    const selectors = ["article", "main", "#content", ".content", ".post", "#main", ".main"];
+    let mainContent = $();
 
-export async function extractURL(url: string): Promise<ExtractionResult> {
-    await validate_url(url);
-    const response = await fetch(url);
-    if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    for (const selector of selectors) {
+        const found = $(selector).first();
+        if (found.length > 0 && found.text().trim().length > 100) {
+            mainContent = found;
+            break;
+        }
     }
 
-    const html = await response.text();
+    // 3. Remove navigational/footer noise from main content if found, but NOT globally yet 
+    // (to preserve discovery if used elsewhere, although extractHTML is for CONTENT)
+    if (mainContent.length > 0) {
+        mainContent.find("nav, footer, header").remove();
+    } else {
+        // If no main content found, clean the body and use it
+        $("nav, footer, header").remove();
+        mainContent = $("body").length > 0 ? $("body") : $.root();
+    }
+
+    const cleanedHtml = mainContent.html() || html;
 
     const turndown = new TurndownService({
         headingStyle: "atx",
         codeBlockStyle: "fenced",
     });
 
-    const markdown = turndown.turndown(html);
+    const markdown = turndown.turndown(cleanedHtml);
 
     return {
         text: markdown,
         metadata: {
-            content_type: "url",
-            char_count: markdown.length,
-            estimated_tokens: estimateTokens(markdown),
-            extraction_method: "node-fetch+turndown",
-            source_url: url,
-            fetched_at: new Date().toISOString(),
+            contentType: "html",
+            charCount: markdown.length,
+            estimatedTokens: estimateTokens(markdown),
+            extractionMethod: "cheerio+turndown",
+            originalHtmlLength: html.length,
         },
     };
 }
 
+/**
+ * Fetches and extracts main content from a URL.
+ * Uses `turndown` to convert HTML to Markdown.
+ *
+ * @param url - The URL to fetch.
+ * @param config - Configuration (timeouts, size limits).
+ */
+export async function extractURL(
+    url: string,
+    config?: ExtractionConfig,
+): Promise<ExtractionResult> {
+    await validateUrl(url);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000); // 30s timeout
+    const MAX_SIZE = config?.maxSizeBytes || 10 * 1024 * 1024; // Default 10MB
+
+    try {
+        const response = await fetch(url, {
+            headers: {
+                "User-Agent":
+                    "OpenMemory/2.3.0 (Bot; +https://github.com/nullure/openmemory)",
+                Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+            signal: controller.signal,
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        if (!response.body) throw new Error("Response body is empty");
+
+        const chunks: string[] = [];
+        let totalBytes = 0;
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            totalBytes += value.byteLength;
+            if (totalBytes > MAX_SIZE) {
+                await reader.cancel();
+                throw new Error(
+                    `Response size exceeds limit of ${MAX_SIZE} bytes`,
+                );
+            }
+            chunks.push(decoder.decode(value, { stream: true }));
+        }
+        chunks.push(decoder.decode()); // Flush
+        const html = chunks.join("");
+
+        const result = await extractHTML(html);
+
+        return {
+            ...result,
+            metadata: {
+                ...result.metadata,
+                contentType: "url",
+                extractionMethod: "node-fetch+turndown",
+                sourceUrl: url,
+                fetchedAt: new Date().toISOString(),
+                fileSizeBytes: totalBytes,
+            },
+        };
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+/**
+ * Extracts text from Audio using OpenAI Whisper API.
+ *
+ * @param buffer - The audio file buffer.
+ * @param mimeType - The MIME type of the audio.
+ * @param config - Config options.
+ */
 export async function extractAudio(
     buffer: Buffer,
     mimeType: string,
+    config?: { maxSizeBytes?: number },
 ): Promise<ExtractionResult> {
-    const apiKey = env.openai_key;
+    const apiKey = env.openaiKey;
     if (!apiKey) {
         throw new Error(
             "OpenAI API key required for audio transcription. Set OPENAI_API_KEY in .env",
         );
     }
 
-    // Check file size (Whisper API limit is 25MB)
-    const maxSize = 25 * 1024 * 1024; // 25MB
+    // Check file size (Whisper API limit is 25MB effectively, but we allow config override)
+    const maxSize = config?.maxSizeBytes || 25 * 1024 * 1024; // Default 25MB
     if (buffer.length > maxSize) {
         throw new Error(
-            `Audio file too large: ${(buffer.length / 1024 / 1024).toFixed(2)}MB. Maximum size is 25MB.`,
+            `Audio file too large: ${(buffer.length / 1024 / 1024).toFixed(2)}MB. Limit is ${(maxSize / 1024 / 1024).toFixed(2)}MB.`,
         );
     }
 
     // Create temporary file for Whisper API
     const tempDir = os.tmpdir();
     const ext = getAudioExtension(mimeType);
-    const tempFilePath = path.join(tempDir, `audio-${Date.now()}${ext}`);
+    const tempFilePath = path.join(
+        tempDir,
+        `audio-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`,
+    );
 
     try {
         // Write buffer to temp file
@@ -153,57 +282,52 @@ export async function extractAudio(
         const openai = new OpenAI({ apiKey });
 
         // Transcribe audio using Whisper
-        const transcription = await openai.audio.transcriptions.create({
+        const transcription = (await openai.audio.transcriptions.create({
             file: fs.createReadStream(tempFilePath),
             model: "whisper-1",
             response_format: "verbose_json",
-        });
+        })) as unknown as OpenAIAudioResponse;
 
         const text = transcription.text;
 
         return {
             text,
             metadata: {
-                content_type: "audio",
-                char_count: text.length,
-                estimated_tokens: estimateTokens(text),
-                extraction_method: "whisper",
-                audio_format: ext.replace(".", ""),
-                file_size_bytes: buffer.length,
-                file_size_mb: (buffer.length / 1024 / 1024).toFixed(2),
-                duration_seconds: (transcription as any).duration || null,
-                language: (transcription as any).language || null,
+                contentType: "audio",
+                charCount: text.length,
+                estimatedTokens: estimateTokens(text),
+                extractionMethod: "whisper",
+                audioFormat: ext.replace(".", ""),
+                fileSizeBytes: buffer.length,
+                fileSizeMb: (buffer.length / 1024 / 1024).toFixed(2),
+                durationSeconds: transcription.duration || null,
+                language: transcription.language || null,
             },
         };
     } catch (error: unknown) {
-        if (env.verbose) console.error("[EXTRACT] Audio transcription failed:", error);
+        logger.error("[EXTRACT] Audio transcription failed:", { error });
         const msg = error instanceof Error ? error.message : String(error);
         throw new Error(`Audio transcription failed: ${msg}`);
     } finally {
         // Clean up temp file
-        try {
-            if (fs.existsSync(tempFilePath)) {
-                fs.unlinkSync(tempFilePath);
-            }
-        } catch (e) {
-            if (env.verbose) console.warn("[EXTRACT] Failed to clean up temp file:", e);
-        }
+        await bunUnlink(tempFilePath);
     }
 }
 
 export async function extractVideo(
     buffer: Buffer,
+    config?: { maxSizeBytes?: number },
 ): Promise<ExtractionResult> {
+    const maxSize = config?.maxSizeBytes || 100 * 1024 * 1024; // Default 100MB
+    if (buffer.length > maxSize) {
+        throw new Error(
+            `Video file too large: ${(buffer.length / 1024 / 1024).toFixed(2)}MB. Limit is ${(maxSize / 1024 / 1024).toFixed(2)}MB.`,
+        );
+    }
     // Create temporary files for video and audio
     const tempDir = os.tmpdir();
-    const videoPath = path.join(
-        tempDir,
-        `video-${Date.now()}.mp4`,
-    );
-    const audioPath = path.join(
-        tempDir,
-        `audio-${Date.now()}.mp3`,
-    );
+    const videoPath = path.join(tempDir, `video-${Date.now()}.mp4`);
+    const audioPath = path.join(tempDir, `audio-${Date.now()}.mp3`);
 
     try {
         // Write video buffer to temp file
@@ -221,20 +345,20 @@ export async function extractVideo(
         });
 
         // Read extracted audio
-        const audioBuffer = Buffer.from(await Bun.file(audioPath).arrayBuffer());
+        const audioBuffer = Buffer.from(
+            await Bun.file(audioPath).arrayBuffer(),
+        );
 
         // Transcribe extracted audio
         const result = await extractAudio(audioBuffer, "audio/mpeg");
 
         // Update metadata to reflect video source
-        result.metadata.content_type = "video";
-        result.metadata.extraction_method = "ffmpeg+whisper";
-        result.metadata.video_file_size_bytes = buffer.length;
-        result.metadata.video_file_size_mb = (
-            buffer.length /
-            1024 /
-            1024
-        ).toFixed(2);
+        result.metadata.contentType = "video";
+        result.metadata.extractionMethod = "ffmpeg+whisper";
+        result.metadata.videoFileSizeBytes = buffer.length;
+        result.metadata.videoFileSizeMb = (buffer.length / 1024 / 1024).toFixed(
+            2,
+        );
 
         return result;
     } catch (error: unknown) {
@@ -244,16 +368,11 @@ export async function extractVideo(
                 "FFmpeg not found. Please install FFmpeg to process video files. Visit: https://ffmpeg.org/download.html",
             );
         }
-        if (env.verbose) console.error("[EXTRACT] Video processing failed:", error);
+        logger.error("[EXTRACT] Video processing failed:", { error });
         throw new Error(`Video processing failed: ${msg}`);
     } finally {
         // Clean up temp files
-        try {
-            if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath);
-            if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
-        } catch (e) {
-            if (env.verbose) console.warn("[EXTRACT] Failed to clean up temp files:", e);
-        }
+        await Promise.all([bunUnlink(videoPath), bunUnlink(audioPath)]);
     }
 }
 
@@ -276,96 +395,128 @@ function getAudioExtension(mimeType: string): string {
 export async function extractText(
     contentType: string,
     data: string | Buffer,
+    config?: ExtractionConfig,
 ): Promise<ExtractionResult> {
     const type = contentType.toLowerCase();
 
-    // Audio formats
-    if (
-        type === "mp3" ||
-        type === "audio" ||
-        type === "audio/mpeg" ||
-        type === "audio/mp3" ||
-        type === "audio/wav" ||
-        type === "audio/wave" ||
-        type === "audio/x-wav" ||
-        type === "wav" ||
-        type === "m4a" ||
-        type === "audio/mp4" ||
-        type === "audio/m4a" ||
-        type === "audio/x-m4a" ||
-        type === "webm" ||
-        type === "audio/webm" ||
-        type === "ogg" ||
-        type === "audio/ogg"
-    ) {
+    const audioTypes = new Set([
+        "mp3",
+        "audio",
+        "audio/mpeg",
+        "audio/mp3",
+        "audio/wav",
+        "audio/wave",
+        "audio/x-wav",
+        "wav",
+        "m4a",
+        "audio/mp4",
+        "audio/m4a",
+        "audio/x-m4a",
+        "webm",
+        "audio/webm",
+        "ogg",
+        "audio/ogg",
+    ]);
+
+    const videoTypes = new Set([
+        "mp4",
+        "video",
+        "video/mp4",
+        "video/webm",
+        "video/mpeg",
+        "avi",
+        "video/avi",
+        "mov",
+        "video/quicktime",
+    ]);
+
+    if (audioTypes.has(type)) {
+        if (typeof data === "string" && data.length > 100 * 1024 * 1024) {
+            throw new Error("Base64 audio data too large (>100MB). processing rejected to prevent OOM.");
+        }
         const buffer = Buffer.isBuffer(data)
             ? data
             : Buffer.from(data as string, "base64");
-        return extractAudio(buffer, type.startsWith("audio/") ? type : `audio/${type}`);
+        return extractAudio(
+            buffer,
+            type.startsWith("audio/") ? type : `audio/${type}`,
+            config,
+        );
     }
 
-    // Video formats
-    if (
-        type === "mp4" ||
-        type === "video" ||
-        type === "video/mp4" ||
-        type === "video/webm" ||
-        type === "video/mpeg" ||
-        type === "avi" ||
-        type === "video/avi" ||
-        type === "mov" ||
-        type === "video/quicktime"
-    ) {
+    if (videoTypes.has(type)) {
+        if (typeof data === "string" && data.length > 100 * 1024 * 1024) {
+            throw new Error("Base64 video data too large (>100MB). processing rejected to prevent OOM.");
+        }
         const buffer = Buffer.isBuffer(data)
             ? data
             : Buffer.from(data as string, "base64");
-        return extractVideo(buffer);
+        return extractVideo(buffer, config);
     }
 
     switch (type) {
         case "pdf":
+        case "application/pdf":
             return extractPDF(
                 Buffer.isBuffer(data)
                     ? data
                     : Buffer.from(data as string, "base64"),
+                config,
             );
 
         case "docx":
-        case "doc":
+        case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
             return extractDOCX(
                 Buffer.isBuffer(data)
                     ? data
                     : Buffer.from(data as string, "base64"),
+                config,
+            );
+
+        case "doc":
+        case "application/msword":
+            logger.warn(
+                "[EXTRACT] Legacy .doc file detected. Attempting to process as .docx (mammoth), which may fail.",
+            );
+            return extractDOCX(
+                Buffer.isBuffer(data)
+                    ? data
+                    : Buffer.from(data as string, "base64"),
+                config,
             );
 
         case "html":
         case "htm":
+        case "text/html":
             return extractHTML(data.toString());
 
         case "md":
-        case "markdown": {
+        case "markdown":
+        case "text/markdown":
+        case "text/x-markdown": {
             const text = data.toString();
             return {
                 text,
                 metadata: {
-                    content_type: "markdown",
-                    char_count: text.length,
-                    estimated_tokens: estimateTokens(text),
-                    extraction_method: "passthrough",
+                    contentType: "markdown",
+                    charCount: text.length,
+                    estimatedTokens: estimateTokens(text),
+                    extractionMethod: "passthrough",
                 },
             };
         }
 
         case "txt":
-        case "text": {
+        case "text":
+        case "text/plain": {
             const text = data.toString();
             return {
                 text,
                 metadata: {
-                    content_type: "txt",
-                    char_count: text.length,
-                    estimated_tokens: estimateTokens(text),
-                    extraction_method: "passthrough",
+                    contentType: "txt",
+                    charCount: text.length,
+                    estimatedTokens: estimateTokens(text),
+                    extractionMethod: "passthrough",
                 },
             };
         }

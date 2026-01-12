@@ -1,3 +1,9 @@
+/**
+ * @file ideEvents.ts
+ * @description Utilities for handling IDE events, including hashing for deduplication,
+ * sector classification, and caching vector lookups.
+ */
+
 import * as crypto from 'crypto';
 
 const recentHashes = new Set<string>();
@@ -5,11 +11,21 @@ const HASH_CACHE_SIZE = 1000;
 const microVectorCache = new Map<string, { vector: number[], timestamp: number, score: number }>();
 const CACHE_MAX_SIZE = 32;
 
+/**
+ * Generates a SHA1 hash for an event to detect duplicates.
+ * @param filePath Path of the file involved.
+ * @param eventType Type of event (e.g., 'save', 'edit').
+ * @param content Content snippet or full content.
+ * @returns Hex string hash.
+ */
 export function generateEventHash(filePath: string, eventType: string, content: string): string {
     const snippet = content.slice(0, 128);
     return crypto.createHash('sha1').update(`${filePath}${eventType}${snippet}`).digest('hex');
 }
 
+/**
+ * Checks if an event should be skipped (debounced) based on recent history.
+ */
 export function shouldSkipEvent(filePath: string, eventType: string, content: string): boolean {
     const hash = generateEventHash(filePath, eventType, content);
 
@@ -26,6 +42,9 @@ export function shouldSkipEvent(filePath: string, eventType: string, content: st
     return false;
 }
 
+/**
+ * Determines target memory sectors based on event type.
+ */
 export function getSectorFilter(eventType: string): string[] {
     switch (eventType) {
         case 'edit':
@@ -43,6 +62,9 @@ export function getSectorFilter(eventType: string): string[] {
     }
 }
 
+/**
+ * Updates the micro-cache with a new vector for a query.
+ */
 export function updateMicroCache(query: string, vector: number[], score: number) {
     const key = crypto.createHash('md5').update(query).digest('hex');
     microVectorCache.set(key, { vector, timestamp: Date.now(), score });
@@ -60,6 +82,10 @@ export function updateMicroCache(query: string, vector: number[], score: number)
     }
 }
 
+/**
+ * Checks the micro-cache for a similar query vector.
+ * Applies time-based decay to the score.
+ */
 export function checkMicroCache(query: string, lambda = 0.7, tau = 3600000): { vector: number[], score: number } | null {
     const key = crypto.createHash('md5').update(query).digest('hex');
     const cached = microVectorCache.get(key);

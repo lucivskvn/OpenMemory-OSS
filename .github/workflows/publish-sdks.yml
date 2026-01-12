@@ -39,6 +39,11 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
       - name: get version
         id: version
         run: |
@@ -48,12 +53,18 @@ jobs:
           echo "Publishing openmemory-js@$VERSION"
 
       - name: install deps
-        run: cd packages/openmemory-js && npm ci
+        run: cd packages/openmemory-js && bun install
 
       - name: build
-        run: cd packages/openmemory-js && npm run build
+        run: cd packages/openmemory-js && bun run build
 
       - name: publish
+        # Bun publish is not yet fully compatible with npm publish for all registries or auth modes,
+        # but we can try `npm publish` still, OR use `bun publish` if confident.
+        # Given we are in a node environment for publishing, we'll keep npm publish for safety but ensure artifacts are built.
+        # However, `npm publish` needs `npm install`? 
+        # Actually, if we built with Bun, we might want to stick to standard tooling for publishing if possible.
+        # But let's stick to what we promised: "Update publish-js job to use bun install and bun run build".
         run: cd packages/openmemory-js && npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

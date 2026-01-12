@@ -1,46 +1,103 @@
 {
     "name": "openmemory-js",
-    "version": "2.1.0",
+    "version": "2.3.0",
+    "description": "Real long-term memory for AI agents (MCP, Temporal Graph, Semantic Search). Self-hosted & Local-first.",
+    "keywords": [
+        "ai",
+        "memory",
+        "mcp",
+        "agents",
+        "llm",
+        "vector-database",
+        "graph-database",
+        "semantic-search",
+        "cognitive-architecture",
+        "rag"
+    ],
     "author": "nullure",
+    "homepage": "https://openmemory.cavira.app",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/CaviraOSS/OpenMemory.git"
+    },
+    "license": "Apache-2.0",
     "bin": {
         "opm": "./dist/cli.js",
         "openmemory-js": "./dist/cli.js"
     },
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "default": "./dist/index.js"
+        },
+        "./client": {
+            "types": "./dist/client.d.ts",
+            "default": "./dist/client.js"
+        },
+        "./ai/graph": {
+            "types": "./dist/ai/graph.d.ts",
+            "default": "./dist/ai/graph.js"
+        },
+        "./ai/mcp": {
+            "types": "./dist/ai/mcp.d.ts",
+            "default": "./dist/ai/mcp.js"
+        },
+        "./server": {
+            "types": "./dist/server/start.d.ts",
+            "default": "./dist/server/start.js"
+        }
+    },
     "scripts": {
-        "dev": "bun --hot src/server/index.ts",
+        "dev": "bun --hot src/server/start.ts",
         "dev:mcp": "bun --hot src/ai/mcp.ts",
-        "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
-        "build": "bun build ./src/server/index.ts ./src/index.ts ./src/ai/mcp.ts ./src/cli.ts --outdir ./dist --target bun",
-        "start": "bun dist/server/index.js",
+        "format": "bun x prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+        "lint": "bun x eslint src/**/*.ts",
+        "build:bundle": "bun build ./src/server/start.ts ./src/index.ts ./src/ai/mcp.ts ./src/ai/graph.ts ./src/client.ts ./src/cli.ts --outdir ./dist --target bun --external @huggingface/transformers --external onnxruntime-node --external @modelcontextprotocol/sdk",
+        "build:types": "bun build ./src/index.ts ./src/client.ts ./src/server/start.ts ./src/ai/graph.ts ./src/ai/mcp.ts --outdir ./dist --target bun --dts",
+        "build": "bun scripts/build.ts",
+        "start": "bun dist/server/start.js",
         "start:mcp": "bun dist/ai/mcp.js",
         "migrate": "bun dist/cli.js migrate",
-        "test": "bun test"
+        "test": "bun test",
+        "typecheck": "bun x tsc --noEmit"
     },
     "dependencies": {
-        "@azure/msal-node": "^2.16.3",
-        "@modelcontextprotocol/sdk": "^1.0.1",
-        "@notionhq/client": "^2.3.0",
-        "@octokit/rest": "^20.0.0",
-        "cheerio": "^1.0.0-rc.12",
+        "@anthropic-ai/sdk": "^0.71.2",
+        "@aws-sdk/client-bedrock-runtime": "^3.965.0",
+        "@azure/msal-node": "^3.8.4",
+        "@huggingface/transformers": "^3.8.1",
+        "@modelcontextprotocol/sdk": "^1.25.2",
+        "@notionhq/client": "^5.6.0",
+        "@octokit/rest": "^22.0.1",
+        "cheerio": "^1.1.2",
         "fluent-ffmpeg": "^2.1.3",
-        "googleapis": "^140.0.0",
-        "ioredis": "^5.4.1",
-        "mammoth": "^1.7.2",
-        "openai": "^4.73.0",
-        "pdf-parse": "^1.1.1",
-        "pg": "^8.11.5",
-        "turndown": "^7.1.3",
-        "yaml": "^2.4.5",
-        "zod": "^3.23.0"
+        "googleapis": "^170.0.0",
+        "ioredis": "^5.9.0",
+        "mammoth": "^1.11.0",
+        "openai": "^6.15.0",
+        "pdf-parse": "^2.4.5",
+        "pg": "^8.16.3",
+        "turndown": "^7.2.2",
+        "yaml": "^2.8.2",
+        "zod": "^3.23.8"
     },
     "devDependencies": {
+        "@eslint/js": "^9.39.2",
         "@types/bun": "^1.3.5",
-        "@types/cheerio": "^0.22.35",
         "@types/fluent-ffmpeg": "^2.1.28",
+        "@types/node": "^22.19.3",
         "@types/pg": "^8.16.0",
+        "@types/turndown": "^5.0.6",
+        "@typescript-eslint/eslint-plugin": "^8.52.0",
+        "@typescript-eslint/parser": "^8.52.0",
+        "bun-types": "^1.3.5",
+        "eslint": "^9.39.2",
+        "eslint-plugin-simple-import-sort": "^12.1.1",
+        "eslint-plugin-unused-imports": "^4.3.0",
         "prettier": "^3.7.4",
-        "typescript": "^5.9.3"
+        "typescript": "^5.9.3",
+        "typescript-eslint": "^8.52.0"
     }
 }

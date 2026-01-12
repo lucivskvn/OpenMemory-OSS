@@ -52,13 +52,19 @@ class TestPhase63(unittest.IsolatedAsyncioTestCase):
             "last_seen_at": 123,
             "salience": 1.0,
             "tags": "[]",
-            "meta": "{}",
-            "user_id": "test_user"
+            "metadata": "{}",
+            "user_id": "test_user",
+            "decay_lambda": 0.02,
+            "version": 1,
+            "segment": 0,
+            "simhash": None,
+            "generated_summary": None,
+            "feedback_score": 0.0
         }
-        
+
         mem = Client(user="test_user")
         item = await mem.add("test content")
-        
+
         self.assertIsInstance(item, MemoryItem)
         self.assertEqual(item.id, "test_id")
         self.assertEqual(item.content, "test content")
@@ -66,11 +72,24 @@ class TestPhase63(unittest.IsolatedAsyncioTestCase):
     async def test_crewai_adapter_sync_bridge(self):
         mock_mem = AsyncMock()
         mock_mem.search.return_value = [
-             MemoryItem(id="1", content="res", primary_sector="s", created_at=0, updated_at=0)
+            MemoryItem(
+                id="1",
+                content="res",
+                primary_sector="s",
+                created_at=0,
+                updated_at=0,
+                last_seen_at=0,
+                sectors=[],
+                tags=[],
+                metadata={},
+                salience=0.0,
+                feedback_score=0.0,
+                _debug=None,
+            )
         ]
-        
+
         adapter = CrewAIMemory(mock_mem, user_id="crew_user")
-        
+
         # Test save (sync)
         # Running in a thread to simulate sync usage and avoid deadlock with the test loop
         await asyncio.to_thread(adapter.save, "hello")
@@ -84,18 +103,31 @@ class TestPhase63(unittest.IsolatedAsyncioTestCase):
     async def test_langchain_retriever_bridge(self):
         mock_mem = AsyncMock()
         mock_mem.search.return_value = [
-             MemoryItem(id="1", content="res", primary_sector="s", created_at=0, updated_at=0)
+            MemoryItem(
+                id="1",
+                content="res",
+                primary_sector="s",
+                created_at=0,
+                updated_at=0,
+                last_seen_at=0,
+                sectors=[],
+                tags=[],
+                metadata={},
+                salience=0.0,
+                feedback_score=0.0,
+                _debug=None,
+            )
         ]
-        
+
         retriever = OpenMemoryRetriever()
         retriever.memory = mock_mem
         retriever.user_id = "lc_user"
         retriever.k = 5
-    
+
         # Test sync bridge in thread
         docs = await asyncio.to_thread(retriever._get_relevant_documents, "q", run_manager=MagicMock())
         self.assertEqual(docs[0].page_content, "res")
-        
+
         # Test async
         docs_async = await retriever._aget_relevant_documents("q", run_manager=MagicMock())
         self.assertEqual(docs_async[0].page_content, "res")

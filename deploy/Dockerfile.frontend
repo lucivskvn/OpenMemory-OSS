@@ -1,0 +1,47 @@
+# Dashboard Production Dockerfile
+# Optimized for Next.js 14+ with Bun
+
+# Stage 1: Base
+FROM oven/bun:1.1 as base
+WORKDIR /app
+
+# Stage 2: Dependencies
+FROM base as deps
+COPY packages/openmemory-js/package.json ./packages/openmemory-js/
+COPY apps/dashboard/package.json ./apps/dashboard/
+COPY package.json bun.lockb ./
+# Install dependencies including workspace packages
+RUN bun install --frozen-lockfile
+
+# Stage 3: Builder
+FROM base as builder
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+# Build Dashboard (and dependent packages if needed)
+# Next.js standalone build requires setting output: 'standalone' in next.config.js
+ENV NEXT_TELEMETRY_DISABLED 1
+WORKDIR /app/apps/dashboard
+RUN bun run build
+
+# Stage 4: Runner
+FROM oven/bun:1.1-slim as runner
+WORKDIR /app
+ENV NODE_ENV production
+ENV NEXT_TELEMETRY_DISABLED 1
+
+RUN groupadd --system --gid 1001 nodejs
+RUN useradd --system --uid 1001 nextjs
+
+# Copy standalone build artifacts
+# Note: You must ensure next.config.js has output: 'standalone'
+COPY --from=builder --chown=nextjs:nodejs /app/apps/dashboard/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/apps/dashboard/.next/static ./apps/dashboard/.next/static
+COPY --from=builder --chown=nextjs:nodejs /app/apps/dashboard/public ./apps/dashboard/public
+
+USER nextjs
+
+EXPOSE 3000
+ENV PORT 3000
+
+CMD ["bun", "apps/dashboard/server.js"]

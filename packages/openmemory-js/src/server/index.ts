@@ -1,175 +1,312 @@
-import server from "./server";
-import { env, tier } from "../core/cfg";
-import { run_decay_process, prune_weak_waypoints } from "../memory/hsg";
 import { mcp } from "../ai/mcp";
-import { routes } from "./routes";
+import { env, tier } from "../core/cfg";
+import { closeDb } from "../core/db";
+import { closeRedis } from "../core/redis";
 import {
-    authenticate_api_request,
-    log_authenticated_request,
+    registerInterval,
+    stopAllMaintenance as stopAllSchedulerMaintenance,
+} from "../core/scheduler";
+import { pruneWeakWaypoints, runDecayProcess } from "../memory/hsg";
+import { startReflection } from "../memory/reflect";
+import { startUserSummaryReflection } from "../memory/user_summary";
+import { maintenanceRetrainAll, safeJob } from "../ops/maintenance";
+import { configureLogger, logger } from "../utils/logger";
+import { auditMiddleware } from "./middleware/audit";
+import {
+    authenticateApiRequest,
+    logAuthenticatedRequest,
 } from "./middleware/auth";
-import { start_reflection } from "../memory/reflect";
-import { start_user_summary_reflection } from "../memory/user_summary";
-import { sendTelemetry } from "../core/telemetry";
-import { req_tracker_mw } from "./routes/dashboard";
-import { close_db } from "../core/db";
-import { maintenanceRetrainAll } from "../ops/maintenance";
+import { rateLimitMiddleware } from "./middleware/rateLimit";
+import { adminRoutes } from "./routes/admin"; // Phase 35
+import { compressRoutes } from "./routes/compression";
+import { dash } from "./routes/dashboard";
+import { reqTrackerMw } from "./routes/dashboard";
+import { dynamicsRoutes } from "./routes/dynamics";
+import { homeRoutes } from "./routes/home";
+import { ideRoutes } from "./routes/ide";
+import { langGraphRoutes } from "./routes/langgraph";
+import { memoryRoutes } from "./routes/memory";
+import { portabilityRoutes } from "./routes/portability";
+import { sourceRoutes } from "./routes/sources";
+import { setupStream } from "./routes/stream";
+import { systemRoutes } from "./routes/system";
+import { temporalRoutes } from "./routes/temporal";
+import { userRoutes } from "./routes/users";
+import { vercelRoutes } from "./routes/vercel";
+import server from "./server";
 
 export * from "./server";
 // Explicitly import for local usage
+import { printBanner } from "../utils/banner";
 import { AdvancedRequest, AdvancedResponse } from "./server";
 
-const ASC = `   ____                   __  __                                 
-  / __ \\                 |  \\/  |                                
- | |  | |_ __   ___ _ __ | \\  / | ___ _ __ ___   ___  _ __ _   _ 
- | |  | | '_ \\ / _ \\ '_ \\| |\\/| |/ _ \\ '_ \` _ \\ / _ \\| '__| | | |
- | |__| | |_) |  __/ | | | |  | |  __/ | | | | | (_) | |  | |_| |
-  \\____/| .__/ \\___|_| |_|_|  |_|\\___|_| |_| |_|\\___/|_|   \\__, |
-        | |                                                 __/ |
-        |_|                                                |___/ `;
+configureLogger({
+    mode: env.mode,
+    verbose: env.verbose,
+    logLevel: env.logLevel,
+});
+logger.debug("[DEBUG] Loading src/server/index.ts (Refreshed)");
 
-const app = server({ max_payload_size: env.max_payload_size });
+const app = server({ maxPayloadSize: env.maxPayloadSize });
 
-console.log(ASC);
+printBanner();
 if (env.verbose) {
-    console.log(`[CONFIG] Vector Dimension: ${env.vec_dim}`);
-    console.log(`[CONFIG] Cache Segments: ${env.cache_segments}`);
-    console.log(`[CONFIG] Max Active Queries: ${env.max_active}`);
+    logger.info(`[CONFIG] Vector Dimension: ${env.vecDim}`);
+    logger.info(`[CONFIG] Cache Segments: ${env.cacheSegments}`);
+    logger.info(`[CONFIG] Max Active Queries: ${env.maxActive}`);
 }
 
 // Warn about configuration mismatch that causes embedding incompatibility
-if (env.emb_kind !== "synthetic" && (tier === "hybrid" || tier === "fast")) {
-    console.warn(
+if (env.embKind !== "synthetic" && (tier === "hybrid" || tier === "fast")) {
+    logger.warn(
         `[CONFIG] ⚠️  WARNING: Embedding configuration mismatch detected!\n` +
-        `         OM_EMBEDDINGS=${env.emb_kind} but OM_TIER=${tier}\n` +
-        `         Storage will use ${env.emb_kind} embeddings, but queries will use synthetic embeddings.\n` +
-        `         This causes semantic search to fail. Set OM_TIER=deep to fix.`
+        `         OM_EMBEDDINGS=${env.embKind} but OM_TIER=${tier}\n` +
+        `         Storage will use ${env.embKind} embeddings, but queries will use synthetic embeddings.\n` +
+        `         This causes semantic search to fail. Set OM_TIER=deep to fix.`,
     );
 }
 
 // Security Hardening: Ensure API Key is set
-if (!env.api_key || env.api_key.trim() === "") {
-    console.warn(
-        `\n[SECURITY] ⚠️  WARNING: NO API KEY CONFIGURED! (OM_API_KEY)\n` +
-        `           The server is running in OPEN mode. Anyone can access your memories.\n` +
-        `           Please set OM_API_KEY in your .env file for production usage.\n`
-    );
-    // In strict mode or production, we might want to process.exit(1) here.
-    // For now, let's just make it VERY obvious.
-}
+// Security Hardening: Handled by Setup Token & DB Auth
+// Legacy check removed to favor Multi-Tenant DB check.
 
-app.use(req_tracker_mw());
+app.use(reqTrackerMw());
 
-app.use((req: AdvancedRequest, res: AdvancedResponse, next: () => void) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader(
-        "Access-Control-Allow-Methods",
-        "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-    );
-    res.setHeader(
-        "Access-Control-Allow-Headers",
-        "Content-Type,Authorization,x-api-key",
-    );
-    if (req.method === "OPTIONS") {
-        res.status(200).end();
-        return;
-    }
-    next();
-});
+app.use(
+    async (req: AdvancedRequest, res: AdvancedResponse, next: () => void) => {
+        // CORS
+        const origin = req.headers.origin || req.headers.Origin || ""; // Bun headers can be case-sensitive depending on gateway
 
-app.use(authenticate_api_request);
+        let allowOrigin = "";
+        const allowed = env.ideAllowedOrigins;
 
-if (process.env.OM_LOG_AUTH === "true") {
-    app.use(log_authenticated_request);
-}
+        if (allowed.includes("*") || allowed.length === 0) {
+            allowOrigin = "*";
+        } else if (origin && allowed.includes(origin as string)) {
+            allowOrigin = origin as string;
+        } else if (origin) {
+            // Origin provided but not allowed.
+            // We do strictly nothing, which blocks CORS.
+        }
 
-routes(app);
+        if (allowOrigin) {
+            res.setHeader("Access-Control-Allow-Origin", allowOrigin);
+            res.setHeader("Vary", "Origin"); // Important for caching proxies
+        }
 
-mcp(app);
-if (env.mode === "langgraph") {
-    console.log("[MODE] LangGraph integration enabled");
-}
+        // Security Headers
+        res.setHeader("X-DNS-Prefetch-Control", "off");
+        res.setHeader("X-Frame-Options", "SAMEORIGIN");
+        res.setHeader(
+            "Strict-Transport-Security",
+            "max-age=15552000; includeSubDomains",
+        );
+        res.setHeader("X-Download-Options", "noopen");
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        res.setHeader("X-XSS-Protection", "1; mode=block");
+        res.setHeader("Referrer-Policy", "no-referrer");
 
-const decayIntervalMs = env.decay_interval_minutes * 60 * 1000;
-console.log(
-    `[DECAY] Interval: ${env.decay_interval_minutes} minutes (${decayIntervalMs / 1000}s)`,
-);
-
-setInterval(async () => {
-    if (env.verbose) console.log("[DECAY] Running HSG decay process...");
-    try {
-        const result = await run_decay_process();
-        if (env.verbose) {
-            console.log(
-                `[DECAY] Completed: ${result.decayed}/${result.processed} memories updated`,
+        if (req.method === "OPTIONS") {
+            res.setHeader(
+                "Access-Control-Allow-Methods",
+                "GET,POST,PUT,PATCH,DELETE,OPTIONS",
             );
+            res.setHeader(
+                "Access-Control-Allow-Headers",
+                "Content-Type,Authorization,x-api-key,Accept,x-requested-with",
+            );
+            res.setHeader("Access-Control-Max-Age", "86400"); // Cache preflight for 24h
+            res.status(200).end();
+            return;
         }
-    } catch (error) {
-        console.error("[DECAY] Process failed:", error);
-    }
-}, decayIntervalMs);
-setInterval(
-    async () => {
-        if (env.verbose) console.log("[PRUNE] Pruning weak waypoints...");
-        try {
-            const pruned = await prune_weak_waypoints();
-            if (env.verbose) console.log(`[PRUNE] Completed: ${pruned} waypoints removed`);
-        } catch (error) {
-            console.error("[PRUNE] Failed:", error);
-        }
+        await next();
     },
-    7 * 24 * 60 * 60 * 1000,
 );
-setTimeout(() => {
-    run_decay_process()
-        .then((result: { decayed: number; processed: number }) => {
+
+app.use(authenticateApiRequest);
+
+// Register Rate Limit middleware (after Auth to potentially skip trusted users/admins if we wanted, 
+// but usually before for protection. However, since we use IP-based, it's independent of auth mostly. 
+// Placing it here allows us to potentially use user context later if we enhance it.)
+app.use(rateLimitMiddleware);
+
+// Register Audit middleware after Auth but before handlers
+app.use(auditMiddleware);
+
+if (env.logAuth) {
+    app.use(logAuthenticatedRequest);
+}
+import { setupRoutes } from "./routes/setup";
+
+// ... [omitted imports]
+
+if (env.logAuth) {
+    app.use(logAuthenticatedRequest);
+}
+systemRoutes(app);
+setupRoutes(app); // New Setup Routes
+homeRoutes(app); // Root / Welcome Page
+portabilityRoutes(app);
+adminRoutes(app);
+userRoutes(app);
+memoryRoutes(app);
+temporalRoutes(app);
+sourceRoutes(app);
+dash(app);
+vercelRoutes(app);
+setupStream(app);
+mcp(app);
+langGraphRoutes(app);
+ideRoutes(app);
+dynamicsRoutes(app);
+compressRoutes(app);
+
+// Static Files - Dashboard Support (Phase 94)
+import path from "path";
+// We need to serve src/server/public/ as /public
+// Note: app.serverStatic is a method on the underlying Bun server/handler if we were using raw Bun,
+// but our 'app' is the Hono-like or custom router from ./server.ts.
+// checking server.ts, it returns { ...methods, serverStatic }.
+// And app.use takes a handler.
+// app.serverStatic(endpoint, dir) returns a Handler.
+app.use(app.serverStatic("/public", path.join(__dirname, "public")));
+
+startReflection();
+startUserSummaryReflection();
+
+if (env.mode === "langgraph") {
+    logger.info("[MODE] LangGraph integration enabled");
+}
+
+const decayIntervalMs = env.decayIntervalMinutes * 60 * 1000;
+logger.info(
+    `[DECAY] Interval: ${env.decayIntervalMinutes} minutes (${decayIntervalMs / 1000}s)`,
+);
+
+registerInterval(
+    "decay",
+    async () => {
+        await safeJob("decay", async () => {
+            if (env.verbose)
+                logger.debug("[DECAY] Running HSG decay process...");
+            const result = await runDecayProcess();
             if (env.verbose) {
-                console.log(
-                    `[INIT] Initial decay: ${result.decayed}/${result.processed} memories updated`,
+                logger.debug(
+                    `[DECAY] Completed: ${result.decayed}/${result.processed} memories updated`,
                 );
             }
+        });
+    },
+    decayIntervalMs,
+);
+
+// Encapsulated background process starter
+export function startBackgroundProcess() {
+    registerInterval(
+        "prune",
+        async () => {
+            await safeJob("prune", async () => {
+                if (env.verbose)
+                    logger.debug("[PRUNE] Pruning weak waypoints...");
+                const pruned = await pruneWeakWaypoints();
+                if (env.verbose)
+                    logger.debug(
+                        `[PRUNE] Completed: ${pruned} waypoints removed`,
+                    );
+            });
+        },
+        7 * 24 * 60 * 60 * 1000,
+    );
+
+    // Delay initial background tasks to allow server startup and DB readiness
+    setTimeout(() => {
+        runDecayProcess()
+            .then((result: { decayed: number; processed: number }) => {
+                if (env.verbose) {
+                    logger.debug(
+                        `[INIT] Initial decay: ${result.decayed}/${result.processed} memories updated`,
+                    );
+                }
+            })
+            .catch((err: unknown) =>
+                logger.error("[INIT] Initial decay failed", { error: err }),
+            );
+        maintenanceRetrainAll()
+            .then(() => {
+                if (env.verbose)
+                    logger.debug(
+                        "[INIT] Initial classifier training completed",
+                    );
+            })
+            .catch((err: unknown) =>
+                logger.error("[INIT] Initial training failed", { error: err }),
+            );
+    }, 3000);
+
+    const trainIntervalMs = env.classifierTrainInterval * 60 * 1000;
+    logger.info(
+        `[TRAIN] Classifier interval: ${env.classifierTrainInterval} minutes`,
+    );
+
+    registerInterval(
+        "train",
+        async () => {
+            await safeJob("train", async () => {
+                if (env.verbose)
+                    logger.debug("[TRAIN] Running auto-training process...");
+                await maintenanceRetrainAll();
+            });
+        },
+        trainIntervalMs,
+    );
+
+    // Orphaned Vector Cleanup (Daily)
+    import("../ops/cleanup")
+        .then(({ pruneOrphanedVectors }) => {
+            registerInterval(
+                "prune_vectors",
+                async () => {
+                    await safeJob("prune_vectors", async () => {
+                        if (env.verbose)
+                            logger.debug(
+                                "[PRUNE] Checking for orphaned vectors...",
+                            );
+                        await pruneOrphanedVectors();
+                    });
+                },
+                24 * 60 * 60 * 1000,
+            ); // 24 hours
         })
-        .catch(console.error);
-    maintenanceRetrainAll()
-        .then(() => {
-            if (env.verbose) console.log("[INIT] Initial classifier training completed");
+        .catch((e) =>
+            logger.error("[INIT] Failed to load cleanup module", { error: e }),
+        );
+
+    // Telemetry (Daily)
+    import("../core/telemetry")
+        .then(({ sendTelemetry }) => {
+            // Send initial ping after 1 min to allow startup stabilization
+            setTimeout(() => sendTelemetry().catch(() => { }), 60000);
+
+            registerInterval(
+                "telemetry",
+                async () => {
+                    await sendTelemetry();
+                },
+                24 * 60 * 60 * 1000,
+            );
         })
-        .catch(console.error);
-}, 3000);
+        .catch(() => { });
+}
 
-const trainIntervalMs = env.classifier_train_interval * 60 * 1000;
-console.log(`[TRAIN] Classifier interval: ${env.classifier_train_interval} minutes`);
+// Export app for external usage (e.g. testing or start script)
+export { app };
 
-setInterval(async () => {
-    if (env.verbose) console.log("[TRAIN] Running auto-training process...");
-    try {
-        await maintenanceRetrainAll();
-    } catch (error) {
-        console.error("[TRAIN] Process failed:", error);
-    }
-}, trainIntervalMs);
+export async function stopServer() {
+    await stopAllSchedulerMaintenance();
 
-start_reflection();
-start_user_summary_reflection();
-
-console.log(`[SERVER] Starting on port ${env.port}`);
-app.listen(env.port, () => {
-    console.log(`[SERVER] Running on http://localhost:${env.port}`);
-    sendTelemetry().catch(() => {
-        // ignore telemetry failures
-    });
-
-    const shutdown = async (signal: string) => {
-        console.log(`\n[SERVER] ${signal} received. Shutting down gracefully...`);
-        try {
-            await close_db(); // Close DB connections
-            console.log("[SERVER] Database connections closed.");
-            process.exit(0);
-        } catch (err) {
-            console.error("[SERVER] Error during shutdown:", err);
-            process.exit(1);
-        }
-    };
-
-    process.on("SIGTERM", () => shutdown("SIGTERM"));
-    process.on("SIGINT", () => shutdown("SIGINT"));
-});
+    // Close connections in parallel for speed, but wait for all
+    await Promise.all([
+        closeDb().catch((e) => logger.error("[SERVER] Failed to close DB:", { error: e })),
+        closeRedis().catch((e) => logger.error("[SERVER] Failed to close Redis:", { error: e })),
+    ]);
+}
