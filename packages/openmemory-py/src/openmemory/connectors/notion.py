@@ -65,7 +65,7 @@ class NotionConnector(BaseConnector):
                         type="page",
                         path=f"page/{page['id']}",
                         size=0,
-                        metadata={
+                        metadata={  # type: ignore[arg-type]  # type: ignore[arg-type]
                             "url": page.get("url", ""),
                             "last_edited": page.get("last_edited_time")
                         }
@@ -85,7 +85,7 @@ class NotionConnector(BaseConnector):
                     type="page",
                     path=f"page/{page['id']}",
                     size=0,
-                    metadata={
+                    metadata={  # type: ignore[arg-type]  # type: ignore[arg-type]
                         "url": page.get("url", ""),
                         "last_edited": page.get("last_edited_time")
                     }
@@ -136,7 +136,7 @@ class NotionConnector(BaseConnector):
             type="notion_page",
             text=text,
             data=text,
-            metadata={
+            metadata={  # type: ignore[arg-type]  # type: ignore[arg-type]
                 "source": "notion",
                 "page_id": item_id,
                 "url": page.get("url", ""),

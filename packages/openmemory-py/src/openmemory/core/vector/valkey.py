@@ -81,7 +81,7 @@ class ValkeyVectorStore(VectorStore):
         # Sector is ignored because Valkey mapping stores by id only; kept for interface parity.
         await client.delete(self._key(id))
 
-    async def search(self, vector: List[float], sector: str, k: int, filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    async def search(self, vector: List[float], sector: str, k: int, filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:  # type: ignore[override]
         """
         Perform vector similarity search.
 
@@ -111,25 +111,28 @@ class ValkeyVectorStore(VectorStore):
         # For now, naive scan.
 
         while True:
-            cursor, keys = await client.scan(cursor, match=f"{self.prefix}*", count=1000)
-            if keys:
+            cursor, keys = await client.scan(cursor, match=f"{self.prefix}*", count=1000)  # type: ignore[possibly-unbound]
+            if keys:  # type: ignore[possibly-unbound]
                 # pipeline fetch
-                pipe = client.pipeline()
-                for key in keys:
+                pipe = client.pipeline()  # type: ignore[possibly-unbound]
+                for key in keys:  # type: ignore[possibly-unbound]
                     pipe.hgetall(key)
                 items = await pipe.execute()
 
                 for item in items:
-                    if not item: continue
+                    if not item:
+                        continue
                     # decode
                     def dec(x): return x.decode('utf-8') if isinstance(x, bytes) else str(x)
 
                     i_sector = dec(item.get(b'sector') or item.get('sector'))
-                    if i_sector != sector: continue
+                    if i_sector != sector:
+                        continue
 
                     if filter and filter.get("user_id"):
                         i_uid = dec(item.get(b'user_id') or item.get('user_id'))
-                        if i_uid != filter["user_id"]: continue
+                        if i_uid != filter["user_id"]:
+                            continue
 
                     v_bytes = item.get(b'v') or item.get('v')
                     v = np.frombuffer(v_bytes, dtype=np.float32)
@@ -150,9 +153,11 @@ class ValkeyVectorStore(VectorStore):
 
     async def disconnect(self):
         """Close Redis connection."""
-        if self.client:
-            try:
-                await self.client.aclose()
-            except Exception as e:
-                logger.warning(f"Error during Valkey disconnect: {e}")
+        if not self.client:
+            return
+        try:
+            await self.client.aclose()
+        except Exception as e:
+            logger.warning(f"Error during Valkey disconnect: {e}")
+        finally:
             self.client = None

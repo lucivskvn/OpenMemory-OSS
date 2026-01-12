@@ -1,13 +1,13 @@
 import pytest
 import asyncio
 import json
-from openmemory.client import Memory
-from openmemory.core.config import env
-from openmemory.ai.graph import (
+from openmemory.client import Memory  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.core.config import env  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.ai.graph import (  # type: ignore[import-untyped]  # type: ignore[import-untyped]
     store_node_mem, retrieve_node_mems, get_thread_history, get_lg_cfg,
     LgmStoreReq, LgmRetrieveReq
 )
-from openmemory.core.db import db
+from openmemory.core.db import db  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 # Force synthetic for tests
 env.emb_kind = "synthetic"

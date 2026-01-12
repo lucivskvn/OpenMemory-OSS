@@ -1,8 +1,8 @@
 import asyncio
 import pytest
 import time
-from openmemory.ops.maintenance import maintenance_retrain_all, log_maintenance, cleanup_orphans
-from openmemory.core.db import db, q
+from openmemory.ops.maintenance import maintenance_retrain_all, log_maintenance, cleanup_orphans  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.core.db import db, q  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 @pytest.mark.asyncio
 async def test_maintenance_logging_and_orphans():

@@ -1,8 +1,8 @@
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
-from openmemory.memory.user_summary import gen_user_summary, gen_user_summary_async
-from openmemory.memory.decay import on_query_hit
-from openmemory.memory.reflect import mark_consolidated, boost
+from openmemory.memory.user_summary import gen_user_summary, gen_user_summary_async  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.memory.decay import on_query_hit  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.memory.reflect import mark_consolidated, boost  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 @pytest.mark.asyncio
 async def test_user_summary_double_counting():

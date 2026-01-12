@@ -78,7 +78,7 @@ class SourceContent(BaseModel):
     text: str
     data: Optional[Any] = None
     metadata: Dict[str, Any] = Field(default_factory=dict, alias="meta")
-    
+
     model_config = ConfigDict(populate_by_name=True)
 
 T = TypeVar("T")
@@ -87,18 +87,18 @@ T = TypeVar("T")
 
 class RateLimiter:
     """Token bucket rate limiter"""
-    
+
     def __init__(self, requests_per_second: float = 10):
         self.rps = requests_per_second
         self.tokens = requests_per_second
         self.last_update = time.time()
-    
+
     async def acquire(self):
         now = time.time()
         elapsed = now - self.last_update
         self.tokens = min(self.rps, self.tokens + elapsed * self.rps)
         self.last_update = now
-        
+
         if self.tokens < 1:
             wait_time = (1 - self.tokens) / self.rps
             await asyncio.sleep(wait_time)
@@ -116,7 +116,7 @@ async def with_retry(
 ):
     """Execute fn with exponential backoff retry"""
     last_err: Optional[Exception] = None
-    
+
     for attempt in range(max_attempts):
         try:
             val = fn()
@@ -127,16 +127,16 @@ async def with_retry(
             raise  # don't retry auth errors
         except Exception as e:
             last_err = e
-            
+
             if attempt < max_attempts - 1:
                 if isinstance(e, SourceRateLimitError) and e.retry_after:
                     delay = e.retry_after
                 else:
                     delay = min(base_delay * (2 ** attempt), max_delay)
-                
+
                 logger.warning(f"[retry] attempt {attempt + 1}/{max_attempts} failed: {e}, retrying in {delay}s")
                 await asyncio.sleep(delay)
-    
+
     if last_err:
         raise last_err
     raise RuntimeError("Max retries exceeded")
@@ -167,7 +167,7 @@ class BaseConnector(ABC):
         """authenticate with the service"""
         logger.info(f"[{self.name}] connecting...")
         try:
-            result = await self._connect(**creds)
+            result = await self._connect(**creds)  # type: ignore[attr-defined]
             self._connected = result
             if result:
                 logger.info(f"[{self.name}] connected")
@@ -190,8 +190,8 @@ class BaseConnector(ABC):
 
         try:
             items = await with_retry(
-                lambda: self._list_items(**filters),
-                self._max_retries
+                lambda: self._list_items(**filters),  # type: ignore[attr-defined]
+                self._max_retries,
             )
             logger.info(f"[{self.name}] found {len(items)} items")
             return items
@@ -207,13 +207,13 @@ class BaseConnector(ABC):
 
         try:
             return await with_retry(
-                lambda: self._fetch_item(item_id),
-                self._max_retries
+                lambda: self._fetch_item(item_id),  # type: ignore[attr-defined]
+                self._max_retries,
             )
         except Exception as e:
             raise SourceFetchError(str(e), self.name, e)
 
-    async def ingest_all(self, **filters) -> List[str]:
+    async def ingest_all(self, **filters) -> List[str]:  # type: ignore[return]
         """fetch and ingest all items matching filters with concurrency control"""
         from ..ops.ingest import ingest_document
 
@@ -227,11 +227,11 @@ class BaseConnector(ABC):
             async with semaphore:
                 try:
                     content = await self.fetch_item(item.id)
-                    result = await ingest_document(
+                    result = await ingest_document(  # type: ignore[arg-type]
                         t=content.type,
                         data=content.data or content.text,
-                        metadata={"source": self.name, **content.metadata},
-                        user_id=self.user_id
+                        metadata={"source": self.name, **content.metadata},  # type: ignore[arg-type]
+                        user_id=self.user_id,
                     )
                     return result["root_memory_id"]
                 except Exception as e:

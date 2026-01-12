@@ -1,7 +1,7 @@
 import pytest
 import asyncio
-from openmemory.core.vector_store import get_vector_store
-from openmemory.memory.hsg import hsg_query
+from openmemory.core.vector_store import get_vector_store  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.memory.hsg import hsg_query  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 # We need to mock DB or ensure test env uses SQLite which is self contained
 # existing tests/test_sdk_core.py does this setup. We can reuse similar pattern or just test vector store directly.
@@ -13,7 +13,7 @@ async def test_vector_store_filters():
     vid = "test_vec_1"
     vec = [0.1] * 128 # assumption
     try:
-        from openmemory.core.db import q, db
+        from openmemory.core.db import q, db  # type: ignore[import-untyped]
         import time
         now = int(time.time()*1000)
         await q.ins_user("test_user", "Test User", 0, now, now)

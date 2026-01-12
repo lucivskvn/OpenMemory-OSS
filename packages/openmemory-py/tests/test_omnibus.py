@@ -3,16 +3,16 @@ import asyncio
 import time
 import json
 from unittest.mock import patch
-from openmemory.client import Memory
-from openmemory.core.config import env
+from openmemory.client import Memory  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.core.config import env  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 import unittest
 import os
 import shutil
 import base64
 import struct
-from openmemory.core.security import get_encryption
-from openmemory.utils.vectors import compress_vec_for_storage, vec_to_buf, buf_to_vec
-from openmemory.core.db import db
+from openmemory.core.security import get_encryption  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.utils.vectors import compress_vec_for_storage, vec_to_buf, buf_to_vec  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.core.db import db  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 # Force synthetic for tests
 env.emb_kind = "synthetic"
@@ -216,7 +216,7 @@ class TestEncryptionCompression(unittest.TestCase):
         env.encryption_key = self.key
 
         # Reset security singleton to pick up new config values
-        from openmemory.core import security
+        from openmemory.core import security  # type: ignore[import-untyped]
         security._instance = None
 
         self.provider = get_encryption()

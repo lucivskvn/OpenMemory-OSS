@@ -14,21 +14,24 @@ class SpanContext:
     trace_id: str
     span_id: str
     parent_id: Optional[str]
-    user_id: Optional[str]
+    userId: Optional[str]
     name: str
     start_time: int
     metadata: Dict[str, Any] = field(default_factory=dict)
-    
+
 _current_span: ContextVar[Optional["Span"]] = ContextVar("current_span", default=None)
 
 # --- Span Class ---
 
 class Span:
-    def __init__(self, name: str, user_id: Optional[str] = None, parent: Optional["Span"] = None):
+
+    def __init__(
+        self, name: str, userId: Optional[str] = None, parent: Optional["Span"] = None
+    ):
         self.id = str(uuid.uuid4())
         self.trace_id = parent.trace_id if parent else str(uuid.uuid4())
         self.parent_id = parent.id if parent else None
-        self.user_id = user_id or (parent.user_id if parent else "anonymous")
+        self.userId = userId or (parent.userId if parent else "anonymous")
         self.name = name
         self.start_time = int(time.time() * 1000)
         self.end_time: Optional[int] = None
@@ -51,20 +54,20 @@ class Span:
         self.end_time = int(time.time() * 1000)
         # In a real system, we would export the span here
         pass
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "trace_id": self.trace_id,
             "span_id": self.id,
             "parent_id": self.parent_id,
-            "user_id": self.user_id,
+            "userId": self.userId,
             "name": self.name,
             "start_time": self.start_time,
             "end_time": self.end_time,
             "duration": (self.end_time - self.start_time) if self.end_time else None,
             "metadata": self.metadata,
             "events": self.events,
-            "status": self.status
+            "status": self.status,
         }
 
     def __enter__(self):
@@ -100,10 +103,10 @@ class Tracer:
         self.mem = mem # Optional reference to memory system for explainability
 
     @staticmethod
-    def start_span(name: str, user_id: Optional[str] = None) -> Span:
+    def start_span(name: str, userId: Optional[str] = None) -> Span:
         """Start a new span, inheriting context if available."""
         parent = _current_span.get()
-        return Span(name, user_id, parent)
+        return Span(name, userId, parent)
 
     @staticmethod
     def current_span() -> Optional[Span]:
@@ -117,20 +120,22 @@ class Tracer:
         if span:
             headers["x-trace-id"] = span.trace_id
             headers["x-span-id"] = span.id
-            if span.user_id:
-                headers["x-user-id"] = span.user_id
+            if span.userId:
+                headers["x-user-id"] = span.userId
 
-    async def explain_query(self, query: str, user_id: Optional[str] = None) -> Dict[str, Any]:
+    async def explain_query(
+        self, query: str, userId: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Explainable retrieval (Legacy 'trace' method).
         """
         if not self.mem:
             raise RuntimeError("Tracer not initialized with Memory instance")
 
-        with self.start_span("explain_query", user_id=user_id) as span:
+        with self.start_span("explain_query", userId=userId) as span:
             span.set_attribute("query", query)
-            results = await self.mem.search(query, user_id=user_id, debug=True)
-            
+            results = await self.mem.search(query, userId=userId, debug=True)
+
             explanation = []
             for r in results:
                 debug = r.get("_debug", {})
@@ -139,13 +144,14 @@ class Tracer:
                     "content_preview": r["content"][:50],
                     "score_breakdown": debug
                 })
-            
+
             return {
                 "query": query,
-                "user_id": user_id,
+                "userId": userId,
                 "results": explanation,
-                "trace_id": span.trace_id
+                "trace_id": span.trace_id,
             }
+
 
 # --- Decorator ---
 
@@ -154,9 +160,9 @@ def traced(name: Optional[str] = None):
         @wraps(func)
         async def wrapper(*args, **kwargs):
             span_name = name or func.__qualname__
-            # Try to find user_id in kwargs
-            uid = kwargs.get("user_id")
-            with Tracer.start_span(span_name, user_id=uid) as span:
+            # Try to find userId in kwargs
+            uid = kwargs.get("userId")
+            with Tracer.start_span(span_name, userId=uid) as span:
                 return await func(*args, **kwargs)
         return wrapper
     return decorator

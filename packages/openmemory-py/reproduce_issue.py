@@ -1,5 +1,4 @@
-
-from openmemory.server.routers.temporal import FactRequest
+from openmemory.server.routers.temporal import FactRequest  # type: ignore[import-untyped]
 from pydantic import ValidationError
 
 f1 = {

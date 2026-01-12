@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
-from openmemory.server.api import app
-from openmemory.core.config import env
+from openmemory.server.api import app  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.core.config import env  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 # Use TestClient for synchronous API testing
 test_client = TestClient(app)
@@ -11,7 +11,7 @@ def setup_env():
     # Ensure test environment
     env.server_api_key = "test-key"
     env.db_url = "sqlite:///:memory:"
-    from openmemory.core.db import db
+    from openmemory.core.db import db  # type: ignore[import-untyped]
     db.connect(force=True)
     yield
     db.disconnect()

@@ -1,4 +1,3 @@
-
 import httpx
 import json
 import asyncio
@@ -59,21 +58,21 @@ class MemoryClient:
             headers["x-api-key"] = self.token
 
         last_error: Optional[Exception] = None
-        
+
         for attempt in range(self.max_retries):
             try:
                 resp = await self._client.request(method, url, json=json_body, params=params, headers=headers)
-                
+
                 if resp.status_code == 204:
                     return None
-                
+
                 # Check for retryable errors
                 if resp.status_code == 429 or resp.status_code >= 500:
                     delay = self.retry_delay * (2 ** attempt)  # Exponential backoff
                     if attempt < self.max_retries - 1:
                         await asyncio.sleep(delay)
                         continue
-                
+
                 if resp.status_code >= 400:
                     try:
                         err = resp.json()
@@ -83,9 +82,9 @@ class MemoryClient:
                         msg = resp.text
                         details = {}
                     raise OpenMemoryError(f"OpenMemory API Error ({resp.status_code}): {msg}", status_code=resp.status_code, details=details)
-                
+
                 return resp.json()
-                
+
             except httpx.RequestError as e:
                 last_error = OpenMemoryError(f"Connection error: {e}")
                 if attempt < self.max_retries - 1:
@@ -93,7 +92,7 @@ class MemoryClient:
                     await asyncio.sleep(delay)
                     continue
                 raise last_error
-        
+
         if last_error:
             raise last_error
         raise OpenMemoryError("Request failed after retries")
@@ -136,16 +135,16 @@ class MemoryClient:
         """Search for memories."""
         uid = user_id or self.default_user or "anonymous"
         # Filter None from filters is tricky with nested. Re-construct.
-        filters = {"userId": uid}
+        filters: Dict[str, Any] = {"userId": uid}  # type: ignore[assignment]
         if min_salience is not None:
-             filters["minScore"] = min_salience
-             
+            filters["minScore"] = min_salience  # type: ignore[index]
+
         body = {
             "query": query,
             "limit": limit,
             "filters": filters
         }
-            
+
         res = await self._request("POST", "/memory/query", json_body=body)
         return res or []
 
@@ -167,7 +166,7 @@ class MemoryClient:
         if content is not None: body["content"] = content
         if tags is not None: body["tags"] = tags
         if metadata is not None: body["metadata"] = metadata
-        
+
         return await self._request("PATCH", f"/memory/{memory_id}", json_body=body)
 
     async def delete(self, memory_id: str) -> bool:
@@ -279,7 +278,8 @@ class MemoryClient:
     async def get_current_fact(self, subject: str, predicate: str, at: Optional[Union[str, int]] = None) -> Optional[Dict[str, Any]]:
         """Get current valid fact."""
         params = {"subject": subject, "predicate": predicate}
-        if at: params["at"] = at
+        if at:
+            params["at"] = at  # type: ignore[index]  # type: ignore[index]
         res = await self._request("GET", "/api/temporal/fact/current", params=params)
         return res.get("fact")
 
@@ -298,16 +298,22 @@ class MemoryClient:
     async def get_predicate_history(self, predicate: str, start: Optional[Union[str, int]] = None, end: Optional[Union[str, int]] = None) -> List[Dict[str, Any]]:
         """Get history of a predicate."""
         params = {"predicate": predicate}
-        if start: params["from"] = start
-        if end: params["to"] = end
-        res = await self._request("GET", "/api/temporal/history/predicate", params=params)
+        if start:
+            params["from"] = start  # type: ignore[index]  # type: ignore[index]
+        if end:
+            params["to"] = end  # type: ignore[index]  # type: ignore[index]
+        res = await self._request(
+            "GET", "/api/temporal/history/predicate", params=params
+        )
         return res.get("timeline", []) if res else []
 
     async def get_subject_facts(self, subject: str, at: Optional[Union[str, int]] = None, include_historical: bool = False) -> List[Dict[str, Any]]:
         """Get all facts for a subject."""
         params = {}
-        if at: params["at"] = at
-        if include_historical: params["includeHistorical"] = "true"
+        if at:
+            params["at"] = at  # type: ignore[index]  # type: ignore[index]
+        if include_historical:
+            params["includeHistorical"] = "true"
         res = await self._request("GET", f"/api/temporal/subject/{subject}", params=params)
         return res.get("facts", []) if res else []
 
@@ -327,11 +333,12 @@ class MemoryClient:
     async def apply_decay(self, decay_rate: float = 0.01) -> Dict[str, Any]:
         """Apply confidence decay globally."""
         return await self._request("POST", "/api/temporal/decay", json_body={"decayRate": decay_rate})
-    
+
     async def get_volatile_facts(self, subject: Optional[str] = None, limit: int = 10) -> Dict[str, Any]:
         """Get most volatile facts."""
         params = {"limit": limit}
-        if subject: params["subject"] = subject
+        if subject:
+            params["subject"] = subject  # type: ignore[index]  # type: ignore[index]
         return await self._request("GET", "/api/temporal/volatile", params=params)
 
     async def invalidate_edge(self, edge_id: str, valid_to: Optional[Union[str, int]] = None) -> None:
@@ -406,7 +413,7 @@ class MemoryClient:
     async def regenerate_all_user_summaries(self) -> Dict[str, Any]:
         """Regenerate summaries for all users (Admin)."""
         return await self._request("POST", "/users/summaries/regenerate-all")
-    
+
     async def register_user(self, user_id: str, scope: str = "user") -> Dict[str, Any]:
         """Register a new user and generate API key (Admin)."""
         return await self._request("POST", "/users/register", json_body={"userId": user_id, "scope": scope})
@@ -498,8 +505,11 @@ class MemoryClient:
     async def retrieve_energy_based(self, query: str, sector: str = "semantic", min_energy: Optional[float] = None) -> Dict[str, Any]:
         """Energy-based retrieval."""
         body = {"query": query, "sector": sector}
-        if min_energy is not None: body["minEnergy"] = min_energy
-        return await self._request("POST", "/dynamics/retrieval/energy-based", json_body=body)
+        if min_energy is not None:
+            body["minEnergy"] = min_energy  # type: ignore[index]
+        return await self._request(
+            "POST", "/dynamics/retrieval/energy-based", json_body=body
+        )
 
     async def reinforce_trace(self, memory_id: str) -> Dict[str, Any]:
         """Reinforce trace."""
@@ -631,7 +641,7 @@ class MemoryClient:
         headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
         resp = await self._client.get(url, headers=headers)
         if resp.status_code >= 400:
-             raise OpenMemoryError(f"Export failed: {resp.text}", status_code=resp.status_code)
+            raise OpenMemoryError(f"Export failed: {resp.text}", status_code=resp.status_code)
         return resp.text
 
     async def import_data(self, jsonl_data: str) -> Dict[str, Any]:
@@ -641,7 +651,7 @@ class MemoryClient:
         headers["Content-Type"] = "application/x-ndjson"
         resp = await self._client.post(url, content=jsonl_data, headers=headers)
         if resp.status_code >= 400:
-             raise OpenMemoryError(f"Import failed: {resp.text}", status_code=resp.status_code)
+            raise OpenMemoryError(f"Import failed: {resp.text}", status_code=resp.status_code)
         return resp.json()
 
 Client = Memory # Default to direct DB client for backward compat

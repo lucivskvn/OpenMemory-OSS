@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
-from openmemory.connectors.base import BaseConnector, ConnectorError
-from openmemory.integrations.langchain import OpenMemoryVectorStore
+from openmemory.connectors.base import BaseConnector, ConnectorError  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.integrations.langchain import OpenMemoryVectorStore  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 # === Connector Pattern Tests ===
 
@@ -68,7 +68,7 @@ async def test_langchain_search():
 @pytest.mark.asyncio
 async def test_web_crawler_delegation():
     """Verify WebCrawler uses central extraction logic."""
-    from openmemory.connectors.web_crawler import WebCrawlerConnector
+    from openmemory.connectors.web_crawler import WebCrawlerConnector  # type: ignore[import-untyped]
     
     with patch("openmemory.ops.extract.extract_url", new_callable=AsyncMock) as mock_extract:
         mock_extract.return_value = {

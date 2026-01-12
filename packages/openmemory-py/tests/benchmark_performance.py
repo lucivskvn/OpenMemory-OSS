@@ -1,8 +1,8 @@
 import asyncio
 import time
 import uuid
-from openmemory.main import Memory
-from openmemory.core.db import db, q
+from openmemory.main import Memory  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.core.db import db, q  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 async def benchmark():
     client = Memory()
@@ -50,7 +50,7 @@ async def benchmark():
                 (ids[i], ids[i+1], user_id, 0.9, now, now)
             )
             
-    from openmemory.memory.hsg import expand_via_waypoints
+    from openmemory.memory.hsg import expand_via_waypoints  # type: ignore[import-untyped]
     t4 = time.time()
     expanded = await expand_via_waypoints(ids, max_exp=100, user_id=user_id)
     t5 = time.time()

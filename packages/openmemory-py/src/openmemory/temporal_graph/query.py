@@ -8,13 +8,14 @@ from ..core.types import TemporalFact, TemporalEdge
 
 # Port of backend/src/temporal_graph/query.ts
 
+
 async def query_facts_at_time(
     subject: Optional[str] = None,
     predicate: Optional[str] = None,
     fact_object: Optional[str] = None,
     at: Optional[int] = None,
-    min_confidence: float = 0.1,
-    user_id: Optional[str] = None,
+    minConfidence: float = 0.1,
+    userId: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Query facts that were active at a specific point in time.
@@ -24,14 +25,14 @@ async def query_facts_at_time(
         predicate: Optional predicate filter.
         fact_object: Optional object filter.
         at: Timestamp (ms). Default: now.
-        min_confidence: Minimum confidence score.
-        user_id: Owner user ID.
+        minConfidence: Minimum confidence score.
+        userId: Owner user ID.
 
     Returns:
         List of matching TemporalFact dicts.
     """
     ts = at if at is not None else int(time.time()*1000)
-    conds = ["(valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?))"]
+    conds = ["(validFrom <= ? AND (validTo IS NULL OR validTo >= ?))"]
     params = [ts, ts]
 
     if subject:
@@ -43,45 +44,47 @@ async def query_facts_at_time(
     if fact_object:
         conds.append("object = ?")
         params.append(fact_object)  # type: ignore[arg-type]
-    if min_confidence > 0:
+    if minConfidence > 0:
         conds.append("confidence >= ?")
-        params.append(min_confidence)  # type: ignore[arg-type]
-    if user_id:
-        conds.append("user_id = ?")
-        params.append(user_id)  # type: ignore[arg-type]
+        params.append(minConfidence)  # type: ignore[arg-type]
+    if userId:
+        conds.append("userId = ?")
+        params.append(userId)  # type: ignore[arg-type]
 
     t = q.tables
     sql = f"""
-        SELECT id, user_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
+        SELECT id, userId, subject, predicate, object, validFrom, validTo, confidence, lastUpdated, metadata
         FROM {t['temporal_facts']}
         WHERE {' AND '.join(conds)}
-        ORDER BY confidence DESC, valid_from DESC
+        ORDER BY confidence DESC, validFrom DESC
     """
     rows = await db.async_fetchall(sql, tuple(params))
     return [format_fact(r) for r in rows]
 
 
-async def get_current_fact(subject: str, predicate: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+async def get_current_fact(
+    subject: str, predicate: str, userId: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
     """
     Get the currently active fact for a subject and predicate.
 
     Args:
         subject: The subject to query.
         predicate: The predicate to query.
-        user_id: Owner user ID.
+        userId: Owner user ID.
 
     Returns:
         The active TemporalFact or None.
     """
-    user_clause = "AND user_id = ?" if user_id else ""
-    params = (subject, predicate, user_id) if user_id else (subject, predicate)
+    user_clause = "AND userId = ?" if userId else ""
+    params = (subject, predicate, userId) if userId else (subject, predicate)
 
     t = q.tables
     sql = f"""
-        SELECT id, user_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
+        SELECT id, userId, subject, predicate, object, validFrom, validTo, confidence, lastUpdated, metadata
         FROM {t['temporal_facts']}
-        WHERE subject = ? AND predicate = ? {user_clause} AND valid_to IS NULL
-        ORDER BY valid_from DESC
+        WHERE subject = ? AND predicate = ? {user_clause} AND validTo IS NULL
+        ORDER BY validFrom DESC
         LIMIT 1
     """
     row = await db.async_fetchone(sql, params)
@@ -94,8 +97,8 @@ async def query_facts_in_range(
     predicate: Optional[str] = None,
     start: Optional[int] = None,
     end: Optional[int] = None,
-    min_confidence: float = 0.1,
-    user_id: Optional[str] = None,
+    minConfidence: float = 0.1,
+    userId: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Query facts that were active at any point within a time range.
@@ -105,8 +108,8 @@ async def query_facts_in_range(
         predicate: Optional predicate filter.
         start: Start timestamp (ms).
         end: End timestamp (ms).
-        min_confidence: Minimum confidence score.
-        user_id: Owner user ID.
+        minConfidence: Minimum confidence score.
+        userId: Owner user ID.
 
     Returns:
         List of matching TemporalFact dicts.
@@ -116,13 +119,13 @@ async def query_facts_in_range(
 
     if start is not None and end is not None:
         # Overlap: (fact_start <= range_end) AND (fact_end IS NULL OR fact_end >= range_start)
-        conds.append("(valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?))")
+        conds.append("(validFrom <= ? AND (validTo IS NULL OR validTo >= ?))")
         params.extend([end, start])
     elif start is not None:
-        conds.append("valid_from >= ?")
+        conds.append("validFrom >= ?")
         params.append(start)
     elif end is not None:
-        conds.append("valid_from <= ?")
+        conds.append("validFrom <= ?")
         params.append(end)
 
     if subject:
@@ -131,20 +134,20 @@ async def query_facts_in_range(
     if predicate:
         conds.append("predicate = ?")
         params.append(predicate)
-    if min_confidence > 0:
+    if minConfidence > 0:
         conds.append("confidence >= ?")
-        params.append(min_confidence)
-    if user_id:
-        conds.append("user_id = ?")
-        params.append(user_id)
+        params.append(minConfidence)
+    if userId:
+        conds.append("userId = ?")
+        params.append(userId)
 
     where = f"WHERE {' AND '.join(conds)}" if conds else ""
     t = q.tables
     sql = f"""
-        SELECT id, user_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
+        SELECT id, userId, subject, predicate, object, validFrom, validTo, confidence, lastUpdated, metadata
         FROM {t['temporal_facts']}
         {where}
-        ORDER BY valid_from DESC
+        ORDER BY validFrom DESC
     """
     rows = await db.async_fetchall(sql, tuple(params))
     return [format_fact(r) for r in rows]
@@ -154,7 +157,7 @@ async def find_conflicting_facts(
     subject: str,
     predicate: str,
     at: Optional[int] = None,
-    user_id: Optional[str] = None,
+    userId: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Find all facts for a (subject, predicate) that were active at a point in time.
@@ -164,21 +167,23 @@ async def find_conflicting_facts(
         subject: The subject to check.
         predicate: The predicate to check.
         at: Timestamp (ms) to check at.
-        user_id: Owner user ID.
+        userId: Owner user ID.
 
     Returns:
         List of conflicting TemporalFact dicts.
     """
     ts = at if at is not None else int(time.time()*1000)
-    user_clause = "AND user_id = ?" if user_id else ""
-    params = (subject, predicate, ts, ts, user_id) if user_id else (subject, predicate, ts, ts)
+    user_clause = "AND userId = ?" if userId else ""
+    params = (
+        (subject, predicate, ts, ts, userId) if userId else (subject, predicate, ts, ts)
+    )
 
     t = q.tables
     sql = f"""
-        SELECT id, user_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
+        SELECT id, userId, subject, predicate, object, validFrom, validTo, confidence, lastUpdated, metadata
         FROM {t['temporal_facts']}
         WHERE subject = ? AND predicate = ?
-        AND (valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?))
+        AND (validFrom <= ? AND (validTo IS NULL OR validTo >= ?))
         {user_clause}
         ORDER BY confidence DESC
     """
@@ -190,7 +195,7 @@ async def get_facts_by_subject(
     subject: str,
     at: Optional[int] = None,
     include_historical: bool = False,
-    user_id: Optional[str] = None,
+    userId: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Get all facts relating to a specific subject entity.
@@ -199,31 +204,32 @@ async def get_facts_by_subject(
         subject: The subject entity name.
         at: Optional timestamp to filter active facts.
         include_historical: If True, returns ended facts too.
-        user_id: Owner user ID.
+        userId: Owner user ID.
 
     Returns:
         List of matching TemporalFact dicts.
     """
-    user_clause = "AND user_id = ?" if user_id else ""
+    user_clause = "AND userId = ?" if userId else ""
     params: List[Any] = [subject]
-    if user_id: params.append(user_id)
+    if userId:
+        params.append(userId)
 
     t = q.tables
 
     if include_historical:
         sql = f"""
-            SELECT id, user_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
+            SELECT id, userId, subject, predicate, object, validFrom, validTo, confidence, lastUpdated, metadata
             FROM {t['temporal_facts']}
             WHERE subject = ? {user_clause}
-            ORDER BY predicate ASC, valid_from DESC
+            ORDER BY predicate ASC, validFrom DESC
         """
     else:
         ts = at if at is not None else int(time.time()*1000)
         sql = f"""
-            SELECT id, user_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
+            SELECT id, userId, subject, predicate, object, validFrom, validTo, confidence, lastUpdated, metadata
             FROM {t['temporal_facts']}
             WHERE subject = ?
-            AND (valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?))
+            AND (validFrom <= ? AND (validTo IS NULL OR validTo >= ?))
             {user_clause}
             ORDER BY predicate ASC, confidence DESC
         """
@@ -239,20 +245,21 @@ async def search_facts(
     field: str = "subject",
     at: Optional[int] = None,
     limit: int = 100,
-    user_id: Optional[str] = None,
+    userId: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Search facts using LIKE pattern matching on subject, predicate, or object."""
     ts = at if at is not None else int(time.time()*1000)
     search_pat = f"%{pattern}%"
-    
-    user_clause = "AND user_id = ?" if user_id else ""
+
+    user_clause = "AND userId = ?" if userId else ""
     params: List[Any] = [ts, ts]
-    if user_id: params.append(user_id)
+    if userId:
+        params.append(userId)
     params.append(limit)
-    
+
     where_clause = ""
     query_params = []
-    
+
     if field in ["subject", "predicate", "object"]:
         where_clause = f"{field} LIKE ?"
         query_params = [search_pat]
@@ -260,17 +267,17 @@ async def search_facts(
         # "all" or invalid field -> search all columns
         where_clause = "(subject LIKE ? OR predicate LIKE ? OR object LIKE ?)"
         query_params = [search_pat, search_pat, search_pat]
-        
+
     full_params = query_params + params
 
     t = q.tables
     sql = f"""
-        SELECT id, user_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
+        SELECT id, userId, subject, predicate, object, validFrom, validTo, confidence, lastUpdated, metadata
         FROM {t['temporal_facts']}
         WHERE {where_clause}
-        AND (valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?))
+        AND (validFrom <= ? AND (validTo IS NULL OR validTo >= ?))
         {user_clause}
-        ORDER BY confidence DESC, valid_from DESC
+        ORDER BY confidence DESC, validFrom DESC
         LIMIT ?
     """
     rows = await db.async_fetchall(sql, tuple(full_params))
@@ -278,56 +285,59 @@ async def search_facts(
 
 
 async def query_edges(
-    source_id: Optional[str] = None,
-    target_id: Optional[str] = None,
-    relation_type: Optional[str] = None,
+    sourceId: Optional[str] = None,
+    targetId: Optional[str] = None,
+    relationType: Optional[str] = None,
     at: Optional[int] = None,
-    user_id: Optional[str] = None,
+    userId: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Query temporal edges with optional filters."""
     ts = at if at is not None else int(time.time()*1000)
-    conds = ["(valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?))"]
+    conds = ["(validFrom <= ? AND (validTo IS NULL OR validTo >= ?))"]
     params: List[Any] = [ts, ts]
 
-    if source_id:
-        conds.append("source_id = ?")
-        params.append(source_id)
-    if target_id:
-        conds.append("target_id = ?")
-        params.append(target_id)
-    if relation_type:
-        conds.append("relation_type = ?")
-        params.append(relation_type)
-    if user_id:
-        conds.append("user_id = ?")
-        params.append(user_id)
+    if sourceId:
+        conds.append("sourceId = ?")
+        params.append(sourceId)
+    if targetId:
+        conds.append("targetId = ?")
+        params.append(targetId)
+    if relationType:
+        conds.append("relationType = ?")
+        params.append(relationType)
+    if userId:
+        conds.append("userId = ?")
+        params.append(userId)
 
     t = q.tables
     sql = f"""
-        SELECT id, user_id, source_id, target_id, relation_type, valid_from, valid_to, weight, metadata
+        SELECT id, userId, sourceId, targetId, relationType, validFrom, validTo, weight, metadata
         FROM {t['temporal_edges']}
         WHERE {' AND '.join(conds)}
-        ORDER BY weight DESC, valid_from DESC
+        ORDER BY weight DESC, validFrom DESC
     """
     rows = await db.async_fetchall(sql, tuple(params))
-    return [{
-        "id": r["id"],
-        "user_id": r["user_id"],
-        "source_id": r["source_id"],
-        "target_id": r["target_id"],
-        "relation_type": r["relation_type"],
-        "valid_from": r["valid_from"],
-        "valid_to": r["valid_to"],
-        "weight": r["weight"],
-        "metadata": json.loads(r["metadata"]) if r["metadata"] else None
-    } for r in rows]
+    return [
+        {
+            "id": r["id"],
+            "userId": r["userId"],
+            "sourceId": r["sourceId"],
+            "targetId": r["targetId"],
+            "relationType": r["relationType"],
+            "validFrom": r["validFrom"],
+            "validTo": r["validTo"],
+            "weight": r["weight"],
+            "metadata": json.loads(r["metadata"]) if r["metadata"] else None,
+        }
+        for r in rows
+    ]
 
 
 async def get_related_facts(
     fact_id: str,
-    relation_type: Optional[str] = None,
+    relationType: Optional[str] = None,
     at: Optional[int] = None,
-    user_id: Optional[str] = None,
+    userId: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Perform a 1-hop traversal from a source fact.
@@ -337,50 +347,52 @@ async def get_related_facts(
     """
     ts = at if at is not None else int(time.time()*1000)
 
-    sql_conds = ["e.source_id = ?", "(e.valid_from <= ? AND (e.valid_to IS NULL OR e.valid_to >= ?))"]
+    sql_conds = [
+        "e.sourceId = ?",
+        "(e.validFrom <= ? AND (e.validTo IS NULL OR e.validTo >= ?))",
+    ]
     params = [fact_id, ts, ts]
 
-    if relation_type:
-        sql_conds.append("e.relation_type = ?")
-        params.append(relation_type)
+    if relationType:
+        sql_conds.append("e.relationType = ?")
+        params.append(relationType)
 
     # f validation
-    sql_conds.append("(f.valid_from <= ? AND (f.valid_to IS NULL OR f.valid_to >= ?))")
+    sql_conds.append("(f.validFrom <= ? AND (f.validTo IS NULL OR f.validTo >= ?))")
     params.extend([ts, ts])
 
-    if user_id:
-        sql_conds.append("e.user_id = ?")
-        params.append(user_id)
+    if userId:
+        sql_conds.append("e.userId = ?")
+        params.append(userId)
 
     t = q.tables
     sql = f"""
-        SELECT f.*, e.relation_type, e.weight, e.user_id as edge_user_id
+        SELECT f.*, e.relationType, e.weight, e.userId as edge_userId
         FROM {t['temporal_edges']} e
-        JOIN {t['temporal_facts']} f ON e.target_id = f.id
+        JOIN {t['temporal_facts']} f ON e.targetId = f.id
         WHERE {' AND '.join(sql_conds)}
         ORDER BY e.weight DESC, f.confidence DESC
     """
 
     rows = await db.async_fetchall(sql, tuple(params))
-    return [{
-        "fact": format_fact(r),
-        "relation": r["relation_type"],
-        "weight": r["weight"]
-    } for r in rows]
+    return [
+        {"fact": format_fact(r), "relation": r["relationType"], "weight": r["weight"]}
+        for r in rows
+    ]
 
 
 def format_fact(row: Dict[str, Any]) -> Dict[str, Any]:
     """Helper to deserialize metadata and format a database row as a TemporalFact dict."""
-    # Use internal snake_case names for the dict, but Pydantic handles the aliases
+    # Use camelCase names for the dict to match TypedDict
     return {
         "id": row["id"],
-        "user_id": row.get("user_id"),
+        "userId": row.get("userId"),
         "subject": row["subject"],
         "predicate": row["predicate"],
         "object": row["object"],
-        "valid_from": row["valid_from"],
-        "valid_to": row["valid_to"],
+        "validFrom": row["validFrom"],
+        "validTo": row["validTo"],
         "confidence": row["confidence"],
-        "last_updated": row["last_updated"],
-        "metadata": json.loads(row["metadata"]) if row["metadata"] else None
+        "lastUpdated": row["lastUpdated"],
+        "metadata": json.loads(row["metadata"]) if row["metadata"] else None,
     }

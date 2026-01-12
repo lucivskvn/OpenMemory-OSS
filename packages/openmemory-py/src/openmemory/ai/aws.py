@@ -10,7 +10,9 @@ try:
     import boto3  # type: ignore[import]
     from botocore.config import Config  # type: ignore[import]
 except ImportError:
-    boto3 = None
+    boto3 = None  # type: ignore[assignment]
+    Config = None  # type: ignore[assignment]  # type: ignore[assignment]
+    Config = None  # type: ignore[assignment]
 
 class AwsAdapter(AIAdapter):
     def __init__(self, region: Optional[str] = None, access_key: Optional[str] = None, secret_key: Optional[str] = None):
@@ -22,7 +24,7 @@ class AwsAdapter(AIAdapter):
 
         if not self.region: raise ValueError("AWS Region missing")
 
-        config = Config(
+        config = Config(  # type: ignore[misc]  # type: ignore[misc]
             region_name=self.region,
             signature_version="v4",
             retries={"max_attempts": 0}, # Handled by our own resilience

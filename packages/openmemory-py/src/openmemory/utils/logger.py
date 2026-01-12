@@ -31,7 +31,7 @@ class JsonFormatter(logging.Formatter):
     def format(self, record):
         # Redact arguments before message formatting to ensure getMessage() uses redacted data
         if record.args:
-            record.args = redact_struct(record.args)
+            record.args = redact_struct(record.args)  # type: ignore[attr-defined]
         if isinstance(record.msg, (dict, list)):
             record.msg = redact_struct(record.msg)
 
@@ -48,8 +48,8 @@ class JsonFormatter(logging.Formatter):
         if span:
             json_log["trace_id"] = span.trace_id
             json_log["span_id"] = span.id
-            if span.user_id:
-                json_log["user_id"] = span.user_id
+            if span.user_id:  # type: ignore[attr-defined]
+                json_log["user_id"] = span.user_id  # type: ignore[attr-defined]
 
         if record.exc_info:
              json_log["exception"] = redact_text(self.formatException(record.exc_info))

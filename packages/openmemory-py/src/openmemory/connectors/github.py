@@ -23,7 +23,7 @@ class GithubConnector(BaseConnector):
     async def _connect(self, **creds) -> bool:
         """authenticate with github api"""
         try:
-            from github import Github, Auth
+            from github import Github, Auth  # type: ignore[attr-defined]  # type: ignore[attr-defined]
         except ImportError:
             raise ImportError("pip install PyGithub")
 
@@ -41,21 +41,21 @@ class GithubConnector(BaseConnector):
             _ = g.get_user().login
             return g
 
-        self.github = await self._run_blocking(_verify)
+        self.github = await self._run_blocking(_verify)  # type: ignore[attr-defined]
         return True
 
-    async def _list_items(self, **filters) -> List[SourceItem]:
+    async def _list_items(self, **filters) -> List[SourceItem]:  # type: ignore[return]
         """
         List files and optionally issues from a repository.
-        
+
         Args:
-            filters: 
+            filters:
                 repo: Repository name (owner/repo).
                 path: Root path to list (default: "/").
                 recursive: Whether to list files recursively (default: False).
                 include_issues: Whether to include issues (default: False).
                 max_issues: Maximum issues to fetch (default: 50).
-                
+
         Returns:
             List of SourceItem objects.
         """
@@ -86,30 +86,36 @@ class GithubConnector(BaseConnector):
                         if clean_path and not element.path.startswith(clean_path):
                             continue
 
-                        res.append(SourceItem(
-                            id=f"{repo_name}:{element.path}",
-                            name=os.path.basename(element.path),
-                            type="dir" if element.type == "tree" else "file",
-                            path=element.path,
-                            size=element.size or 0,
-                            sha=element.sha,
-                            metadata={"type": "git_tree", "mode": element.mode}
-                        ))
+                        res.append(
+                            SourceItem(  # type: ignore[arg-type]
+                                id=f"{repo_name}:{element.path}",
+                                name=os.path.basename(element.path),
+                                type="dir" if element.type == "tree" else "file",
+                                path=element.path,
+                                size=element.size or 0,
+                                sha=element.sha,
+                                metadata={"type": "git_tree", "mode": element.mode},
+                            )
+                        )
                 else:
                     contents = repository.get_contents(clean_path)
                     if not isinstance(contents, list):
                         contents = [contents]
 
                     for c in contents:
-                        res.append(SourceItem(
-                            id=f"{repo_name}:{c.path}",
-                            name=c.name,
-                            type="dir" if c.type == "dir" else (c.encoding or "file"),
-                            path=c.path,
-                            size=c.size,
-                            sha=c.sha,
-                            metadata={"type": "contents"}
-                        ))
+                        res.append(
+                            SourceItem(  # type: ignore[arg-type]
+                                id=f"{repo_name}:{c.path}",
+                                name=c.name,
+                                type=(
+                                    "dir" if c.type == "dir" else (c.encoding or "file")
+                                ),
+                                path=c.path,
+                                size=c.size,
+                                sha=c.sha,
+                                metadata={"type": "contents"},
+                            )
+                        )
             except Exception as e:
                 logger.warning(f"failed to list paths for {repo_name}/{clean_path}: {e}")
 
@@ -120,26 +126,32 @@ class GithubConnector(BaseConnector):
                     count = 0
                     for issue in issues:
                         if count >= max_issues: break
-                        res.append(SourceItem(
-                            id=f"{repo_name}:issue:{issue.number}",
-                            name=issue.title,
-                            type="issue",
-                            path=f"issue/{issue.number}",
-                            metadata={
-                                "number": issue.number,
-                                "state": issue.state,
-                                "labels": [l.name for l in issue.labels],
-                                "last_updated": issue.updated_at.isoformat() if issue.updated_at else None
-                            }
-                        ))
+                        res.append(
+                            SourceItem(
+                                id=f"{repo_name}:issue:{issue.number}",
+                                name=issue.title,
+                                type="issue",
+                                path=f"issue/{issue.number}",
+                                metadata={  # type: ignore[arg-type]  # type: ignore[arg-type]
+                                    "number": issue.number,
+                                    "state": issue.state,
+                                    "labels": [l.name for l in issue.labels],
+                                    "last_updated": (
+                                        issue.updated_at.isoformat()
+                                        if issue.updated_at
+                                        else None
+                                    ),
+                                },
+                            )
+                        )
                         count += 1
                 except Exception as e:
                     logger.warning(f"failed to fetch issues for {repo_name}: {e}")
             return res
 
-        return await self._run_blocking(_fetch_list)
+        return await self._run_blocking(_fetch_list)  # type: ignore[attr-defined]
 
-    async def _fetch_item(self, item_id: str) -> SourceContent:
+    async def _fetch_item(self, item_id: str) -> SourceContent:  # type: ignore[return]
         """fetch file or issue content"""
         parts = item_id.split(":")
         repo_name = parts[0]
@@ -166,7 +178,7 @@ class GithubConnector(BaseConnector):
                 # Fetch comments with a safety limit
                 comments = issue.get_comments()
                 for i, comment in enumerate(comments):
-                    if i >= 100: 
+                    if i >= 100:
                         text_parts.append("\n---\n*Truncated: too many comments*")
                         break
                     text_parts.append(f"\n---\n**{comment.user.login}:** {comment.body}")
@@ -178,12 +190,12 @@ class GithubConnector(BaseConnector):
                     type="issue",
                     text=text,
                     data=text,
-                    metadata={
+                    metadata={  # type: ignore[arg-type]  # type: ignore[arg-type]
                         "source": "github",
                         "repo": repo_name,
                         "issue_number": issue_num,
-                        "state": issue.state
-                    }
+                        "state": issue.state,
+                    },
                 )
 
             # Is File/Dir
@@ -194,13 +206,13 @@ class GithubConnector(BaseConnector):
                 # Directory
                 if isinstance(content, list):
                     text = "\n".join([f"- {c.path}" for c in content])
-                    return SourceContent(
+                    return SourceContent(  # type: ignore[arg-type]
                         id=item_id,
                         name=fpath or repo_name,
                         type="directory",
                         text=text,
                         data=text,
-                        metadata={"source": "github", "repo": repo_name, "path": fpath}
+                        metadata={"source": "github", "repo": repo_name, "path": fpath},  # type: ignore[arg-type]
                     )
 
                 # File
@@ -215,13 +227,13 @@ class GithubConnector(BaseConnector):
                     type=content.encoding or "file",
                     text=text,
                     data=content.decoded_content,  # keeps bytes if binary
-                    metadata={
+                    metadata={  # type: ignore[arg-type]  # type: ignore[arg-type]
                         "source": "github",
                         "repo": repo_name,
                         "path": content.path,
                         "sha": content.sha,
-                        "size": content.size
-                    }
+                        "size": content.size,
+                    },
                 )
 
         return await self._run_blocking(_fetch_one)

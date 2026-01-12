@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from openmemory.ai.adapters import FailoverAdapter
-from openmemory.ai.exceptions import AIProviderError
+from openmemory.ai.adapters import FailoverAdapter  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.ai.exceptions import AIProviderError  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 @pytest.mark.asyncio
 async def test_failover_logic_chat():

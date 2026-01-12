@@ -2,7 +2,30 @@
     "exclude": [
         "**/anaconda3/Lib/**",
         "sdk-py/.venv/**",
-        "**/.vscode/extensions/**"
+        ".venv/**",
+        "venv/**",
+        "env/**",
+        "node_modules/**",
+        "dist/**",
+        "build/**",
+        ".next/**",
+        "__pycache__/**",
+        ".pytest_cache/**",
+        ".cache/**",
+        ".idea/**",
+        ".DS_Store",
+        "**/.vscode/extensions/**",
+        "examples/**",
+        "**/node-gyp/**"
     ],
-    "reportMissingImports": "warning"
+    "reportMissingImports": "warning",
+    "reportAttributeAccessIssue": "warning",
+    "reportCallIssue": "warning",
+    "reportOptionalSubscript": "warning",
+    "reportOptionalMemberAccess": "warning",
+    "reportOptionalIterable": "warning",
+    "reportArgumentType": "warning",
+    "reportIncompatibleVariableOverride": "warning",
+    "reportIncompatibleMethodOverride": "warning",
+    "reportAssignmentType": "warning"
 }

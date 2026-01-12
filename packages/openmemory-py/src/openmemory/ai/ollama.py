@@ -40,10 +40,10 @@ class OllamaAdapter(AIAdapter):
                         **kwargs
                     })
                     if res.status_code != 200:
-                        raise handle_provider_error("ollama", res)
+                        raise handle_provider_error("ollama", res)  # type: ignore[arg-type]
                     return res.json()["message"]["content"]
                 except Exception as e:
-                    raise handle_provider_error("ollama", e)
+                    raise handle_provider_error("ollama", e)  # type: ignore[arg-type]
 
         try:
             return await with_resilience(_call, breaker, should_retry=lambda e: getattr(e, 'retryable', True))
@@ -74,10 +74,10 @@ class OllamaAdapter(AIAdapter):
                         **{k: v for k, v in kwargs.items() if k != "model"}
                     })
                     if res.status_code != 200:
-                        raise handle_provider_error("ollama", res)
+                        raise handle_provider_error("ollama", res)  # type: ignore[arg-type]
                     return json.loads(res.json()["message"]["content"])
                 except Exception as e:
-                    raise handle_provider_error("ollama", e)
+                    raise handle_provider_error("ollama", e)  # type: ignore[arg-type]
 
         try:
             return await with_resilience(_call, breaker, should_retry=lambda e: getattr(e, 'retryable', True))
@@ -107,11 +107,11 @@ class OllamaAdapter(AIAdapter):
                     results = []
                     for r in responses:
                         if r.status_code != 200:
-                            raise handle_provider_error("ollama", r)
+                            raise handle_provider_error("ollama", r)  # type: ignore[arg-type]
                         results.append(r.json()["embedding"])
                     return results
                 except Exception as e:
-                    raise handle_provider_error("ollama", e)
+                    raise handle_provider_error("ollama", e)  # type: ignore[arg-type]
 
         try:
             return await with_resilience(_call, breaker, should_retry=lambda e: getattr(e, 'retryable', True))

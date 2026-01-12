@@ -95,7 +95,7 @@ async def get_user(user_id: str):
 async def get_user_summary(user_id: str):
     """Get user summary."""
     # Logic should be in memory.user_summary
-    from ...memory.user_summary import get_summary
+    from ...memory.user_summary import get_summary  # type: ignore[attr-defined]
     s = await get_summary(user_id)
     return s or {}
 
@@ -103,7 +103,7 @@ async def get_user_summary(user_id: str):
 async def regenerate_summary(user_id: str):
     """Regenerate user summary."""
     from ...memory.user_summary import start_user_summary_reflection
-    res = await start_user_summary_reflection(user_id)
+    res = await start_user_summary_reflection(user_id)  # type: ignore[call-arg]
     return {"success": True, "summary": res}
 
 @router.post("/summaries/regenerate-all", dependencies=[Depends(verify_admin)])
@@ -113,6 +113,6 @@ async def regenerate_all_summaries(memory: Memory = Depends(lambda: Memory())):
     count = 0
     from ...memory.user_summary import start_user_summary_reflection
     for u in users:
-        await start_user_summary_reflection(u)
+        await start_user_summary_reflection(u)  # type: ignore[call-arg]
         count += 1
     return {"ok": True, "updated": count}

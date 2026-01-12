@@ -1,7 +1,7 @@
 import unittest
-import openmemory
-from openmemory.client import OpenMemory, Memory, Client
-from openmemory.core.types import MemoryItem
+import openmemory  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.client import OpenMemory, Memory, Client  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.core.types import MemoryItem  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 class TestStructure(unittest.TestCase):
     def test_version_exposed(self):

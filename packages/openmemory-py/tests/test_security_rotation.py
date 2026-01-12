@@ -3,15 +3,15 @@ import pytest
 import asyncio
 import time
 
-# Set env vars BEFORE importing anything from openmemory
+# Set env vars BEFORE importing anything from openmemory  # type: ignore[import-untyped]
 os.environ["OM_ENCRYPTION_ENABLED"] = "true"
 os.environ["OM_ENCRYPTION_KEY"] = "original-secret-key-12345"
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 
-from openmemory.main import Memory
-from openmemory.core.config import env
-from openmemory.core.db import db, q
-import openmemory.core.security as sec
+from openmemory.main import Memory  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.core.config import env  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.core.db import db, q  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+import openmemory.core.security as sec  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 @pytest.mark.asyncio
 async def test_key_rotation():

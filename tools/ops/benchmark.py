@@ -3,7 +3,7 @@ import asyncio
 import time
 import random
 import argparse
-from openmemory.client import Memory
+from openmemory.client import Memory  # type: ignore[import-untyped]
 
 # ==================================================================================
 # BENCHMARK TOOL

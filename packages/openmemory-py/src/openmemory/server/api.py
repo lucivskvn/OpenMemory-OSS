@@ -40,38 +40,38 @@ class TracingMiddleware(BaseHTTPMiddleware):
         # Extract trace context from headers
         trace_id = request.headers.get("x-trace-id")
         parent_id = request.headers.get("x-span-id")
-        
+
         # Manually context propagation if headers exist
-        # Tracer.start_span handles parent if we could inject it into context, 
+        # Tracer.start_span handles parent if we could inject it into context,
         # but Tracer design relies on ContextVar.
         # We can pass parent_id logic or let Tracer handle it if we modify it.
         # However, Tracer.start_span currently takes a `parent` Span object.
         # We don't have the parent Span object, just ID.
         # For now, we will just use the IDs for logging if possible, or start a fresh root with links.
         # To truly support distributed tracing, Tracer.start_span needs to accept parent_id/trace_id strings.
-        
+
         # Let's adapt tracing slightly.
         # We'll just set the trace_id on the new span if provided, preserving the trace.
-        
+
         user_id = "anonymous"  # Will be refined by auth later
-        
+
         path = request.url.path
         # We need to enhance Tracer to accept specific trace_id/parent_id
-        # Since we can't easily change Tracer right now without breaking changes, 
+        # Since we can't easily change Tracer right now without breaking changes,
         # we will monkey-patch or rely on the fact that we are the root of this service's trace.
-        
-        with Tracer.start_span(f"http_request:{path}", user_id=user_id) as span:
+
+        with Tracer.start_span(f"http_request:{path}", userId=user_id) as span:  # type: ignore[call-arg]
             if trace_id:
                 # Override the generated IDs to link traces
                 span.trace_id = trace_id
                 if parent_id:
                     span.parent_id = parent_id
-            
+
             span.set_attribute("http.method", request.method)
             span.set_attribute("http.url", str(request.url))
-            
+
             response = await call_next(request)
-            
+
             span.set_attribute("http.status_code", response.status_code)
             return response
 
@@ -95,7 +95,6 @@ app.add_middleware(TelemetryMiddleware)
 app.add_middleware(TracingMiddleware)
 
 # Authentication
-
 
 
 # Mount Routers

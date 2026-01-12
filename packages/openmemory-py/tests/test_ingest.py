@@ -15,7 +15,7 @@ async def test_ingest_url_accepts_tags():
         }
         mock_add_mem.return_value = {"id": "mem_1"}
         
-        from openmemory.ops.ingest import ingest_url
+        from openmemory.ops.ingest import ingest_url  # type: ignore[import-untyped]
         
         tags = ["news", "tech"]
         await ingest_url("http://test.com", tags=tags, user_id="u1")
@@ -40,7 +40,7 @@ async def test_ingest_document_root_child_propagate_tags():
         }
         mock_mk_root.return_value = "root_1"
         
-        from openmemory.ops.ingest import ingest_document
+        from openmemory.ops.ingest import ingest_document  # type: ignore[import-untyped]
         
         tags = ["dataset", "large"]
         await ingest_document("text", "data", tags=tags, user_id="u1", cfg={"force_root": True})

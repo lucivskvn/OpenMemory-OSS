@@ -1,9 +1,10 @@
 import pytest
 import asyncio
 import os
-from openmemory.core.db import db, Queries
-from openmemory.core.config import OpenMemoryConfig, load_config
-import pytest_asyncio
+from openmemory.core.db import db, Queries  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.core.config import OpenMemoryConfig, load_config  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+import pytest_asyncio  # type: ignore[import-untyped]
+  # type: ignore[import-untyped]
 
 # Re-use the existing db fixture logic or define a fresh one for hardening tests
 @pytest_asyncio.fixture
@@ -17,7 +18,7 @@ async def test_db():
     # Connect to test DB
     db.conn = None # Force reconnect
     # We need to hack the env/config temporarily
-    from openmemory.core.config import env
+    from openmemory.core.config import env  # type: ignore[import-untyped]
     orig_env_url = env.db_url
     env.db_url = test_url
     

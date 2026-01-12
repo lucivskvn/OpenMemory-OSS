@@ -1,7 +1,7 @@
 
 import pytest
 from unittest.mock import AsyncMock, patch
-from openmemory.ops.ingest import ingest_document
+from openmemory.ops.ingest import ingest_document  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 @pytest.mark.asyncio
 async def test_ingest_document_chunking_integration():

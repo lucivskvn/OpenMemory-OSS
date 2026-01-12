@@ -81,8 +81,6 @@ def compute_tag_match_score_sync(tags_json: Optional[str], q_toks: Set[str]) -> 
         return 0.0
 
 
-
-
 def classify_content(content: str, metadata: Any = None) -> Dict[str, Any]:
     # return {primary, additional, confidence}
     meta_sec = metadata.get("sector") if isinstance(metadata, dict) else None
@@ -112,7 +110,6 @@ def classify_content(content: str, metadata: Any = None) -> Dict[str, Any]:
         "additional": additional,
         "confidence": confidence
     }
-
 
 
 def boosted_sim(s: float) -> float:
@@ -248,7 +245,7 @@ def compute_hybrid_score(sim: float, tok_ov: float, ww: float, rec_sc: float, kw
 
 async def create_single_waypoint(new_id: str, new_mean: List[float], ts: int, user_id: str = "anonymous"):
     """
-    Creates an associative link between a new memory and its most semantically similar 
+    Creates an associative link between a new memory and its most semantically similar
     predecessor within the same user's scope.
     """
     # Strictly isolate by user_id
@@ -257,7 +254,7 @@ async def create_single_waypoint(new_id: str, new_mean: List[float], ts: int, us
     else:
         # For anonymous, we still want to isolate to anonymous cluster
         mems = await q.all_mem(250, 0, user_id="anonymous")
-        
+
     best = None
     best_sim = -1.0
 
@@ -281,18 +278,18 @@ async def create_single_waypoint(new_id: str, new_mean: List[float], ts: int, us
 
 async def create_inter_mem_waypoints(new_id: str, prim_sec: str, new_vec: List[float], ts: int, user_id: str = "anonymous"):
     """
-    Creates bi-directional semantic links between memories in the same sector 
+    Creates bi-directional semantic links between memories in the same sector
     and same user scope if they exceed a similarity threshold.
     """
     thresh = 0.85 # Increased threshold for higher precision in inter-mem links
     wt = 0.5
-    
+
     t = q.tables
     # CRITICAL: Added user_id filter to prevent cross-user linkage
     # Also added LIMIT 100 to prevent performance degradation/OOM with large memory bases
     sql = f"SELECT id, v FROM {t['vectors']} WHERE sector=? AND user_id=? ORDER BY id DESC LIMIT 100"
     rows = await db.async_fetchall(sql, (prim_sec, user_id))
-    
+
     nv = np.array(new_vec, dtype=np.float32)
     for r in rows:
         if r["id"] == new_id:
@@ -341,7 +338,7 @@ async def _learned_refine(content: str, mean_vec: List[float], user_id: str, for
             learned_cls = LearnedClassifier.predict(mean_vec, model)
             if learned_cls["confidence"] > 0.4:
                 logger.info(f"[HSG] Learned Refinement for {user_id}: {learned_cls['primary']} (conf: {learned_cls['confidence']:.2f})")
-                
+
                 if not forced_sector:
                     refined["primary"] = learned_cls["primary"]
                 refined["additional"] = learned_cls["additional"]
@@ -359,12 +356,12 @@ async def _graph_link(mid: str, mean_vec: List[float], primary_sector: str, user
 async def add_hsg_memory(content: str, tags: Optional[str] = None, metadata: Any = None, user_id: Optional[str] = None, commit: bool = True, id_override: Optional[str] = None, created_at_override: Optional[int] = None) -> Dict[str, Any]:
     async with transaction():
         simhash = compute_simhash(content)
-        
+
         if id_override:
             existing_id = await q.get_mem(id_override, user_id)
             if existing_id:
                 # If recovering, maybe we update? Or skip?
-                pass 
+                pass
 
         existing = await q.get_mem_by_simhash(simhash, user_id)
 
@@ -409,15 +406,15 @@ async def add_hsg_memory(content: str, tags: Optional[str] = None, metadata: Any
             refined = await _learned_refine(content, mean_vec, user_id, forced_sector)
             if refined["primary"]:
                 logger.info(f"[HSG] Applying Learned Refinement: {cls['primary']} -> {refined['primary']}")
-                
+
                 if refined["primary"] not in all_secs:
                     new_emb = await embed_for_sector(content, refined["primary"], user_id=user_id)
                     emb_res.append({"sector": refined["primary"], "vector": new_emb, "dim": len(new_emb)})
                     all_secs.append(refined["primary"])
                     mean_vec = calc_mean_vec(emb_res, [refined["primary"]] + refined["additional"])
-                
+
                 cls["primary"] = refined["primary"]
-            
+
             cls["additional"] = list(set(cls["additional"] + refined["additional"]))
 
         # Mean Vector Buffering
@@ -464,13 +461,13 @@ async def add_hsg_memory(content: str, tags: Optional[str] = None, metadata: Any
             updated_at=now_ts,
             last_seen_at=now_ts,
             salience=init_sal,
-            decay_lambda=sec_cfg["decay_lambda"],
+            decay_lambda=sec_cfg.get("decay_lambda", 0.95),  # type: ignore[literal-required]
             version=1,
             mean_dim=len(mean_vec),
-            mean_vec=mean_buf,
-            compressed_vec=comp_buf,
+            mean_vec=mean_buf,  # type: ignore[arg-type]
+            compressed_vec=comp_buf,  # type: ignore[arg-type]
             feedback_score=0,
-            commit=False
+            commit=False,
         )
 
         # Store Sector-specific Vectors
@@ -484,7 +481,7 @@ async def add_hsg_memory(content: str, tags: Optional[str] = None, metadata: Any
         if user_id:
             def _bg_summary_update():
                 asyncio.create_task(update_user_summary(user_id))
-            
+
             # Simple wrapper or just fire and forget but with a logger catch?
             # Better to use a safe launcher helper if we had one, but strict inline:
             async def _safe_update():
@@ -492,7 +489,7 @@ async def add_hsg_memory(content: str, tags: Optional[str] = None, metadata: Any
                     await update_user_summary(user_id)
                 except Exception as e:
                     logger.error(f"[HSG] Background summary update failed: {e}")
-            
+
             asyncio.create_task(_safe_update())
 
         return {
@@ -504,7 +501,7 @@ async def add_hsg_memory(content: str, tags: Optional[str] = None, metadata: Any
             "salience": init_sal,
             "created_at": now_ts,
             "simhash": simhash,
-            "generated_summary": None 
+            "generated_summary": None
         }
 
 async def add_hsg_memories(items: List[Dict[str, Any]], user_id: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -513,10 +510,10 @@ async def add_hsg_memories(items: List[Dict[str, Any]], user_id: Optional[str] =
     items: List of {'content', 'tags', 'metadata'}
     """
     if not items: return []
-    
+
     results = [None] * len(items)
     pending_ingestion = [] # Indices of items that need embedding
-    
+
     # 1. Deduplication loop (Fast check)
     async with transaction():
         for i, item in enumerate(items):
@@ -527,7 +524,7 @@ async def add_hsg_memories(items: List[Dict[str, Any]], user_id: Optional[str] =
                 now = int(time.time()*1000)
                 boost = min(1.0, (existing["salience"] or 0) + COGNITIVE_PARAMS["DEDUPLICATION_BOOST"])
                 await q.upd_seen(existing["id"], now, boost, now, user_id)
-                results[i] = {
+                results[i] = {  # type: ignore[index]
                     "id": existing["id"],
                     "deduplicated": True,
                     "created_at": existing.get("created_at", now)
@@ -552,18 +549,18 @@ async def add_hsg_memories(items: List[Dict[str, Any]], user_id: Optional[str] =
     # 2. Batch Embedding
     emb_payload = [{"id": p["id"], "content": p["content"], "sectors": p["sectors"]} for p in pending_ingestion]
     emb_results = await embed_batch_multi_sector(emb_payload, user_id=user_id, commit=True)
-    
+
     # 3. Final Ingestion Loop
     encryption = get_encryption()
     now_ts = int(time.time()*1000)
-    
+
     async with transaction():
         # Pre-fetch user and segment info once
         if user_id:
             u = await q.get_user(user_id)
             if not u:
                 await q.ins_user(user_id, "User profile initializing...", 0, now_ts, now_ts)
-        
+
         max_seg_res = await q.get_max_segment(user_id)
         cur_seg = max_seg_res["max_seg"] if max_seg_res else 0
         cnt_res = await q.get_segment_count(cur_seg, user_id)
@@ -576,13 +573,13 @@ async def add_hsg_memories(items: List[Dict[str, Any]], user_id: Optional[str] =
             cls = p["cls"]
             sh = p["simhash"]
             embs = emb_results[i]
-            
+
             mean_vec = calc_mean_vec(embs, p["sectors"])
-            
+
             # 3b. Batch Learned Refinement
             if user_id:
                 refined = await _learned_refine(content, mean_vec, user_id)
-                
+
                 if refined["primary"]:
                     # Parity Fix: If primary changed to a new sector, we MUST embed it
                     if refined["primary"] not in p["sectors"]:
@@ -600,16 +597,16 @@ async def add_hsg_memories(items: List[Dict[str, Any]], user_id: Optional[str] =
                 p["cls"]["additional"] = list(set(p["cls"]["additional"] + refined["additional"]))
 
             mean_buf = vec_to_buf(mean_vec)
-            
+
             # Segment overflow check
             if current_cnt >= env.seg_size:
                 cur_seg += 1
                 current_cnt = 0
             current_cnt += 1
-            
+
             stored_content = extract_essence(content, cls["primary"], env.summary_max_length)
             stored_content_enc = encryption.encrypt(stored_content)
-            
+
             # Metadata handling
             meta_in = items[idx].get("metadata") or {}
             final_meta = meta_in.copy()
@@ -629,26 +626,26 @@ async def add_hsg_memories(items: List[Dict[str, Any]], user_id: Optional[str] =
                 updated_at=now_ts,
                 last_seen_at=now_ts,
                 salience=max(0.0, min(1.0, 0.4 + 0.1 * len(cls["additional"]))),
-                decay_lambda=SECTOR_CONFIGS[cls["primary"]]["decay_lambda"],
+                decay_lambda=SECTOR_CONFIGS[cls["primary"]].get("decay_lambda", 0.95),  # type: ignore[literal-required]
                 version=1,
                 mean_dim=len(mean_vec),
-                mean_vec=mean_buf,
-                commit=False
+                mean_vec=mean_buf,  # type: ignore[arg-type]
+                commit=False,
             )
-            
+
             # Store individual sector vectors
             for r in embs:
                 await store.storeVector(mid, r["sector"], r["vector"], r["dim"], user_id or "anonymous")
-            
+
             # Establish graph links (Graph Linking)
             await _graph_link(mid, mean_vec, cls["primary"], user_id or "anonymous", now_ts)
-            
-            results[idx] = {
+
+            results[idx] = {  # type: ignore[index]
                 "id": mid,
                 "primary_sector": cls["primary"],
                 "sectors": p["sectors"]
             }
-            
+
     return [r for r in results if r is not None]
 
 class HSGState:
@@ -681,7 +678,7 @@ async def _coactivation_worker():
         for _, a, b in pairs:
             unique_ids.add(a)
             unique_ids.add(b)
-        
+
         mem_map = {}
         if unique_ids:
             # We fetch without user_id constraint initially and validate later, or do we?
@@ -744,10 +741,10 @@ async def reinforce_waypoints(path: List[str], user_id: str = "anonymous"):
 async def run_decay_process() -> Dict[str, int]:
     """Alias for standardized background decay process."""
     # We could just call apply_decay directly, but keeping the signature for backward compatibility
-    # if anyone was calling it (though grep says no). 
+    # if anyone was calling it (though grep says no).
     # Return value might differ, apply_decay currently returns None (logs progress).
     await apply_decay()
-    return {"status": "completed"}
+    return {"status": "completed"}  # type: ignore[return-value]
 
 async def expand_via_waypoints(ids: List[str], max_exp: int = 15, user_id: Optional[str] = None):
     """
@@ -755,24 +752,24 @@ async def expand_via_waypoints(ids: List[str], max_exp: int = 15, user_id: Optio
     Optimized to O(depth) queries instead of O(nodes) N+1 pattern.
     """
     if not ids: return []
-    
+
     vis = set(ids)
     results = [] # List of {"id", "weight", "path"}
-    
+
     # Current "frontier" of nodes to expand
     # Each entry: (id, current_weight, path_to_node)
     frontier = [(i, 1.0, [i]) for i in ids]
-    
+
     t = q.tables
     limit_per_layer = 50 # Prevent explosion
-    
+
     # BFS traversal depth is implicitly limited by weight decay (exp_wt < 0.1)
     # and total max_exp results count.
     while frontier and len(results) < max_exp:
         current_ids = [node[0] for node in frontier]
         frontier_map = {node[0]: node for node in frontier}
         frontier = [] # Reset for next layer
-        
+
         # Batch fetch all neighbors for the current frontier
         placeholders = ",".join(["?"] * len(current_ids))
         sql = f"SELECT src_id, dst_id, weight FROM {t['waypoints']} WHERE src_id IN ({placeholders})"
@@ -780,32 +777,32 @@ async def expand_via_waypoints(ids: List[str], max_exp: int = 15, user_id: Optio
         if user_id:
             sql += " AND user_id = ?"
             params.append(user_id)
-        
+
         sql += " ORDER BY weight DESC"
-        
+
         rows = await db.async_fetchall(sql, tuple(params))
-        
+
         for r in rows:
             if len(results) >= max_exp: break
-            
+
             src = r["src_id"]
             dst = r["dst_id"]
-            
+
             if dst in vis: continue
-            
+
             parent = frontier_map[src]
             wt = min(1.0, max(0.0, float(r["weight"])))
             exp_wt = parent[1] * wt * COGNITIVE_PARAMS["WAYPOINT_DECAY"] # Decay factor
-            
+
             if exp_wt < COGNITIVE_PARAMS["EXPAN_MIN_WEIGHT"]: continue
-            
+
             item = {"id": dst, "weight": exp_wt, "path": parent[2] + [dst]}
             results.append(item)
             vis.add(dst)
-            
+
             if len(frontier) < limit_per_layer:
                 frontier.append((dst, exp_wt, item["path"]))
-                
+
     return results
 
 
@@ -830,11 +827,10 @@ async def hsg_query(
         if not ss: ss = ["semantic"]
 
         qe = await embed_query_for_all_sectors(qt, ss, user_id=f.get("user_id"))
-
         # Temporal Awareness
         if has_temporal_markers(qt):
             logger.info(f"[HSG] Temporal marker detected in query: {qt}")
-            t_facts = await query_facts_at_time(user_id=f.get("user_id"), min_confidence=0.5)
+            t_facts = await query_facts_at_time(f.get("user_id") or "anonymous")  # type: ignore[arg-type]
             # In a more advanced version, we'd use these facts to re-rank or augment the query.
             # For now, we log the detection as a bridge achievement.
 
@@ -878,39 +874,39 @@ async def hsg_query(
             search_opts = {"user_id": f.get("user_id")}
             if f.get("metadata"):
                 search_opts["metadata"] = f.get("metadata")
-            
+
             # Iterative Expansion to prevent starvation
             # If temporal/salience filters are strong, we might need to fetch many more candidates
             # to find K valid ones.
             base_mult = 5 if (f.get("startTime") or f.get("endTime") or f.get("minSalience")) else 2
             multiplier = base_mult
-            
+
             while True:
                 req_k = k * multiplier
                 res = await store.search(qv, s, req_k, filters=search_opts) # type: ignore
-                
+
                 # Check saturation if filters exist
                 if not res or (not f.get("startTime") and not f.get("endTime") and not f.get("minSalience")):
                     # No complex filters -> Trust vector store
                     break
-                    
+
                 # Inspect a sample or all to see if we satisfy K
                 # We need to do a lightweight check against the DB to see if they pass filters
                 # Optimization: Only check if we haven't reached "Hard Limit"
-                if len(res) < k: 
+                if len(res) < k:
                     # Even vector store didn't find enough
                     break
-                
+
                 # Identify IDs to check
                 cids = [r["id"] for r in res]
-                
+
                 # Lightweight check
                 placeholders = ",".join(["?"] * len(cids))
-                
+
                 # Build filter clause for SQL check
                 clauses = ["id IN ({})".format(placeholders)]
                 params = list(cids)
-                
+
                 if f.get("startTime"):
                     clauses.append("created_at >= ?")
                     params.append(f["startTime"])
@@ -920,27 +916,27 @@ async def hsg_query(
                 if f.get("minSalience"):
                     clauses.append("salience >= ?")
                     params.append(f["minSalience"])
-                    
+
                 cond = " AND ".join(clauses)
-                
+
                 # We count how many satisfy
                 valid_count_res = await db.async_fetchone(f"SELECT COUNT(*) as c FROM {q.tables['memories']} WHERE {cond}", tuple(params))
                 valid_count = valid_count_res["c"] if valid_count_res else 0
-                
+
                 if valid_count >= k:
                     # We have enough
                     break
-                    
+
                 if len(res) < req_k:
                     # Store exhausted (returned fewer than we asked)
                     break
-                    
+
                 # Expand
                 multiplier *= 2
                 if multiplier > 60: # Max cap (approx 300-600 candidates for K=10)
                     logger.warning(f"[HSG] Query expansion hit limit {multiplier}x for sector {s}")
                     break
-            
+
             sr[s] = [{"id": r["id"], "similarity": r["score"]} for r in res]
 
         all_sims = []
@@ -967,7 +963,7 @@ async def hsg_query(
 
         t = q.tables
         placeholders = ",".join(["?"] * len(ids))
-        m_rows = await db.async_fetchall(f"SELECT * FROM {t['memories']} WHERE id IN ({placeholders})", tuple(ids))
+        m_rows = await db.async_fetchall(f"SELECT  # type: ignore[arg-type]  # type: ignore[arg-type] * FROM {t['memories']} WHERE id IN ({placeholders})", tuple(ids))
         m_map = {m["id"]: m for m in m_rows}
 
         kw_scores = {}
@@ -1049,32 +1045,32 @@ async def hsg_query(
             # Construct MemoryItem with path
             meta_parsed = safe_json_loads(m.get("metadata") or m.get("meta"), {})
             tags_parsed = safe_json_loads(m.get("tags"), [])
-            
-            item = MemoryItem(
+
+            item = MemoryItem(  # type: ignore[call-arg]
                 id=mid,
                 content=get_encryption().decrypt(m["content"]),
                 score=fs,
-                primary_sector=m["primary_sector"],
+                primary_sector=m["primary_sector"],  # type: ignore[call-arg]
                 sectors=list(set([m["primary_sector"]] + meta_parsed.get("additional_sectors", []))),
                 salience=sal,
-                created_at=m["created_at"],
-                updated_at=m["updated_at"],
-                last_seen_at=m["last_seen_at"],
+                created_at=m["created_at"],  # type: ignore[call-arg]
+                updated_at=m["updated_at"],  # type: ignore[call-arg]
+                last_seen_at=m["last_seen_at"],  # type: ignore[call-arg]
                 tags=tags_parsed,
-                metadata=meta_parsed,
-                decay_lambda=m["decay_lambda"],
+                metadata=meta_parsed,  # type: ignore[call-arg]
+                decay_lambda=m["decay_lambda"],  # type: ignore[call-arg]
                 version=m["version"],
                 segment=m["segment"],
                 simhash=m["simhash"],
-                generated_summary=m["generated_summary"],
-                feedback_score=m["feedback_score"] or 0.0,
+                generated_summary=m["generated_summary"],  # type: ignore[call-arg]
+                feedback_score=m["feedback_score"] or 0.0,  # type: ignore[call-arg]
                 trace=trace_obj,
-                user_id=m["user_id"]
+                user_id=m["user_id"]  # type: ignore[call-arg]
             )
             item.path = path # Attach path for reinforcement
 
             if f.get("debug"):
-                item.debug = debug_obj
+                item.debug = debug_obj  # type: ignore[attr-defined]
 
             res_list.append(item)
 
@@ -1135,7 +1131,7 @@ async def hsg_query(
 async def reinforce_memory(mid: str, boost: float = 0.1, user_id: Optional[str] = None) -> Dict[str, Any]:
     """Manually reinforce a memory's salience."""
     now = int(time.time() * 1000)
-    
+
     async with transaction():
         mem = await q.get_mem(mid, user_id)
         if not mem:
@@ -1159,8 +1155,8 @@ async def reinforce_memory(mid: str, boost: float = 0.1, user_id: Optional[str] 
         await on_query_hit(mid, mem["primary_sector"], lambda t: embed_for_sector(t, mem["primary_sector"], user_id=mem["user_id"]))
 
         return {
-            "success": True, 
-            "propagatedCount": propagated_count, 
+            "success": True,
+            "propagatedCount": propagated_count,
             "newSalience": new_sal,
             "id": mid
         }
@@ -1170,7 +1166,7 @@ async def _propagate_reinforcement(mid: str, new_sal: float, old_sal: float, pat
     total_propagated = 0
     if path and len(path) > 1:
         await reinforce_waypoints(path, user_id or "anonymous")
-    
+
     t = q.tables
     wps_rows = await db.async_fetchall(
         f"SELECT dst_id, weight FROM {t['waypoints']} WHERE src_id=? AND (user_id=? OR (user_id IS NULL AND ? IS NULL))",
@@ -1184,7 +1180,7 @@ async def _propagate_reinforcement(mid: str, new_sal: float, old_sal: float, pat
     pru = await propagateAssociativeReinforcementToLinkedNodes(
         mid, new_sal, wps, user_id
     )
-    
+
     if pru:
         ln_ids = [u["node_id"] for u in pru]
         placeholders = ",".join(["?"] * len(ln_ids))
@@ -1203,7 +1199,7 @@ async def _propagate_reinforcement(mid: str, new_sal: float, old_sal: float, pat
                 decay_fact = math.exp(-0.02 * time_diff)
                 ctx_boost = HYBRID_PARAMS["gamma"] * (new_sal - old_sal) * decay_fact
                 upd_sal = max(0.0, min(1.0, linked_mem["salience"] + ctx_boost))
-                
+
                 # params: salience, last_seen_at, updated_at, id
                 update_params.append((upd_sal, now_ts, now_ts, u["node_id"]))
                 total_propagated += 1
@@ -1213,6 +1209,5 @@ async def _propagate_reinforcement(mid: str, new_sal: float, old_sal: float, pat
                 f"UPDATE {t['memories']} SET salience=?, last_seen_at=?, updated_at=? WHERE id=?",
                 update_params
             )
-    
-    return total_propagated
 
+    return total_propagated

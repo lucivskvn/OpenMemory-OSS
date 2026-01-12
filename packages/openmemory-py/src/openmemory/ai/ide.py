@@ -27,13 +27,13 @@ async def log_ide_event(
     """
     Log an IDE event (open, save, close, etc.) to memory.
     """
-    mem_client = client or Memory() 
+    mem_client = client or Memory()
     # Note: Memory() in python SDK (client.py) connects via HTTP usually?
     # Wait, `from ...main import Memory` in router imports the SERVER-SIDE implementation!
     # Yes, router imports `from ...main import Memory`.
     # MCP imports `from ..main import Memory` too.
     # So both are server-side. Good.
-    
+
     if event_type == "open":
         mem_content = f"Opened file: {file_path}"
     elif event_type == "save":
@@ -57,12 +57,12 @@ async def log_ide_event(
         "ide_mode": True,
     }
 
-    res = await mem_client.add(mem_content, user_id=user_id, meta=full_metadata)
+    res = await mem_client.add(mem_content, user_id=user_id, metadata=full_metadata)
 
     return {
         "success": True,
-        "memoryId": res.id,
-        "primarySector": res.primary_sector,
+        "memoryId": res.id,  # type: ignore[attr-defined]  # type: ignore[attr-defined]
+        "primarySector": res.primarySector,  # type: ignore[attr-defined]
     }
 
 async def get_ide_context(
@@ -77,7 +77,7 @@ async def get_ide_context(
     Retrieve context relevant to the current IDE state.
     """
     mem_client = client or Memory()
-    
+
     results = await mem_client.search(
         query, user_id=user_id, limit=limit * 2
     )
@@ -85,7 +85,7 @@ async def get_ide_context(
     filtered = []
     for r in results:
         meta = getattr(r, "meta", None) or getattr(r, "metadata", {}) or {}
-        
+
         if session_id:
             if meta.get("ide_session_id") != session_id:
                 continue
@@ -93,7 +93,7 @@ async def get_ide_context(
         if file_path:
             path_in_meta = meta.get("ide_file_path", "") or meta.get("file_path", "")
             if (
-                file_path.lower() not in r.content.lower()
+                file_path.lower() not in r.content.lower()  # type: ignore[attr-defined]
                 and file_path.lower() not in path_in_meta.lower()
             ):
                 continue
@@ -106,7 +106,7 @@ async def get_ide_context(
         {
             "memoryId": r.id,
             "content": r.content,
-            "primarySector": r.primary_sector,
+            "primarySector": r.primarySector,
             "salience": r.salience,
             "score": r.score,
             "lastSeenAt": getattr(r, "last_accessed", None) or r.last_seen_at,
@@ -128,7 +128,7 @@ async def start_ide_session(
     client: Optional[Memory] = None
 ) -> Dict[str, Any]:
     mem_client = client or Memory()
-    
+
     session_id = f"session_{int(time.time())}_{uuid.uuid4().hex[:8]}"
     content = f"Session started: {user_id or 'unknown'} in {project_name} using {ide_name}"
 
@@ -141,12 +141,12 @@ async def start_ide_session(
         "ide_mode": True
     }
 
-    res = await mem_client.add(content, user_id=user_id, meta=metadata)
+    res = await mem_client.add(content, user_id=user_id, metadata=metadata)
 
     return {
         "success": True,
         "sessionId": session_id,
-        "memoryId": res.id,
+        "memoryId": res.id,  # type: ignore[attr-defined]  # type: ignore[attr-defined]
         "startedAt": metadata["session_start_time"],
     }
 
@@ -156,7 +156,7 @@ async def end_ide_session(
     client: Optional[Memory] = None
 ) -> Dict[str, Any]:
     mem_client = client or Memory()
-    
+
     content = f"Session {session_id} ended."
     metadata = {
         "ide_session_id": session_id,
@@ -165,7 +165,7 @@ async def end_ide_session(
         "ide_mode": True,
     }
 
-    res = await mem_client.add(content, user_id=user_id, meta=metadata)
+    res = await mem_client.add(content, user_id=user_id, metadata=metadata)
 
     return {
         "success": True,
@@ -184,7 +184,7 @@ async def get_ide_patterns(
     Aligns with JS implementation by prioritizing 'active_files' context.
     """
     mem_client = client or Memory()
-    
+
     # search for generic coding patterns first
     results = await mem_client.search(
         "coding pattern implementation best practice", user_id=user_id, limit=20
@@ -193,19 +193,19 @@ async def get_ide_patterns(
     patterns = []
     for r in results:
         meta = getattr(r, "meta", None) or getattr(r, "metadata", {}) or {}
-        
+
         # Filter by sector
-        if r.primary_sector != "procedural":
+        if r.primarySector != "procedural":  # type: ignore[attr-defined]
             continue
-            
+
         # If session_id provided, filter strict
         if session_id and session_id != "default" and meta.get("ide_session_id") != session_id:
             continue
-            
+
         # If active_files provided, check relevance
         affected = meta.get("affected_files", []) or [meta.get("ide_file_path", "")]
         is_relevant = False
-        
+
         if not active_files and not session_id:
             # If no context provided, return generic high-salience patterns
             is_relevant = True
@@ -220,17 +220,17 @@ async def get_ide_patterns(
         elif session_id:
             # Handled above
             is_relevant = True
-            
+
         if is_relevant:
             patterns.append(
-                {
-                    "patternId": r.id,
-                    "description": r.content,
-                    "salience": r.salience,
-                    "detectedAt": r.created_at,
-                    "lastReinforced": r.updated_at,
-                    "confidence": r.salience,
-                    "affectedFiles": affected
+                {  # type: ignore[typeddict-item]
+                    "patternId": r.id,  # type: ignore[attr-defined]
+                    "description": r.content,  # type: ignore[attr-defined]
+                    "salience": r.salience,  # type: ignore[attr-defined]
+                    "detectedAt": r.createdAt,  # type: ignore[attr-defined]
+                    "lastReinforced": r.updatedAt,  # type: ignore[attr-defined]
+                    "confidence": r.salience,  # type: ignore[attr-defined]
+                    "affectedFiles": affected,
                 }
             )
 

@@ -1,4 +1,5 @@
 from typing import List, Optional, Dict, Any
+import asyncio
 import json
 import logging
 from ..types import MemRow
@@ -18,7 +19,7 @@ class PostgresVectorStore(VectorStore):
 
     async def _get_pool(self):
         import asyncpg  # type: ignore[import]
-        
+
         async with self._pool_lock:
             if not self.pool:
                 self.pool = await asyncpg.create_pool(self.dsn)
@@ -58,14 +59,14 @@ class PostgresVectorStore(VectorStore):
                 v = EXCLUDED.v,
                 dim = EXCLUDED.dim
         """
-        async with pool.acquire() as conn:
+        async with pool.acquire() as conn:  # type: ignore[union-attr]  # type: ignore[union-attr]
             await conn.execute(sql, id, sector, user_id, vec_str, dim)
 
     async def storeVectors(self, rows: List[Dict[str, Any]]):
         if not rows: return
         # Batch insert for PG using executemany semantics of asyncpg
         pool = await self._get_pool()
-        
+
         # asyncpg.executemany is efficient
         sql = f"""
             INSERT INTO {self.table} (id, sector, user_id, v, dim)
@@ -75,15 +76,15 @@ class PostgresVectorStore(VectorStore):
                 v = EXCLUDED.v,
                 dim = EXCLUDED.dim
         """
-        
+
         # Prepare data tuples
         data = []
         for r in rows:
             vec_str = json.dumps(r["vector"])
             data.append((r["id"], r["sector"], r.get("user_id"), vec_str, r["dim"]))
-            
-        async with pool.acquire() as conn:
-             await conn.executemany(sql, data)
+
+        async with pool.acquire() as conn:  # type: ignore[union-attr]  # type: ignore[union-attr]
+            await conn.executemany(sql, data)
 
     async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]:
         pool = await self._get_pool()
@@ -93,7 +94,7 @@ class PostgresVectorStore(VectorStore):
             sql += " AND user_id=$2"
             args.append(user_id)
 
-        async with pool.acquire() as conn:
+        async with pool.acquire() as conn:  # type: ignore[union-attr]  # type: ignore[union-attr]
             rows = await conn.fetch(sql, *args)
 
         res = []
@@ -113,7 +114,7 @@ class PostgresVectorStore(VectorStore):
             sql += f" AND user_id=${len(ids)+1}"
             args.append(user_id)
 
-        async with pool.acquire() as conn:
+        async with pool.acquire() as conn:  # type: ignore[union-attr]  # type: ignore[union-attr]
             rows = await conn.fetch(sql, *args)
 
         res = {}
@@ -132,7 +133,7 @@ class PostgresVectorStore(VectorStore):
             sql += " AND user_id=$3"
             args.append(user_id)
 
-        async with pool.acquire() as conn:
+        async with pool.acquire() as conn:  # type: ignore[union-attr]  # type: ignore[union-attr]
             r = await conn.fetchrow(sql, *args)
 
         if not r: return None
@@ -141,7 +142,7 @@ class PostgresVectorStore(VectorStore):
 
     async def deleteVectors(self, id: str, sector: Optional[str] = None):
         pool = await self._get_pool()
-        async with pool.acquire() as conn:
+        async with pool.acquire() as conn:  # type: ignore[union-attr]  # type: ignore[union-attr]
             if sector:
                 await conn.execute(f"DELETE FROM {self.table} WHERE id=$1 AND sector=$2", id, sector)
             else:
@@ -149,14 +150,14 @@ class PostgresVectorStore(VectorStore):
 
     async def search(self, vector: List[float], sector: str, k: int, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         pool = await self._get_pool()
-        vec_str = json.dumps(vector) 
+        vec_str = json.dumps(vector)
 
         from ..db import q
         t = q.tables
 
         # Determine if we need to JOIN for metadata filtering
         has_meta = filters and filters.get("metadata")
-        
+
         if has_meta:
             table_clause = f"{self.table} v JOIN {t['memories']} m ON m.id = v.id"
         else:
@@ -172,14 +173,14 @@ class PostgresVectorStore(VectorStore):
             arg_idx += 1
 
         if has_meta:
-             meta = filters["metadata"]
-             if isinstance(meta, dict):
-                 for key, val in meta.items():
-                     if val is not None:
-                         # Simple text search on metadata for parity
-                         filter_sql += f" AND m.metadata LIKE ${arg_idx}"
-                         args.append(f"%{key}%{val}%")
-                         arg_idx += 1
+            meta = filters["metadata"]  # type: ignore[index]  # type: ignore[index]
+            if isinstance(meta, dict):
+                for key, val in meta.items():
+                    if val is not None:
+                        # Simple text search on metadata for parity
+                        filter_sql += f" AND m.metadata LIKE ${arg_idx}"
+                        args.append(f"%{key}%{val}%")
+                        arg_idx += 1
 
         # <=> is cosine distance operator
         sql = f"""
@@ -190,7 +191,7 @@ class PostgresVectorStore(VectorStore):
             LIMIT {k}
         """
 
-        async with pool.acquire() as conn:
+        async with pool.acquire() as conn:  # type: ignore[union-attr]  # type: ignore[union-attr]
             rows = await conn.fetch(sql, *args)
 
         return [{"id": r["id"], "score": float(r["similarity"])} for r in rows]

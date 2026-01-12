@@ -4,24 +4,24 @@ from typing import TypedDict, Optional, Any, Dict
 
 class TemporalFact(TypedDict):
     id: str
-    user_id: Optional[str]
+    userId: Optional[str]
     subject: str
     predicate: str
     object: str
-    valid_from: int # TS uses Date, we use ms timestamp
-    valid_to: Optional[int]
+    validFrom: int  # TS uses Date, we use ms timestamp
+    validTo: Optional[int]
     confidence: float
-    last_updated: int
+    lastUpdated: int
     metadata: Optional[Dict[str, Any]]
 
 class TemporalEdge(TypedDict):
     id: str
-    user_id: Optional[str]
-    source_id: str
-    target_id: str
-    relation_type: str
-    valid_from: int
-    valid_to: Optional[int]
+    userId: Optional[str]
+    sourceId: str
+    targetId: str
+    relationType: str
+    validFrom: int
+    validTo: Optional[int]
     weight: float
     metadata: Optional[Dict[str, Any]]
 
@@ -34,11 +34,11 @@ class TimelineEntry(TypedDict):
     change_type: str # 'created' | 'updated' | 'invalidated'
 
 class TemporalQuery(TypedDict, total=False):
-    user_id: Optional[str]
+    userId: Optional[str]
     subject: Optional[str]
     predicate: Optional[str]
     object: Optional[str]
     at: Optional[int]
     start: Optional[int] # from
     end: Optional[int] # to
-    min_confidence: Optional[float]
+    minConfidence: Optional[float]

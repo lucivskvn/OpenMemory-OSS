@@ -63,7 +63,7 @@ class GeminiAdapter(AIAdapter):
                         "generationConfig": kwargs
                     })
                     if res.status_code != 200:
-                        raise handle_provider_error("gemini", res)
+                        raise handle_provider_error("gemini", res)  # type: ignore[arg-type]  # type: ignore[arg-type]
                     
                     data = res.json()
                     return data["candidates"][0]["content"]["parts"][0]["text"]
@@ -104,7 +104,7 @@ class GeminiAdapter(AIAdapter):
                         }
                     })
                     if res.status_code != 200:
-                        raise handle_provider_error("gemini", res)
+                        raise handle_provider_error("gemini", res)  # type: ignore[arg-type]  # type: ignore[arg-type]
                     
                     data = res.json()
                     text = data["candidates"][0]["content"]["parts"][0]["text"]
@@ -152,7 +152,7 @@ class GeminiAdapter(AIAdapter):
                 try:
                     res = await client.post(url, headers=headers, json={"requests": reqs})
                     if res.status_code != 200:
-                        raise handle_provider_error("gemini", res)
+                        raise handle_provider_error("gemini", res)  # type: ignore[arg-type]  # type: ignore[arg-type]
                     
                     data = res.json()
                     if "embeddings" not in data: return []

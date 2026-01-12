@@ -1,12 +1,12 @@
 import unittest
 import asyncio
-from openmemory.ops.ingest import ingest_document
-from openmemory.main import Memory
-from openmemory.core.db import db, q
+from openmemory.ops.ingest import ingest_document  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.main import Memory  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.core.db import db, q  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 class TestUserJourney(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        from openmemory.core.config import env
+        from openmemory.core.config import env  # type: ignore[import-untyped]
         env.db_path = ":memory:"
         # Force reconnection to use new path
         db.connect(force=True)

@@ -99,7 +99,7 @@ class DB:
                 # Basic pool settings
                 self._pool = pool.ThreadedConnectionPool(1, env.max_threads or 20, url)
             self.conn = self._pool.getconn()
-            self.conn.autocommit = True
+            self.conn.autocommit = True  # type: ignore[attr-defined]  # type: ignore[attr-defined]
         else:
             raise ValueError(f"Unsupported database URL schema: {url}. Only sqlite:/// and postgresql:// are supported.")
 
@@ -232,7 +232,7 @@ class DB:
                 # Map ? to %s for psycopg2
                 sql = sql.replace("?", "%s")
                 from psycopg2.extras import RealDictCursor
-                cur = conn.cursor(cursor_factory=RealDictCursor)
+                cur = conn.cursor(cursor_factory=RealDictCursor)  # type: ignore[call-arg]  # type: ignore[call-arg]
                 cur.execute(sql, params)
                 return cur
                 
@@ -769,7 +769,7 @@ async def transaction():
     # For Postgres, each context gets a unique connection from pool, so parallel tx is safe.
     if db.is_pg:
          conn = db.get_conn()
-         token = _tx_conn.set(conn)
+         token = _tx_conn.set(conn)  # type: ignore[arg-type]  # type: ignore[arg-type]
          try:
             await db.async_execute("BEGIN")
             yield conn
@@ -783,7 +783,7 @@ async def transaction():
     else:
         async with db._tx_lock:
             conn = db.get_conn()
-            token = _tx_conn.set(conn)
+            token = _tx_conn.set(conn)  # type: ignore[arg-type]  # type: ignore[arg-type]
             started = False
             try:
                 # Check for existing transaction state (if supported) or try/except BEGIN

@@ -2,16 +2,16 @@ import unittest
 import json
 import asyncio
 from unittest.mock import MagicMock, patch
-from openmemory.memory import hsg
-from openmemory.core.db import db
-from openmemory.memory.hsg import add_hsg_memory, compute_simhash
+from openmemory.memory import hsg  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.core.db import db  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.memory.hsg import add_hsg_memory, compute_simhash  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 class TestGraphIntegrity(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         # Use in-memory DB for tests
         db.conn = None
-        from openmemory.core.config import env
+        from openmemory.core.config import env  # type: ignore[import-untyped]
         env.database_url = "sqlite:///:memory:"
         db.connect()
         db.init_schema()

@@ -16,14 +16,14 @@ class CrewAIMemory:
     def __init__(self, memory: Memory, user_id: str = "crew_agent"):
         self.mem = memory
         self.user_id = user_id
-        
+
     def save(self, value: Any, metadata: Dict[str, Any] | None = None) -> None:
         if isinstance(value, str):
             try:
                 run_sync(self.mem.add(value, user_id=self.user_id, metadata=metadata or {}))
             except Exception as e:
                 logger.warning("CrewAIMemory.save failed: %s", e)
-            
+
     def search(self, query: str, limit: int = 3) -> List[Any]:
         try:
             results = run_sync(self.mem.search(query, user_id=self.user_id, limit=limit))
@@ -93,8 +93,8 @@ class MemoryRetriever(BaseRetriever):  # type: ignore[misc]
                     metadata={
                         "id": r.id,
                         "score": r.score,
-                        "primary_sector": r.primary_sector,
-                        **r.metadata,
+                        "primary_sector": r.primary_sector,  # type: ignore[attr-defined]
+                        **r.metadata,  # type: ignore[attr-defined]
                     },
                 )
             )
@@ -140,7 +140,7 @@ class MemoryHistory(BaseChatMessageHistory):  # type: ignore[misc]
         role = "Human"
         if isinstance(message, AIMessage): role = "AI"
         elif isinstance(message, SystemMessage): role = "System"
-        
+
         content_text = getattr(message, 'content', str(message))
         content = f"[{role}] {content_text}"
         run_sync(self.mem.add(content, user_id=self.user_id))
@@ -153,7 +153,7 @@ class MemoryHistory(BaseChatMessageHistory):  # type: ignore[misc]
 def memory_node(state: Dict, memory: Memory, user_key: str = "user_id", input_key: str = "messages"):
     """
     LangGraph node to automatically persist state to memory.
-    
+
     Args:
         state: The current graph state.
         memory: OpenMemory instance.
@@ -162,7 +162,7 @@ def memory_node(state: Dict, memory: Memory, user_key: str = "user_id", input_ke
     """
     messages = state.get(input_key, [])
     user_id = state.get(user_key, "anonymous")
-    
+
     if messages:
         last_msg = messages[-1]
         content = getattr(last_msg, "content", str(last_msg))
@@ -171,5 +171,5 @@ def memory_node(state: Dict, memory: Memory, user_key: str = "user_id", input_ke
             run_sync(memory.add(content, user_id=user_id))
         except Exception as e:
             logger.warning("memory_node failed to persist: %s", e)
-        
+
     return state

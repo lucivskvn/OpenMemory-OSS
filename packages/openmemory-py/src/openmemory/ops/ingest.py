@@ -124,13 +124,14 @@ async def _execute_single_strategy(text: str, tags: str, meta: Dict, user_id: Op
         "extraction": meta
     }
 
+
 async def _execute_root_child_strategy(
-    text: str, 
-    chunks: List[Dict], 
-    ex: Dict, 
-    meta: Dict, 
-    user_id: Optional[str], 
-    tags: str
+    text: str,
+    chunks: List[Dict],
+    ex: Dict,
+    meta: Dict,
+    user_id: Optional[str],
+    tags: str,
 ) -> Dict[str, Any]:
     """Internal helper for root-child memory ingestion."""
     async with db.transaction():
@@ -146,6 +147,7 @@ async def _execute_root_child_strategy(
             "extraction": ex["metadata"]
         }
 
+
 async def ingest_document(
     t: str,
     data: Any,
@@ -156,7 +158,7 @@ async def ingest_document(
 ) -> Dict[str, Any]:
     """
     Ingest a document, automatically deciding between single or root-child strategy.
-    
+
     Args:
         t: Source text or content descriptor.
         data: Raw data (bytes or str).
@@ -178,7 +180,7 @@ async def ingest_document(
 
     use_rc = (cfg and cfg.get("force_root")) or est_tok > th
     tags_json = json.dumps(tags or [])
-    
+
     m = (meta or {}).copy()
     m.update(ex_meta)
     m.update({"ingested_at": int(time.time()*1000)})
@@ -192,11 +194,11 @@ async def ingest_document(
     # Use robust chunking for splitting
     chunks = chunk_text(text, tgt=sz, ovr=cfg.get("overlap", 0.1) if cfg else 0.1)
     logger.info(f"Splitting text into {len(chunks)} sections for ingest")
-    
+
     m["ingestion_strategy"] = "root-child"
     try:
-        res = await _execute_root_child_strategy(text, chunks, ex, m, user_id, tags_json)
-        res["total_tokens"] = est_tok
+        res = await _execute_root_child_strategy(text, chunks, ex, m, user_id, tags_json)  # type: ignore[arg-type]
+        res["total_tokens"] = est_tok  # type: ignore[index]
         return res
     except Exception as e:
         logger.exception(f"Ingest document failed: {e}")
@@ -214,14 +216,14 @@ async def ingest_url(
     Ingest text content from a URL with automatic strategy selection.
     """
     ex = await extract_url(url, user_id=user_id)
-    
+
     th = cfg.get("lg_thresh", LG_THRESH) if cfg else LG_THRESH
     sz = cfg.get("sec_sz", SEC_SIZE) if cfg else SEC_SIZE
     est_tok = ex["metadata"]["estimated_tokens"]
 
     use_rc = (cfg and cfg.get("force_root")) or est_tok > th
     tags_json = json.dumps(tags or [])
-    
+
     m = (meta or {}).copy()
     m.update(ex["metadata"])
     m.update({"source_url": url, "ingested_at": int(time.time()*1000)})
@@ -234,10 +236,10 @@ async def ingest_url(
 
     # Use robust chunking
     chunks = chunk_text(ex["text"], tgt=sz, ovr=cfg.get("overlap", 0.1) if cfg else 0.1)
-    
+
     m["ingestion_strategy"] = "root-child"
     try:
-        res = await _execute_root_child_strategy(ex["text"], chunks, ex, m, user_id, tags_json)
+        res = await _execute_root_child_strategy(ex["text"], [c.model_dump() if hasattr(c, "model_dump") else c for c in chunks], ex, m, user_id, tags_json)  # type: ignore[arg-type]
         res["total_tokens"] = est_tok
         return res
     except Exception as e:

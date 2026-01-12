@@ -7,28 +7,29 @@ from .query import query_facts_at_time, format_fact
 
 # Port of backend/src/temporal_graph/timeline.ts
 
+
 async def get_subject_timeline(
-    subject: str, predicate: Optional[str] = None, user_id: Optional[str] = None
+    subject: str, predicate: Optional[str] = None, userId: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
     Get a chronological list of changes (creating/invalidated) for a subject.
-    
+
     Args:
         subject: The subject entity to track.
         predicate: Optional predicate filter.
-        user_id: Owner user ID.
-        
+        userId: Owner user ID.
+
     Returns:
         Sorted list of TimelineEntry dicts.
     """
     conds = ["subject = ?"]
     params: List[Any] = [subject]
 
-    if user_id:
-        conds.append("user_id = ?")
-        params.append(user_id)
+    if userId:
+        conds.append("userId = ?")
+        params.append(userId)
     else:
-        conds.append("user_id IS NULL")
+        conds.append("userId IS NULL")
 
     if predicate:
         conds.append("predicate = ?")
@@ -36,35 +37,40 @@ async def get_subject_timeline(
 
     t = q.tables
     sql = f"""
-        SELECT subject, predicate, object, confidence, valid_from, valid_to
+        SELECT subject, predicate, object, confidence, validFrom, validTo
         FROM {t['temporal_facts']}
         WHERE {' AND '.join(conds)}
-        ORDER BY valid_from ASC
+        ORDER BY validFrom ASC
     """
     rows = await db.async_fetchall(sql, tuple(params))
     return _build_timeline(rows)
+
 
 def _build_timeline(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Helper to convert rows into event-based timeline entries."""
     timeline = []
     for row in rows:
-        timeline.append({
-            "timestamp": row["valid_from"],
-            "subject": row["subject"],
-            "predicate": row["predicate"],
-            "object": row["object"],
-            "confidence": row["confidence"],
-            "change_type": "created"
-        })
-        if row["valid_to"]:
-            timeline.append({
-                "timestamp": row["valid_to"],
+        timeline.append(
+            {
+                "timestamp": row["validFrom"],
                 "subject": row["subject"],
                 "predicate": row["predicate"],
                 "object": row["object"],
                 "confidence": row["confidence"],
-                "change_type": "invalidated"
-            })
+                "change_type": "created",
+            }
+        )
+        if row["validTo"]:
+            timeline.append(
+                {
+                    "timestamp": row["validTo"],
+                    "subject": row["subject"],
+                    "predicate": row["predicate"],
+                    "object": row["object"],
+                    "confidence": row["confidence"],
+                    "change_type": "invalidated",
+                }
+            )
     timeline.sort(key=lambda x: x["timestamp"])
     return timeline
 
@@ -73,38 +79,38 @@ async def get_predicate_timeline(
     predicate: str,
     start: Optional[int] = None,
     end: Optional[int] = None,
-    user_id: Optional[str] = None,
+    userId: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Get a timeline of all facts using a specific predicate."""
     conds = ["predicate = ?"]
     params: List[Any] = [predicate]
 
-    if user_id:
-        conds.append("user_id = ?")
-        params.append(user_id)
+    if userId:
+        conds.append("userId = ?")
+        params.append(userId)
     else:
-        conds.append("user_id IS NULL")
+        conds.append("userId IS NULL")
 
     if start is not None:
-        conds.append("valid_from >= ?")
+        conds.append("validFrom >= ?")
         params.append(start)
     if end is not None:
-        conds.append("valid_from <= ?")
+        conds.append("validFrom <= ?")
         params.append(end)
 
     t = q.tables
     sql = f"""
-        SELECT subject, predicate, object, confidence, valid_from, valid_to
+        SELECT subject, predicate, object, confidence, validFrom, validTo
         FROM {t['temporal_facts']}
         WHERE {' AND '.join(conds)}
-        ORDER BY valid_from ASC
+        ORDER BY validFrom ASC
     """
     rows = await db.async_fetchall(sql, tuple(params))
     return _build_timeline(rows)
 
 
 async def get_changes_in_window(
-    start: int, end: int, subject: Optional[str] = None, user_id: Optional[str] = None
+    start: int, end: int, subject: Optional[str] = None, userId: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """Get all temporal changes that occurred within a specific time window."""
     conds = []
@@ -113,36 +119,38 @@ async def get_changes_in_window(
     if subject:
         conds.append("subject = ?")
         params.append(subject)
-    if user_id:
-        conds.append("user_id = ?")
-        params.append(user_id)
+    if userId:
+        conds.append("userId = ?")
+        params.append(userId)
 
     where_sub = f"AND {' AND '.join(conds)}" if conds else ""
 
     t = q.tables
     sql = f"""
-        SELECT subject, predicate, object, confidence, valid_from, valid_to
+        SELECT subject, predicate, object, confidence, validFrom, validTo
         FROM {t['temporal_facts']}
-        WHERE ((valid_from >= ? AND valid_from <= ?) OR (valid_to >= ? AND valid_to <= ?)) 
+        WHERE ((validFrom >= ? AND validFrom <= ?) OR (validTo >= ? AND validTo <= ?))
         {where_sub}
     """
     rows = await db.async_fetchall(sql, tuple(params))
     timeline = []
 
     for row in rows:
-        if row["valid_from"] >= start and row["valid_from"] <= end:
-            timeline.append({
-                "timestamp": row["valid_from"],
-                "subject": row["subject"],
-                "predicate": row["predicate"],
-                "object": row["object"],
-                "confidence": row["confidence"],
-                "change_type": "created"
-            })
-        if row["valid_to"] and row["valid_to"] >= start and row["valid_to"] <= end:
+        if row["validFrom"] >= start and row["validFrom"] <= end:
             timeline.append(
                 {
-                    "timestamp": row["valid_to"],
+                    "timestamp": row["validFrom"],
+                    "subject": row["subject"],
+                    "predicate": row["predicate"],
+                    "object": row["object"],
+                    "confidence": row["confidence"],
+                    "change_type": "created",
+                }
+            )
+        if row["validTo"] and row["validTo"] >= start and row["validTo"] <= end:
+            timeline.append(
+                {
+                    "timestamp": row["validTo"],
                     "subject": row["subject"],
                     "predicate": row["predicate"],
                     "object": row["object"],
@@ -156,18 +164,18 @@ async def get_changes_in_window(
 
 
 async def compare_time_points(
-    subject: str, t1: int, t2: int, user_id: Optional[str] = None
+    subject: str, t1: int, t2: int, userId: Optional[str] = None
 ) -> Dict[str, List[Dict[str, Any]]]:
     """Compare the state of a subject at two different points in time."""
-    user_clause = "AND user_id = ?" if user_id else "AND user_id IS NULL"
-    user_param = (user_id,) if user_id else ()  # type: ignore[assignment]
+    user_clause = "AND userId = ?" if userId else "AND userId IS NULL"
+    user_param = (userId,) if userId else ()  # type: ignore[assignment]
 
     t = q.tables
     sql1 = f"""
-        SELECT id, user_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
+        SELECT id, userId, subject, predicate, object, validFrom, validTo, confidence, lastUpdated, metadata
         FROM {t['temporal_facts']}
         WHERE subject = ?
-        AND valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?)
+        AND validFrom <= ? AND (validTo IS NULL OR validTo >= ?)
         {user_clause}
     """
     f1 = await db.async_fetchall(sql1, (subject, t1, t1) + user_param)  # type: ignore[arg-type]
@@ -201,23 +209,23 @@ async def compare_time_points(
 
 
 async def get_change_frequency(
-    subject: str, predicate: str, window_days: int = 30, user_id: Optional[str] = None
+    subject: str, predicate: str, window_days: int = 30, userId: Optional[str] = None
 ) -> Dict[str, Any]:
     """Calculate the frequency of changes for a specific subject-predicate pair."""
     now = int(time.time()*1000)
     start = now - (window_days * 86400000)
 
-    user_clause = "AND user_id = ?" if user_id else ""
-    user_param = (user_id,) if user_id else ()
+    user_clause = "AND userId = ?" if userId else ""
+    user_param = (userId,) if userId else ()
 
     t = q.tables
     sql = f"""
-        SELECT valid_from, valid_to
+        SELECT validFrom, validTo
         FROM {t['temporal_facts']}
         WHERE subject = ? AND predicate = ?
-        AND valid_from >= ?
+        AND validFrom >= ?
         {user_clause}
-        ORDER BY valid_from ASC
+        ORDER BY validFrom ASC
     """
     rows = await db.async_fetchall(sql, (subject, predicate, start) + user_param)
 
@@ -226,8 +234,8 @@ async def get_change_frequency(
     valid_count = 0
 
     for r in rows:
-        if r["valid_to"]:
-            total_dur += (r["valid_to"] - r["valid_from"])
+        if r["validTo"]:
+            total_dur += r["validTo"] - r["validFrom"]
             valid_count += 1
 
     avg_dur = total_dur / valid_count if valid_count > 0 else 0
@@ -242,7 +250,7 @@ async def get_change_frequency(
 
 
 async def get_volatile_facts(
-    subject: Optional[str] = None, limit: int = 10, user_id: Optional[str] = None
+    subject: Optional[str] = None, limit: int = 10, userId: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """Identify facts that change frequently (volatility analysis)."""
     conds = []
@@ -250,9 +258,9 @@ async def get_volatile_facts(
     if subject:
         conds.append("subject = ?")
         params.append(subject)
-    if user_id:
-        conds.append("user_id = ?")
-        params.append(user_id)
+    if userId:
+        conds.append("userId = ?")
+        params.append(userId)
 
     where = f"WHERE {' AND '.join(conds)}" if conds else ""
 

@@ -23,10 +23,10 @@ sys.modules["langchain_core.retrievers"] = mock_lc
 sys.modules["langchain_core.documents"] = mock_lc
 sys.modules["langchain_core.callbacks"] = mock_lc
 
-from openmemory.client import Client, OpenMemory
-from openmemory.core.types import MemoryItem
-from openmemory.integrations.agents import CrewAIMemory
-from openmemory.integrations.langchain import OpenMemoryChatMessageHistory, OpenMemoryRetriever
+from openmemory.client import Client, OpenMemory  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.core.types import MemoryItem  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.integrations.agents import CrewAIMemory  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.integrations.langchain import OpenMemoryChatMessageHistory, OpenMemoryRetriever  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 class TestPhase63(unittest.IsolatedAsyncioTestCase):
     async def test_client_aliases(self):
@@ -41,7 +41,7 @@ class TestPhase63(unittest.IsolatedAsyncioTestCase):
         mock_ingest.return_value = {"root_memory_id": "test_id"}
         # Mock q.get_mem (called by self.get)
         # Note: self.get() decrypts content, so we need bytes
-        from openmemory.core.security import get_encryption
+        from openmemory.core.security import get_encryption  # type: ignore[import-untyped]
         enc = get_encryption()
         mock_get_mem.return_value = {
             "id": "test_id",

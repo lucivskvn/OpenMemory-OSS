@@ -1,5 +1,5 @@
 import pytest
-from openmemory.ops.extract import extract_html, estimate_tokens
+from openmemory.ops.extract import extract_html, estimate_tokens  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 @pytest.mark.asyncio
 async def test_extract_html_sanitization():

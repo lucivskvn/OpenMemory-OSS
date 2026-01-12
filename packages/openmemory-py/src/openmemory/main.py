@@ -12,6 +12,7 @@ from .ops.ingest import ingest_document
 from .openai_handler import OpenAIRegistrar
 from .core.types import MemoryItem
 from .core.config import env
+from .core.constants import COGNITIVE_PARAMS
 from .utils.logger import setup_logging
 
 __version__ = "2.3.0"
@@ -119,11 +120,11 @@ class Memory:
     ) -> List[Dict[str, Any]]:
         """
         High-throughput batch ingestion of multiple memories.
-        
+
         Args:
             items: List of dictionaries with 'content' (required), 'tags' (optional), 'metadata' (optional).
             user_id: The owner of the memories.
-            
+
         Returns:
             List of result dictionaries containing 'id' and 'sectors'.
         """
@@ -145,20 +146,23 @@ class Memory:
 
         # Direct call to add_hsg_memory (bypassing ingest/chunking)
         res = await add_hsg_memory(
-            content, 
-            tags=json.dumps(tags_val), 
-            metadata=meta_val, 
-            user_id=uid, 
-            commit=True, 
-            id_override=id_override, 
-            created_at_override=int(created_at) if created_at else None
+            content,
+            tags=json.dumps(tags_val),
+            metadata=meta_val,
+            user_id=uid,
+            commit=True,
+            id_override=id_override,
+            created_at_override=int(created_at) if created_at else None,
         )
 
         mid = res.get("id")
         if not mid:
             raise ValueError("Failed to import memory: no ID returned")
-            
-        return await self.get(mid, user_id=uid)
+
+        result = await self.get(mid, user_id=uid)
+        if result is None:
+            raise ValueError("Failed to retrieve imported memory")
+        return result
 
     async def search(
         self, query: str, user_id: Optional[str] = None, limit: int = 10, **kwargs
@@ -214,25 +218,45 @@ class Memory:
             try:
                 enc = get_encryption()
                 m["content"] = enc.decrypt(m["content"])
+                # Handle both camelCase and snake_case keys for backward compatibility
+                primary_sector = (
+                    m.get("primarySector")
+                    or m.get("primary_sector")
+                    or m.get("primary_sector", "")
+                )
+                created_at = m.get("createdAt") or m.get("created_at") or 0
+                updated_at = m.get("updatedAt") or m.get("updated_at") or 0
+                last_seen_at = (
+                    m.get("lastSeenAt")
+                    or m.get("last_seen_at")
+                    or COGNITIVE_PARAMS["DEFAULT_LAST_SEEN_AT"]
+                )
+                decay_lambda = (
+                    m.get("decayLambda")
+                    or m.get("decay_lambda")
+                    or COGNITIVE_PARAMS["DEFAULT_DECAY_LAMBDA"]
+                )
                 return MemoryItem(
                     id=m["id"],
                     content=m["content"],
-                    primary_sector=m["primary_sector"],
-                    sectors=[m["primary_sector"]],
-                    created_at=m["created_at"],
-                    updated_at=m["updated_at"],
-                    last_seen_at=m["last_seen_at"],
-                    tags=json.loads(m["tags"] or "[]"),
-                    metadata=json.loads(m.get("metadata") or m.get("meta") or "{}"),
-                    salience=m["salience"],
-                    decay_lambda=m["decay_lambda"],
-                    version=m["version"],
-                    segment=m["segment"],
-                    simhash=m["simhash"],
-                    generated_summary=m["generated_summary"],
-                    user_id=m["user_id"],
-                    feedback_score=m.get("feedback_score") or 0.0,
-                    _debug=None,
+                    primarySector=primary_sector,
+                    sectors=[primary_sector],
+                    createdAt=created_at,
+                    updatedAt=updated_at,
+                    lastSeenAt=last_seen_at,
+                    tags=json.loads(m.get("tags") or "[]"),
+                    meta=json.loads(m.get("meta") or m.get("metadata") or "{}"),
+                    salience=m.get("salience", COGNITIVE_PARAMS["DEFAULT_SALIENCE"]),
+                    decayLambda=decay_lambda,
+                    version=m.get("version", COGNITIVE_PARAMS["DEFAULT_VERSION"]),
+                    segment=m.get("segment", COGNITIVE_PARAMS["DEFAULT_SEGMENT"]),
+                    simhash=m.get("simhash"),
+                    generatedSummary=m.get("generatedSummary")
+                    or m.get("generated_summary"),
+                    userId=m.get("userId") or m.get("user_id"),
+                    feedbackScore=m.get("feedbackScore")
+                    or m.get("feedback_score")
+                    or 0.0,
                 )
             except Exception as e:
                 logger.error(f"failed to decrypt/parse memory {memory_id}: {e}")
@@ -378,22 +402,21 @@ class Memory:
                 item = MemoryItem(
                     id=m["id"],
                     content=m["content"],
-                    primary_sector=m["primary_sector"],
+                    primarySector=m["primary_sector"],
                     sectors=[m["primary_sector"]],
-                    created_at=m["created_at"],
-                    updated_at=m["updated_at"],
-                    last_seen_at=m["last_seen_at"],
+                    createdAt=m["created_at"],
+                    updatedAt=m["updated_at"],
+                    lastSeenAt=m["last_seen_at"],
                     tags=json.loads(m["tags"] or "[]"),
-                    metadata=json.loads(m.get("metadata") or m.get("meta") or "{}"),
+                    meta=json.loads(m.get("metadata") or m.get("meta") or "{}"),
                     salience=m["salience"],
-                    decay_lambda=m["decay_lambda"],
+                    decayLambda=m["decay_lambda"],
                     version=m["version"],
                     segment=m["segment"],
                     simhash=m["simhash"],
-                    generated_summary=m["generated_summary"],
-                    user_id=m.get("user_id"),
-                    feedback_score=m.get("feedback_score") or 0.0,
-                    _debug=None,
+                    generatedSummary=m["generated_summary"],
+                    userId=m.get("user_id"),
+                    feedbackScore=m.get("feedback_score") or 0.0,
                 )
                 res.append(item)
             except Exception as e:
@@ -431,11 +454,7 @@ class Memory:
             sectors[s] = c
             total += c
 
-        return {
-            "total_memories": total,
-            "sectors": sectors,
-            "user_id": uid
-        }
+        return {"total_memories": total, "sectors": sectors, "userId": uid}
 
     async def rotate_key(self, user_id: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -445,13 +464,13 @@ class Memory:
         provider = get_encryption()
         if not provider.enabled:
             return {"success": False, "message": "Encryption is not enabled."}
-            
+
         # 1. Fetch all memories for the user
         uid = user_id or self.default_user or "anonymous"
-        
+
         # Using a very large limit for now to ensure all items are covered
         mems = await q.all_mem(limit=1000000, user_id=uid)
-        
+
         count = 0
         async with db.transaction():
             for m in mems:
@@ -463,7 +482,7 @@ class Memory:
                         # Update without commit to stay in transaction
                         await q.upd_mem(m["id"], new_content, m["tags"], m["metadata"], int(time.time()*1000), user_id=uid, commit=False)
                         count += 1
-        
+
         return {"success": True, "rotated_count": count}
 
     async def getAll(
@@ -508,8 +527,41 @@ class Memory:
                     m["content"] = enc.decrypt(m["content"])
                 except:
                     pass
-            # Map sector fields if needed, but MemoryItem handles it
-            items.append(MemoryItem(**m))
+            # Convert snake_case to camelCase for MemoryItem
+            item = MemoryItem(
+                id=m["id"],
+                content=m["content"],
+                primarySector=m.get(
+                    "primary_sector", m.get("primarySector", "general")
+                ),
+                sectors=[m.get("primary_sector", m.get("primarySector", "general"))],
+                createdAt=(
+                    m["created_at"] if "created_at" in m else m.get("createdAt", 0)
+                ),
+                updatedAt=(
+                    m["updated_at"] if "updated_at" in m else m.get("updatedAt", 0)
+                ),
+                lastSeenAt=m.get("last_seen_at", m.get("lastSeenAt", 0)),
+                tags=(
+                    json.loads(m["tags"])
+                    if isinstance(m.get("tags"), str)
+                    else (m.get("tags") or [])
+                ),
+                meta=(
+                    json.loads(m.get("metadata", "{}"))
+                    if isinstance(m.get("metadata"), str)
+                    else (m.get("meta") or {})
+                ),
+                salience=m.get("salience", 0.5),
+                decayLambda=m.get("decay_lambda", m.get("decayLambda", 0.1)),
+                version=m.get("version", 1),
+                segment=m.get("segment", 0),
+                simhash=m.get("simhash"),
+                generatedSummary=m.get("generated_summary", m.get("generatedSummary")),
+                userId=m.get("user_id", m.get("userId")),
+                feedbackScore=m.get("feedback_score", m.get("feedbackScore", 0.0)),
+            )
+            items.append(item)
         return items
 
     def list_sectors(self) -> List[str]:
@@ -583,24 +635,28 @@ class Memory:
                 """Add a new fact to the temporal graph."""
                 # mapped to insert_fact
                 kwargs.pop("commit", None) # Remove legacy arg if present
-                return await insert_fact(subject, predicate, object_, user_id=self.user_id, **kwargs)
+                return await insert_fact(
+                    subject, predicate, object_, userId=self.user_id, **kwargs
+                )
 
             async def get(self, subject: str, predicate: str):
                 """Get the current valid fact for a subject-predicate pair."""
-                return await get_current_fact(subject, predicate, user_id=self.user_id)
+                return await get_current_fact(subject, predicate, userId=self.user_id)
 
             async def search(self, pattern: str, limit: int = 100):
                 """Search facts by pattern."""
-                return await search_facts(pattern, limit=limit, user_id=self.user_id)
+                return await search_facts(pattern, limit=limit, userId=self.user_id)
 
             async def history(self, subject: str):
                 """Get history of facts for a subject."""
-                return await get_facts_by_subject(subject, user_id=self.user_id)
+                return await get_facts_by_subject(subject, userId=self.user_id)
 
             async def add_edge(self, source_id: str, target_id: str, relation: str, **kwargs):
                 """Add an edge between two facts."""
                 from .temporal_graph.store import insert_edge
-                return await insert_edge(source_id, target_id, relation, user_id=self.user_id, **kwargs)
+                return await insert_edge(
+                    source_id, target_id, relation, userId=self.user_id, **kwargs
+                )
 
             async def get_edges(
                 self, source_id: Optional[str] = None, target_id: Optional[str] = None
@@ -608,7 +664,7 @@ class Memory:
                 """Retrieve edges connected to a source or target fact."""
                 from .temporal_graph.query import get_related_facts
                 if source_id:
-                    return await get_related_facts(source_id, user_id=self.user_id)
+                    return await get_related_facts(source_id, userId=self.user_id)
                 return []
 
         return TemporalFacade(self.default_user)
@@ -618,7 +674,7 @@ class Memory:
         """Access User Management (Local Mode Stub)."""
         class UsersFacade:
             def __init__(self, user_id): self.user_id = user_id
-            
+
             async def get_user(self, user_id): raise NotImplementedError("User management is only available in Remote mode.")
             async def register_user(self, user_id, scope="user"): raise NotImplementedError("User registration is only available in Remote mode.")
             async def list_api_keys(self): raise NotImplementedError("API Key management is only available in Remote mode.")
@@ -647,7 +703,7 @@ class Memory:
 
             async def calculate_resonance(self, memory_sector="semantic", query_sector="semantic", base_similarity=0.8):
                 return {"score": await dyn.calculateCrossSectorResonanceScore(memory_sector, query_sector, base_similarity)}
-            
+
             async def reinforce_trace(self, memory_id):
                 # We can implement a basic version of this locally
                 m = await q.get_mem(memory_id)
@@ -655,7 +711,7 @@ class Memory:
                 new_sal = await dyn.applyRetrievalTraceReinforcementToMemory(memory_id, m["salience"])
                 # Update DB
                 # Note: This is a simplified update, ideally we use a proper update method
-                await q.upd_mem_salience(memory_id, new_sal) 
+                await q.upd_mem_salience(memory_id, new_sal)
                 return {"success": True, "newSalience": new_sal}
 
             async def calculate_salience(self, **kwargs):
@@ -672,7 +728,7 @@ class Memory:
         """Access LangGraph Memory (Local Mode Stub)."""
         class LangGraphFacade:
             def __init__(self, user_id): self.user_id = user_id
-            
+
             async def get_lg_config(self): raise NotImplementedError("LangGraph Integration is only available in Remote mode.")
             async def store(self, **kwargs): raise NotImplementedError("LangGraph Integration is only available in Remote mode.")
             async def retrieve(self, **kwargs): raise NotImplementedError("LangGraph Integration is only available in Remote mode.")
@@ -687,17 +743,18 @@ class Memory:
         from .ops import ingest as ing
 
         class SourcesFacade:
-            def __init__(self, user_id, mem_instance): 
+
+            def __init__(self, user_id, mem_instance):
                 self.user_id = user_id
                 self.mem = mem_instance
 
-            async def list_sources(self): 
+            async def list_sources(self):
                 # Basic implementations available locally
                 return {"sources": ["file", "url", "github", "google_drive", "notion"]}
 
-            async def ingest_source(self, source, **kwargs): 
+            async def ingest_source(self, source, **kwargs):
                 raise NotImplementedError("Full source ingestion pipeline is optimized for Remote/Server mode.")
-            
+
             async def get_source_configs(self): raise NotImplementedError("Source management is Remote-only.")
             async def set_source_config(self, **kwargs): raise NotImplementedError("Source management is Remote-only.")
 

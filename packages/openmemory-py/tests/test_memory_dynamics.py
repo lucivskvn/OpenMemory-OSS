@@ -2,8 +2,8 @@ import pytest
 import asyncio
 from unittest.mock import AsyncMock, Mock, patch
 
-from openmemory.ops.dynamics import SCORING_WEIGHTS
-from openmemory.memory.decay import calc_recency_score, compress_vector, DecayCfg
+from openmemory.ops.dynamics import SCORING_WEIGHTS  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.memory.decay import calc_recency_score, compress_vector, DecayCfg  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 # Mock time for consistent testing
 import time
@@ -38,7 +38,7 @@ async def test_decay_cold_storage_logic():
         mock_tx.return_value = mock_cm
 
         # Setup mock data
-        from openmemory.memory.decay import apply_decay, cfg
+        from openmemory.memory.decay import apply_decay, cfg  # type: ignore[import-untyped]
         
         # Mock fetchall to return a segment with one memory
         mock_db.async_fetchall.side_effect = [
@@ -61,7 +61,7 @@ async def test_decay_cold_storage_logic():
         # Mock vector store
         mock_store.getVector.return_value = Mock(vector=[0.1]*1536, dim=1536)
         # Force reset active_q and last_decay to ensure decay runs
-        import openmemory.memory.decay as decay_mod
+        import openmemory.memory.decay as decay_mod  # type: ignore[import-untyped]
         decay_mod.active_q = 0
         decay_mod.last_decay = 0
         
@@ -84,8 +84,8 @@ async def test_decay_cold_storage_logic():
 @pytest.mark.asyncio
 async def test_maintenance_loops():
     # Verify start/stop logic doesn't crash
-    from openmemory.memory.decay import start_decay, stop_decay, _decay_task
-    from openmemory.ops.maintenance import start_maintenance, stop_maintenance, _maint_task
+    from openmemory.memory.decay import start_decay, stop_decay, _decay_task  # type: ignore[import-untyped]
+    from openmemory.ops.maintenance import start_maintenance, stop_maintenance, _maint_task  # type: ignore[import-untyped]
     
     start_decay()
     # It starts a task, we can't easily check internal state without accessing global

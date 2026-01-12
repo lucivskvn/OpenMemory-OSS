@@ -1,9 +1,9 @@
 import pytest
 import time
 from unittest.mock import MagicMock, AsyncMock, patch
-from openmemory.temporal_graph.store import insert_fact, update_fact, invalidate_fact, insert_edge, batch_insert_facts
-from openmemory.temporal_graph.query import get_current_fact, query_facts_at_time
-from openmemory.temporal_graph.timeline import get_subject_timeline, get_change_frequency
+from openmemory.temporal_graph.store import insert_fact, update_fact, invalidate_fact, insert_edge, batch_insert_facts  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.temporal_graph.query import get_current_fact, query_facts_at_time  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.temporal_graph.timeline import get_subject_timeline, get_change_frequency  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 @pytest.mark.asyncio
 async def test_temporal_graph_crud():

@@ -1,7 +1,7 @@
 import asyncio
 import sys
 import time
-from openmemory.client import Memory
+from openmemory.client import Memory  # type: ignore[import-untyped]
 
 # ==================================================================================
 # HEALTH VIZ

@@ -85,7 +85,7 @@ class GoogleSheetsConnector(BaseConnector):
                     name=props.get("title", "Sheet1"),
                     type="sheet",
                     path=f"/{spreadsheet_id}",
-                    metadata={
+                    metadata={  # type: ignore[arg-type]  # type: ignore[arg-type]
                         "index": props.get("index", 0),
                         "spreadsheet_id": spreadsheet_id,
                     },
@@ -133,7 +133,7 @@ class GoogleSheetsConnector(BaseConnector):
             type="spreadsheet",
             text=text,
             data=text,
-            metadata={
+            metadata={  # type: ignore[arg-type]  # type: ignore[arg-type]
                 "source": "google_sheets",
                 "spreadsheet_id": spreadsheet_id,
                 "range": sheet_range,

@@ -1,9 +1,9 @@
 
 import pytest
 from fastapi.testclient import TestClient
-from openmemory.server.api import app
-from openmemory.core.config import env
-from openmemory.core.db import db
+from openmemory.server.api import app  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.core.config import env  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.core.db import db  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 import sys
 
 # Use TestClient

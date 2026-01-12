@@ -1,9 +1,9 @@
 import asyncio
 import unittest
 from unittest.mock import MagicMock, patch
-from openmemory.connectors.base import BaseConnector, SourceItem, SourceContent
-from openmemory.connectors.github import GithubConnector
-from openmemory.connectors.notion import NotionConnector
+from openmemory.connectors.base import BaseConnector, SourceItem, SourceContent  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.connectors.github import GithubConnector  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.connectors.notion import NotionConnector  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 class TestBaseConnector(unittest.IsolatedAsyncioTestCase):
     async def test_run_blocking(self):

@@ -1,9 +1,9 @@
 import pytest
 import asyncio
 from unittest.mock import MagicMock, patch
-from openmemory.core.security import EncryptionProvider
-from openmemory.server.dependencies import verify_admin
-from openmemory.ops import dynamics
+from openmemory.core.security import EncryptionProvider  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.server.dependencies import verify_admin  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.ops import dynamics  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 from fastapi import Request, HTTPException
 
 # === Security Tests ===

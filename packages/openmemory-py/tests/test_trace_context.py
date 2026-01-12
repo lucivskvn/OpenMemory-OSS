@@ -1,6 +1,6 @@
 import pytest
 import asyncio
-from openmemory.trace import Tracer, traced
+from openmemory.trace import Tracer, traced  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 @pytest.mark.asyncio
 async def test_trace_context_propagation():

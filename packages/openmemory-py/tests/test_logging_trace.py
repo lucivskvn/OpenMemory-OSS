@@ -1,7 +1,7 @@
 import logging
 import pytest
 import json
-from openmemory.utils.logger import JsonFormatter
+from openmemory.utils.logger import JsonFormatter  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 def test_arg_redaction():
     # Verify JsonFormatter redacts sensitive keys passed as ARGS

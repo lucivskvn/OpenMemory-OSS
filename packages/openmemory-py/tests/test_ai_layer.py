@@ -13,9 +13,9 @@ sys.modules["mcp"] = MagicMock()
 sys.modules["mcp.server"] = MagicMock()
 sys.modules["mcp.types"] = MagicMock()
 
-from openmemory.ai.mcp import handle_call_tool, handle_list_tools
-from openmemory.integrations.agents import MemoryRetriever, MemoryHistory, CrewAIMemory
-from openmemory.main import Memory
+from openmemory.ai.mcp import handle_call_tool, handle_list_tools  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.integrations.agents import MemoryRetriever, MemoryHistory, CrewAIMemory  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.main import Memory  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 # --- MCP Tool Tests ---
 

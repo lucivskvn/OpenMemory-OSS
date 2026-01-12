@@ -21,11 +21,11 @@ class GoogleDriveConnector(BaseConnector):
     async def connect(self, **creds) -> bool:
         """
         authenticate with google drive api
-        
+
         env vars:
             GOOGLE_SERVICE_ACCOUNT_FILE: path to service account json
             GOOGLE_CREDENTIALS_JSON: raw json string of credentials
-        
+
         or pass:
             service_account_file: path to json file
             credentials_json: dict of credentials
@@ -70,7 +70,7 @@ class GoogleDriveConnector(BaseConnector):
     ) -> List[SourceItem]:  # type: ignore[override]
         """
         list files from drive
-        
+
         args:
             folder_id: optional folder to list from
             mime_types: filter by mime types (e.g. ["application/pdf"])
@@ -194,5 +194,5 @@ class GoogleDriveConnector(BaseConnector):
             type=mime,
             text=text if isinstance(text, str) else "",
             data=payload_data,
-            metadata={"source": "google_drive", "file_id": item_id, "mime_type": mime},
+            metadata={"source": "google_drive", "file_id": item_id, "mime_type": mime},  # type: ignore[arg-type]
         )

@@ -8,7 +8,7 @@ import logging
 from typing import List, Dict, Optional, Set, Any
 import os
 from urllib.parse import urljoin, urlparse
-from .base import BaseConnector, SourceContent
+from .base import BaseConnector, SourceContent, SourceFetchError
 
 
 logger = logging.getLogger("openmemory.connectors.web_crawler")
@@ -129,32 +129,32 @@ class WebCrawlerConnector(BaseConnector):
     async def fetch_item(self, item_id: str) -> SourceContent:  # type: ignore[override]
         """
         Fetch and extract clean text from a URL using hardened extraction logic.
-        
+
         Args:
             item_id: The URL to fetch.
-            
+
         Returns:
             Dict containing the extracted text and metadata.
         """
         # Reuse the hardened extraction logic from ops.extract
         # This ensures consistent XSS protection and robust handling
         from ..ops.extract import extract_url
-        
+
         try:
             # We already have a valid user_id attached to the connector
             result = await extract_url(item_id, user_id=self.user_id)
-            
+
             return SourceContent(
                 id=item_id,
                 name=result["metadata"].get("title", item_id),
                 type="webpage",
                 text=result["text"],
                 data=result["text"],
-                metadata={
+                metadata={  # type: ignore[arg-type]
                     "source": "web_crawler",
                     "url": item_id,
-                    **result["metadata"]
-                }
+                    **result["metadata"],
+                },
             )
         except Exception as e:
             logger.error(f"Failed to fetch {item_id}: {e}")

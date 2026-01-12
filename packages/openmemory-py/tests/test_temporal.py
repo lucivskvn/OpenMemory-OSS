@@ -1,9 +1,9 @@
 
 import unittest
 import asyncio
-from openmemory.main import Memory
-from openmemory.core.db import db
-from openmemory.core.config import env
+from openmemory.main import Memory  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.core.db import db  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.core.config import env  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 from unittest.mock import AsyncMock, patch, Mock
 
 class TestTemporalGraph(unittest.IsolatedAsyncioTestCase):
@@ -60,7 +60,7 @@ class TestTemporalGraph(unittest.IsolatedAsyncioTestCase):
 
     async def test_delete_fact_atomicity(self):
         """Verify that delete_fact uses a transaction."""
-        from openmemory.temporal_graph.store import delete_fact
+        from openmemory.temporal_graph.store import delete_fact  # type: ignore[import-untyped]
         
         with patch("openmemory.temporal_graph.store.db", new_callable=Mock) as mock_db:
             mock_db.transaction.return_value.__aenter__ = AsyncMock()
@@ -74,7 +74,7 @@ class TestTemporalGraph(unittest.IsolatedAsyncioTestCase):
 
     async def test_get_related_facts_logic(self):
         """Verify get_related_facts query structure."""
-        from openmemory.temporal_graph.query import get_related_facts
+        from openmemory.temporal_graph.query import get_related_facts  # type: ignore[import-untyped]
         
         with patch("openmemory.temporal_graph.query.db", new_callable=AsyncMock) as mock_db:
             mock_db.async_fetchall.return_value = [
@@ -93,7 +93,7 @@ class TestTemporalGraph(unittest.IsolatedAsyncioTestCase):
 
     async def test_batch_insert(self):
         """Verify batch_insert_facts atomic behavior."""
-        from openmemory.temporal_graph.store import batch_insert_facts
+        from openmemory.temporal_graph.store import batch_insert_facts  # type: ignore[import-untyped]
         
         facts = [
             {"subject": "S_B1", "predicate": "P_B1", "object": "O_B1"},

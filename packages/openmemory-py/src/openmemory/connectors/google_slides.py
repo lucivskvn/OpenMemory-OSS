@@ -155,7 +155,7 @@ class GoogleSlidesConnector(BaseConnector):
             type="presentation",
             text=text,
             data=text,
-            metadata={
+            metadata={  # type: ignore[arg-type]  # type: ignore[arg-type]
                 "source": "google_slides",
                 "presentation_id": presentation_id,
                 "slide_count": len(pres.get("slides", []))

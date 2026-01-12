@@ -8,22 +8,22 @@ class AddRequest(BaseModel):
     content: str
     tags: List[str] = []
     metadata: Dict[str, Any] = {}
-    user_id: Optional[str] = Field(None, alias="userId")
+    userId: Optional[str] = None
     id: Optional[str] = None
-    created_at: Optional[int] = Field(None, alias="createdAt")
+    createdAt: Optional[int] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
 class BatchAddRequest(BaseModel):
     items: List[AddRequest]
-    user_id: Optional[str] = Field(None, alias="userId")
+    userId: Optional[str] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
 class QueryRequest(BaseModel):
     query: str
     limit: int = 10
-    user_id: Optional[str] = Field(None, alias="userId")
+    userId: Optional[str] = None
     filters: Dict[str, Any] = {}
 
     model_config = ConfigDict(populate_by_name=True)
@@ -31,30 +31,30 @@ class QueryRequest(BaseModel):
 class ReinforceRequest(BaseModel):
     id: str
     boost: float = 0.1
-    user_id: Optional[str] = Field(None, alias="userId")
+    userId: Optional[str] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
 class MemRow(BaseModel):
     id: str
     content: str
-    primary_sector: str = Field(..., alias="primarySector")
+    primarySector: str
     tags: Optional[str] = None
-    metadata: Optional[str] = Field(None, alias="meta")
-    user_id: Optional[str] = Field(None, alias="userId")
-    created_at: int = Field(..., alias="createdAt")
-    updated_at: int = Field(..., alias="updatedAt")
-    last_seen_at: int = Field(COGNITIVE_PARAMS["DEFAULT_LAST_SEEN_AT"], alias="lastSeenAt")
+    meta: Optional[str] = None
+    userId: Optional[str] = None
+    createdAt: int
+    updatedAt: int
+    lastSeenAt: int = COGNITIVE_PARAMS["DEFAULT_LAST_SEEN_AT"]
     salience: float = COGNITIVE_PARAMS["DEFAULT_SALIENCE"]
-    decay_lambda: float = Field(COGNITIVE_PARAMS["DEFAULT_DECAY_LAMBDA"], alias="decayLambda")
+    decayLambda: float = COGNITIVE_PARAMS["DEFAULT_DECAY_LAMBDA"]
     version: int = COGNITIVE_PARAMS["DEFAULT_VERSION"]
     segment: int = COGNITIVE_PARAMS["DEFAULT_SEGMENT"]
     simhash: Optional[str] = None
-    generated_summary: Optional[str] = Field(None, alias="generatedSummary")
-    mean_dim: Optional[int] = Field(None, alias="meanDim")
-    mean_vec: Optional[bytes] = Field(None, alias="meanVec")
-    compressed_vec: Optional[bytes] = Field(None, alias="compressedVec")
-    feedback_score: Optional[float] = Field(None, alias="feedbackScore")
+    generatedSummary: Optional[str] = None
+    meanDim: Optional[int] = None
+    meanVec: Optional[bytes] = None
+    compressedVec: Optional[bytes] = None
+    feedbackScore: Optional[float] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -66,15 +66,15 @@ class MemRow(BaseModel):
 
 class IngestRequest(BaseModel):
     source: Optional[Literal["file", "link", "connector"]] = None
-    content_type: str = Field("text", alias="contentType")
+    contentType: str = "text"
     data: str
     metadata: Dict[str, Any] = {}
     config: Dict[str, Any] = {}
-    user_id: Optional[str] = Field(None, alias="userId")
+    userId: Optional[str] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
-# ... (omitting lGM/IDE specific types for brevity as they are less core, 
+# ... (omitting lGM/IDE specific types for brevity as they are less core,
 # but user said 'every single folder file', so I should include them if possible.
 # I will include them as generic dicts for now or typed if critical.)
 
@@ -84,41 +84,41 @@ class LgmStoreReq(BaseModel):
     tags: Optional[List[str]] = None
     metadata: Optional[Dict[str, Any]] = None
     namespace: Optional[str] = None
-    graph_id: Optional[str] = Field(None, alias="graphId")
+    graphId: Optional[str] = None
     reflective: Optional[bool] = None
-    user_id: Optional[str] = Field(None, alias="userId")
-    
+    userId: Optional[str] = None
+
     model_config = ConfigDict(populate_by_name=True)
 
 
 class MemoryItem(BaseModel):
     id: str
     content: str
-    primary_sector: str = Field(..., alias="primarySector")
+    primarySector: str
     tags: List[str] = []
-    metadata: Dict[str, Any] = Field({}, alias="meta")
-    user_id: Optional[str] = Field(None, alias="userId")
-    created_at: int = Field(..., alias="createdAt")
-    updated_at: int = Field(..., alias="updatedAt")
-    last_seen_at: int = Field(COGNITIVE_PARAMS["DEFAULT_LAST_SEEN_AT"], alias="lastSeenAt")
+    meta: Dict[str, Any] = {}
+    userId: Optional[str] = None
+    createdAt: int
+    updatedAt: int
+    lastSeenAt: int = COGNITIVE_PARAMS["DEFAULT_LAST_SEEN_AT"]
     salience: float = COGNITIVE_PARAMS["DEFAULT_SALIENCE"]
-    decay_lambda: float = Field(COGNITIVE_PARAMS["DEFAULT_DECAY_LAMBDA"], alias="decayLambda")
+    decayLambda: float = COGNITIVE_PARAMS["DEFAULT_DECAY_LAMBDA"]
     version: int = COGNITIVE_PARAMS["DEFAULT_VERSION"]
     segment: int = COGNITIVE_PARAMS["DEFAULT_SEGMENT"]
     simhash: Optional[str] = None
-    generated_summary: Optional[str] = Field(None, alias="generatedSummary")
+    generatedSummary: Optional[str] = None
     sectors: List[str] = []
     score: Optional[float] = None
     path: Optional[List[str]] = None
     trace: Optional[Dict[str, Any]] = None
-    feedback_score: Optional[float] = None
-    
+    feedbackScore: Optional[float] = None
+
     model_config = ConfigDict(populate_by_name=True)
 
 class GraphMemoryItem(MemoryItem):
     node: str
-    compressed_vec_str: Optional[str] = Field(None, alias="compressedVecStr")
-    debug: Optional[Dict[str, Any]] = Field(None, alias="_debug")
+    compressedVecStr: Optional[str] = None
+    debug: Optional[Dict[str, Any]] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -130,42 +130,42 @@ class GraphMemoryItem(MemoryItem):
 
 class TemporalFact(BaseModel):
     id: str
-    user_id: Optional[str] = Field(None, alias="userId")
+    userId: Optional[str] = None
     subject: str
     predicate: str
     object: str
-    valid_from: int = Field(..., alias="validFrom")
-    valid_to: Optional[int] = Field(None, alias="validTo")
+    validFrom: int
+    validTo: Optional[int] = None
     confidence: float
-    source_id: Optional[str] = Field(None, alias="sourceId")
-    last_updated: int = Field(..., alias="lastUpdated")
+    sourceId: Optional[str] = None
+    lastUpdated: int
     metadata: Optional[Dict[str, Any]] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
 class TemporalEdge(BaseModel):
     id: str
-    user_id: Optional[str] = Field(None, alias="userId")
-    source_id: str = Field(..., alias="sourceId")
-    target_id: str = Field(..., alias="targetId")
-    relation_type: str = Field(..., alias="relationType")
-    valid_from: int = Field(..., alias="validFrom")
-    valid_to: Optional[int] = Field(None, alias="validTo")
+    userId: Optional[str] = None
+    sourceId: str
+    targetId: str
+    relationType: str
+    validFrom: int
+    validTo: Optional[int] = None
     weight: float
     metadata: Optional[Dict[str, Any]] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
 class TemporalQuery(BaseModel):
-    user_id: Optional[str] = Field(None, alias="userId")
+    userId: Optional[str] = None
     subject: Optional[str] = None
     predicate: Optional[str] = None
     object: Optional[str] = None
     at: Optional[Union[int, float]] = None
-    from_: Optional[Union[int, float]] = Field(None, alias="from")
+    from_: Optional[Union[int, float]] = None
     to: Optional[Union[int, float]] = None
-    min_confidence: Optional[float] = Field(None, alias="minConfidence")
-    limit: int = 100 # Kept for convenience/client-side limit
+    minConfidence: Optional[float] = None
+    limit: int = 100
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -487,7 +487,7 @@ class ReinforcementResult(BaseModel):
 class ActivationResultItem(BaseModel):
     memory_id: str = Field(..., alias="memoryId")
     activation_level: float = Field(..., alias="activationLevel")
-    
+
     model_config = ConfigDict(populate_by_name=True)
 
 class SpreadingActivationResult(BaseModel):

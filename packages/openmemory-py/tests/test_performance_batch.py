@@ -2,8 +2,8 @@ import pytest
 import asyncio
 import time
 import uuid
-from openmemory.main import Memory
-from openmemory.core.db import db
+from openmemory.main import Memory  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.core.db import db  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 @pytest.mark.asyncio
 async def test_batch_ingestion_performance():
@@ -45,7 +45,7 @@ async def test_batch_ingestion_performance():
     # Search should include fusion and decay checks which are now optimized
     
     # 3. Verify Cache effectiveness
-    from openmemory.core.db import q
+    from openmemory.core.db import q  # type: ignore[import-untyped]
     print(f"[Perf] Testing cache hit for stats...")
     # First call to stats (populates cache for sectors etc if we used it there, 
     # but currently get_stats is not cached, only get_user/get_api_key)

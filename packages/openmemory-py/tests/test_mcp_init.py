@@ -11,7 +11,7 @@ def test_mcp_import_does_not_connect_db():
         del sys.modules["openmemory.main"]
 
     with patch("openmemory.core.db.db.connect") as mock_connect:
-        from openmemory.ai import mcp
+        from openmemory.ai import mcp  # type: ignore[import-untyped]
         
         # Should NOT have called connect
         mock_connect.assert_not_called()
@@ -43,7 +43,7 @@ async def test_run_mcp_server_initializes_memory():
         mock_context.__aexit__.return_value = None
         mock_stdio.return_value = mock_context
         
-        from openmemory.ai.mcp import run_mcp_server
+        from openmemory.ai.mcp import run_mcp_server  # type: ignore[import-untyped]
         
         # Run the server function (it's async? No, 'def run_mcp_server' is sync in existing code? Let's check)
         # Ah, run_mcp_server definition in viewed code: "async def run_mcp_server():" at line 451.

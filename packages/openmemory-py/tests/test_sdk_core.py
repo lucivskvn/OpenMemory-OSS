@@ -3,8 +3,8 @@ import asyncio
 import os
 import shutil
 from pathlib import Path
-from openmemory.client import OpenMemory
-from openmemory.core.config import env
+from openmemory.client import OpenMemory  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.core.config import env  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 class TestPhase64(unittest.IsolatedAsyncioTestCase):
     @classmethod
@@ -25,7 +25,7 @@ class TestPhase64(unittest.IsolatedAsyncioTestCase):
         # Reset others
         env.openai_key = None
         env.tier = "hybrid"
-        from openmemory.core.db import db
+        from openmemory.core.db import db  # type: ignore[import-untyped]
         import asyncio
         try:
             # We are in a sync classmethod, but db.disconnect is async

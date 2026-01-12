@@ -1,6 +1,6 @@
 import pytest
-from openmemory.core.models import load_models, get_model
-from openmemory.utils.net_security import validate_url
+from openmemory.core.models import load_models, get_model  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.utils.net_security import validate_url  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 import logging
 
 @pytest.mark.asyncio

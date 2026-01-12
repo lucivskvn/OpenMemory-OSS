@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch, ANY
-from openmemory.memory.embed import embed_multi_sector
+from openmemory.memory.embed import embed_multi_sector  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 @pytest.mark.asyncio
 async def test_embed_transaction_safety():

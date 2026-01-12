@@ -46,11 +46,11 @@ async def get_current_user_id(
             # Check status? (active/revoked)
             if key_exists.get("status") == "revoked":
                 raise HTTPException(status_code=403, detail="API Key revoked")
-            
+
             # Update last_used
             # We skip commit for performance, or do it periodically?
             # For now, let's keep it simple.
-            
+
             uid = key_exists["user_id"]
             request.state.user_id = uid
             request.state.role = key_exists.get("role", "user")
@@ -91,15 +91,15 @@ def verify_admin(request: Request, user_id: str = Depends(get_current_user_id)):
     Ensures authentication runs first via dependency.
     """
     # Check if request state has user info (set by dependency)
-    user_id = getattr(request.state, "user_id", None)
-    role = getattr(request.state, "role", "user")
-    
+    user_id = getattr(request.state, "user_id", None)  # type: ignore[arg-type]
+    role = getattr(request.state, "role", "user")  # type: ignore[arg-type]
+
     # Global admin key bypass
     if user_id == "default-user":
         return
-        
+
     # Check role
     if role == "admin":
         return
-        
+
     raise HTTPException(status_code=403, detail="Admin privileges required")

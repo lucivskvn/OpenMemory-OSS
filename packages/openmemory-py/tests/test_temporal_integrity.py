@@ -1,9 +1,9 @@
 import asyncio
 import pytest
 import time
-from openmemory.temporal_graph.store import insert_fact, invalidate_fact, insert_edge
-from openmemory.temporal_graph.query import query_facts_at_time, get_current_fact
-from openmemory.core.db import db, q
+from openmemory.temporal_graph.store import insert_fact, invalidate_fact, insert_edge  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.temporal_graph.query import query_facts_at_time, get_current_fact  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.core.db import db, q  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 @pytest.mark.asyncio
 async def test_temporal_fact_invalidation_integrity():

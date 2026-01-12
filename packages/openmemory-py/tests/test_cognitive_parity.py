@@ -2,8 +2,8 @@
 import pytest
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
-from openmemory.ops.extract import extract_image, extract_text
-from openmemory.memory.user_summary import gen_user_summary_smart
+from openmemory.ops.extract import extract_image, extract_text  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.memory.user_summary import gen_user_summary_smart  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 class TestCognitiveParity(unittest.IsolatedAsyncioTestCase):
 

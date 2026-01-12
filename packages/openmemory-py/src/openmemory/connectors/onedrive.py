@@ -124,7 +124,7 @@ class OneDriveConnector(BaseConnector):
                             size=item.get("size", 0),
                             path=item.get("parentReference", {}).get("path", ""),
                             updated_at=item.get("lastModifiedDateTime"),  # type: ignore[arg-type]
-                            metadata={
+                            metadata={  # type: ignore[arg-type]  # type: ignore[arg-type]
                                 "drive_type": item.get("parentReference", {}).get(
                                     "driveType"
                                 )
@@ -181,7 +181,7 @@ class OneDriveConnector(BaseConnector):
             type=meta.get("file", {}).get("mimeType", "unknown"),
             text=text,
             data=content,
-            metadata={
+            metadata={  # type: ignore[arg-type]  # type: ignore[arg-type]
                 "source": "onedrive",
                 "item_id": item_id,
                 "size": meta.get("size", 0),

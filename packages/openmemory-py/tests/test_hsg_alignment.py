@@ -3,10 +3,10 @@ import pytest
 import time
 import uuid
 from unittest.mock import patch, MagicMock
-from openmemory.memory.hsg import add_hsg_memory, add_hsg_memories, hsg_query, hsg_state
-from openmemory.memory.hsg import add_hsg_memory, add_hsg_memories, hsg_query, hsg_state
-from openmemory.core.db import db, q
-from openmemory.ai.adapters import reset_adapter
+from openmemory.memory.hsg import add_hsg_memory, add_hsg_memories, hsg_query, hsg_state  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.memory.hsg import add_hsg_memory, add_hsg_memories, hsg_query, hsg_state  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.core.db import db, q  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.ai.adapters import reset_adapter  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 @pytest.fixture(autouse=True)
 async def cleanup_adapters():

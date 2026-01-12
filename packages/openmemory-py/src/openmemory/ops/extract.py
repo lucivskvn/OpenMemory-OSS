@@ -17,9 +17,9 @@ logger = logging.getLogger("openmemory.ops.extract")
 # ffmpeg -> pydub or subprocess ffmpeg call? "fluent-ffmpeg" in Node.
 
 import httpx
-from pypdf import PdfReader
-import mammoth
-from markdownify import markdownify as md
+from pypdf import PdfReader  # type: ignore[import-untyped]
+import mammoth  # type: ignore[import-untyped]
+from markdownify import markdownify as md  # type: ignore[import-untyped]
 from openai import AsyncOpenAI
 from ..core.config import env
 
@@ -37,7 +37,7 @@ async def extract_pdf(data: bytes) -> Dict[str, Any]:
     text = ""
     for page in reader.pages:
         text += page.extract_text() + "\n"
-        
+
     return {
         "text": text,
         "metadata": {
@@ -68,7 +68,7 @@ async def extract_docx(data: bytes) -> Dict[str, Any]:
 async def extract_html(html: str) -> Dict[str, Any]:
     # Robust sanitization: Remove script and style blocks entirely (content included)
     cleaned_html = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', html, flags=re.DOTALL | re.IGNORECASE)
-    
+
     text = md(cleaned_html, heading_style="ATX", code_language="", strip=["script", "style"])
     return {
         "text": text,
@@ -91,7 +91,7 @@ async def extract_url(url: str, user_id: Optional[str] = None) -> Dict[str, Any]
         resp = await client.get(url, follow_redirects=True)
         resp.raise_for_status()
         html = resp.text
-        
+
     return await extract_html(html)
 
 async def extract_audio(data: bytes, mime_type: str, user_id: Optional[str] = None) -> Dict[str, Any]:
@@ -100,20 +100,20 @@ async def extract_audio(data: bytes, mime_type: str, user_id: Optional[str] = No
     api_key = getattr(adapter, "api_key", None) or env.openai_key or os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise ValueError("OpenAI API key required for audio transcription")
-        
+
     if len(data) > 25 * 1024 * 1024:
         raise ValueError("Audio file too large (max 25MB)")
-        
+
     ext = ".mp3"
     if "wav" in mime_type: ext = ".wav"
     elif "m4a" in mime_type: ext = ".m4a"
     elif "ogg" in mime_type: ext = ".ogg"
     elif "webm" in mime_type: ext = ".webm"
-    
+
     with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
         tmp.write(data)
         tmp_path = tmp.name
-        
+
     try:
         client = AsyncOpenAI(api_key=api_key)
         with open(tmp_path, "rb") as f:
@@ -122,7 +122,7 @@ async def extract_audio(data: bytes, mime_type: str, user_id: Optional[str] = No
                 model="whisper-1",
                 response_format="verbose_json"
             )
-            
+
         text = transcription.text
         return {
             "text": text,
@@ -148,13 +148,13 @@ async def extract_video(data: bytes, user_id: Optional[str] = None) -> Dict[str,
     # Extract audio using ffmpeg
     # requires ffmpeg installed
     import subprocess
-    
+
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as vid_tmp:
         vid_tmp.write(data)
         vid_path = vid_tmp.name
-        
+
     audio_path = vid_path.replace(".mp4", ".mp3")
-    
+
     try:
         subprocess.run(
             ["ffmpeg", "-y", "-i", vid_path, "-vn", "-acodec", "libmp3lame", audio_path],
@@ -162,16 +162,16 @@ async def extract_video(data: bytes, user_id: Optional[str] = None) -> Dict[str,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
-        
+
         with open(audio_path, "rb") as f:
             audio_data = f.read()
-            
+
         res = await extract_audio(audio_data, "audio/mp3", user_id=user_id)
         res["metadata"]["content_type"] = "video"
         res["metadata"]["extraction_method"] = "ffmpeg+whisper"
         res["metadata"]["video_size"] = len(data)
         return res
-        
+
     except FileNotFoundError:
         raise RuntimeError("FFmpeg not found - ensure ffmpeg is installed for video transcription")
     except Exception as e:
@@ -196,11 +196,11 @@ async def extract_image(data: bytes, mime_type: str, user_id: Optional[str] = No
                 "extraction_method": "placeholder"
             }
         }
-    
+
     import base64
     b64_img = base64.b64encode(data).decode('utf-8')
     data_url = f"data:{mime_type};base64,{b64_img}"
-    
+
     try:
         client = AsyncOpenAI(api_key=api_key)
         response = await client.chat.completions.create(
@@ -244,9 +244,9 @@ async def extract_text(content_type: str, data: Union[str, bytes], user_id: Opti
     Main dispatcher for extracting text from various content types.
     """
     ctype = content_type.lower()
-    
+
     import base64
-    
+
     # Helper to ensure we have bytes for binary formats
     def to_bytes(d: Union[str, bytes]) -> bytes:
         if isinstance(d, bytes): return d
@@ -265,24 +265,24 @@ async def extract_text(content_type: str, data: Union[str, bytes], user_id: Opti
     # Check audio
     if any(x in ctype for x in ["audio", "mp3", "wav", "m4a", "ogg", "webm"]) and "video" not in ctype:
         return await extract_audio(to_bytes(data), ctype, user_id=user_id)
-        
+
     # Check video
     if any(x in ctype for x in ["video", "mp4", "avi", "mov"]):
         return await extract_video(to_bytes(data), user_id=user_id)
-        
+
     # Check PDF
     if "pdf" in ctype:
         return await extract_pdf(to_bytes(data))
-        
+
     # Check DOCX
     if "docx" in ctype or ctype.endswith(".doc") or "msword" in ctype:
         return await extract_docx(to_bytes(data))
-        
+
     # Check HTML
     if "html" in ctype or "htm" in ctype:
         s = data.decode("utf-8") if isinstance(data, bytes) else data
         return await extract_html(s) # type: ignore
-        
+
     # Check Text/Markdown
     if any(x in ctype for x in ["markdown", "md", "txt", "text"]):
         s = data.decode("utf-8") if isinstance(data, bytes) else str(data)
@@ -295,5 +295,5 @@ async def extract_text(content_type: str, data: Union[str, bytes], user_id: Opti
                 "extraction_method": "passthrough"
             }
         }
-        
+
     raise ValueError(f"Unsupported content type: {content_type}")

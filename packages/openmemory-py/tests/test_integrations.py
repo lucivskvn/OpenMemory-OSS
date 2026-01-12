@@ -6,10 +6,10 @@ import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
 
-from openmemory.utils.async_bridge import run_sync
-from openmemory.integrations.agents import CrewAIMemory
-from openmemory.integrations.langchain import OpenMemoryChatMessageHistory
-from openmemory.core.types import MemoryItem
+from openmemory.utils.async_bridge import run_sync  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.integrations.agents import CrewAIMemory  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.integrations.langchain import OpenMemoryChatMessageHistory  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.core.types import MemoryItem  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 class TestAsyncBridge(unittest.TestCase):
     def test_run_sync_simple(self):

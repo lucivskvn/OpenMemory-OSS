@@ -1,9 +1,9 @@
 
 import pytest
 import numpy as np
-from openmemory.utils.chunking import chunk_text
-from openmemory.utils.keyword import extract_keywords
-from openmemory.utils.vectors import cos_sim, compress_vec_for_storage
+from openmemory.utils.chunking import chunk_text  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.utils.keyword import extract_keywords  # type: ignore[import-untyped]  # type: ignore[import-untyped]
+from openmemory.utils.vectors import cos_sim, compress_vec_for_storage  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 def test_chunking_offsets_accuracy():
     """Verify that chunk offsets point exactly to the source text."""

@@ -5,7 +5,7 @@ import json
 import gzip
 import time
 from datetime import datetime
-from openmemory.client import Memory
+from openmemory.client import Memory  # type: ignore[import-untyped]
 
 # ==================================================================================
 # BACKUP & RESTORE TOOL
