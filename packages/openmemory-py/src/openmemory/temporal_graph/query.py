@@ -348,7 +348,12 @@ async def get_related_facts(
 
     rows = await db.async_fetchall(sql, tuple(params))
     return [
-        {"fact": format_fact(r), "relation": r["relation_type"], "weight": r["weight"]}
+        {
+            "fact": format_fact(r),
+            "relation": r["relation_type"],
+            "weight": r["weight"],
+            "edge_user_id": r.get("edge_user_id"),
+        }
         for r in rows
     ]
 

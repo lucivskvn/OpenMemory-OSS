@@ -51,7 +51,6 @@ import type {
     VolatileFactsResult,
     WaypointGraphResult,
     WaypointWeightResult,
-    SourceRegistryEntry,
     ApiKey,
 } from "./core/types";
 

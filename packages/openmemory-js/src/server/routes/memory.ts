@@ -165,6 +165,16 @@ export function memoryRoutes(app: ServerApp) {
             const m = new Memory(normalizedUid);
             const added = await m.addBatch(items, { userId: normalizedUid ?? undefined });
 
+            // Filter out error entries to find successful additions
+            const successful = added.filter((r) => r && !('error' in r));
+
+            // Update user summary only when there are successful additions
+            if (successful.length > 0) {
+                await updateUserSummary(normalizedUid).catch((e) =>
+                    logger.warn(`Failed to update user summary for ${normalizedUid}:`, e)
+                );
+            }
+
             res.json({ items: added });
         } catch (e: unknown) {
             sendError(res, e);

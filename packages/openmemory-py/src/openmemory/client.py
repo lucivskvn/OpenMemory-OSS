@@ -116,9 +116,9 @@ class MemoryClient:
         try:
             return await self._request("GET", f"/memory/{memory_id}")
         except Exception as e:
-            if "404" in str(e):
+            if "404" in str(e) or "404" in str(type(e)):
                 return None
-            raise e
+            raise
 
     async def update(self, memory_id: str, content: Optional[str] = None, tags: Optional[List[str]] = None, metadata: Optional[Dict[str, Any]] = None) -> Any:
         """Update a memory."""
@@ -150,6 +150,7 @@ class MemoryClient:
             "query": "",  # Empty query for all/history
             "user_id": uid,
             "limit": limit,
+            "offset": offset,
         }
         res = await self._request("POST", "/memory/query", json_body=body)
         return res or []

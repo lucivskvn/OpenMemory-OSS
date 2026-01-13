@@ -415,7 +415,7 @@ class Memory:
                     segment=m["segment"],
                     simhash=m["simhash"],
                     generatedSummary=m["generated_summary"],
-                    user_id=m.get("user_id"),
+                    user_id=m.get("user_id") or uid,
                     feedbackScore=m.get("feedback_score") or 0.0,
                 )
                 res.append(item)

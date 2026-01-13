@@ -325,7 +325,7 @@ export const applyDecay = async (
                 1,
             );
             const newSal = calcDecay(m.primarySector || "semantic", sal, timeDeltaMs);
-            const f = newSal / (sal + 1e-9);
+            const f = clampF(newSal / (sal + 1e-9), 0, 1);
 
             let structuralChange = false;
 

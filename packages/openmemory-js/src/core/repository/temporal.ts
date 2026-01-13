@@ -79,7 +79,7 @@ export class TemporalRepository extends BaseRepository {
      */
     async getOverlappingFacts(subject: string, predicate: string, validFromTs: number, userId: string | null | undefined): Promise<any[]> {
         return await this.allUser(
-            `SELECT id, valid_from, valid_to FROM ${this.tables.temporal_facts} WHERE subject = ? AND predicate = ? AND (valid_to IS NULL OR valid_to > ?) ORDER BY valid_from ASC` + (this.isPg ? " FOR UPDATE" : ""),
+            `SELECT id, valid_from, valid_to FROM ${this.tables.temporal_facts} WHERE subject = ? AND predicate = ? AND (valid_to IS NULL OR valid_to >= ?) ORDER BY valid_from ASC` + (this.isPg ? " FOR UPDATE" : ""),
             [subject, predicate, validFromTs],
             userId
         );
@@ -88,7 +88,13 @@ export class TemporalRepository extends BaseRepository {
     /**
      * Invalidate a fact by setting valid_to.
      */
-    async closeFact(id: string, validTo: number) {
+    async closeFact(id: string, validTo: number, userId?: string) {
+        if (userId) {
+            return await this.runAsync(
+                `UPDATE ${this.tables.temporal_facts} SET valid_to = ? WHERE id = ? AND user_id = ?`,
+                [validTo, id, userId]
+            );
+        }
         return await this.runAsync(
             `UPDATE ${this.tables.temporal_facts} SET valid_to = ? WHERE id = ?`,
             [validTo, id]
@@ -109,6 +115,17 @@ export class TemporalRepository extends BaseRepository {
      * Update arbitrary fields of a fact (internal use).
      */
     async updateFactRaw(id: string, updates: string[], params: any[], userId: string | null | undefined): Promise<number> {
+        // Validate column names in updates against allowlist
+        const allowedColumns = ['confidence', 'valid_to', 'metadata', 'last_updated'];
+        const columnRegex = /^(\w+)\s*=/i;
+
+        for (const update of updates) {
+            const match = update.match(columnRegex);
+            if (!match || !allowedColumns.includes(match[1].toLowerCase())) {
+                throw new Error(`Invalid column in update clause: ${update}`);
+            }
+        }
+
         let sql = `UPDATE ${this.tables.temporal_facts} SET ${updates.join(", ")} WHERE id = ?`;
         if (userId !== undefined) {
             sql += userId === null ? " AND user_id IS NULL" : " AND user_id = ?";
@@ -186,6 +203,17 @@ export class TemporalRepository extends BaseRepository {
      * Update arbitrary edge fields.
      */
     async updateEdgeRaw(id: string, updates: string[], params: any[], userId: string | null | undefined): Promise<number> {
+        // Validate column names in updates against allowlist
+        const allowedColumns = ['weight', 'confidence', 'metadata', 'last_updated'];
+        const columnRegex = /^(\w+)\s*=/i;
+
+        for (const update of updates) {
+            const match = update.match(columnRegex);
+            if (!match || !allowedColumns.includes(match[1].toLowerCase())) {
+                throw new Error(`Invalid column in update clause: ${update}`);
+            }
+        }
+
         let sql = `UPDATE ${this.tables.temporal_edges} SET ${updates.join(", ")} WHERE id = ?`;
         if (userId !== undefined) {
             sql += userId === null ? " AND user_id IS NULL" : " AND user_id = ?";

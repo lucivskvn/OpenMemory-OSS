@@ -131,7 +131,9 @@ class OpenMemoryVectorStore:
         # Basic implementation mapping to memory.add
         ids = []
         for i, text in enumerate(texts):
-            meta = metadatas[i] if metadatas else {}
+            meta = None
+            if metadatas and i < len(metadatas):
+                meta = metadatas[i] or {}
             res = run_sync(self.memory.add(text, user_id=self.user_id, metadata=meta))
             ids.append(res.id)
         return ids

@@ -194,12 +194,21 @@ export const deleteFact = async (
     const changes = await runUser(`DELETE FROM ${TABLES.temporal_facts} WHERE id = ?`, [id], uid);
 
     if (changes > 0) {
-        // Also delete related edges (orphans)
-        await runUser(
-            `DELETE FROM ${TABLES.temporal_edges} WHERE (source_id = ? OR target_id = ?)`,
-            [id, id],
-            uid
-        );
+        // Also delete related edges (orphans) - ensure user_id matches for data isolation
+        // Handle three cases: undefined (no filter), null (IS NULL), string (= ?)
+        let edgeSql = `DELETE FROM ${TABLES.temporal_edges} WHERE (source_id = ? OR target_id = ?)`;
+        let edgeParams: any[] = [id, id];
+
+        if (uid !== undefined) {
+            if (uid === null) {
+                edgeSql += ` AND user_id IS NULL`;
+            } else {
+                edgeSql += ` AND user_id = ?`;
+                edgeParams.push(uid);
+            }
+        }
+
+        await runUser(edgeSql, edgeParams, uid);
         if (env.verbose) logger.debug(`[TEMPORAL] Deleted fact ${id} and related edges`);
     }
 };

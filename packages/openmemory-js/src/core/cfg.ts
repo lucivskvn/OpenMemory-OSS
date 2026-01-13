@@ -275,7 +275,7 @@ const EnvSchema = z.object({
                 .map((k) => k.trim())
                 .filter(Boolean),
         ),
-    encryptionSalt: strSchema("openmemory-salt-v1"),
+    encryptionSalt: strSchema(""),
     telemetryEndpoint: urlSchema("https://telemetry.spotit.dev"),
     ingestSectionSize: numSchema(4000),
     ingestLargeThreshold: numSchema(12000),
@@ -364,6 +364,9 @@ const EnvSchema = z.object({
 }).refine((data) => !data.encryptionEnabled || (data.encryptionKey && data.encryptionKey.length > 0), {
     message: "encryptionKey is required when encryptionEnabled is true",
     path: ["encryptionKey"],
+}).refine((data) => !data.encryptionEnabled || (data.encryptionSalt && data.encryptionSalt.length > 0 && data.encryptionSalt !== "openmemory-salt-v1"), {
+    message: "encryptionSalt must be a unique non-default value when encryptionEnabled is true",
+    path: ["encryptionSalt"],
 });
 
 const parseEnv = () => {

@@ -50,7 +50,10 @@ export class ConfigRepository extends BaseRepository {
         return await this.getAsync<any>(`select * from ${this.tables.api_keys} where key_hash=?`, [kh]);
     }
 
-    async delApiKey(kh: string) {
+    async delApiKey(kh: string, userId?: string) {
+        if (userId) {
+            return await this.runAsync(`delete from ${this.tables.api_keys} where key_hash=? and user_id=?`, [kh, userId]);
+        }
         return await this.runAsync(`delete from ${this.tables.api_keys} where key_hash=?`, [kh]);
     }
 

@@ -66,7 +66,8 @@ export class MemoryRepository extends BaseRepository {
         const BATCH_SIZE = 500;
         let total = 0;
         for (let i = 0; i < items.length; i += BATCH_SIZE) {
-            total += await execChunk(items.slice(i, i + BATCH_SIZE));
+            const chunkResult = await execChunk(items.slice(i, i + BATCH_SIZE));
+            total += typeof chunkResult === 'number' ? chunkResult : (chunkResult?.changes || 0);
         }
         return total;
     }
@@ -300,7 +301,9 @@ export class MemoryRepository extends BaseRepository {
     }
 
     async allMemBySectorAndTag(sec: string, tag: string, limit: number, offset: number, userId?: string | null) {
-        return await this.allUser<MemoryRow>(`select * from ${this.tables.memories} where primary_sector=? and tags like ? order by created_at desc limit ? offset ?`, [sec, `%${tag}%`, limit, offset], userId);
+        // Escape LIKE wildcards to prevent unintended pattern matches
+        const escapedTag = tag.replace(/[%_]/g, '\\$&');
+        return await this.allUser<MemoryRow>(`select * from ${this.tables.memories} where primary_sector=? and tags like ? escape '\\' order by created_at desc limit ? offset ?`, [sec, `%${escapedTag}%`, limit, offset], userId);
     }
 
     async getVecCount(userId?: string | null): Promise<{ c: number }> {

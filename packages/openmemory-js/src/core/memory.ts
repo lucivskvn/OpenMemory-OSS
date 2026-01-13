@@ -117,11 +117,16 @@ export class Memory {
     async addBatch(items: Array<{ content: string; tags?: string[]; metadata?: Record<string, unknown> }>, opts?: { userId?: string | null }) {
         const results = [];
         for (const item of items) {
-            results.push(await this.add(item.content, {
-                userId: opts?.userId,
-                tags: item.tags,
-                ...item.metadata
-            }));
+            try {
+                const result = await this.add(item.content, {
+                    ...item.metadata,
+                    userId: opts?.userId,
+                    tags: item.tags
+                });
+                results.push(result);
+            } catch (error) {
+                results.push({ error: error instanceof Error ? error.message : String(error) });
+            }
         }
         return results;
     }

@@ -136,7 +136,7 @@ async def test_get_graph_ctx_aggregation():
                         updatedAt=1000,
                         lastSeenAt=1000,
                         meta={},
-                        user_id="u1",
+                        userId="u1",
                     )
                 ],
             )

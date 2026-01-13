@@ -1,13 +1,14 @@
 import { BaseRepository } from "./base";
 import { Waypoint, BatchWaypointInsertItem } from "../types";
-import { getIsPg, transaction } from "../db";
+import { getIsPg, transaction, SqlValue } from "../db";
 
 export class WaypointRepository extends BaseRepository {
     async insWaypoint(src: string, dst: string, userId: string | null | undefined, w: number, ca: number, ua: number) {
-        return await this.runAsync(
+        const result = await this.runAsync(
             `insert into ${this.tables.waypoints}(src_id,dst_id,user_id,weight,created_at,updated_at) values(?,?,?,?,?,?) on conflict(src_id,dst_id,user_id) do update set weight=excluded.weight,updated_at=excluded.updated_at`,
             [src, dst, userId ?? null, w, ca, ua],
         );
+        return typeof result === 'number' ? result : (result?.changes || 1);
     }
 
     async insWaypoints(items: BatchWaypointInsertItem[]) {

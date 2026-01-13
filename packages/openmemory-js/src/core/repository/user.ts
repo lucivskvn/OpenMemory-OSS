@@ -46,4 +46,14 @@ export class UserRepository extends BaseRepository {
     async delStatsByUser(userId: string) {
         return await this.runAsync(`delete from ${this.tables.stats} where user_id=?`, [userId]);
     }
-}
+
+    async deleteUserCascade(userId: string) {
+        // Delete in cascade order: waypoints, edges, facts, vectors, memories, stats, users
+        await this.runAsync(`delete from ${this.tables.waypoints} where user_id=?`, [userId]);
+        await this.runAsync(`delete from ${this.tables.edges} where user_id=?`, [userId]);
+        await this.runAsync(`delete from ${this.tables.facts} where user_id=?`, [userId]);
+        await this.runAsync(`delete from ${this.tables.vectors} where user_id=?`, [userId]);
+        await this.runAsync(`delete from ${this.tables.memories} where user_id=?`, [userId]);
+        await this.delStatsByUser(userId);
+        return await this.delUser(userId);
+    }

@@ -410,6 +410,13 @@ let simulation = null;
 async function loadGraph(query) {
     const svg = document.getElementById('graphSvg');
     if (!svg) return;
+
+    // Clear previous simulation to prevent memory leak
+    if (simulation !== null) {
+        clearInterval(simulation);
+        simulation = null;
+    }
+
     svg.innerHTML = '<text x="50%" y="50%" fill="#777" text-anchor="middle" dominant-baseline="middle">Loading Graph...</text>';
 
     try {
@@ -429,8 +436,10 @@ async function loadGraph(query) {
         }
 
         renderForceGraph(svg, facts, edges);
+        // Note: simulation is stored in global variable for cleanup on reload
     } catch (e) {
-        svg.innerHTML = `<text x="50%" y="50%" fill="red" text-anchor="middle" dominant-baseline="middle">Error: ${e.message}</text>`;
+        const errorMsg = escapeHtml((e instanceof Error ? e.message : String(e)) || 'Unknown error');
+        svg.innerHTML = `<text x="50%" y="50%" fill="red" text-anchor="middle" dominant-baseline="middle">Error: ${errorMsg}</text>`;
     }
 }
 
@@ -567,6 +576,7 @@ function renderForceGraph(svg, facts, edges) {
             const dx = t.x - s.x;
             const dy = t.y - s.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist === 0) return; // Guard against division by zero
             const force = (dist - 100) * c; // Rest length 100
             const fx = (dx / dist) * force;
             const fy = (dy / dist) * force;

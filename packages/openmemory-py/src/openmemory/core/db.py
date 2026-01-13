@@ -24,28 +24,24 @@ class DB:
         url = env.database_url or ""
         self.is_pg = url.startswith("postgresql://") or url.startswith("postgres://")
         self._current_url = None
-        self._lock: Optional[asyncio.Lock] = None
-        self._tx_lock: Optional[asyncio.Lock] = None
+        self._lock: Optional[asyncio.Lock] = asyncio.Lock()
+        self._tx_lock: Optional[asyncio.Lock] = asyncio.Lock()
         self._stmt_cache: Dict[str, Any] = {}
 
     @property
     def lock(self) -> asyncio.Lock:
-        if self._lock is None:
-            self._lock = asyncio.Lock()
         return self._lock
 
     @property
     def tx_lock(self) -> asyncio.Lock:
-        if self._tx_lock is None:
-            self._tx_lock = asyncio.Lock()
         return self._tx_lock
 
     async def disconnect(self):
         """Close the database connection/pool."""
         if self._pool:
-             await asyncio.to_thread(self._pool.closeall)
-             self._pool = None
-             
+            await asyncio.to_thread(self._pool.closeall)
+            self._pool = None
+
         if self.conn:
             if self.is_pg:
                 await asyncio.to_thread(self.conn.close)
@@ -155,7 +151,7 @@ class DB:
                     # Apply Table Replacements (Parity with JS SDK)
                     sc = env.pg_schema
                     mt = env.pg_table
-                    
+
                     if self.is_pg:
                         replacements = {
                             "{m}": f'"{sc}"."{mt}"',
@@ -199,7 +195,7 @@ class DB:
                         cur.execute(sql)
                     else:
                         c.executescript(sql)
-                    
+
                     c.execute("INSERT INTO _migrations (name, applied_at) VALUES (?, ?)", (f, int(time.time())))
                 except Exception as e:
                     msg = str(e).lower()
@@ -218,7 +214,7 @@ class DB:
         """Get a connection from the pool (if PG) or return the main one."""
         tx = _tx_conn.get()
         if tx: return tx
-        
+
         if self.is_pg and self._pool:
             return self._pool.getconn()
         return self.conn
@@ -227,7 +223,7 @@ class DB:
         """Release a connection back to the pool."""
         if _tx_conn.get() == conn:
             return # Don't release if in transaction
-            
+
         if self.is_pg and self._pool:
             try:
                 self._pool.putconn(conn)
@@ -239,7 +235,7 @@ class DB:
         conn = self.get_conn()
         if not conn:
             raise RuntimeError("Database connection not established")
-        
+
         try:
             if self.is_pg:
                 # Map ? to %s for psycopg2
@@ -248,7 +244,7 @@ class DB:
                 cur = conn.cursor(cursor_factory=RealDictCursor)  # type: ignore[call-arg]  # type: ignore[call-arg]
                 cur.execute(sql, params)
                 return cur
-                
+
             # SQLite
             return conn.execute(sql, params)
         finally:
@@ -289,9 +285,9 @@ class DB:
 
     async def async_fetchall(self, sql: str, params: tuple = ()) -> List[Any]:
         if self.is_pg:
-             return await asyncio.to_thread(self.fetchall, sql, params)
+            return await asyncio.to_thread(self.fetchall, sql, params)
         async with self.lock:
-             return await asyncio.to_thread(self.fetchall, sql, params)
+            return await asyncio.to_thread(self.fetchall, sql, params)
 
     def executemany(self, sql: str, params_list: List[tuple]) -> Any:
         self.connect()

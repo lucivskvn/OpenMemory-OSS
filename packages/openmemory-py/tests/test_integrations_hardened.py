@@ -100,35 +100,39 @@ class TestPhase63(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res, ["res"])
 
     async def test_langchain_retriever_bridge(self):
-        # TODO: retriever not instantiated - test incomplete
-        pass
-        # mock_mem = AsyncMock()
-        # mock_mem.search.return_value = [
-        #     MemoryItem(
-        #         id="1",
-        #         content="res",
-        #         primarySector="s",
-        #         createdAt=0,
-        #         updatedAt=0,
-        #         lastSeenAt=0,
-        #         sectors=[],
-        #         tags=[],
-        #         meta={},
-        #         salience=0.0,
-        #         feedbackScore=0.0,
-        #     )
-        # ]
-        # retriever.memory = mock_mem
-        # retriever.user_id = "lc_user"
-        # retriever.k = 5
-        #
-        # # Test sync bridge in thread
-        # docs = await asyncio.to_thread(retriever._get_relevant_documents, "q", run_manager=MagicMock())
-        # self.assertEqual(docs[0].page_content, "res")
-        #
-        # # Test async
-        # docs_async = await retriever._aget_relevant_documents("q", run_manager=MagicMock())
-        # self.assertEqual(docs_async[0].page_content, "res")
+        from openmemory.integrations.langchain import OpenMemoryRetriever
+        from unittest.mock import MagicMock
+
+        mock_mem = AsyncMock()
+        mock_mem.search.return_value = [
+            MemoryItem(
+                id="1",
+                content="res",
+                primarySector="s",
+                createdAt=0,
+                updatedAt=0,
+                lastSeenAt=0,
+                sectors=[],
+                tags=[],
+                meta={},
+                salience=0.0,
+                feedbackScore=0.0,
+            )
+        ]
+
+        retriever = OpenMemoryRetriever(memory=mock_mem, user_id="lc_user", k=5)
+
+        # Test sync bridge in thread
+        docs = await asyncio.to_thread(
+            retriever._get_relevant_documents, "q", run_manager=MagicMock()
+        )
+        self.assertEqual(docs[0].page_content, "res")
+
+        # Test async
+        docs_async = await retriever._aget_relevant_documents(
+            "q", run_manager=MagicMock()
+        )
+        self.assertEqual(docs_async[0].page_content, "res")
 
 if __name__ == '__main__':
     unittest.main()
