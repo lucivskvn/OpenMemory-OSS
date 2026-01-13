@@ -35,7 +35,7 @@ class EncryptionProvider:
                 logger.warning("[Security] Encryption enabled but key is too short (<16 chars) or missing. Encryption disabled.")
                 self.enabled = False
                 return
-            
+
             # Verify primary key works
             if not self.verify_key():
                 logger.error("[Security] Key verification failed. Encryption disabled.")
@@ -44,7 +44,7 @@ class EncryptionProvider:
     def _get_aes(self, secret: str) -> Optional[Any]:
         if secret in self._key_cache:
             return self._key_cache[secret]
-            
+
         try:
             from cryptography.hazmat.primitives import hashes as h
             from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC as KDF
@@ -92,15 +92,15 @@ class EncryptionProvider:
         if not self.enabled:
             return text # Cannot decrypt
 
-        all_secrets = [self.secret] + self.secondary_secrets
-        
+        all_secrets = [self.secret] + (self.secondary_secrets or [])
+
         parts = text.split(":")
         if len(parts) != 3:
             return text
 
         iv_b64 = parts[1]
         ct_b64 = parts[2]
-        
+
         try:
             iv = base64.b64decode(iv_b64)
             ct = base64.b64decode(ct_b64)
@@ -111,7 +111,7 @@ class EncryptionProvider:
             if not secret: continue
             aes = self._get_aes(secret)
             if not aes: continue
-            
+
             try:
                 pt_bytes = aes.decrypt(iv, ct, None)
                 return pt_bytes.decode("utf-8")
@@ -129,11 +129,11 @@ class EncryptionProvider:
         """
         if not self.enabled or not self.secret:
             return text
-            
+
         # If not encrypted, don't touch
         if not text or not (text.startswith("enc:") or text.startswith("v1:")):
             return text
-            
+
         try:
             decrypted = self.decrypt(text)
             return self.encrypt(decrypted)
@@ -167,4 +167,3 @@ def get_encryption() -> EncryptionProvider:
     if not _instance:
         _instance = EncryptionProvider()
     return _instance
-

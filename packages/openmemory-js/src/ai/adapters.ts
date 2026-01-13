@@ -779,12 +779,12 @@ export class AnthropicGenerator implements GenerationAdapter {
                         {
                             model: this.model,
                             max_tokens: options?.max_tokens || 4096,
+                            system: "Output ONLY valid JSON.",
                             messages: [
                                 {
                                     role: "user",
                                     content:
                                         prompt +
-                                        "\n\nResponse must be valid JSON." +
                                         (schema
                                             ? `\n\nFollow this JSON schema: ${JSON.stringify(schema)}`
                                             : ""),

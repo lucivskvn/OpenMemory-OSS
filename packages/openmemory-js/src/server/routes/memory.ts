@@ -41,6 +41,15 @@ const IngestUrlSchema = z.object({
     createdAt: z.number().int().optional(),
 });
 
+const BatchAddSchema = z.object({
+    items: z.array(z.object({
+        content: z.string().min(1).max(100000),
+        tags: z.array(z.string()).optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
+    })),
+    userId: z.string().optional(),
+});
+
 const QueryMemorySchema = z.object({
     query: z.string().min(1),
     k: z.number().optional().default(8),
@@ -63,6 +72,7 @@ const UpdateMemorySchema = z.object({
     content: z.string().max(100000).optional(),
     tags: z.array(z.string()).optional(),
     metadata: z.record(z.string(), z.unknown()).optional(),
+    userId: z.string().optional(),
 });
 
 const ListMemorySchema = z.object({
@@ -135,6 +145,27 @@ export function memoryRoutes(app: ServerApp) {
                     }),
                 );
             }
+        } catch (e: unknown) {
+            sendError(res, e);
+        }
+    };
+
+
+
+
+    const addBatchHandler = async (
+        req: AdvancedRequest,
+        res: AdvancedResponse,
+    ) => {
+        try {
+            const body = req.body as z.infer<typeof BatchAddSchema>;
+            const { items, userId: bodyUserId } = body;
+            const normalizedUid = getEffectiveUserId(req, bodyUserId);
+
+            const m = new Memory(normalizedUid);
+            const added = await m.addBatch(items, { userId: normalizedUid ?? undefined });
+
+            res.json({ items: added });
         } catch (e: unknown) {
             sendError(res, e);
         }
@@ -311,7 +342,7 @@ export function memoryRoutes(app: ServerApp) {
         try {
             const id = req.params.id;
             const body = req.body as z.infer<typeof UpdateMemorySchema>;
-            const { content, tags, metadata } = body;
+            const { content, tags, metadata, userId: bodyUserId } = body;
 
             if (!id)
                 return sendError(
@@ -319,7 +350,7 @@ export function memoryRoutes(app: ServerApp) {
                     new AppError(400, "MISSING_ID", "ID is required"),
                 );
 
-            const checkUserId = getEffectiveUserId(req);
+            const checkUserId = getEffectiveUserId(req, bodyUserId);
 
             const m = new Memory(checkUserId);
             // Verify existence AND ownership via Facade get()
@@ -467,10 +498,9 @@ export function memoryRoutes(app: ServerApp) {
                 await m.wipe();
                 // Return 0 or undefined for count? wipe() is void. We can't easily get count for global wipe efficiently without pre-count.
                 // Let's assume OK.
-            } else {
                 count = await m.deleteAll(userId);
             }
-            res.json({ ok: true, deleted: count });
+            res.json({ ok: true, success: true, deleted: count, deletedCount: count });
         } catch (e: unknown) {
             sendError(res, e);
         }
@@ -481,6 +511,12 @@ export function memoryRoutes(app: ServerApp) {
      * Adds a new memory to the HSG.
      */
     app.post("/memory/add", validateBody(AddMemorySchema), addMemoryHandler);
+
+    /**
+     * POST /memory/batch
+     * Adds multiple memories.
+     */
+    app.post("/memory/batch", validateBody(BatchAddSchema), addBatchHandler);
 
     /**
      * POST /memory/ingest

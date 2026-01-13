@@ -1,6 +1,6 @@
 
 import { describe, expect, test, mock, beforeEach } from "bun:test";
-import { MemoryClient } from "../src/client";
+import { MemoryClient } from "../../src/client";
 
 // Global fetch mock
 const originalFetch = global.fetch;
@@ -28,9 +28,9 @@ describe("MemoryClient (Mocked)", () => {
         const url = call[0];
         const opts = call[1];
 
-        expect(url).toBe("http://test-api/users/register");
+        expect(url).toBe("http://test-api/admin/users");
         expect(opts.method).toBe("POST");
-        expect(JSON.parse(opts.body)).toEqual({ userId: "u1", scope: "admin" });
+        expect(JSON.parse(opts.body)).toEqual({ userId: "u1", summary: "admin" });
         expect(opts.headers["Authorization"]).toBe("Bearer test-token");
     });
 

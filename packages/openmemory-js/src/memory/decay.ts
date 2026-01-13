@@ -5,12 +5,13 @@
  */
 
 import { env } from "../core/cfg";
-import { allAsync, memoriesTable, q, vectorStore } from "../core/db";
+import { q, vectorStore } from "../core/db";
 import { sectorConfigs } from "../core/hsg_config";
 import { getEncryption } from "../core/security";
 import { MemoryRow } from "../core/types";
 import { normalizeUserId } from "../utils";
 import { logger } from "../utils/logger";
+import { calculateDualPhaseDecayMemoryRetention } from "../ops/dynamics";
 
 // Subset of MemoryRow required for decay processing
 type DecayingMemory = Pick<
@@ -119,8 +120,6 @@ const compressVector = (
     normalize(pooled);
     return pooled;
 };
-
-import { calculateDualPhaseDecayMemoryRetention } from "../ops/dynamics";
 
 export function calcDecay(
     sector: string,
@@ -288,7 +287,7 @@ export const applyDecay = async (
     lastDecay = now;
     const t0 = performance.now();
 
-    const segments = await q.getSegments.all();
+    const segments = await q.getSegments.all(uid);
     if (!segments || segments.length === 0) return { decayed: 0, processed: 0 };
 
     let totProc = 0,
@@ -299,32 +298,16 @@ export const applyDecay = async (
 
     for (const seg of segments) {
         const segment = seg.segment;
-        let userFilter = "";
-        const queryParams: (string | number | null)[] = [segment];
-        if (uid !== undefined) {
-            if (uid === null) {
-                userFilter = " AND user_id IS NULL";
-            } else {
-                userFilter = " AND user_id = ?";
-                queryParams.push(uid);
-            }
-        }
 
         // count total items in segment first
-        const countRes = await allAsync(
-            `select count(*) as c from ${memoriesTable} where segment=?${userFilter}`,
-            queryParams,
-        ) as { c: number }[];
-        const total = countRes[0]?.c || 0;
+        const countRes = await q.getSegmentCount.get(segment, uid);
+        const total = countRes?.c || 0;
         if (total === 0) continue;
 
         const batchSz = Math.max(1, Math.floor(total * env.decayRatio));
         const startIdx = Math.floor(Math.random() * Math.max(1, total - batchSz));
 
-        const rows = (await allAsync(
-            `select id, content, generated_summary as summary, salience, decay_lambda as decayLambda, last_seen_at as lastSeenAt, updated_at as updatedAt, primary_sector as primarySector, coactivations, user_id as userId from ${memoriesTable} where segment=?${userFilter} LIMIT ? OFFSET ?`,
-            [...queryParams, batchSz, startIdx],
-        )) as DecayingMemory[];
+        const rows = await q.allMem.all(batchSz, startIdx, uid);
 
         const batch = rows;
         const salUpdates: Array<{ id: string; salience: number; lastSeenAt: number; updatedAt: number }> = [];
@@ -333,24 +316,17 @@ export const applyDecay = async (
             const tier = pickTier(m, now);
             tierCounts[tier]++;
 
-            const lam =
-                tier === "hot"
-                    ? cfg.lambdaHot
-                    : tier === "warm"
-                        ? cfg.lambdaWarm
-                        : cfg.lambdaCold;
-
             const last = m.lastSeenAt || m.updatedAt || now;
-            const dt = Math.max(0, (now - last) / cfg.timeUnitMs);
+            const timeDeltaMs = Math.max(0, now - last);
             const act = Math.max(0, m.coactivations || 0);
             const sal = clampF(
                 (m.salience || 0.5) * (1 + Math.log1p(act)),
                 0,
                 1,
             );
-            const f = Math.exp(-lam * (dt / (sal + 0.1)));
+            const newSal = calcDecay(m.primarySector || "semantic", sal, timeDeltaMs);
+            const f = newSal / (sal + 1e-9);
 
-            const newSal = clampF(sal * f, 0, 1);
             let structuralChange = false;
 
             if (f < 0.7) {

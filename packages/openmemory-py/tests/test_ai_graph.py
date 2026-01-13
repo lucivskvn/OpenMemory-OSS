@@ -36,8 +36,8 @@ async def test_store_node_mem_basic():
         assert res.success
         assert res.memory_id == "mem1"
         assert res.node == "observe"
-        assert res.memory.id == "mem1"
-        assert res.memory.node == "observe"
+        assert res.memory is not None and res.memory.id == "mem1"
+        assert res.memory is not None and res.memory.node == "observe"
 
         mock_add.assert_called_once()
         ca = mock_add.call_args
@@ -129,14 +129,16 @@ async def test_get_graph_ctx_aggregation():
                     GraphMemoryItem(
                         id=f"m_{req.node}",
                         content=f"Content for {req.node}",
-                        primary_sector="semantic",
+                        primarySector="semantic",
                         sectors=["semantic"],
                         node=str(req.node),
-                        created_at=1000, updated_at=1000, last_seen_at=1000,
+                        createdAt=1000,
+                        updatedAt=1000,
+                        lastSeenAt=1000,
                         meta={},
-                        user_id="u1"
+                        user_id="u1",
                     )
-                ]
+                ],
             )
         mock_retr.side_effect = side_effect
 
@@ -145,5 +147,5 @@ async def test_get_graph_ctx_aggregation():
 
         assert res.success
         # Should contain entries for each node in map (5 nodes)
-        assert len(res.nodes) == 5
+        assert res.nodes is not None and len(res.nodes) == 5
         assert "Content for observe" in res.context

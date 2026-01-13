@@ -7,9 +7,6 @@ import { logger } from "./logger";
 /**
  * Normalizes a vector to unit length (L2 norm).
  */
-/**
- * Normalizes a vector to unit length (L2 norm).
- */
 export function normalize(v: number[]): number[] {
     let n = 0;
     for (let i = 0; i < v.length; i++) n += v[i] * v[i];
@@ -67,17 +64,16 @@ export const bufferToVector = (b: Buffer | Uint8Array | string): number[] => {
 
     // Fast path: use Float32Array view if aligned
     if (buf.byteLength % 4 === 0) {
-        // Create a copy of the buffer to ensure memory alignment and safety
-        // caused by potential shared Buffer pool offsets if we used buffer.offset directly usually
-        // But specialized: Buffer.from(buf.buffer, buf.byteOffset, ...)
-        // Safer to just compact it to a new ArrayBuffer if needed, or strictly use offsets.
-        // For widely compatible simple conversion:
-        const f32 = new Float32Array(
-            buf.buffer,
-            buf.byteOffset,
-            buf.byteLength / 4,
-        );
-        return Array.from(f32);
+        if (buf.byteOffset % 4 === 0) {
+            const f32 = new Float32Array(
+                buf.buffer,
+                buf.byteOffset,
+                buf.byteLength / 4,
+            );
+            return Array.from(f32);
+        }
+        // Copy if misaligned
+        return Array.from(new Float32Array(new Uint8Array(buf).buffer));
     }
 
     // Fallback for misaligned buffers (rare)
@@ -96,6 +92,12 @@ export const bufferToFloat32Array = (b: Buffer | Uint8Array): Float32Array => {
     const buf = Buffer.isBuffer(b) ? b : Buffer.from(b);
     if (buf.byteLength % 4 !== 0) {
         throw new Error(`Invalid buffer length for Float32Array: ${buf.byteLength}`);
+    }
+    if (buf.byteOffset % 4 !== 0) {
+        // Copy to ensure alignment
+        const copy = new Uint8Array(buf.byteLength);
+        copy.set(new Uint8Array(buf));
+        return new Float32Array(copy.buffer);
     }
     return new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
 };
@@ -128,4 +130,20 @@ export const aggregateVectors = (vecs: number[][]): number[] => {
     const rc = 1 / count;
     for (let i = 0; i < d; i++) r[i] *= rc;
     return r;
+};
+
+/**
+ * Format a vector for Postgres usage (string representation "[1,2,3]").
+ */
+export const toVectorString = (v: number[] | Float32Array | Buffer | null | undefined): string | null => {
+    if (!v) return null;
+    if (Buffer.isBuffer(v)) {
+        // Assume it's a binary float32 array we need to convert to numbers first? 
+        // Or if it's already a string buffer?
+        // Usually we pass pre-calculated meanVec which is number[] or Float32Array. 
+        // If it's a Buffer, we convert to vector first.
+        return `[${bufferToVector(v).join(",")}]`;
+    }
+    if (Array.isArray(v)) return `[${v.join(",")}]`;
+    return `[${Array.from(v).join(",")}]`;
 };

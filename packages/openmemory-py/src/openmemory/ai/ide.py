@@ -57,7 +57,7 @@ async def log_ide_event(
         "ide_mode": True,
     }
 
-    res = await mem_client.add(mem_content, user_id=user_id, metadata=full_metadata)
+    res = await mem_client.add(mem_content, user_id=user_id, meta=full_metadata)
 
     return {
         "success": True,
@@ -141,7 +141,7 @@ async def start_ide_session(
         "ide_mode": True
     }
 
-    res = await mem_client.add(content, user_id=user_id, metadata=metadata)
+    res = await mem_client.add(content, user_id=user_id, meta=metadata)
 
     return {
         "success": True,
@@ -165,7 +165,7 @@ async def end_ide_session(
         "ide_mode": True,
     }
 
-    res = await mem_client.add(content, user_id=user_id, metadata=metadata)
+    res = await mem_client.add(content, user_id=user_id, meta=metadata)
 
     return {
         "success": True,

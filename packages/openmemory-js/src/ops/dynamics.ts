@@ -431,19 +431,7 @@ export async function performSpreadingActivationRetrieval(
 
             const chunk = batchIds.slice(j, j + CHUNK_SIZE);
             const chunkParams = chunk.map(() => "?").join(",");
-            const sql = sqlUser(
-                `
-                SELECT src_id as srcId, dst_id as dstId, weight 
-                FROM waypoints 
-                WHERE src_id IN (${chunkParams})
-            `,
-                uid,
-            );
-            const chunkNeighbors = await allAsync<{
-                srcId: string;
-                dstId: string;
-                weight: number;
-            }>(sql, pUser([...chunk], uid));
+            const chunkNeighbors = await q.getWaypointsBySrc.all(chunk, uid);
 
             allNeighbors.push(...chunkNeighbors);
             traversalBudget -= chunkNeighbors.length;

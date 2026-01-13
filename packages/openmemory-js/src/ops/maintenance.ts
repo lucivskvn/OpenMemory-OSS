@@ -9,7 +9,7 @@ import { normalizeUserId, now } from "../utils";
 import { DistributedLock } from "../utils/lock";
 import { logger } from "../utils/logger";
 import { bufferToVector } from "../utils/vectors";
-import { applyDecay } from "./dynamics";
+import { applyDecay } from "../memory/decay";
 
 /**
  * Helper to log maintenance operation statistics.

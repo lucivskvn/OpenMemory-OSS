@@ -8,7 +8,7 @@ class AddRequest(BaseModel):
     content: str
     tags: List[str] = []
     metadata: Dict[str, Any] = {}
-    userId: Optional[str] = None
+    userId: Optional[str] = Field(default=None, alias="user_id")
     id: Optional[str] = None
     createdAt: Optional[int] = None
 
@@ -16,14 +16,14 @@ class AddRequest(BaseModel):
 
 class BatchAddRequest(BaseModel):
     items: List[AddRequest]
-    userId: Optional[str] = None
+    userId: Optional[str] = Field(default=None, alias="user_id")
 
     model_config = ConfigDict(populate_by_name=True)
 
 class QueryRequest(BaseModel):
     query: str
     limit: int = 10
-    userId: Optional[str] = None
+    userId: Optional[str] = Field(default=None, alias="user_id")
     filters: Dict[str, Any] = {}
 
     model_config = ConfigDict(populate_by_name=True)
@@ -31,7 +31,7 @@ class QueryRequest(BaseModel):
 class ReinforceRequest(BaseModel):
     id: str
     boost: float = 0.1
-    userId: Optional[str] = None
+    userId: Optional[str] = Field(default=None, alias="user_id")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -41,7 +41,7 @@ class MemRow(BaseModel):
     primarySector: str
     tags: Optional[str] = None
     meta: Optional[str] = None
-    userId: Optional[str] = None
+    userId: Optional[str] = Field(default=None, alias="user_id")
     createdAt: int
     updatedAt: int
     lastSeenAt: int = COGNITIVE_PARAMS["DEFAULT_LAST_SEEN_AT"]
@@ -70,7 +70,7 @@ class IngestRequest(BaseModel):
     data: str
     metadata: Dict[str, Any] = {}
     config: Dict[str, Any] = {}
-    userId: Optional[str] = None
+    userId: Optional[str] = Field(default=None, alias="user_id")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -86,7 +86,7 @@ class LgmStoreReq(BaseModel):
     namespace: Optional[str] = None
     graphId: Optional[str] = None
     reflective: Optional[bool] = None
-    userId: Optional[str] = None
+    userId: Optional[str] = Field(default=None, alias="user_id")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -97,7 +97,7 @@ class MemoryItem(BaseModel):
     primarySector: str
     tags: List[str] = []
     meta: Dict[str, Any] = {}
-    userId: Optional[str] = None
+    userId: Optional[str] = Field(default=None, alias="user_id")
     createdAt: int
     updatedAt: int
     lastSeenAt: int = COGNITIVE_PARAMS["DEFAULT_LAST_SEEN_AT"]
@@ -115,6 +115,13 @@ class MemoryItem(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
+    def __getitem__(self, item):
+        return getattr(self, item)
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+
 class GraphMemoryItem(MemoryItem):
     node: str
     compressedVecStr: Optional[str] = None
@@ -130,7 +137,7 @@ class GraphMemoryItem(MemoryItem):
 
 class TemporalFact(BaseModel):
     id: str
-    userId: Optional[str] = None
+    userId: Optional[str] = Field(default=None, alias="user_id")
     subject: str
     predicate: str
     object: str
@@ -145,7 +152,7 @@ class TemporalFact(BaseModel):
 
 class TemporalEdge(BaseModel):
     id: str
-    userId: Optional[str] = None
+    userId: Optional[str] = Field(default=None, alias="user_id")
     sourceId: str
     targetId: str
     relationType: str

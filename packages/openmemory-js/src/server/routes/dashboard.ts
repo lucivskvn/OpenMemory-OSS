@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { env } from "../../core/cfg";
-import { allAsync, memoriesTable, q, runAsync, SqlValue } from "../../core/db";
+import { allAsync, q, runAsync, SqlValue, TABLES } from "../../core/db";
 import { getEncryption } from "../../core/security";
 import { getSystemStats } from "../../core/stats";
 import { normalizeUserId } from "../../utils";
@@ -95,7 +95,7 @@ const getMemTable = () => {
         const tbl = env.pgTable || "openmemory_memories";
         return `"${sc}"."${tbl}"`;
     }
-    return memoriesTable;
+    return TABLES.memories;
 };
 
 const reqz = {

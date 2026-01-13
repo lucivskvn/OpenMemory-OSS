@@ -16,7 +16,7 @@ class FactRequest(BaseModel):
     confidence: float = 1.0
     user_id: Optional[str] = Field(None, alias="userId")
     metadata: Dict[str, Any] = {}
-    
+
     model_config = ConfigDict(populate_by_name=True)
 
 class EdgeRequest(BaseModel):
@@ -47,7 +47,7 @@ async def create_fact(req: FactRequest, auth_user: str = Depends(get_current_use
                 logging.getLogger("temporal").warning(f"Failed to parse date {req.valid_from}: {e}")
 
     fid = await insert_fact(
-        req.subject, req.predicate, req.fact_object, 
+        req.subject, req.predicate, req.fact_object,
         valid_from=valid_from_val,  # type: ignore[call-arg]
         confidence=req.confidence,
         metadata=req.metadata,
@@ -68,24 +68,24 @@ async def get_facts_filtered(
 ):
     from ...temporal_graph import query_facts_at_time
     uid = resolve_user(auth_user, user_id)
-    
+
     facts = await query_facts_at_time(
         subject=subject,
         predicate=predicate,
-        fact_object=object,
+        subject_object=object,
         at=at,
         min_confidence=minConfidence or 0.0,  # type: ignore[call-arg]
-        user_id=uid  # type: ignore[call-arg]
+        user_id=uid,  # type: ignore[call-arg]
     )
     return {"facts": facts}
 
 @router.get("/search", response_model_by_alias=True)
 async def search_facts_pattern(
-    pattern: Optional[str] = None, 
+    pattern: Optional[str] = None,
     q: Optional[str] = None,  # Support both
-    type: str = "subject", 
-    limit: int = 10, 
-    user_id: Optional[str] = None, 
+    type: str = "subject",
+    limit: int = 10,
+    user_id: Optional[str] = None,
     auth_user: str = Depends(get_current_user_id)
 ):
     from ...temporal_graph import search_facts

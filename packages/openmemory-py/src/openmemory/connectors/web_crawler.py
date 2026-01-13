@@ -27,6 +27,17 @@ class WebCrawlerConnector(BaseConnector):
         self.visited: Set[str] = set()
         self.crawled: List[Dict] = []
 
+    # Implement abstract methods to satisfy BaseConnector
+    async def _connect(self, **creds) -> bool:
+        return True
+
+    async def _list_items(self, **filters) -> List[Any]:
+        # WebCrawler uses custom list_items with start_url
+        return self.crawled
+
+    async def _fetch_item(self, item_id: str) -> Any:
+        return await self.fetch_item(item_id)
+
     async def connect(self, **creds) -> bool:
         """no auth needed for public crawling"""
         self._connected = True

@@ -109,6 +109,12 @@ Flags:
   --host <url>       Remote server (Standard: http://localhost:8080)
   --user_id <id>     Target User
   --limit <n>        Max results
+
+Advanced Commands:
+  \x1b[33mdelete-all\x1b[0m <id>     Delete ALL memories for user
+  \x1b[33mtrain\x1b[0m <user>          Train/Retrain Classifier
+  \x1b[33mlisten\x1b[0m              Listen for SSE events
+  \x1b[33mcompress\x1b[0m <text>     Test compression
 `);
 }
 

@@ -253,7 +253,7 @@ class Memory:
                     simhash=m.get("simhash"),
                     generatedSummary=m.get("generatedSummary")
                     or m.get("generated_summary"),
-                    userId=m.get("userId") or m.get("user_id"),
+                    user_id=m.get("userId") or m.get("user_id"),
                     feedbackScore=m.get("feedbackScore")
                     or m.get("feedback_score")
                     or 0.0,
@@ -415,7 +415,7 @@ class Memory:
                     segment=m["segment"],
                     simhash=m["simhash"],
                     generatedSummary=m["generated_summary"],
-                    userId=m.get("user_id"),
+                    user_id=m.get("user_id"),
                     feedbackScore=m.get("feedback_score") or 0.0,
                 )
                 res.append(item)
@@ -558,7 +558,7 @@ class Memory:
                 segment=m.get("segment", 0),
                 simhash=m.get("simhash"),
                 generatedSummary=m.get("generated_summary", m.get("generatedSummary")),
-                userId=m.get("user_id", m.get("userId")),
+                user_id=m.get("user_id", m.get("userId")),
                 feedbackScore=m.get("feedback_score", m.get("feedbackScore", 0.0)),
             )
             items.append(item)
@@ -636,26 +636,26 @@ class Memory:
                 # mapped to insert_fact
                 kwargs.pop("commit", None) # Remove legacy arg if present
                 return await insert_fact(
-                    subject, predicate, object_, userId=self.user_id, **kwargs
+                    subject, predicate, object_, user_id=self.user_id, **kwargs
                 )
 
             async def get(self, subject: str, predicate: str):
                 """Get the current valid fact for a subject-predicate pair."""
-                return await get_current_fact(subject, predicate, userId=self.user_id)
+                return await get_current_fact(subject, predicate, user_id=self.user_id)
 
             async def search(self, pattern: str, limit: int = 100):
                 """Search facts by pattern."""
-                return await search_facts(pattern, limit=limit, userId=self.user_id)
+                return await search_facts(pattern, limit=limit, user_id=self.user_id)
 
             async def history(self, subject: str):
                 """Get history of facts for a subject."""
-                return await get_facts_by_subject(subject, userId=self.user_id)
+                return await get_facts_by_subject(subject, user_id=self.user_id)
 
             async def add_edge(self, source_id: str, target_id: str, relation: str, **kwargs):
                 """Add an edge between two facts."""
                 from .temporal_graph.store import insert_edge
                 return await insert_edge(
-                    source_id, target_id, relation, userId=self.user_id, **kwargs
+                    source_id, target_id, relation, user_id=self.user_id, **kwargs
                 )
 
             async def get_edges(
@@ -664,7 +664,7 @@ class Memory:
                 """Retrieve edges connected to a source or target fact."""
                 from .temporal_graph.query import get_related_facts
                 if source_id:
-                    return await get_related_facts(source_id, userId=self.user_id)
+                    return await get_related_facts(source_id, user_id=self.user_id)
                 return []
 
         return TemporalFacade(self.default_user)

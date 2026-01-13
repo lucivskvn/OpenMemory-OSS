@@ -28,522 +28,132 @@ import {
 import { SqlVectorStore } from "./vector/sql";
 import { ValkeyVectorStore } from "./vector/valkey";
 import { VectorStore } from "./vector_store";
+import { MemoryRepository } from "./repository/memory";
+import { WaypointRepository } from "./repository/waypoint";
+import { LogRepository } from "./repository/log";
+import { UserRepository } from "./repository/user";
+import { ConfigRepository } from "./repository/config";
+import { TemporalRepository } from "./repository/temporal";
+
 export { pUser, sqlUser };
+export { toVectorString } from "../utils/vectors";
 export type { SqlParams, SqlValue };
 
 export interface QType {
-    insMem: {
-        run: (
-            id: string,
-            content: string,
-            primarySector: string,
-            tags: string | null,
-            metadata: string | null,
-            userId: string | null | undefined,
-            segment: number,
-            simhash: string | null,
-            createdAt: number,
-            updatedAt: number,
-            lastSeenAt: number,
-            salience: number,
-            decayLambda: number,
-            version: number,
-            meanDim: number,
-            meanVec: Buffer | Uint8Array,
-            compressedVec: Buffer | Uint8Array,
-            feedbackScore: number,
-            generatedSummary: string | null,
-        ) => Promise<number>;
-    };
-    insMems: {
-        run: (items: BatchMemoryInsertItem[]) => Promise<number>;
-    };
-    updMeanVec: {
-        run: (
-            id: string,
-            dim: number,
-            vec: Buffer | Uint8Array,
-            userId?: string | null,
-        ) => Promise<number>;
-    };
-    updCompressedVec: {
-        run: (
-            id: string,
-            vec: Buffer | Uint8Array,
-            userId?: string | null,
-        ) => Promise<number>;
-    };
-    updFeedback: {
-        run: (
-            id: string,
-            feedbackScore: number,
-            userId?: string | null,
-        ) => Promise<number>;
-    };
-    updSeen: {
-        run: (
-            id: string,
-            lastSeenAt: number,
-            salience: number,
-            updatedAt: number,
-            userId?: string | null,
-        ) => Promise<number>;
-    };
-    updSummary: {
-        run: (
-            id: string,
-            summary: string,
-            userId?: string | null,
-        ) => Promise<number>;
-    };
-    updMem: {
-        run: (
-            content: string,
-            primarySector: string,
-            tags: string | null,
-            metadata: string | null,
-            updatedAt: number,
-            id: string,
-            userId?: string | null,
-        ) => Promise<number>;
-    };
-    updSector: {
-        run: (
-            id: string,
-            sector: string,
-            userId?: string | null,
-        ) => Promise<number>;
-    };
-    delMem: { run: (id: string, userId?: string | null) => Promise<number> };
-    delMems: {
-        run: (ids: string[], userId?: string | null) => Promise<number>;
-    };
-    getMem: {
-        get: (
-            id: string,
-            userId?: string | null,
-        ) => Promise<MemoryRow | undefined>;
-    };
-    getMems: {
-        all: (ids: string[], userId?: string | null) => Promise<MemoryRow[]>;
-    };
-    getMemRaw: {
-        get: (
-            id: string,
-            userId?: string | null,
-        ) => Promise<MemoryRow | undefined>;
-    };
-    getMemBySimhash: {
-        get: (
-            simhash: string,
-            userId?: string | null,
-        ) => Promise<MemoryRow | undefined>;
-    };
-    clearAll: { run: () => Promise<number> };
-    getStats: {
-        get: (
-            userId?: string | null,
-        ) => Promise<{ count: number; avgSalience: number } | undefined>;
-    };
-    getSectorStats: {
-        all: (
-            userId?: string | null,
-        ) => Promise<
-            Array<{ sector: string; count: number; avgSalience: number }>
-        >;
-    };
-    getRecentActivity: {
-        all: (
-            limit?: number,
-            userId?: string | null,
-        ) => Promise<
-            Array<{
-                id: string;
-                content: string;
-                lastSeenAt: number;
-                primarySector: string;
-            }>
-        >;
-    };
-    getTopMemories: {
-        all: (
-            limit?: number,
-            userId?: string | null,
-        ) => Promise<
-            Array<{
-                id: string;
-                content: string;
-                salience: number;
-                primarySector: string;
-            }>
-        >;
-    };
-    getSectorTimeline: {
-        all: (
-            sector: string,
-            limit?: number,
-            userId?: string | null,
-        ) => Promise<Array<{ lastSeenAt: number; salience: number }>>;
-    };
-    getMaintenanceLogs: {
-        all: (
-            limit?: number,
-            userId?: string | null,
-        ) => Promise<
-            Array<{ op: string; status: string; details: string; ts: number }>
-        >;
-    };
-    getMemBySegment: {
-        all: (segment: number, userId?: string | null) => Promise<MemoryRow[]>;
-    };
-    getSegments: {
-        all: (userId?: string | null) => Promise<Array<{ segment: number }>>;
-    };
-    getMaxSegment: {
-        get: (
-            userId?: string | null,
-        ) => Promise<{ maxSeg: number } | undefined>;
-    };
-    getSegmentCount: {
-        get: (
-            segment: number,
-            userId?: string | null,
-        ) => Promise<{ c: number } | undefined>;
-    };
-    getMemCount: {
-        get: (userId?: string | null) => Promise<{ c: number } | undefined>;
-    };
-    getVecCount: {
-        get: (userId?: string | null) => Promise<{ c: number } | undefined>;
-    };
-    getFactCount: {
-        get: (userId?: string | null) => Promise<{ c: number } | undefined>;
-    };
-    getEdgeCount: {
-        get: (userId?: string | null) => Promise<{ c: number } | undefined>;
-    };
-    allMemByUser: {
-        all: (
-            userId: string | null | undefined,
-            limit: number,
-            offset: number,
-        ) => Promise<MemoryRow[]>;
-    };
-    allMem: {
-        all: (
-            limit: number,
-            offset: number,
-            userId?: string | null,
-        ) => Promise<MemoryRow[]>;
-    };
-    allMemStable: {
-        all: (
-            limit: number,
-            offset: number,
-            userId?: string | null,
-        ) => Promise<MemoryRow[]>;
-    };
-    allMemCursor: {
-        all: (
-            limit: number,
-            cursor: { createdAt: number; id: string } | null,
-            userId?: string | null,
-        ) => Promise<MemoryRow[]>;
-    };
-    allMemBySector: {
-        all: (
-            sector: string,
-            limit: number,
-            offset: number,
-            userId?: string | null,
-        ) => Promise<MemoryRow[]>;
-    };
-    allMemBySectorAndTag: {
-        all: (
-            sector: string,
-            tag: string,
-            limit: number,
-            offset: number,
-            userId?: string | null,
-        ) => Promise<MemoryRow[]>;
-    };
-    insWaypoint: {
-        run: (
-            srcId: string,
-            dstId: string,
-            userId: string | null | undefined,
-            weight: number,
-            createdAt: number,
-            updatedAt: number,
-        ) => Promise<number>;
-    };
-    insWaypoints: { run: (items: BatchWaypointInsertItem[]) => Promise<number> };
-    getWaypoint: {
-        get: (
-            srcId: string,
-            dstId: string,
-            userId?: string | null,
-        ) => Promise<Waypoint | undefined>;
-    };
-    getWaypointsBySrc: {
-        all: (srcId: string, userId?: string | null) => Promise<Waypoint[]>;
-    };
-    getNeighbors: {
-        all: (
-            srcId: string,
-            userId?: string | null,
-        ) => Promise<Array<{ dstId: string; weight: number }>>;
-    };
-    updWaypoint: {
-        run: (
-            srcId: string,
-            weight: number,
-            updatedAt: number,
-            dstId: string,
-            userId?: string | null,
-        ) => Promise<number>;
-    };
-    pruneWaypoints: {
-        run: (threshold: number, userId?: string | null) => Promise<number>;
-    };
-    getLowSalienceMemories: {
-        all: (
-            threshold: number,
-            limit: number,
-            userId?: string | null,
-        ) => Promise<Array<{ id: string; userId: string }>>;
-    };
-    pruneMemories: {
-        run: (threshold: number, userId?: string | null) => Promise<number>;
-    };
-    updSaliences: {
-        run: (
-            items: Array<{
-                id: string;
-                salience: number;
-                lastSeenAt: number;
-                updatedAt: number;
-            }>,
-            userId?: string | null,
-        ) => Promise<number>;
-    };
-    insMaintLog: {
-        run: (
-            userId: string | null | undefined,
-            status: string,
-            details: string,
-            ts: number,
-        ) => Promise<number>;
-    };
-    logMaintOp: {
-        run: (
-            op: string,
-            status: string,
-            details: string,
-            ts: number,
-            userId?: string | null,
-        ) => Promise<number>;
-    };
-    insLog: {
-        run: (
-            id: string,
-            userId: string | null | undefined,
-            model: string,
-            status: string,
-            ts: number,
-            err: string | null,
-        ) => Promise<number>;
-    };
-    updLog: {
-        run: (
-            id: string,
-            status: string,
-            err: string | null,
-        ) => Promise<number>;
-    };
-    getPendingLogs: { all: (userId?: string | null) => Promise<LogEntry[]> };
-    getFailedLogs: { all: (userId?: string | null) => Promise<LogEntry[]> };
-    insUser: {
-        run: (
-            userId: string | null | undefined,
-            summary: string,
-            reflectionCount: number,
-            createdAt: number,
-            updatedAt: number,
-        ) => Promise<number>;
-    };
-    getUser: {
-        get: (userId: string | null | undefined) => Promise<
-            | {
-                userId: string;
-                summary: string;
-                reflectionCount: number;
-                createdAt: number;
-                updatedAt: number;
-            }
-            | undefined
-        >;
-    };
-    updUserSummary: {
-        run: (
-            userId: string | null | undefined,
-            summary: string,
-            updatedAt: number,
-        ) => Promise<number>;
-    };
-    delMemByUser: {
-        run: (userId: string | null | undefined) => Promise<number>;
-    };
-    delUser: { run: (userId: string | null | undefined) => Promise<number> };
-    getMemByMetadataLike: {
-        all: (
-            pattern: string,
-            userId?: string | null | undefined,
-        ) => Promise<MemoryRow[]>;
-    };
-    getTrainingData: {
-        all: (
-            userId: string | null | undefined,
-            limit: number,
-        ) => Promise<
-            Array<{ meanVec: Buffer | Uint8Array; primarySector: string }>
-        >;
-    };
-    getClassifierModel: {
-        get: (userId: string) => Promise<
-            | {
-                weights: string;
-                biases: string;
-                version: number;
-                updatedAt: number;
-            }
-            | undefined
-        >;
-    };
-    insClassifierModel: {
-        run: (
-            userId: string | null | undefined,
-            weights: string,
-            biases: string,
-            version: number,
-            updatedAt: number,
-        ) => Promise<number>;
-    };
-    getActiveUsers: { all: () => Promise<Array<{ userId: string }>> };
-    getUsers: {
-        all: (
-            limit: number,
-            offset: number,
-        ) => Promise<
-            Array<{
-                userId: string;
-                summary: string;
-                reflectionCount: number;
-                createdAt: number;
-                updatedAt: number;
-            }>
-        >;
-    };
-    getTables: { all: () => Promise<{ name: string }[]> };
-    insSourceConfig: {
-        run: (
-            userId: string | null,
-            type: string,
-            config: string,
-            status: string,
-            createdAt: number,
-            updatedAt: number,
-        ) => Promise<number>;
-    };
-    updSourceConfig: {
-        run: (
-            userId: string | null,
-            type: string,
-            config: string,
-            status: string,
-            updatedAt: number,
-        ) => Promise<number>;
-    };
-    getSourceConfig: {
-        get: (
-            userId: string | null,
-            type: string,
-        ) => Promise<
-            | {
-                userId: string | null;
-                type: string;
-                config: string;
-                status: string;
-                createdAt: number;
-                updatedAt: number;
-            }
-            | undefined
-        >;
-    };
-    getSourceConfigsByUser: {
-        all: (userId: string | null) => Promise<
-            Array<{
-                userId: string | null;
-                type: string;
-                config: string;
-                status: string;
-                createdAt: number;
-                updatedAt: number;
-            }>
-        >;
-    };
-    delSourceConfig: {
-        run: (userId: string | null, type: string) => Promise<number>;
-    };
+    insMem: { run: MemoryRepository["insMem"] };
+    insMems: { run: MemoryRepository["insMems"] };
+    updMeanVec: { run: MemoryRepository["updMeanVec"] };
+    updCompressedVec: { run: MemoryRepository["updCompressedVec"] };
+    updFeedback: { run: MemoryRepository["updFeedback"] };
+    updSeen: { run: MemoryRepository["updSeen"] };
+    updSaliences: { run: MemoryRepository["updSaliences"] };
+    updSummary: { run: MemoryRepository["updSummary"] };
+    updMem: { run: MemoryRepository["updMem"] };
+    updSector: { run: MemoryRepository["updSector"] };
+    delMem: { run: MemoryRepository["delMem"] };
+    delMems: { run: MemoryRepository["delMems"] };
+    getMem: { get: MemoryRepository["getMem"] };
+    getMems: { all: MemoryRepository["getMems"] };
+    getMemBySimhash: { get: MemoryRepository["getMemBySimhash"] };
+    getStats: { get: MemoryRepository["getStats"] };
+    getSegmentCount: { get: MemoryRepository["getSegmentCount"] };
+    getMemCount: { get: MemoryRepository["getMemCount"] };
+    allMem: { all: MemoryRepository["allMem"] };
+    allMemByUser: { all: MemoryRepository["allMemByUser"] };
+    allMemStable: { all: MemoryRepository["allMemStable"] };
+    allMemCursor: { all: MemoryRepository["allMemCursor"] };
+    allMemBySector: { all: MemoryRepository["allMemBySector"] };
+    allMemBySectorAndTag: { all: MemoryRepository["allMemBySectorAndTag"] };
+    searchMemsByKeyword: { all: MemoryRepository["searchByKeyword"] };
+    hsgSearch: { all: MemoryRepository["hsgSearch"] };
+    getSegments: { all: MemoryRepository["getSegments"] };
 
-    insApiKey: {
-        run: (
-            keyHash: string,
-            userId: string,
-            role: string,
-            note: string | null,
-            createdAt: number,
-            updatedAt: number,
-            expiresAt: number,
-        ) => Promise<number>;
-    };
-    getApiKey: {
-        get: (keyHash: string) => Promise<
-            | {
-                keyHash: string;
-                userId: string;
-                role: string;
-                note: string;
-                expiresAt: number;
-            }
-            | undefined
-        >;
-    };
-    delApiKey: { run: (keyHash: string) => Promise<number> };
-    getApiKeysByUser: {
-        all: (userId: string) => Promise<
-            Array<{
-                keyHash: string;
-                userId: string;
-                role: string;
-                note: string;
-                createdAt: number;
-            }>
-        >;
-    };
-    getAllApiKeys: {
-        all: () => Promise<
-            Array<{
-                keyHash: string;
-                userId: string;
-                role: string;
-                note: string;
-                createdAt: number;
-            }>
-        >;
-    };
+    // Temporal Repo
+    findActiveFact: { get: TemporalRepository["findActiveFact"] };
+    updateFactConfidence: { run: TemporalRepository["updateFactConfidence"] };
+    getOverlappingFacts: { all: TemporalRepository["getOverlappingFacts"] };
+    closeFact: { run: TemporalRepository["closeFact"] };
+    insertFactRaw: { run: TemporalRepository["insertFactRaw"] };
+    updateFactRaw: { run: TemporalRepository["updateFactRaw"] };
+    findActiveEdge: { get: TemporalRepository["findActiveEdge"] };
+    updateEdgeWeight: { run: TemporalRepository["updateEdgeWeight"] };
+    getOverlappingEdges: { all: TemporalRepository["getOverlappingEdges"] };
+    closeEdge: { run: TemporalRepository["closeEdge"] };
+    insertEdgeRaw: { run: TemporalRepository["insertEdgeRaw"] };
+    updateEdgeRaw: { run: TemporalRepository["updateEdgeRaw"] };
+    deleteEdgeRaw: { run: TemporalRepository["deleteEdgeRaw"] };
+    applyConfidenceDecay: { run: TemporalRepository["applyConfidenceDecay"] };
+    getFact: { get: TemporalRepository["getFact"] };
+    getEdge: { get: TemporalRepository["getEdge"] };
+    getActiveFactCount: { get: TemporalRepository["getActiveFactCount"] };
+    getActiveEdgeCount: { get: TemporalRepository["getActiveEdgeCount"] };
+
+    // Temporal Queries
+    queryFactsAtTime: { all: TemporalRepository["queryFactsAtTime"] };
+    getCurrentFact: { get: TemporalRepository["getCurrentFact"] };
+    queryFactsInRange: { all: TemporalRepository["queryFactsInRange"] };
+    findConflictingFacts: { all: TemporalRepository["findConflictingFacts"] };
+    getFactsBySubject: { all: TemporalRepository["getFactsBySubject"] };
+    searchFacts: { all: TemporalRepository["searchFacts"] };
+    getRelatedFacts: { all: TemporalRepository["getRelatedFacts"] };
+    queryEdges: { all: TemporalRepository["queryEdges"] };
+    getFactsByPredicate: { all: TemporalRepository["getFactsByPredicate"] };
+    getChangesInWindow: { all: TemporalRepository["getChangesInWindow"] };
+    getVolatileFacts: { all: TemporalRepository["getVolatileFacts"] };
+
+    insWaypoint: { run: WaypointRepository["insWaypoint"] };
+    insWaypoints: { run: WaypointRepository["insWaypoints"] };
+    getWaypoint: { get: WaypointRepository["getWaypoint"] };
+    getWaypointsBySrc: { all: WaypointRepository["getWaypointsBySrc"] };
+    getNeighbors: { all: WaypointRepository["getNeighbors"] };
+    updWaypoint: { run: WaypointRepository["updWaypoint"] };
+    pruneWaypoints: { run: WaypointRepository["pruneWaypoints"] };
+    getLowSalienceMemories: { all: WaypointRepository["getLowSalienceMemories"] };
+    delOrphanWaypoints: { run: WaypointRepository["delOrphanWaypoints"] };
+
+    insLog: { run: LogRepository["insLog"] };
+    updLog: { run: LogRepository["updLog"] };
+    getPendingLogs: { all: LogRepository["getPendingLogs"] };
+    getFailedLogs: { all: LogRepository["getFailedLogs"] };
+    insMaintLog: { run: LogRepository["insMaintLog"] };
+    logMaintOp: { run: LogRepository["logMaintOp"] };
+    getMaintenanceLogs: { all: LogRepository["getMaintenanceLogs"] };
+
+    insUser: { run: UserRepository["insUser"] };
+    getUser: { get: (userId: string | null | undefined) => Promise<any> };
+    updUserSummary: { run: UserRepository["updUserSummary"] };
+    delUser: { run: UserRepository["delUser"] };
+    getActiveUsers: { all: UserRepository["getActiveUsers"] };
+    getUsers: { all: UserRepository["getUsers"] };
+
+    insSourceConfig: { run: ConfigRepository["insSourceConfig"] };
+    updSourceConfig: { run: ConfigRepository["updSourceConfig"] };
+    getSourceConfig: { get: ConfigRepository["getSourceConfig"] };
+    getSourceConfigsByUser: { all: ConfigRepository["getSourceConfigsByUser"] };
+    delSourceConfig: { run: ConfigRepository["delSourceConfig"] };
+    insApiKey: { run: ConfigRepository["insApiKey"] };
+    getApiKey: { get: ConfigRepository["getApiKey"] };
+    delApiKey: { run: ConfigRepository["delApiKey"] };
+    getApiKeysByUser: { all: ConfigRepository["getApiKeysByUser"] };
+    getAllApiKeys: { all: ConfigRepository["getAllApiKeys"] };
+
+    // Common/Specialized
+    clearAll: { run: () => Promise<number> };
+    getSectorStats: { all: (userId?: string | null) => Promise<SectorStat[]> };
+    getRecentActivity: { all: (limit?: number, userId?: string | null) => Promise<any[]> };
+    getTopMemories: { all: (limit?: number, userId?: string | null) => Promise<any[]> };
+    getSectorTimeline: { all: (sec: string, limit?: number, userId?: string | null) => Promise<any[]> };
+    getVecCount: { get: (userId?: string | null) => Promise<{ c: number }> };
+    getFactCount: { get: (userId?: string | null) => Promise<{ c: number }> };
+    getEdgeCount: { get: (userId?: string | null) => Promise<{ c: number }> };
+    getMemByMetadataLike: { all: (pattern: string, userId?: string | null) => Promise<MemoryRow[]> };
+    getTrainingData: { all: (userId: string | null | undefined, limit: number) => Promise<Array<{ meanVec: Buffer | Uint8Array; primarySector: string }>> };
+    getClassifierModel: { get: (userId: string | null | undefined) => Promise<any> };
+    insClassifierModel: { run: (uid: string | null | undefined, w: string, b: string, v: number, ua: number) => Promise<number> };
     getAdminCount: { get: () => Promise<{ count: number } | undefined> };
-    // Cascade Delete Helpers
+    getTables: { all: () => Promise<any[]> };
+
+    // Deletion Helpers
     delFactsByUser: { run: (userId: string) => Promise<number> };
     delEdgesByUser: { run: (userId: string) => Promise<number> };
     delLearnedModel: { run: (userId: string) => Promise<number> };
@@ -552,14 +162,8 @@ export interface QType {
     delEmbedLogsByUser: { run: (userId: string) => Promise<number> };
     delMaintLogsByUser: { run: (userId: string) => Promise<number> };
     delStatsByUser: { run: (userId: string) => Promise<number> };
-    delOrphanWaypoints: { run: () => Promise<number> };
-    searchMemsByKeyword: {
-        all: (
-            keyword: string,
-            limit: number,
-            userId?: string | null,
-        ) => Promise<MemoryRow[]>;
-    };
+    delMemByUser: { run: (userId: string) => Promise<number> };
+    pruneMemories: { run: (id: string, userId?: string | null) => Promise<number> };
 }
 
 // Global Exports
@@ -576,7 +180,6 @@ export async function waitForDb(timeout = 5000) {
     return true;
 }
 
-export const memoriesTable: string = "memories";
 
 // Thread-local state
 const dbs = new Map<string, Database>();
@@ -591,7 +194,7 @@ let lifecycle_lock = Promise.resolve();
 let tx_lock = Promise.resolve();
 const txStorage = new AsyncLocalStorage<{ depth: number; cli?: PoolClient }>();
 
-const getIsPg = () =>
+export const getIsPg = () =>
     env.metadataBackend === "postgres" || env.vectorBackend === "postgres";
 
 export const TABLES = {
@@ -700,7 +303,7 @@ export const vectorStore: VectorStore = {
 };
 
 let pg: Pool | null = null;
-let hasVector = false;
+export let hasVector = false;
 
 const pool = (dbOverride?: string) =>
     new Pool({
@@ -769,7 +372,7 @@ const init = async () => {
                 if ((err as { code?: string }).code === "3D000") {
                     const admin = pool("postgres");
                     try {
-                        await admin.query(`CREATE DATABASE ${env.pgDb}`);
+                        await admin.query(`CREATE DATABASE ${env.pgDb} `);
                     } catch (e: unknown) {
                         if ((e as { code?: string }).code !== "42P04") throw e;
                     } finally {
@@ -792,18 +395,18 @@ const init = async () => {
 
             // Parallel Table Creation
             await Promise.all([
-                pg!.query(`create table if not exists ${TABLES.memories}(id uuid primary key,user_id text,segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,metadata text,created_at bigint,updated_at bigint,last_seen_at bigint,salience double precision,decay_lambda double precision,version integer default 1,mean_dim integer,mean_vec ${vt},compressed_vec bytea,feedback_score double precision default 0,generated_summary text,coactivations integer default 0)`),
-                pg!.query(`create table if not exists ${TABLES.vectors}(id uuid,sector text,user_id text,v ${vt},dim integer not null,metadata text,primary key(id,sector))`),
-                pg!.query(`create table if not exists ${TABLES.waypoints}(src_id text,dst_id text not null,user_id text,weight double precision not null,created_at bigint,updated_at bigint,primary key(src_id,dst_id,user_id))`),
-                pg!.query(`create table if not exists ${TABLES.embed_logs}(id text primary key,user_id text,model text,status text,ts bigint,err text)`),
-                pg!.query(`create table if not exists ${TABLES.users}(user_id text primary key,summary text,reflection_count integer default 0,created_at bigint,updated_at bigint)`),
-                pg!.query(`create table if not exists ${TABLES.stats}(id serial primary key,type text not null,count integer default 1,ts bigint not null,user_id text)`),
-                pg!.query(`create table if not exists ${TABLES.maint_logs}(id serial primary key,op text not null,status text not null,details text,ts bigint not null,user_id text)`),
-                pg!.query(`create table if not exists ${TABLES.temporal_facts}(id text primary key,user_id text,subject text not null,predicate text not null,object text not null,valid_from bigint not null,valid_to bigint,confidence double precision not null,last_updated bigint not null,metadata text)`),
-                pg!.query(`create table if not exists ${TABLES.temporal_edges}(id text primary key,user_id text,source_id text not null,target_id text not null,relation_type text not null,valid_from bigint not null,valid_to bigint,weight double precision not null,metadata text,last_updated bigint)`),
-                pg!.query(`create table if not exists ${TABLES.learned_models}(user_id text primary key,weights text,biases text,version integer default 1,updated_at bigint)`),
-                pg!.query(`create table if not exists ${TABLES.source_configs}(user_id text,type text,config text not null,status text default 'enabled',created_at bigint,updated_at bigint,primary key(user_id,type))`),
-                pg!.query(`create table if not exists ${TABLES.api_keys}(key_hash text primary key,user_id text not null,role text not null default 'user',note text,created_at bigint,updated_at bigint,expires_at bigint)`),
+                pg!.query(`create table if not exists ${TABLES.memories} (id uuid primary key, user_id text, segment integer default 0, content text not null, simhash text, primary_sector text not null, tags text, metadata text, created_at bigint, updated_at bigint, last_seen_at bigint, salience double precision, decay_lambda double precision, version integer default 1, mean_dim integer, mean_vec ${vt},compressed_vec bytea, feedback_score double precision default 0, generated_summary text, coactivations integer default 0)`),
+                pg!.query(`create table if not exists ${TABLES.vectors} (id uuid, sector text, user_id text, v ${vt},dim integer not null, metadata text, primary key(id, sector))`),
+                pg!.query(`create table if not exists ${TABLES.waypoints} (src_id text, dst_id text not null, user_id text, weight double precision not null, created_at bigint, updated_at bigint, primary key(src_id, dst_id, user_id))`),
+                pg!.query(`create table if not exists ${TABLES.embed_logs} (id text primary key, user_id text, model text, status text, ts bigint, err text)`),
+                pg!.query(`create table if not exists ${TABLES.users} (user_id text primary key, summary text, reflection_count integer default 0, created_at bigint, updated_at bigint)`),
+                pg!.query(`create table if not exists ${TABLES.stats} (id serial primary key, type text not null, count integer default 1, ts bigint not null, user_id text)`),
+                pg!.query(`create table if not exists ${TABLES.maint_logs} (id serial primary key, op text not null, status text not null, details text, ts bigint not null, user_id text)`),
+                pg!.query(`create table if not exists ${TABLES.temporal_facts} (id text primary key, user_id text, subject text not null, predicate text not null, object text not null, valid_from bigint not null, valid_to bigint, confidence double precision not null, last_updated bigint not null, metadata text)`),
+                pg!.query(`create table if not exists ${TABLES.temporal_edges} (id text primary key, user_id text, source_id text not null, target_id text not null, relation_type text not null, valid_from bigint not null, valid_to bigint, weight double precision not null, metadata text, last_updated bigint)`),
+                pg!.query(`create table if not exists ${TABLES.learned_models} (user_id text primary key, weights text, biases text, version integer default 1, updated_at bigint)`),
+                pg!.query(`create table if not exists ${TABLES.source_configs} (user_id text, type text, config text not null, status text default 'enabled', created_at bigint, updated_at bigint, primary key(user_id, type))`),
+                pg!.query(`create table if not exists ${TABLES.api_keys} (key_hash text primary key, user_id text not null, role text not null default 'user', note text, created_at bigint, updated_at bigint, expires_at bigint)`),
             ]);
 
             // Auto-Migration for coactivations
@@ -811,48 +414,48 @@ const init = async () => {
 
             // Parallel Index Creation
             const indices = [
-                `create index if not exists idx_mem_user on ${TABLES.memories}(user_id)`,
-                `create index if not exists idx_mem_sector on ${TABLES.memories}(primary_sector)`,
-                `create index if not exists idx_tf_subj on ${TABLES.temporal_facts}(subject)`,
-                `create index if not exists idx_tf_obj on ${TABLES.temporal_facts}(object)`,
-                `create index if not exists idx_tf_subj_pred on ${TABLES.temporal_facts}(subject, predicate)`,
-                `create index if not exists idx_tf_user_pred on ${TABLES.temporal_facts}(user_id, predicate)`,
-                `create index if not exists idx_tf_user_subj_pred on ${TABLES.temporal_facts}(user_id, subject, predicate)`,
-                `create index if not exists idx_tf_temporal on ${TABLES.temporal_facts}(valid_from, valid_to)`,
-                `create index if not exists idx_te_src on ${TABLES.temporal_edges}(source_id)`,
-                `create index if not exists idx_te_tgt on ${TABLES.temporal_edges}(target_id)`,
-                `create index if not exists idx_te_full on ${TABLES.temporal_edges}(source_id, target_id, relation_type)`,
-                `create index if not exists idx_te_user_rel on ${TABLES.temporal_edges}(user_id, relation_type)`,
+                `create index if not exists idx_mem_user on ${TABLES.memories} (user_id)`,
+                `create index if not exists idx_mem_sector on ${TABLES.memories} (primary_sector)`,
+                `create index if not exists idx_tf_subj on ${TABLES.temporal_facts} (subject)`,
+                `create index if not exists idx_tf_obj on ${TABLES.temporal_facts} (object)`,
+                `create index if not exists idx_tf_subj_pred on ${TABLES.temporal_facts} (subject, predicate)`,
+                `create index if not exists idx_tf_user_pred on ${TABLES.temporal_facts} (user_id, predicate)`,
+                `create index if not exists idx_tf_user_subj_pred on ${TABLES.temporal_facts} (user_id, subject, predicate)`,
+                `create index if not exists idx_tf_temporal on ${TABLES.temporal_facts} (valid_from, valid_to)`,
+                `create index if not exists idx_te_src on ${TABLES.temporal_edges} (source_id)`,
+                `create index if not exists idx_te_tgt on ${TABLES.temporal_edges} (target_id)`,
+                `create index if not exists idx_te_full on ${TABLES.temporal_edges} (source_id, target_id, relation_type)`,
+                `create index if not exists idx_te_user_rel on ${TABLES.temporal_edges} (user_id, relation_type)`,
             ];
             await Promise.all(indices.map(sql => pg!.query(sql)));
 
             // Optimization Indices
             await pg!.query(
-                `create index if not exists idx_mem_user_created on ${TABLES.memories}(user_id, created_at DESC)`,
+                `create index if not exists idx_mem_user_created on ${TABLES.memories} (user_id, created_at DESC)`,
             );
             await pg!.query(
-                `create index if not exists idx_mem_user_lastseen on ${TABLES.memories}(user_id, last_seen_at DESC)`,
+                `create index if not exists idx_mem_user_lastseen on ${TABLES.memories} (user_id, last_seen_at DESC)`,
             );
             await pg!.query(
-                `create index if not exists idx_mem_user_segment on ${TABLES.memories}(user_id, segment DESC)`,
+                `create index if not exists idx_mem_user_segment on ${TABLES.memories} (user_id, segment DESC)`,
             );
             await pg!.query(
-                `create index if not exists idx_vec_user on ${TABLES.vectors}(user_id)`,
+                `create index if not exists idx_vec_user on ${TABLES.vectors} (user_id)`,
             );
             await pg!.query(
-                `create index if not exists idx_vec_user_sector on ${TABLES.vectors}(user_id, sector)`,
+                `create index if not exists idx_vec_user_sector on ${TABLES.vectors} (user_id, sector)`,
             );
             await pg!.query(
-                `create index if not exists idx_mem_user_salience on ${TABLES.memories}(user_id, salience DESC)`,
+                `create index if not exists idx_mem_user_salience on ${TABLES.memories} (user_id, salience DESC)`,
             );
             await pg!.query(
-                `create index if not exists idx_mem_simhash on ${TABLES.memories}(simhash)`,
+                `create index if not exists idx_mem_simhash on ${TABLES.memories} (simhash)`,
             );
 
             if (hasVector && env.vectorBackend === "postgres") {
                 await pg!
                     .query(
-                        `create index if not exists idx_vec_hnsw on ${TABLES.vectors} using hnsw (v vector_cosine_ops) WITH (m = 16, ef_construction = 64)`,
+                        `create index if not exists idx_vec_hnsw on ${TABLES.vectors} using hnsw (v vector_cosine_ops) WITH(m = 16, ef_construction = 64)`,
                     )
                     .catch((e) => {
                         logger.warn(
@@ -881,40 +484,40 @@ const init = async () => {
         } else {
             const d = get_sq_db();
             d.exec(
-                `create table if not exists ${TABLES.memories}(id text primary key,segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,metadata text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,user_id text,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0,generated_summary text,coactivations integer default 0)`,
+                `create table if not exists ${TABLES.memories} (id text primary key, segment integer default 0, content text not null, simhash text, primary_sector text not null, tags text, metadata text, created_at integer, updated_at integer, last_seen_at integer, salience real, decay_lambda real, version integer default 1, user_id text, mean_dim integer, mean_vec blob, compressed_vec blob, feedback_score real default 0, generated_summary text, coactivations integer default 0)`,
             );
             d.exec(
-                `create table if not exists ${TABLES.vectors}(id text,sector text,user_id text,v blob,dim integer not null,metadata text,primary key(id,sector))`,
+                `create table if not exists ${TABLES.vectors} (id text, sector text, user_id text, v blob, dim integer not null, metadata text, primary key(id, sector))`,
             );
             d.exec(
-                `create table if not exists waypoints(src_id text,dst_id text not null,user_id text,weight real not null,created_at integer,updated_at integer,primary key(src_id,dst_id,user_id))`,
+                `create table if not exists ${TABLES.waypoints}(src_id text, dst_id text not null, user_id text, weight real not null, created_at integer, updated_at integer, primary key(src_id, dst_id, user_id))`,
             );
             d.exec(
-                `create table if not exists embed_logs(id text primary key,user_id text,model text,status text,ts integer,err text)`,
+                `create table if not exists ${TABLES.embed_logs}(id text primary key, user_id text, model text, status text, ts integer, err text)`,
             );
             d.exec(
-                `create table if not exists users(user_id text primary key,summary text,reflection_count integer default 0,created_at integer,updated_at integer)`,
+                `create table if not exists ${TABLES.users}(user_id text primary key, summary text, reflection_count integer default 0, created_at integer, updated_at integer)`,
             );
             d.exec(
-                `create table if not exists stats(id integer primary key autoincrement,type text not null,count integer default 1,ts integer not null,user_id text)`,
+                `create table if not exists ${TABLES.stats}(id integer primary key autoincrement, type text not null, count integer default 1, ts integer not null, user_id text)`,
             );
             d.exec(
-                `create table if not exists maint_logs(id integer primary key autoincrement,op text not null,status text not null,details text,ts integer not null,user_id text)`,
+                `create table if not exists ${TABLES.maint_logs}(id integer primary key autoincrement, op text not null, status text not null, details text, ts integer not null, user_id text)`,
             );
             d.exec(
-                `create table if not exists temporal_facts(id text primary key,user_id text,subject text not null,predicate text not null,object text not null,valid_from integer not null,valid_to integer,confidence real not null,last_updated integer not null,metadata text)`,
+                `create table if not exists ${TABLES.temporal_facts}(id text primary key, user_id text, subject text not null, predicate text not null, object text not null, valid_from integer not null, valid_to integer, confidence real not null, last_updated integer not null, metadata text)`,
             );
             d.exec(
-                `create table if not exists temporal_edges(id text primary key,user_id text,source_id text not null,target_id text not null,relation_type text not null,valid_from integer not null,valid_to integer,weight real not null,metadata text,last_updated integer)`,
+                `create table if not exists ${TABLES.temporal_edges}(id text primary key, user_id text, source_id text not null, target_id text not null, relation_type text not null, valid_from integer not null, valid_to integer, weight real not null, metadata text, last_updated integer)`,
             );
             d.exec(
-                `create table if not exists learned_models(user_id text primary key,weights text,biases text,version integer default 1,updated_at integer)`,
+                `create table if not exists ${TABLES.learned_models}(user_id text primary key, weights text, biases text, version integer default 1, updated_at integer)`,
             );
             d.exec(
-                `create table if not exists ${TABLES.source_configs}(user_id text,type text,config text not null,status text default 'enabled',created_at integer,updated_at integer,primary key(user_id,type))`,
+                `create table if not exists ${TABLES.source_configs} (user_id text, type text, config text not null, status text default 'enabled', created_at integer, updated_at integer, primary key(user_id, type))`,
             );
             d.exec(
-                `create table if not exists ${TABLES.api_keys}(key_hash text primary key,user_id text not null,role text not null default 'user',note text,created_at integer,updated_at integer,expires_at integer)`,
+                `create table if not exists ${TABLES.api_keys} (key_hash text primary key, user_id text not null, role text not null default 'user', note text, created_at integer, updated_at integer, expires_at integer)`,
             );
 
             // SQLite Auto-Migration for coactivations
@@ -1013,8 +616,8 @@ export async function closeDb() {
 };
 
 /**
- * Converts `?` placeholders to `$N` for PostgreSQL compatibility.
- * Safely ignores `?` (and strings containing `?`) inside single/double quotes.
+ * Converts `? ` placeholders to `$N` for PostgreSQL compatibility.
+ * Safely ignores `? ` (and strings containing ` ? `) inside single/double quotes.
  */
 export function convertPlaceholders(sql: string): string {
     if (!getIsPg()) return sql;
@@ -1075,7 +678,9 @@ const mapRow = (
     // Mapped Fields (snake_case -> camelCase)
     // Memories / Vectors
     if (row.user_id !== undefined) mapped.userId = row.user_id;
-    if (row.primary_sector !== undefined) mapped.primarySector = row.primary_sector;
+    if (row.primary_sector !== undefined) {
+        mapped.primarySector = row.primary_sector;
+    }
     if (row.created_at !== undefined) mapped.createdAt = Number(row.created_at);
     if (row.updated_at !== undefined) mapped.updatedAt = Number(row.updated_at);
     if (row.last_seen_at !== undefined) mapped.lastSeenAt = Number(row.last_seen_at);
@@ -1213,7 +818,7 @@ export const transaction = {
                 throw new Error("DB Connection Error: Postgres enabled but client not initialized. Restart required on config change.");
             }
             const client = await pg.connect();
-            logger.debug(`[DB] [TX:${txId}] BEGIN (PG), depth: ${currentDepth + 1}, rid: ${sysCtx?.requestId}`);
+            logger.debug(`[DB][TX:${txId}]BEGIN(PG), depth: ${currentDepth + 1}, rid: ${sysCtx?.requestId} `);
             try {
                 return await txStorage.run(
                     { depth: currentDepth + 1, cli: client },
@@ -1222,11 +827,11 @@ export const transaction = {
                         try {
                             const res = await fn();
                             await client.query("COMMIT");
-                            logger.debug(`[DB] [TX:${txId}] COMMIT (PG)`);
+                            logger.debug(`[DB][TX:${txId}]COMMIT(PG)`);
                             return res;
                         } catch (e) {
                             await client.query("ROLLBACK");
-                            logger.warn(`[DB] [TX:${txId}] ROLLBACK (PG)`, { error: e });
+                            logger.warn(`[DB][TX:${txId}]ROLLBACK(PG)`, { error: e });
                             throw e;
                         }
                     },
@@ -1246,19 +851,19 @@ export const transaction = {
                 await old;
                 return r!;
             })();
-            logger.debug(`[DB] [TX:${txId}] BEGIN (SQLite), depth: ${currentDepth + 1}, rid: ${sysCtx?.requestId}`);
+            logger.debug(`[DB][TX:${txId}]BEGIN(SQLite), depth: ${currentDepth + 1}, rid: ${sysCtx?.requestId} `);
             try {
                 return await txStorage.run({ depth: currentDepth + 1 }, async () => {
                     try {
                         d.exec("BEGIN IMMEDIATE TRANSACTION");
                         const res = await fn();
                         d.exec("COMMIT");
-                        logger.debug(`[DB] [TX:${txId}] COMMIT (SQLite)`);
+                        logger.debug(`[DB][TX:${txId}]COMMIT(SQLite)`);
                         return res;
                     } catch (e) {
                         try {
                             d.exec("ROLLBACK");
-                            logger.warn(`[DB] [TX:${txId}] ROLLBACK (SQLite)`, { error: e });
+                            logger.warn(`[DB][TX:${txId}]ROLLBACK(SQLite)`, { error: e });
                         } catch { }
                         throw e;
                     }
@@ -1270,21 +875,33 @@ export const transaction = {
     },
 };
 
-function toVectorString(
-    v: Buffer | Uint8Array | number[] | null,
-): string | null {
-    if (!v) return null;
-    const arr = Array.isArray(v)
-        ? v
-        : Array.from(
-            v instanceof Buffer
-                ? new Float32Array(v.buffer, v.byteOffset, v.byteLength / 4)
-                : v,
-        );
-    if (arr.length === 0) return null; // Handle empty vectors as NULL
-    return `[${arr.join(",")}]`;
+
+
+
+const repos = new Map<string, any>();
+
+function getRepo<T>(Class: new (...args: any[]) => T): T {
+    const ctxId = getContextId();
+    const key = `${Class.name}:${ctxId}`;
+    let repo = repos.get(key);
+    if (!repo) {
+        repo = new Class({
+            runAsync,
+            getAsync,
+            allAsync,
+            transaction,
+        });
+        repos.set(key, repo);
+    }
+    return repo;
 }
 
+const getMemRepo = () => getRepo(MemoryRepository);
+const getWaypointRepo = () => getRepo(WaypointRepository);
+const getLogRepo = () => getRepo(LogRepository);
+const getUserRepo = () => getRepo(UserRepository);
+const getConfigRepo = () => getRepo(ConfigRepository);
+const getTemporalRepo = () => getRepo(TemporalRepository);
 
 // Wrapper helpers for safe injection
 export const runUser = async (sql: string, params: SqlParams, userId: string | null | undefined): Promise<number> => {
@@ -1304,941 +921,145 @@ export const allUser = async <T = unknown>(sql: string, params: SqlParams, userI
 
 // Main SQL Interface
 export const q: QType = {
-    insMem: {
-        run: async (
-            id,
-            content,
-            sector,
-            tags,
-            meta,
-            userId,
-            segment,
-            simhash,
-            ca,
-            ua,
-            lsa,
-            salience,
-            dl,
-            version,
-            dim,
-            mv,
-            cv,
-            fs,
-            summary,
-        ) => {
-            const p = [
-                id,
-                content,
-                sector,
-                tags,
-                meta,
-                userId ?? null,
-                segment,
-                simhash,
-                ca,
-                ua,
-                lsa,
-                salience,
-                dl,
-                version,
-                dim,
-                getIsPg() && hasVector ? toVectorString(mv) : mv,
-                cv,
-                fs,
-                summary,
-            ];
-            const sql = `insert into ${TABLES.memories}(id,content,primary_sector,tags,metadata,user_id,segment,simhash,created_at,updated_at,last_seen_at,salience,decay_lambda,version,mean_dim,mean_vec,compressed_vec,feedback_score,generated_summary) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) on conflict(id) do update set content=excluded.content,updated_at=excluded.updated_at,last_seen_at=excluded.last_seen_at,salience=excluded.salience`;
-            return await runAsync(sql, p);
-        },
-    },
-    insMems: {
-        run: async (items) => {
-            if (items.length === 0) return 0;
-
-            // Helper to execute a single chunk
-            const execChunk = async (chunk: BatchMemoryInsertItem[]) => {
-                if (getIsPg()) {
-                    // Multi-row INSERT for Postgres
-                    const params: unknown[] = [];
-                    const rows: string[] = [];
-                    let idx = 1;
-                    for (const item of chunk) {
-                        const rowParams = [
-                            item.id,
-                            item.content,
-                            item.primarySector,
-                            item.tags,
-                            item.metadata,
-                            item.userId,
-                            item.segment || 0,
-                            item.simhash,
-                            item.createdAt,
-                            item.updatedAt,
-                            item.lastSeenAt,
-                            item.salience || 0.5,
-                            item.decayLambda || 0.05,
-                            item.version || 1,
-                            item.meanDim,
-                            hasVector
-                                ? toVectorString(item.meanVec)
-                                : item.meanVec,
-                            item.compressedVec,
-                            item.feedbackScore || 0,
-                            item.generatedSummary || null,
-                        ];
-                        params.push(...rowParams);
-                        const placeholders = rowParams
-                            .map(() => `$${idx++}`)
-                            .join(",");
-                        rows.push(`(${placeholders})`);
-                    }
-                    const sql = `insert into ${TABLES.memories}(id,content,primary_sector,tags,metadata,user_id,segment,simhash,created_at,updated_at,last_seen_at,salience,decay_lambda,version,mean_dim,mean_vec,compressed_vec,feedback_score,generated_summary) values ${rows.join(",")} on conflict(id) do update set content=excluded.content,updated_at=excluded.updated_at,last_seen_at=excluded.last_seen_at,salience=excluded.salience`;
-                    const c = txStorage.getStore()?.cli || pg;
-                    if (!c) throw new Error("PG not initialized");
-                    return (await c.query(sql, params)).rowCount || 0;
-                } else {
-                    // Transactional sequential inserts for SQLite
-                    return await transaction.run(async () => {
-                        let count = 0;
-                        for (const item of chunk) {
-                            count += await q.insMem.run(
-                                item.id,
-                                item.content,
-                                item.primarySector,
-                                item.tags,
-                                item.metadata,
-                                item.userId,
-                                item.segment || 0,
-                                item.simhash,
-                                item.createdAt,
-                                item.updatedAt,
-                                item.lastSeenAt,
-                                item.salience || 0.5,
-                                item.decayLambda || 0.05,
-                                item.version || 1,
-                                item.meanDim,
-                                item.meanVec,
-                                item.compressedVec,
-                                item.feedbackScore || 0,
-                                item.generatedSummary || null,
-                            );
-                        }
-                        return count;
-                    });
-                }
-            };
-
-            // Postgres Parameter Limit ~65535. Each row ~20 params. Safe batch ~3000.
-            // SQLite variable limit is also default 999 or 32766. Safe batch ~500.
-            // Using strict limit of 500 rows per chunk to be safe for both.
-            const BATCH_SIZE = 500;
-            let total = 0;
-            for (let i = 0; i < items.length; i += BATCH_SIZE) {
-                total += await execChunk(items.slice(i, i + BATCH_SIZE));
-            }
-            return total;
-        },
-    },
-    updMeanVec: {
-        run: (id, dim, vec, userId) =>
-            runUser(
-                `update ${TABLES.memories} set mean_dim=?,mean_vec=? where id=?`,
-                [dim, vec, id],
-                userId,
-            ),
-    },
-    updCompressedVec: {
-        run: (id, vec, userId) =>
-            runUser(
-                `update ${TABLES.memories} set compressed_vec=? where id=?`,
-                [vec, id],
-                userId,
-            ),
-    },
-    updFeedback: {
-        run: (id, fs, userId) =>
-            runUser(
-                `update ${TABLES.memories} set feedback_score=? where id=?`,
-                [fs, id],
-                userId,
-            ),
-    },
-    updSeen: {
-        run: (id, lsa, sa, ua, userId) =>
-            runUser(
-                `update ${TABLES.memories} set last_seen_at=?,salience=?,updated_at=? where id=?`,
-                [lsa, sa, ua, id],
-                userId,
-            ),
-    },
-    updSaliences: {
-        run: async (updates, userId) => {
-            if (updates.length === 0) return 0;
-            const uid = normalizeUserId(userId);
-
-            if (getIsPg()) {
-                const rows = [];
-                const params: (string | number | null)[] = [];
-                let idx = 1;
-                for (const item of updates) {
-                    params.push(item.id, item.salience, item.lastSeenAt, item.updatedAt);
-                    rows.push(`($${idx++}::uuid, $${idx++}::double precision, $${idx++}::bigint, $${idx++}::bigint)`);
-                }
-
-                const sql = `
-                    UPDATE ${TABLES.memories} AS m
-                    SET 
-                        salience = u.new_salience,
-                        last_seen_at = u.new_lsa,
-                        updated_at = u.new_ua
-                    FROM (VALUES ${rows.join(",")}) AS u(id, new_salience, new_lsa, new_ua)
-                    WHERE m.id = u.id AND (m.user_id = $${idx} OR (m.user_id IS NULL AND $${idx} IS NULL))
-                `;
-                params.push(uid ?? null);
-                const res = await pg!.query(sql, params);
-                return res.rowCount || 0;
-            } else {
-                return await transaction.run(async () => {
-                    let count = 0;
-                    for (const item of updates) {
-                        count += await q.updSeen.run(
-                            item.id,
-                            item.lastSeenAt,
-                            item.salience,
-                            item.updatedAt,
-                            uid,
-                        );
-                    }
-                    return count;
-                });
-            }
-        },
-    },
-    updSummary: {
-        run: (id, sum, userId) =>
-            runUser(
-                `update ${TABLES.memories} set generated_summary=? where id=?`,
-                [sum, id],
-                userId,
-            ),
-    },
-    updMem: {
-        run: (content, sector, tags, meta, ua, id, userId) =>
-            runUser(
-                `update ${TABLES.memories} set content=?,primary_sector=?,tags=?,metadata=?,updated_at=?,version=version+1 where id=?`,
-                [content, sector, tags, meta, ua, id],
-                userId,
-            ),
-    },
-    updSector: {
-        run: (id, sector, userId) =>
-            runUser(
-                `update ${TABLES.memories} set primary_sector=? where id=?`,
-                [sector, id],
-                userId,
-            ),
-    },
-    getMem: {
-        get: (id, userId) =>
-            getUser<MemoryRow>(
-                `select * from ${TABLES.memories} where id=?`,
-                [id],
-                userId,
-            ),
-    },
-    getMems: {
-        all: (ids, userId) =>
-            allUser<MemoryRow>(
-                `select * from ${TABLES.memories} where id IN (${ids.map(() => "?").join(",")})`,
-                [...ids],
-                userId,
-            ),
-    },
-    getMemRaw: {
-        get: (id, userId) =>
-            getUser<MemoryRow>(
-                `select * from ${TABLES.memories} where id=?`,
-                [id],
-                userId,
-            ),
-    },
-    getMemBySimhash: {
-        get: (sh, userId) =>
-            getUser<MemoryRow>(
-                `select * from ${TABLES.memories} where simhash=? order by salience desc limit 1`,
-                [sh],
-                userId,
-            ),
-    },
-    delMem: {
-        run: async (id, userId) => {
-            const res = await transaction.run(async () => {
-                // Cascade delete waypoints (src or dst)
-                await runUser(
-                    `delete from ${TABLES.waypoints} where src_id=? or dst_id=?`,
-                    [id, id],
-                    userId,
-                );
-                // Delete memory
-                return await runUser(
-                    `delete from ${TABLES.memories} where id=?`,
-                    [id],
-                    userId,
-                );
-            });
-
-            // Integrity: Delete vectors only after DB transaction succeeds
-            try {
-                await vectorStore.deleteVectors([id], userId);
-            } catch (e) {
-                logger.warn(`[DB] Failed to cleanup vectors for memory ${id}:`, { error: e });
-            }
-            return res;
-        },
-    },
-    delMems: {
-        run: async (ids: string[], userId?: string | null) => {
-            if (ids.length === 0) return 0;
-            return await transaction.run(async () => {
-                const placeholders = ids.map(() => "?").join(",");
-                // Cascade vectors
-                await runUser(
-                    `delete from ${TABLES.vectors} where id in (${placeholders})`,
-                    [...ids],
-                    userId,
-                );
-                // Cascade waypoints (complex with IN clause for src/dst, might be slow for huge batches but safer)
-                // For batch, simpler to just let them be orphaned? No, integrity first.
-                // "delete from waypoints where src_id in (...) or dst_id in (...)"
-                await runUser(
-                    `delete from ${TABLES.waypoints} where src_id in (${placeholders}) or dst_id in (${placeholders})`,
-                    [...ids, ...ids],
-                    userId,
-                );
-                // Delete memories
-                const res = await execRes(
-                    (await applySqlUser(
-                        `DELETE FROM ${TABLES.memories} WHERE id IN (${placeholders})`,
-                        [...ids],
-                        userId,
-                    )).sql,
-                    (await applySqlUser(
-                        `DELETE FROM ${TABLES.memories} WHERE id IN (${placeholders})`,
-                        [...ids],
-                        userId,
-                    )).params,
-                );
-                return res.rowCount || 0;
-            });
-        },
-    },
-    allMemByUser: {
-        all: (uid, limit, offset) =>
-            allUser<MemoryRow>(
-                `select * from ${TABLES.memories} order by created_at desc limit ? offset ?`,
-                [limit, offset],
-                uid,
-            ),
-    },
-    allMem: {
-        all: (limit, offset, userId) =>
-            allUser<MemoryRow>(
-                `select * from ${TABLES.memories} order by created_at desc limit ? offset ?`,
-                [limit, offset],
-                userId,
-            ),
-    },
-    allMemStable: {
-        all: (limit: number, offset: number, userId?: string | null) =>
-            allUser<MemoryRow>(
-                `select * from ${TABLES.memories} order by created_at desc, id asc limit ? offset ?`,
-                [limit, offset],
-                userId,
-            ),
-    },
-    allMemCursor: {
-        all: (limit: number, cursor: { createdAt: number; id: string } | null, userId?: string | null) => {
-            // Keyset Pagination: (created_at, id) < (cursor.createdAt, cursor.id)
-            // Order DESC for "Last Created" first
-            if (!cursor) {
-                return allUser<MemoryRow>(
-                    `select * from ${TABLES.memories} order by created_at desc, id desc limit ?`,
-                    [limit],
-                    userId,
-                );
-            }
-            // For (A, B) < (a, b) => A < a OR (A = a AND B < b)
-            return allUser<MemoryRow>(
-                `select * from ${TABLES.memories} where (created_at < ?) OR (created_at = ? AND id < ?) order by created_at desc, id desc limit ?`,
-                [cursor.createdAt, cursor.createdAt, cursor.id, limit],
-                userId,
-            );
-        },
-    },
-    allMemBySector: {
-        all: (sec, limit, offset, userId) =>
-            allUser<MemoryRow>(
-                `select * from ${TABLES.memories} where primary_sector=? order by created_at desc limit ? offset ?`,
-                [sec, limit, offset],
-                userId,
-            ),
-    },
-    allMemBySectorAndTag: {
-        all: (sec, tag, limit, offset, userId) =>
-            allUser<MemoryRow>(
-                `select * from ${TABLES.memories} where primary_sector=? and tags like ? order by created_at desc limit ? offset ?`,
-                [sec, `%${tag}%`, limit, offset],
-                userId,
-            ),
-    },
-    getSegmentCount: {
-        get: (seg, userId) =>
-            getUser(
-                `select count(*) as c from ${TABLES.memories} where segment=?`,
-                [seg],
-                userId,
-            ),
-    },
-    getMemCount: {
-        get: (userId) =>
-            getUser(
-                `select count(*) as c from ${TABLES.memories}`,
-                [],
-                userId,
-            ),
-    },
-    getVecCount: {
-        get: (userId) =>
-            getUser(
-                `select count(*) as c from ${TABLES.vectors}`,
-                [],
-                userId,
-            ),
-    },
-    getFactCount: {
-        get: (userId) =>
-            getUser(
-                `select count(*) as c from ${TABLES.temporal_facts}`,
-                [],
-                userId,
-            ),
-    },
-    getEdgeCount: {
-        get: (userId) =>
-            getUser(
-                `select count(*) as c from ${TABLES.temporal_edges}`,
-                [],
-                userId,
-            ),
-    },
-    getMaxSegment: {
-        get: (userId) =>
-            getUser(
-                `select coalesce(max(segment), 0) as maxSeg from ${TABLES.memories}`,
-                [],
-                userId,
-            ),
-    },
-    getSegments: {
-        all: (userId) =>
-            allUser(
-                `select distinct segment from ${TABLES.memories} order by segment desc`,
-                [],
-                userId,
-            ),
-    },
-    getMemBySegment: {
-        all: (seg, userId) =>
-            allUser<MemoryRow>(
-                `select * from ${TABLES.memories} where segment=? order by created_at desc`,
-                [seg],
-                userId,
-            ),
-    },
-    insUser: {
-        run: (userId, summary, rc, ca, ua) =>
-            runAsync(
-                `insert into ${TABLES.users}(user_id,summary,reflection_count,created_at,updated_at) values(?,?,?,?,?) on conflict(user_id) do update set summary=excluded.summary,updated_at=excluded.updated_at`,
-                [userId ?? null, summary, rc, ca, ua],
-            ),
-    },
-    getUser: {
-        get: (userId) =>
-            getAsync(`select * from ${TABLES.users} where user_id=?`, [
-                userId ?? null,
-            ]),
-    },
-    updUserSummary: {
-        run: (userId, summary, ua) =>
-            runAsync(
-                `update ${TABLES.users} set summary=?,updated_at=?,reflection_count=reflection_count+1 where user_id=?`,
-                [summary, ua, userId ?? null],
-            ),
-    },
-    delMemByUser: {
-        run: async (uid) => {
-            if (!uid) return 0;
-            return await transaction.run(async () => {
-                const p = [uid];
-                await runAsync(`delete from ${TABLES.vectors} where user_id=?`, p);
-                await runAsync(`delete from ${TABLES.waypoints} where user_id=?`, p);
-                await runAsync(`delete from ${TABLES.temporal_facts} where user_id=?`, p);
-                await runAsync(`delete from ${TABLES.temporal_edges} where user_id=?`, p);
-                await runAsync(`delete from ${TABLES.learned_models} where user_id=?`, p);
-                return runAsync(`delete from ${TABLES.memories} where user_id=?`, p);
-            });
-        },
-    },
-    delUser: {
-        run: (uid) =>
-            runAsync(`delete from ${TABLES.users} where user_id=?`, [
-                uid ?? null,
-            ]),
-    },
-    getMemByMetadataLike: {
-        all: (pat, userId) =>
-            allUser<MemoryRow>(
-                `select * from ${TABLES.memories} where metadata like ? order by created_at desc`,
-                [`%${pat}%`],
-                userId,
-            ),
-    },
-    getTrainingData: {
-        all: (uid, limit) =>
-            allAsync(
-                `select mean_vec as meanVec, primary_sector as primarySector from ${TABLES.memories} where user_id=? and mean_vec is not null limit ?`,
-                [uid ?? null, limit],
-            ),
-    },
-    getClassifierModel: {
-        get: (uid) =>
-            getAsync(`select * from ${TABLES.learned_models} where user_id=?`, [
-                uid ?? null,
-            ]),
-    },
-    insClassifierModel: {
-        run: (uid, w, b, v, ua) =>
-            runAsync(
-                `insert into ${TABLES.learned_models}(user_id,weights,biases,version,updated_at) values(?,?,?,?,?) on conflict(user_id) do update set weights=excluded.weights,biases=excluded.biases,version=excluded.version,updated_at=excluded.updated_at`,
-                [uid ?? null, w, b, v, ua],
-            ),
-    },
-    getActiveUsers: {
-        all: () => allAsync(`select user_id as userId from ${TABLES.users}`),
-    },
-    getUsers: {
-        all: (limit: number, offset: number) =>
-            allAsync(
-                `select user_id as userId, summary, reflection_count as reflectionCount, created_at as createdAt, updated_at as updatedAt from ${TABLES.users} order by updated_at desc limit ? offset ?`,
-                [limit, offset],
-            ),
-    },
-    insWaypoint: {
-        run: (src, dst, userId, w, ca, ua) =>
-            runAsync(
-                `insert into ${TABLES.waypoints}(src_id,dst_id,user_id,weight,created_at,updated_at) values(?,?,?,?,?,?) on conflict(src_id,dst_id,user_id) do update set weight=excluded.weight,updated_at=excluded.updated_at`,
-                [src, dst, userId ?? null, w, ca, ua],
-            ),
-    },
-    insWaypoints: {
-        run: async (items) => {
-            if (items.length === 0) return 0;
-            if (getIsPg()) {
-                const params: unknown[] = [];
-                const rows: string[] = [];
-                let idx = 1;
-                for (const item of items) {
-                    const rowParams = [
-                        item.srcId,
-                        item.dstId,
-                        item.userId ?? null,
-                        item.weight,
-                        item.createdAt,
-                        item.updatedAt,
-                    ];
-                    params.push(...rowParams);
-                    const placeholders = rowParams
-                        .map(() => `$${idx++}`)
-                        .join(",");
-                    rows.push(`(${placeholders})`);
-                }
-                const sql = `insert into ${TABLES.waypoints}(src_id,dst_id,user_id,weight,created_at,updated_at) values ${rows.join(",")} on conflict(src_id,dst_id,user_id) do update set weight=excluded.weight,updated_at=excluded.updated_at`;
-                const c = txStorage.getStore()?.cli || pg;
-                if (!c) throw new Error("PG not initialized");
-                return (await c.query(sql, params)).rowCount || 0;
-            } else {
-                return await transaction.run(async () => {
-                    let count = 0;
-                    for (const item of items) {
-                        count += await q.insWaypoint.run(
-                            item.srcId,
-                            item.dstId,
-                            item.userId,
-                            item.weight,
-                            item.createdAt,
-                            item.updatedAt,
-                        );
-                    }
-                    return count;
-                });
-            }
-        },
-    },
-    getWaypoint: {
-        get: (src, dst, userId) =>
-            getUser<Waypoint>(
-                `select * from ${TABLES.waypoints} where src_id=? and dst_id=?`,
-                [src, dst],
-                userId,
-            ),
-    },
-    getWaypointsBySrc: {
-        all: (src, userId) =>
-            allUser<Waypoint>(
-                `select * from ${TABLES.waypoints} where src_id=?`,
-                [src],
-                userId,
-            ),
-    },
-    getNeighbors: {
-        all: (src, userId) =>
-            allUser<{ dstId: string; weight: number }>(
-                `select dst_id as dstId, weight from ${TABLES.waypoints} where src_id=? order by weight desc`,
-                [src],
-                userId,
-            ),
-    },
-    updWaypoint: {
-        run: (src, weight, ua, dst, userId) =>
-            runUser(
-                `update ${TABLES.waypoints} set weight=?,updated_at=? where src_id=? and dst_id=?`,
-                [weight, ua, src, dst],
-                userId,
-            ),
-    },
-    pruneWaypoints: {
-        run: (t, userId) =>
-            runUser(
-                `delete from ${TABLES.waypoints} where weight<?`,
-                [t],
-                userId,
-            ),
-    },
-    getLowSalienceMemories: {
-        all: (t, limit, userId) =>
-            allUser<{ id: string; userId: string }>(
-                `select id, user_id as userId from ${TABLES.memories} where salience<? limit ?`,
-                [t, limit],
-                userId,
-            ),
-    },
-    pruneMemories: {
-        run: async (t, userId) => {
-            // Fetch IDs to be pruned first to ensure vector cleanup
-            // Limit to 1000 to prevent massive memory usage, caller should loop
-            const rows = await allUser<{ id: string }>(
-                `select id from ${TABLES.memories} where salience<? limit 1000`,
-                [t],
-                userId,
-            );
-            if (rows.length === 0) return 0;
-            const ids = rows.map((r) => r.id);
-
-            // Cleanup DB First (Integrity)
-            const placeholders = ids.map(() => '?').join(',');
-            const count = await runUser(
-                `delete from ${TABLES.memories} where id in (${placeholders})`,
-                [...ids],
-                userId,
-            );
-
-            // Cleanup vectors - Only if DB delete succeeded
-            try {
-                await vectorStore.deleteVectors(ids, userId);
-            } catch (e) {
-                logger.warn("[DB] Prune vector cleanup failed", { error: e });
-            }
-
-            return count;
-        },
-    },
-
-    insMaintLog: {
-        run: (userId, status, details, ts) =>
-            runAsync(
-                `insert into ${TABLES.maint_logs}(op,user_id,status,details,ts) values('routine',?,?,?,?)`,
-                [userId ?? null, status, details, ts],
-            ),
-    },
-    logMaintOp: {
-        run: (op, status, details, ts, userId) =>
-            runAsync(
-                `insert into ${TABLES.maint_logs}(op,status,details,ts,user_id) values(?,?,?,?,?)`,
-                [op, status, details, ts, userId ?? null],
-            ),
-    },
-    insLog: {
-        run: (id, userId, model, status, ts, err) =>
-            runAsync(
-                `insert into ${TABLES.embed_logs}(id,user_id,model,status,ts,err) values(?,?,?,?,?,?) on conflict(id) do update set status=excluded.status,err=excluded.err`,
-                [id, userId ?? null, model, status, ts, err ?? null],
-            ),
-    },
-    updLog: {
-        run: (id, status, err) =>
-            runAsync(
-                `update ${TABLES.embed_logs} set status=?,err=? where id=?`,
-                [status, err ?? null, id],
-            ),
-    },
-    getPendingLogs: {
-        all: (userId) =>
-            allUser<LogEntry>(
-                `select * from ${TABLES.embed_logs} where status='pending'`,
-                [],
-                userId,
-            ),
-    },
-    getFailedLogs: {
-        all: (userId) =>
-            allUser<LogEntry>(
-                `select * from ${TABLES.embed_logs} where status='failed' order by ts desc limit 100`,
-                [],
-                userId,
-            ),
-    },
+    insMem: { run: (...args) => getMemRepo().insMem(...args) },
+    insMems: { run: (...args) => getMemRepo().insMems(...args) },
+    updMeanVec: { run: (...args) => getMemRepo().updMeanVec(...args) },
+    updCompressedVec: { run: (...args) => getMemRepo().updCompressedVec(...args) },
+    updFeedback: { run: (...args) => getMemRepo().updFeedback(...args) },
+    updSeen: { run: (...args) => getMemRepo().updSeen(...args) },
+    updSaliences: { run: (...args) => getMemRepo().updSaliences(...args) },
+    updSummary: { run: (...args) => getMemRepo().updSummary(...args) },
+    updMem: { run: (...args) => getMemRepo().updMem(...args) },
+    updSector: { run: (...args) => getMemRepo().updSector(...args) },
+    delMem: { run: (...args) => getMemRepo().delMem(...args) },
+    delMems: { run: (...args) => getMemRepo().delMems(...args) },
+    getMem: { get: (...args) => getMemRepo().getMem(...args) },
+    getMems: { all: (...args) => getMemRepo().getMems(...args) },
+    getMemBySimhash: { get: (...args) => getMemRepo().getMemBySimhash(...args) },
     clearAll: {
         run: async () => {
-            const tables = [
-                TABLES.memories,
-                TABLES.vectors,
-                TABLES.waypoints,
-                TABLES.users,
-                TABLES.temporal_facts,
-                TABLES.temporal_edges,
-                TABLES.source_configs,
-                TABLES.embed_logs,
-                TABLES.maint_logs,
-                TABLES.stats,
-                TABLES.learned_models,
-            ];
+            const tables = [TABLES.memories, TABLES.vectors, TABLES.waypoints, TABLES.users, TABLES.temporal_facts, TABLES.temporal_edges, TABLES.source_configs, TABLES.embed_logs, TABLES.maint_logs, TABLES.stats, TABLES.learned_models];
             for (const t of tables) await runAsync(`delete from ${t}`);
             return 1;
         },
     },
-    getStats: {
-        get: (userId) =>
-            getUser(
-                `select count(*) as count, avg(salience) as avgSalience from ${TABLES.memories}`,
-                [],
-                userId,
-            ),
+    getStats: { get: (userId?: string | null) => getMemRepo().getStats(userId) },
+    getSectorStats: { all: (userId?: string | null) => getMemRepo().getSectorStats(userId) },
+    getRecentActivity: { all: (limit = 10, userId?: string | null) => getMemRepo().getRecentActivity(limit, userId) },
+    getTopMemories: { all: (limit = 10, userId?: string | null) => getMemRepo().getTopMemories(limit, userId) },
+    getSectorTimeline: { all: (sec: string, limit = 50, userId?: string | null) => getMemRepo().getSectorTimeline(sec, limit, userId) },
+    getMaintenanceLogs: { all: (limit = 50, userId?: string | null) => getLogRepo().getMaintenanceLogs(limit, userId) },
+    getSegmentCount: { get: (seg: number, userId?: string | null) => getMemRepo().getSegmentCount(seg, userId) },
+    getSegments: { all: (userId?: string | null) => getMemRepo().getSegments(userId) },
+    getMemCount: { get: (userId?: string | null) => getMemRepo().getMemCount(userId) },
+    getVecCount: { get: (userId?: string | null) => getMemRepo().getVecCount(userId) },
+    getFactCount: { get: (userId?: string | null) => getTemporalRepo().getFactCount(userId) },
+    getEdgeCount: { get: (userId?: string | null) => getTemporalRepo().getEdgeCount(userId) },
+    allMemByUser: { all: (uid: string, limit: number, offset: number) => getMemRepo().allMemByUser(uid, limit, offset) },
+    allMem: { all: (limit: number, offset: number, userId?: string | null) => getMemRepo().allMem(limit, offset, userId) },
+    allMemStable: { all: (limit: number, offset: number, userId?: string | null) => getMemRepo().allMemStable(limit, offset, userId) },
+    allMemCursor: { all: (limit: number, cursor: { createdAt: number; id: string } | null, userId?: string | null) => getMemRepo().allMemCursor(limit, cursor, userId) },
+    allMemBySector: { all: (sec: string, limit: number, offset: number, userId?: string | null) => getMemRepo().allMemBySector(sec, limit, offset, userId) },
+    allMemBySectorAndTag: { all: (sec: string, tag: string, limit: number, offset: number, userId?: string | null) => getMemRepo().allMemBySectorAndTag(sec, tag, limit, offset, userId) },
+    searchMemsByKeyword: { all: (keyword: string, limit: number, userId?: string | null) => getMemRepo().searchByKeyword(keyword, limit, userId) },
+    insWaypoint: { run: (src: string, dst: string, userId: string | null | undefined, w: number, ca: number, ua: number) => getWaypointRepo().insWaypoint(src, dst, userId, w, ca, ua) },
+    insWaypoints: { run: (items: import("./types").BatchWaypointInsertItem[]) => getWaypointRepo().insWaypoints(items) },
+    getWaypoint: { get: (src: string, dst: string, userId?: string | null) => getWaypointRepo().getWaypoint(src, dst, userId) },
+    getWaypointsBySrc: { all: (src: string, userId?: string | null) => getWaypointRepo().getWaypointsBySrc(src, userId) },
+    getNeighbors: { all: (src: string, userId?: string | null) => getWaypointRepo().getNeighbors(src, userId) },
+    updWaypoint: { run: (src: string, dst: string, userId: string | null | undefined, w: number, ua: number) => getWaypointRepo().updWaypoint(src, dst, userId, w, ua) },
+    pruneWaypoints: { run: (threshold: number, userId?: string | null) => getWaypointRepo().pruneWaypoints(threshold, userId) },
+    getLowSalienceMemories: { all: (threshold: number, limit: number, userId?: string | null) => getWaypointRepo().getLowSalienceMemories(threshold, limit, userId) },
+    pruneMemories: { run: (id: string, userId?: string | null) => getMemRepo().delMem(id, userId) },
+    insMaintLog: { run: (userId: string | null | undefined, status: string, details: string, ts: number) => getLogRepo().insMaintLog(userId, status, details, ts) },
+    logMaintOp: { run: (op: string, status: string, details: string, ts: number, userId?: string | null) => getLogRepo().logMaintOp(op, status, details, ts, userId) },
+    insLog: { run: (id: string, userId: string | null | undefined, model: string, status: string, ts: number, err: string | null) => getLogRepo().insLog(id, userId, model, status, ts, err) },
+    updLog: { run: (id: string, status: string, err: string | null) => getLogRepo().updLog(id, status, err) },
+    getPendingLogs: { all: (userId?: string | null) => getLogRepo().getPendingLogs(userId) },
+    getFailedLogs: { all: (userId?: string | null) => getLogRepo().getFailedLogs(userId) },
+    insUser: { run: (userId: string | null | undefined, summary: string, rc: number, ca: number, ua: number) => getUserRepo().insUser(userId, summary, rc, ca, ua) },
+    getUser: { get: (userId: string | null | undefined) => getUserRepo().getById(userId) },
+    updUserSummary: { run: (userId: string | null | undefined, summary: string, ua: number) => getUserRepo().updUserSummary(userId, summary, ua) },
+    delMemByUser: { run: (userId: string) => getMemRepo().delMemByUser(userId) },
+    delUser: {
+        run: async (userId: string) => {
+            return await transaction.run(async () => {
+                await getMemRepo().delMemByUser(userId);
+                await getWaypointRepo().delWaypointsByUser(userId);
+                await getTemporalRepo().delFactsByUser(userId);
+                await getTemporalRepo().delEdgesByUser(userId);
+                await getConfigRepo().delSourceConfigsByUser(userId);
+                await getConfigRepo().delLearnedModelByUser(userId);
+                await getConfigRepo().delApiKeysByUser(userId);
+                await getLogRepo().delEmbedLogsByUser(userId);
+                await getLogRepo().delMaintLogsByUser(userId);
+                await getUserRepo().delStatsByUser(userId);
+                await vectorStore.deleteVectorsByUser(userId);
+                return await getUserRepo().delUser(userId);
+            });
+        }
     },
-    getSectorStats: {
-        all: (userId) =>
-            allUser<SectorStat>(
-                `select type as sector, sum(count) as count, 0 as avgSalience from stats where type like 'sector:%' group by type`,
-                [],
-                userId,
-            ),
-    },
-    getRecentActivity: {
-        all: (limit = 10, userId) =>
-            allUser<{
-                id: string;
-                content: string;
-                lastSeenAt: number;
-                primarySector: string;
-            }>(
-                `select id, content, last_seen_at as lastSeenAt, primary_sector as primarySector from ${TABLES.memories} order by last_seen_at desc limit ?`,
-                [limit],
-                userId,
-            ),
-    },
-    getTopMemories: {
-        all: (limit = 10, userId) =>
-            allUser<{
-                id: string;
-                content: string;
-                salience: number;
-                primarySector: string;
-            }>(
-                `select id, content, salience, primary_sector as primarySector from ${TABLES.memories} order by salience desc limit ?`,
-                [limit],
-                userId,
-            ),
-    },
-    getSectorTimeline: {
-        all: (sec, limit = 50, userId) =>
-            allUser<{ lastSeenAt: number; salience: number }>(
-                `select last_seen_at as lastSeenAt, salience from ${TABLES.memories} where primary_sector=? order by last_seen_at desc limit ?`,
-                [sec, limit],
-                userId,
-            ),
-    },
-    getMaintenanceLogs: {
-        all: (limit = 50, userId) =>
-            allUser<MaintLogEntry>(
-                `select * from ${TABLES.maint_logs} order by ts desc limit ?`,
-                [limit],
-                userId,
-            ),
-    },
-    getTables: {
-        all: () =>
-            allAsync(
-                getIsPg()
-                    ? `SELECT table_name as name FROM information_schema.tables WHERE table_schema = '${env.pgSchema}'`
-                    : "SELECT name FROM sqlite_master WHERE type='table'",
-            ),
-    },
-    insSourceConfig: {
-        run: (userId, type, config, status, ca, ua) =>
-            runAsync(
-                `insert into ${TABLES.source_configs}(user_id,type,config,status,created_at,updated_at) values(?,?,?,?,?,?) on conflict(user_id,type) do update set config=excluded.config,status=excluded.status,updated_at=excluded.updated_at`,
-                [userId ?? null, type, config, status, ca, ua],
-            ),
-    },
-    updSourceConfig: {
-        run: (userId, type, config, status, ua) =>
-            runAsync(
-                `update ${TABLES.source_configs} set config=?,status=?,updated_at=? where user_id ${userId ? "=?" : "is null"} and type=?`,
-                userId
-                    ? [config, status, ua, userId, type]
-                    : [config, status, ua, type],
-            ),
-    },
-    getSourceConfig: {
-        get: (userId, type) =>
-            getUser(
-                `select * from ${TABLES.source_configs} where type=?`,
-                [type],
-                userId,
-            ),
-    },
-    getSourceConfigsByUser: {
-        all: (userId) =>
-            allUser(
-                `select * from ${TABLES.source_configs}`,
-                [],
-                userId,
-            ),
-    },
-    delSourceConfig: {
-        run: (userId, type) =>
-            runAsync(
-                `delete from ${TABLES.source_configs} where user_id ${userId ? "=?" : "is null"} and type=?`,
-                userId ? [userId, type] : [type],
-            ),
-    },
+    delFactsByUser: { run: (userId: string) => getTemporalRepo().delFactsByUser(userId) },
+    delEdgesByUser: { run: (userId: string) => getTemporalRepo().delEdgesByUser(userId) },
+    delLearnedModel: { run: (userId: string) => getConfigRepo().delLearnedModelByUser(userId) },
+    delSourceConfigsByUser: { run: (userId: string) => getConfigRepo().delSourceConfigsByUser(userId) },
+    delWaypointsByUser: { run: (userId: string) => getWaypointRepo().delWaypointsByUser(userId) },
+    delEmbedLogsByUser: { run: (userId: string) => getLogRepo().delEmbedLogsByUser(userId) },
+    delMaintLogsByUser: { run: (userId: string) => getLogRepo().delMaintLogsByUser(userId) },
+    delStatsByUser: { run: (userId: string) => getUserRepo().delStatsByUser(userId) },
+    getMemByMetadataLike: { all: (pat: string, userId: string | null | undefined) => allUser<MemoryRow>(`select * from ${TABLES.memories} where metadata like ? order by created_at desc`, [`%${pat}%`], userId) },
+    getTrainingData: { all: (uid: string | null | undefined, limit: number) => allAsync(`select mean_vec as meanVec, primary_sector as primarySector from ${TABLES.memories} where user_id=? and mean_vec is not null limit ?`, [uid ?? null, limit]) },
+    getClassifierModel: { get: (uid: string | null | undefined) => getAsync(`select * from ${TABLES.learned_models} where user_id=?`, [uid ?? null]) },
+    insClassifierModel: { run: (uid: string | null | undefined, w: string, b: string, v: number, ua: number) => runAsync(`insert into ${TABLES.learned_models} (user_id, weights, biases, version, updated_at) values(?,?,?,?,?) on conflict(user_id) do update set weights=excluded.weights, biases=excluded.biases, version=excluded.version, updated_at=excluded.updated_at`, [uid ?? null, w, b, v, ua]) },
+    getActiveUsers: { all: () => getUserRepo().getActiveUsers() },
+    getUsers: { all: (limit = 100, offset = 0) => getUserRepo().getUsers(limit, offset) },
+    getTables: { all: () => allAsync(getIsPg() ? `SELECT table_name as name FROM information_schema.tables WHERE table_schema='${env.pgSchema}'` : "SELECT name FROM sqlite_master WHERE type='table'") },
+    insSourceConfig: { run: (userId: string | null | undefined, type: string, config: string, status: string, ca: number, ua: number) => getConfigRepo().insSourceConfig(userId, type, config, status, ca, ua) },
+    updSourceConfig: { run: (userId: string | null | undefined, type: string, config: string, status: string, ua: number) => getConfigRepo().updSourceConfig(userId, type, config, status, ua) },
+    getSourceConfig: { get: (userId: string | null | undefined, type: string) => getConfigRepo().getSourceConfig(userId, type) },
+    getSourceConfigsByUser: { all: (userId: string | null | undefined) => getConfigRepo().getSourceConfigsByUser(userId) },
+    delSourceConfig: { run: (userId: string | null | undefined, type: string) => getConfigRepo().delSourceConfig(userId, type) },
+    insApiKey: { run: (kh: string, uid: string, role: string, note: string | null, ca: number, ua: number, ea: number) => getConfigRepo().insApiKey(kh, uid, role, note, ca, ua, ea) },
+    getApiKey: { get: (kh: string) => getConfigRepo().getApiKey(kh) },
+    delApiKey: { run: (kh: string) => getConfigRepo().delApiKey(kh) },
+    getApiKeysByUser: { all: (userId: string) => getConfigRepo().getApiKeysByUser(userId) },
+    getAllApiKeys: { all: () => getConfigRepo().getAllApiKeys() },
+    getAdminCount: { get: () => getConfigRepo().getAdminCount() },
+    hsgSearch: { all: (ids: string[], userId: string | null | undefined, limit: number, startTime?: number, endTime?: number, minSalience?: number, tau?: number) => getMemRepo().hsgSearch(ids, userId, limit, startTime, endTime, minSalience, tau || 0.5) },
+    delOrphanWaypoints: { run: () => getWaypointRepo().delOrphanWaypoints() },
 
-    insApiKey: {
-        run: (
-            kh: string,
-            uid: string,
-            role: string,
-            note: string | null,
-            ca: number,
-            ua: number,
-            ea: number,
-        ) =>
-            runAsync(
-                `insert into ${TABLES.api_keys}(key_hash,user_id,role,note,created_at,updated_at,expires_at) values(?,?,?,?,?,?,?) on conflict(key_hash) do update set role=excluded.role,note=excluded.note,updated_at=excluded.updated_at,expires_at=excluded.expires_at`,
-                [kh, uid, role, note, ca, ua, ea],
-            ),
-    },
-    getApiKey: {
-        get: (kh: string) =>
-            getAsync<{
-                keyHash: string;
-                userId: string;
-                role: string;
-                note: string;
-                expiresAt: number;
-            }>(
-                `select key_hash as keyHash, user_id as userId, role, note, expires_at as expiresAt from ${TABLES.api_keys} where key_hash=?`,
-                [kh],
-            ),
-    },
-    delApiKey: {
-        run: (kh: string) =>
-            runAsync(`delete from ${TABLES.api_keys} where key_hash=?`, [kh]),
-    },
-    getApiKeysByUser: {
-        all: (uid: string) =>
-            allAsync(
-                `select key_hash as keyHash, user_id as userId, role, note, created_at as createdAt from ${TABLES.api_keys} where user_id=?`,
-                [uid],
-            ),
-    },
-    getAllApiKeys: {
-        all: () =>
-            allAsync(
-                `select key_hash as keyHash, user_id as userId, role, note, created_at as createdAt from ${TABLES.api_keys}`,
-            ),
-    },
-    getAdminCount: {
-        get: () =>
-            getAsync<{ count: number }>(
-                `select count(*) as count from ${TABLES.api_keys} where role='admin'`,
-            ),
-    },
-
-    delFactsByUser: {
-        run: (uid) =>
-            runAsync(`delete from ${TABLES.temporal_facts} where user_id=?`, [
-                uid,
-            ]),
-    },
-    delEdgesByUser: {
-        run: (uid) =>
-            runAsync(`delete from ${TABLES.temporal_edges} where user_id=?`, [
-                uid,
-            ]),
-    },
-    delLearnedModel: {
-        run: (uid) =>
-            runAsync(`delete from ${TABLES.learned_models} where user_id=?`, [
-                uid,
-            ]),
-    },
-    delSourceConfigsByUser: {
-        run: (uid) =>
-            runAsync(`delete from ${TABLES.source_configs} where user_id=?`, [
-                uid,
-            ]),
-    },
-    delWaypointsByUser: {
-        run: (uid) =>
-            runAsync(`delete from ${TABLES.waypoints} where user_id=?`, [uid]),
-    },
-    delEmbedLogsByUser: {
-        run: (uid) =>
-            runAsync(`delete from ${TABLES.embed_logs} where user_id=?`, [uid]),
-    },
-    delMaintLogsByUser: {
-        run: (uid) =>
-            runAsync(`delete from ${TABLES.maint_logs} where user_id=?`, [uid]),
-    },
-    delStatsByUser: {
-        run: (uid) =>
-            runAsync(`delete from ${TABLES.stats} where user_id=?`, [uid]),
-    },
-    delOrphanWaypoints: {
-        run: () =>
-            runAsync(
-                `delete from ${TABLES.waypoints} where src_id not in (select id from ${TABLES.memories}) or dst_id not in (select id from ${TABLES.memories})`,
-            ),
-    },
-    searchMemsByKeyword: {
-        all: (keyword, limit, userId) =>
-            allUser<MemoryRow>(
-                `select * from ${TABLES.memories} where content like ? or tags like ? order by salience desc limit ?`,
-                [`%${keyword}%`, `%${keyword}%`, limit],
-                userId,
-            ),
-    },
+    // Temporal
+    findActiveFact: { get: (...args) => getTemporalRepo().findActiveFact(...args) },
+    updateFactConfidence: { run: (...args) => getTemporalRepo().updateFactConfidence(...args) },
+    getOverlappingFacts: { all: (...args) => getTemporalRepo().getOverlappingFacts(...args) },
+    closeFact: { run: (...args) => getTemporalRepo().closeFact(...args) },
+    insertFactRaw: { run: (...args) => getTemporalRepo().insertFactRaw(...args) },
+    updateFactRaw: { run: (...args) => getTemporalRepo().updateFactRaw(...args) },
+    findActiveEdge: { get: (...args) => getTemporalRepo().findActiveEdge(...args) },
+    updateEdgeWeight: { run: (...args) => getTemporalRepo().updateEdgeWeight(...args) },
+    getOverlappingEdges: { all: (...args) => getTemporalRepo().getOverlappingEdges(...args) },
+    closeEdge: { run: (...args) => getTemporalRepo().closeEdge(...args) },
+    insertEdgeRaw: { run: (...args) => getTemporalRepo().insertEdgeRaw(...args) },
+    updateEdgeRaw: { run: (...args) => getTemporalRepo().updateEdgeRaw(...args) },
+    deleteEdgeRaw: { run: (...args) => getTemporalRepo().deleteEdgeRaw(...args) },
+    applyConfidenceDecay: { run: (...args) => getTemporalRepo().applyConfidenceDecay(...args) },
+    getFact: { get: (...args) => getTemporalRepo().getFact(...args) },
+    getEdge: { get: (...args) => getTemporalRepo().getEdge(...args) },
+    getActiveFactCount: { get: (...args) => getTemporalRepo().getActiveFactCount(...args) },
+    getActiveEdgeCount: { get: (...args) => getTemporalRepo().getActiveEdgeCount(...args) },
+    queryFactsAtTime: { all: (...args) => getTemporalRepo().queryFactsAtTime(...args) },
+    getCurrentFact: { get: (...args) => getTemporalRepo().getCurrentFact(...args) },
+    queryFactsInRange: { all: (...args) => getTemporalRepo().queryFactsInRange(...args) },
+    findConflictingFacts: { all: (...args) => getTemporalRepo().findConflictingFacts(...args) },
+    getFactsBySubject: { all: (...args) => getTemporalRepo().getFactsBySubject(...args) },
+    searchFacts: { all: (...args) => getTemporalRepo().searchFacts(...args) },
+    getRelatedFacts: { all: (...args) => getTemporalRepo().getRelatedFacts(...args) },
+    queryEdges: { all: (...args) => getTemporalRepo().queryEdges(...args) },
+    getFactsByPredicate: { all: (...args) => getTemporalRepo().getFactsByPredicate(...args) },
+    getChangesInWindow: { all: (...args) => getTemporalRepo().getChangesInWindow(...args) },
+    getVolatileFacts: { all: (...args) => getTemporalRepo().getVolatileFacts(...args) },
 };
+
 
 /**
  * Logs a maintenance operation to the stats table.
@@ -2253,7 +1074,7 @@ export const logMaintOp = async (
 ) => {
     try {
         await runAsync(
-            `insert into ${TABLES.stats}(type,count,ts,user_id) values(?,?,?,?)`,
+            `insert into ${TABLES.stats} (type, count, ts, user_id) values(?,?,?,?)`,
             [type, cnt, Date.now(), userId ?? null],
         );
     } catch (e) {

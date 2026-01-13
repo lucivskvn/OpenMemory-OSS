@@ -183,6 +183,9 @@ export const authenticateApiRequest = async (
             scopes = ["memory:read", "memory:write"];
             isValid = true;
         } else {
+            if (env.isTest) {
+                logger.debug(`[AUTH_DEBUG] Key mismatch. Provided: ${provided.slice(0, 3)}... ExpectedAdmin: ${currentAdminKey ? currentAdminKey.slice(0, 3) + '...' : 'null'}, ExpectedUser: ${currentApiKey ? currentApiKey.slice(0, 3) + '...' : 'null'}`);
+            }
             // Check DB for dynamic keys
             // We need to hash the provided key to lookup (since we store hashes)
             // But wait, the standard is usually to store the hash of the key.

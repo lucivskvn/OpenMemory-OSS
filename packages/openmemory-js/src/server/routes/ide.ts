@@ -63,7 +63,7 @@ export function ideRoutes(app: ServerApp) {
      * Updates User Summary to reflect recent activity.
      */
     app.post(
-        "/api/ide/events",
+        "/ide/events",
         validateBody(IdeEventSchema),
         async (req: AdvancedRequest, res: AdvancedResponse) => {
             try {
@@ -149,7 +149,7 @@ export function ideRoutes(app: ServerApp) {
      * Uses `getIdeContext` which blends semantic search with recent activity.
      */
     app.post(
-        "/api/ide/context",
+        "/ide/context",
         validateBody(IdeContextSchema),
         async (req: AdvancedRequest, res: AdvancedResponse) => {
             try {
@@ -190,7 +190,7 @@ export function ideRoutes(app: ServerApp) {
      * Signals the start of a coding session.
      */
     app.post(
-        "/api/ide/session/start",
+        "/ide/session/start",
         validateBody(IdeSessionStartSchema),
         async (req: AdvancedRequest, res: AdvancedResponse) => {
             try {
@@ -270,7 +270,7 @@ export function ideRoutes(app: ServerApp) {
      * Signals the end of a coding session and generates a summary.
      */
     app.post(
-        "/api/ide/session/end",
+        "/ide/session/end",
         validateBody(IdeSessionEndSchema),
         async (req: AdvancedRequest, res: AdvancedResponse) => {
             try {
@@ -362,7 +362,7 @@ export function ideRoutes(app: ServerApp) {
      * Triggers an `IDE_SUGGESTION` event if patterns are found.
      */
     app.get(
-        "/api/ide/patterns/:sessionId",
+        "/ide/patterns/:sessionId",
         validateParams(SessionIdParams),
         async (req: AdvancedRequest, res: AdvancedResponse) => {
             try {

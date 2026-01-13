@@ -176,8 +176,12 @@ SECTORS = {
 **Purpose:** Simulate memory fading over time
 
 ```typescript
+```typescript
 calculateDecay(sector, initialSalience, daysSinceLastSeen) {
-  return initialSalience × e^(-decay_lambda × days)
+  // Dual-Phase Forgetting Curve (Ebbinghaus-inspired)
+  // Phase 1: Rapid initial decay
+  // Phase 2: Stable long-term retention
+  return initialSalience * (stabilizationFactor + (1 - stabilizationFactor) * e^(-decay_lambda * days));
 }
 ```
 
@@ -416,7 +420,7 @@ NODE_SECTOR_MAP = {
 
 ### 7. Temporal Knowledge Graph (`packages/openmemory-js/src/temporal_graph/`)
 
-**Purpose:** Time-aware knowledge graph for tracking facts and relationships over time.
+**Purpose:** Time-aware knowledge graph for tracking facts and relationships over time. Implements the **Repository Pattern** via `TemporalRepository` and accessible through the central `q` facade.
 
 #### 7.1 Data Model
 
@@ -427,20 +431,24 @@ NODE_SECTOR_MAP = {
 - `valid_from`: Start validity timestamp
 - `valid_to`: End validity timestamp (NULL = active)
 - `confidence`: Certainty score (0-1)
-- `metadata`: JSON payload
+- `metadata`: JSON payload, supporting source attribution and context
+- `user_id`: Multi-tenant isolation
 
 **Edges Table (`temporal_edges`):**
 - `source_id`, `target_id`: Linked entities
 - `relation_type`: Edge type
 - `valid_from`, `valid_to`: Validity window
 - `weight`: Edge strength
+- `user_id`: Multi-tenant isolation
 
-#### 7.2 Features
+#### 7.2 Core Mechanics
 
-- **Time-Travel Queries:** Query the state of facts at any historical point in time.
-- **Fact Collision Handling:** Automatically "close" overlapping facts (set `valid_to`) when new facts contradict them.
-- **Confidence Decay:** Optional decay for fact confidence over time.
-- **Volatile Facts:** identify frequently changing facts.
+- **Repository Pattern**: All database interactions are encapsulated in `src/core/repository/temporal.ts`, providing a clean API for `insertFact`, `queryFactsAtTime`, etc.
+- **Valid Time Model**: Uses `[valid_from, valid_to)` intervals. `valid_to = NULL` indicates currently true.
+- **Single-Value Predicate Enforcement**: Inserting `(S, P, O2)` automatically invalidates any existing `(S, P, O1)` by setting its `valid_to` to the new fact's `valid_from`.
+- **Soft Deletion**: Facts are rarely deleted; they are "invalidated" (closed) to preserve history for time-travel queries.
+- **Confidence Decay**: Automatic background process to decay confidence of facts over time, configurable per user.
+- **Volatility Tracking**: Identifying "volatile" facts (high frequency of change) to optimize caching or attention.
 
 
 ---
@@ -603,6 +611,13 @@ LOCAL_MODEL_PATH=/path/to/model
 # Memory
 OM_MIN_SCORE=0.3                 # Minimum similarity threshold
 OM_DECAY_LAMBDA=0.02             # Default decay rate
+OM_INGEST_SECTION_SIZE=4000      # Max chars per section
+OM_INGEST_LARGE_THRESHOLD=12000  # Threshold for root-child splitting (tokens)
+
+# Security (Encryption-at-Rest)
+OM_ENCRYPTION_ENABLED=true
+OM_ENCRYPTION_KEY=...
+OM_ENCRYPTION_SALT=openmemory-salt-v1
 
 # LangGraph Mode
 OM_MODE=standard                 # standard|langgraph

@@ -31,6 +31,8 @@ class SourceError(Exception):
         self.cause = cause
         super().__init__(f"[{source}] {msg}" if source else msg)
 
+ConnectorError = SourceError
+
 
 class SourceAuthError(SourceError):
     """Authentication failure"""

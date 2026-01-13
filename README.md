@@ -2,7 +2,7 @@
 
 > **Real long-term memory for AI agents. Not RAG. Not a vector DB. Self-hosted, Python + Node.**
 
-[![Status](https://img.shields.io/badge/Status-v1.0.0--Gold-gold)]()
+[![Status](https://img.shields.io/badge/Status-v2.3.0--Gold-gold)]()
 [![VS Code Extension](https://img.shields.io/badge/VS%20Code-Extension-007ACC?logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=Nullure.openmemory-vscode)
 [![Discord](https://img.shields.io/discord/1300368230320697404?label=Discord)](https://discord.gg/P7HaRayqTh)
 [![PyPI](https://img.shields.io/pypi/v/openmemory-py.svg)](https://pypi.org/project/openmemory-py/)
@@ -93,6 +93,7 @@ from openmemory.client import MemoryClient
 
 client = MemoryClient(base_url="http://localhost:8080")
 await client.add("users prefer dark mode")
+await client.add_batch(["user likes blue", "user likes hiking"], user_id="u1")
 ```
 
 #### 🔗 OpenAI
@@ -169,6 +170,11 @@ await github.ingest_all({ repo: "owner/repo" })
 ```
 
 Available connectors: `github`, `notion`, `google_drive`, `google_sheets`, `google_slides`, `onedrive`, `web_crawler`
+
+### Configuration
+Tune the ingestion pipeline via environment variables:
+- `OM_INGEST_SECTION_SIZE`: Max characters per text section (default: 4000).
+- `OM_INGEST_LARGE_THRESHOLD`: Token threshold for switching to hierarchical "root-child" splitting (default: 12000).
 
 ---
 
@@ -585,6 +591,7 @@ OpenMemory supports enterprise-grade security features:
 - **Encryption-at-Rest**: AES-256-GCM for all vector content.
   - Enable: `OM_ENCRYPTION_ENABLED=true`
   - Key: `OM_ENCRYPTION_KEY` (32+ chars)
+  - Salt: `OM_ENCRYPTION_SALT` (optional, defaults to `openmemory-salt-v1`)
   - Rotation: `OM_ENCRYPTION_SECONDARY_KEYS` (comma-separated old keys)
 - **Redaction**: sensitive keys (API keys, DSNs) are automatically redacted from logs.
 

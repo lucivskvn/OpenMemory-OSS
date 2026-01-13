@@ -678,6 +678,7 @@ export const createTemporalEdge = async (
             targetId,
             relationType,
             validFrom: validFromDate.getTime(),
+            ok: true,
             message: "Edge created successfully",
         });
     } catch (error: unknown) {

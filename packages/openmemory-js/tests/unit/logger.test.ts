@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { redact } from "../src/utils/logger";
+import { redact } from "../../src/utils/logger";
 
 describe("Logger Redaction", () => {
     test("redacts explicit sensitive keys", () => {

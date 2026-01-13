@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { aggregateVectors, cosineSimilarity } from "../src/utils/vectors";
+import { aggregateVectors, cosineSimilarity } from "../../src/utils/vectors";
 
 describe("Vector Utilities", () => {
     test("aggregateVectors computes mean correctly", () => {

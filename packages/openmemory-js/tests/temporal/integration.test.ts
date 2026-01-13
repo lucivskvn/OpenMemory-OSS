@@ -10,12 +10,16 @@ import { stopAllMaintenance } from "../../src/core/scheduler";
 describe("Temporal Graph Integration Suite", () => {
 
     beforeAll(async () => {
-        // Prepare environment
+        // Prepare environment - close any existing DB from previous test files
         await closeDb();
+        process.env.OM_DB_PATH = ":memory:";
+        reloadConfig();
     });
 
     // Ensure strict isolation per test
-    beforeEach(() => {
+    beforeEach(async () => {
+        // Close existing DB before reconfiguring
+        await closeDb();
         process.env.OM_DB_PATH = ":memory:";
         reloadConfig();
     });

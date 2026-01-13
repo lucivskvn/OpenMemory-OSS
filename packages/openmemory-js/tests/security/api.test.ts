@@ -19,6 +19,7 @@ describe("API Hardening & Standardization", () => {
     const otherUserId = "other-user-999";
 
     beforeAll(async () => {
+        await closeDb();
         standardUserId = await getClientId(standardUserKey);
         adminUserId = await getClientId(adminKey);
 

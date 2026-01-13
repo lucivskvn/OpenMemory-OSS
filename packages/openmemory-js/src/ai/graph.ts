@@ -140,7 +140,7 @@ const hydrateMemRow = (
     preParsedTags?: string[],
 ): GraphMemoryItem => {
     const tags = preParsedTags || parseJsonSafe<string[]>(row.tags, []);
-    const secs = vectors.map((v) => v.sector);
+    const secs = vectors.length > 0 ? vectors.map((v) => v.sector) : [row.primarySector];
     const metaTyped = metadata as LgmMetadata;
     const node = metaTyped.lgm?.node || row.primarySector;
 
@@ -250,13 +250,13 @@ export async function storeNodeMem(
     const meta = buildMeta(p, sec, ns);
     const userId = normalizeUserId(p.userId);
 
-    let res: { 
-        id: string; 
-        primarySector: string; 
-        sectors: string[]; 
-        createdAt: number; 
+    let res: {
+        id: string;
+        primarySector: string;
+        sectors: string[];
+        createdAt: number;
         userId: string | null;
-        content?: string; 
+        content?: string;
     };
 
     if (p.memoryId) {

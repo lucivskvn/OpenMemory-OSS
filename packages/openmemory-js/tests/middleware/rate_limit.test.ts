@@ -1,4 +1,4 @@
-import { describe, it, expect, mock, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, mock, beforeEach, afterEach, afterAll } from "bun:test";
 import { rateLimitMiddleware } from "../../src/server/middleware/rateLimit"; // Adjust path if needed
 import { cache } from "../../src/core/cache";
 import { env } from "../../src/core/cfg";
@@ -52,6 +52,10 @@ describe("Rate Limit Middleware (Smart Limiting)", () => {
 
     afterEach(() => {
         Object.assign(env, originalEnv);
+    });
+
+    afterAll(() => {
+        mock.restore();
     });
 
     it("should use IP key for anonymous requests", async () => {

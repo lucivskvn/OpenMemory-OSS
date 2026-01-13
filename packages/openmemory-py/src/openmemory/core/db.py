@@ -24,10 +24,21 @@ class DB:
         url = env.database_url or ""
         self.is_pg = url.startswith("postgresql://") or url.startswith("postgres://")
         self._current_url = None
-        self._current_url = None
-        self._lock = asyncio.Lock() # Lock for SQLite
-        self._tx_lock = asyncio.Lock()
+        self._lock: Optional[asyncio.Lock] = None
+        self._tx_lock: Optional[asyncio.Lock] = None
         self._stmt_cache: Dict[str, Any] = {}
+
+    @property
+    def lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
+
+    @property
+    def tx_lock(self) -> asyncio.Lock:
+        if self._tx_lock is None:
+            self._tx_lock = asyncio.Lock()
+        return self._tx_lock
 
     async def disconnect(self):
         """Close the database connection/pool."""
@@ -42,6 +53,8 @@ class DB:
                 self.conn.close()
             self.conn = None
             self._stmt_cache.clear()
+            self._lock = None
+            self._tx_lock = None
             logger.info("Database disconnected")
 
     def close(self):
@@ -52,6 +65,8 @@ class DB:
             except Exception:
                 pass
             self.conn = None
+            self._lock = None
+            self._tx_lock = None
 
     def connect(self, force: bool = False):
         # Parse connection string
@@ -62,13 +77,11 @@ class DB:
             # We don't easily know the current URL if we didn't store it
             # Let's store it
             if hasattr(self, "_current_url") and self._current_url == url:
-                # Ensure lock is valid for current loop
-                if self._lock is None: self._lock = asyncio.Lock()
                 return
 
         # Re-init locks for new connection/loop context
-        self._lock = asyncio.Lock()
-        self._tx_lock = asyncio.Lock()
+        self._lock = None
+        self._tx_lock = None
 
         self._current_url = url
         if url.startswith("sqlite:///"):
@@ -265,19 +278,19 @@ class DB:
     async def async_execute(self, sql: str, params: tuple = ()) -> Any:
         if self.is_pg:
             return await asyncio.to_thread(self.execute, sql, params)
-        async with self._lock:
+        async with self.lock:
             return await asyncio.to_thread(self.execute, sql, params)
 
     async def async_fetchone(self, sql: str, params: tuple = ()) -> Optional[Any]:
         if self.is_pg:
             return await asyncio.to_thread(self.fetchone, sql, params)
-        async with self._lock:
+        async with self.lock:
             return await asyncio.to_thread(self.fetchone, sql, params)
 
     async def async_fetchall(self, sql: str, params: tuple = ()) -> List[Any]:
         if self.is_pg:
              return await asyncio.to_thread(self.fetchall, sql, params)
-        async with self._lock:
+        async with self.lock:
              return await asyncio.to_thread(self.fetchall, sql, params)
 
     def executemany(self, sql: str, params_list: List[tuple]) -> Any:
@@ -298,7 +311,7 @@ class DB:
     async def async_executemany(self, sql: str, params_list: List[tuple]) -> Any:
         if self.is_pg:
             return await asyncio.to_thread(self.executemany, sql, params_list)
-        async with self._lock:
+        async with self.lock:
             return await asyncio.to_thread(self.executemany, sql, params_list)
 
     def commit(self):
@@ -781,7 +794,7 @@ async def transaction():
             _tx_conn.reset(token)
             db.release_conn(conn)
     else:
-        async with db._tx_lock:
+        async with db.tx_lock:
             conn = db.get_conn()
             token = _tx_conn.set(conn)  # type: ignore[arg-type]  # type: ignore[arg-type]
             started = False

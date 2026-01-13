@@ -48,7 +48,7 @@ class AgentMemoryCore:
         t.append(f"role:{role}")
         t.append("interaction")
 
-        await self.mem.add(content, user_id=ctx.user_id, metadata=meta, tags=t)
+        await self.mem.add(content, user_id=ctx.user_id, meta=meta, tags=t)
 
     async def add_interactions_batch(
         self,
@@ -72,14 +72,20 @@ class AgentMemoryCore:
                     "timestamp": time.time()
                 }
             })
-        
+
         # Assumes client has add_batch
-        if hasattr(self.mem, 'add_batch'):
-            await self.mem.add_batch(items, user_id=ctx.user_id)
-        else:
-            # Fallback if client is old (should not happen if synced)
-            for item in items:
-                await self.mem.add(item['content'], user_id=ctx.user_id, tags=item['tags'], metadata=item['metadata'])
+        # TODO: add_batch not implemented in MemoryClient
+        # if hasattr(self.mem, 'add_batch'):
+        #     await self.mem.add_batch(items, user_id=ctx.user_id)
+        # else:
+        # Fallback: add items individually
+        for item in items:
+            await self.mem.add(
+                item["content"],
+                user_id=ctx.user_id,
+                tags=item["tags"],
+                meta=item["metadata"],
+            )
 
     async def add_thought(self, ctx: AgentContext, thought: str):
         """
@@ -90,7 +96,9 @@ class AgentMemoryCore:
             "session_id": ctx.session_id,
             "validity": "ephemeral" # Hint that this might decay faster if we had decay logic for it
         }
-        await self.mem.add(thought, user_id=ctx.user_id, metadata=meta, tags=["thought", "internal"])
+        await self.mem.add(
+            thought, user_id=ctx.user_id, meta=meta, tags=["thought", "internal"]
+        )
 
     async def save_fact(self, ctx: AgentContext, subject: str, predicate: str, object_: str):
         """
@@ -105,7 +113,9 @@ class AgentMemoryCore:
             "object": object_,
             "confidence": 1.0
         }
-        await self.mem.add(content, user_id=ctx.user_id, metadata=meta, tags=["fact", "knowledge"])
+        await self.mem.add(
+            content, user_id=ctx.user_id, meta=meta, tags=["fact", "knowledge"]
+        )
 
     async def recall_context(self, ctx: AgentContext, query: str, limit: int = 5) -> List[str]:
         """
@@ -115,8 +125,10 @@ class AgentMemoryCore:
         3. Deduplicates and merges.
         """
         # 1. Short-term history (raw retrieval)
-        recent_items = await self.mem.history(user_id=ctx.user_id, limit=3)
-        recent_ids = {r["id"] for r in recent_items}
+        # TODO: history method not implemented in MemoryClient
+        # recent_items = await self.mem.history(user_id=ctx.user_id, limit=3)
+        # recent_ids = {r["id"] for r in recent_items}
+        recent_ids = set()
 
         # 2. Long-term semantic search
         semantic_hits = await self.mem.search(query, user_id=ctx.user_id, limit=limit)

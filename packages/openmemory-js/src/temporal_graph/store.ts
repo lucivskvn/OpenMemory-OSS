@@ -4,12 +4,10 @@
  */
 import { env } from "../core/cfg";
 import {
-    allAsync,
-    getAsync,
-    runAsync,
-    SqlParams,
-    TABLES,
+    q,
+    runUser,
     transaction,
+    TABLES
 } from "../core/db";
 import { eventBus, EVENTS } from "../core/events";
 import { getEncryption } from "../core/security";
@@ -45,56 +43,20 @@ export const insertFact = async (
     const id = globalThis.crypto.randomUUID();
     const now = Date.now();
     const validFromTs = validFrom.getTime();
-
-    // Standardize userId
     const uid = normalizeUserId(userId);
 
-    // Use transaction for atomic "close old and insert new" or "update existing"
     return await transaction.run(async () => {
-        // First check: Do we already have this EXACT fact active?
-        // If so, just update confidence and metadata rather than closing/reopening.
-        // Integrity: Added FOR UPDATE for Postgres to prevent concurrent updates/inserts for same fact
-        let matchSql = `
-            SELECT id, confidence, valid_from FROM ${TABLES.temporal_facts} 
-            WHERE subject = ? AND predicate = ? AND object = ? AND valid_to IS NULL
-        `;
-        if (env.metadataBackend === "postgres") {
-            matchSql += " FOR UPDATE";
-        }
-        const matchParams: SqlParams = [subject, predicate, object];
-        if (uid !== undefined) {
-            matchSql +=
-                uid === null ? " AND user_id IS NULL" : " AND user_id = ?";
-            if (uid !== null) matchParams.push(uid);
-        }
+        const match = await q.findActiveFact.get(subject, predicate, object, uid) as TemporalFactRow | undefined;
 
-        const match = await getAsync<TemporalFactRow>(matchSql, matchParams);
         if (match) {
-            if (env.verbose) {
-                logger.debug(
-                    `[TEMPORAL] Existing active fact found for ${subject} ${predicate} ${object}. Updating instead of inserting.`,
-                );
-            }
-            // Update confidence (take the max of existing and new) and bump last_updated
+            if (env.verbose) logger.debug(`[TEMPORAL] Existing active fact found for ${subject} ${predicate} ${object}. Updating.`);
             const newConfidence = Math.max(match.confidence, confidence);
-            await runAsync(
-                `
-                UPDATE ${TABLES.temporal_facts} 
-                SET confidence = ?, last_updated = ?, metadata = ? 
-                WHERE id = ?
-            `,
-                [
-                    newConfidence,
-                    now,
-                    metadata
-                        ? await getEncryption().encrypt(
-                            JSON.stringify(metadata),
-                        )
-                        : null,
-                    match.id,
-                ],
+            await q.updateFactConfidence.run(
+                match.id,
+                newConfidence,
+                metadata ? await getEncryption().encrypt(JSON.stringify(metadata)) : null,
+                now
             );
-
             eventBus.emit(EVENTS.TEMPORAL_FACT_UPDATED, {
                 id: match.id,
                 userId: uid ?? undefined,
@@ -104,90 +66,39 @@ export const insertFact = async (
             return match.id;
         }
 
-        // Second check: If not an exact match, check for overlapping facts for the same subject/predicate.
-        // These will be "closed" to make room for the new fact (replaces old knowledge).
-        // Integrity: Added FOR UPDATE for Postgres to ensure we own the timeline for this subject-predicate
-        let sql = `
-            SELECT id, valid_from, valid_to FROM ${TABLES.temporal_facts} 
-            WHERE subject = ? AND predicate = ? AND (valid_to IS NULL OR valid_to > ?)
-        `;
-        if (env.metadataBackend === "postgres") {
-            sql += " FOR UPDATE";
-        }
-        const params: SqlParams = [subject, predicate, validFromTs];
-
-        if (uid !== undefined) {
-            sql += uid === null ? " AND user_id IS NULL" : " AND user_id = ?";
-            if (uid !== null) params.push(uid);
-        }
-
-        sql += " ORDER BY valid_from ASC";
-
-        const existing = await allAsync<TemporalFactRow>(sql, params);
+        const existing = await q.getOverlappingFacts.all(subject, predicate, validFromTs, uid) as TemporalFactRow[];
         let newFactValidTo: number | null = null;
 
         for (const old of existing) {
             const oldValidFrom = Number(old.validFrom);
-            // Case 1: Old fact overlaps with New fact start: Close Old fact at New start.
             if (oldValidFrom < validFromTs) {
-                await runAsync(
-                    `UPDATE ${TABLES.temporal_facts} SET valid_to = ? WHERE id = ?`,
-                    [validFromTs - 1, old.id],
-                );
-                if (env.verbose) {
-                    logger.debug(
-                        `[TEMPORAL] Closed fact ${old.id} at ${new Date(validFromTs - 1).toISOString()}`,
-                    );
-                }
+                await q.closeFact.run(old.id, validFromTs - 1);
+                if (env.verbose) logger.debug(`[TEMPORAL] Closed fact ${old.id}`);
             } else if (oldValidFrom === validFromTs) {
-                // Collision: Old fact starts exactly when new fact starts.
-                await runAsync(
-                    `UPDATE ${TABLES.temporal_facts} SET valid_to = ? WHERE id = ?`,
-                    [validFromTs - 1, old.id],
-                );
-                if (env.verbose) {
-                    logger.debug(
-                        `[TEMPORAL] Collided fact ${old.id} invalidated at ${new Date(validFromTs - 1).toISOString()}`,
-                    );
-                }
-            }
-            // Case 2: Old fact starts AFTER New fact: New fact must end before Old start.
-            else if (oldValidFrom > validFromTs) {
-                if (
-                    newFactValidTo === null ||
-                    oldValidFrom - 1 < newFactValidTo
-                ) {
+                await q.closeFact.run(old.id, validFromTs - 1);
+                if (env.verbose) logger.debug(`[TEMPORAL] Collided fact ${old.id} invalidated`);
+            } else if (oldValidFrom > validFromTs) {
+                if (newFactValidTo === null || oldValidFrom - 1 < newFactValidTo) {
                     newFactValidTo = oldValidFrom - 1;
                 }
             }
         }
 
-        await runAsync(
-            `
-            INSERT INTO ${TABLES.temporal_facts} (id, user_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-            [
-                id,
-                uid ?? null,
-                subject,
-                predicate,
-                object,
-                validFromTs,
-                newFactValidTo,
-                confidence,
-                now,
-                metadata
-                    ? await getEncryption().encrypt(JSON.stringify(metadata))
-                    : null,
-            ],
-        );
+        await q.insertFactRaw.run({
+            id,
+            userId: uid ?? null,
+            subject,
+            predicate,
+            object,
+            validFrom: validFromTs,
+            validTo: newFactValidTo,
+            confidence,
+            lastUpdated: now,
+            metadata: metadata ? await getEncryption().encrypt(JSON.stringify(metadata)) : null
+        });
 
-        if (env.verbose) {
-            logger.debug(
-                `[TEMPORAL] Inserted fact: ${subject} ${predicate} ${object} (from ${validFrom.toISOString()} to ${newFactValidTo ? new Date(newFactValidTo).toISOString() : "NULL"})`,
-            );
-        }
+        if (env.verbose) logger.debug(`[TEMPORAL] Inserted fact: ${subject} ${predicate} ${object}`);
+
         eventBus.emit(EVENTS.TEMPORAL_FACT_CREATED, {
             id,
             userId: uid ?? undefined,
@@ -203,13 +114,6 @@ export const insertFact = async (
     });
 };
 
-/**
- * Updates an existing fact by ID. Can verify ownership.
- * @param id - Fact UUID.
- * @param userId - Owner context.
- * @param confidence - New confidence score.
- * @param metadata - New metadata content.
- */
 export const updateFact = async (
     id: string,
     userId?: string | null,
@@ -217,40 +121,26 @@ export const updateFact = async (
     metadata?: Record<string, unknown>,
 ): Promise<void> => {
     const updates: string[] = [];
-    const params: SqlParams = [];
+    const params: (string | number | null)[] = [];
     const uid = normalizeUserId(userId);
 
     if (confidence !== undefined) {
         updates.push("confidence = ?");
         params.push(confidence);
     }
-
     if (metadata !== undefined) {
         updates.push("metadata = ?");
         params.push(await getEncryption().encrypt(JSON.stringify(metadata)));
     }
-
     updates.push("last_updated = ?");
     params.push(Date.now());
 
-    params.push(id);
-
     if (updates.length > 0) {
-        let sql = `UPDATE ${TABLES.temporal_facts} SET ${updates.join(", ")} WHERE id = ?`;
-        if (uid !== undefined) {
-            sql += uid === null ? " AND user_id IS NULL" : " AND user_id = ?";
-            if (uid !== null) params.push(uid);
-        }
-
-        const changes = await runAsync(sql, params);
+        const changes = await q.updateFactRaw.run(id, updates, params, uid);
         if (changes === 0) {
-            logger.error(
-                `[TEMPORAL] Update failed: Fact ${id} not found for user ${uid === undefined ? "ANY" : uid || "NULL"}`,
-            );
+            logger.error(`[TEMPORAL] Update failed: Fact ${id} not found for user ${uid}`);
         } else {
-            if (env.verbose) {
-                logger.debug(`[TEMPORAL] Updated fact ${id}`);
-            }
+            if (env.verbose) logger.debug(`[TEMPORAL] Updated fact ${id}`);
             eventBus.emit(EVENTS.TEMPORAL_FACT_UPDATED, {
                 id,
                 userId: uid ?? undefined,
@@ -269,16 +159,7 @@ export const invalidateFact = async (
     const uid = normalizeUserId(userId);
 
     return await transaction.run(async () => {
-        // Integrity: Fetch valid_from to ensure valid_to >= valid_from
-        let querySql = `SELECT valid_from FROM ${TABLES.temporal_facts} WHERE id = ?`;
-        const queryParams: SqlParams = [id];
-        if (uid !== undefined) {
-            querySql += uid === null ? " AND user_id IS NULL" : " AND user_id = ?";
-            if (uid !== null) queryParams.push(uid);
-        }
-
-        const existing = await getAsync<TemporalFactRow>(querySql, queryParams);
-
+        const existing = await q.getFact.get(id, uid) as TemporalFactRow | undefined;
         if (!existing) {
             logger.error(`[TEMPORAL] Invalidation failed: Fact ${id} not found for user ${uid}`);
             return;
@@ -288,23 +169,13 @@ export const invalidateFact = async (
         const validToTs = validTo.getTime();
 
         if (validToTs < validFromTs) {
-            throw new Error(`[TEMPORAL] Integrity Error: validTo (${new Date(validToTs).toISOString()}) cannot be before validFrom (${new Date(validFromTs).toISOString()})`);
+            throw new Error(`[TEMPORAL] Integrity Error: validTo cannot be before validFrom`);
         }
 
-        let sql = `UPDATE ${TABLES.temporal_facts} SET valid_to = ?, last_updated = ? WHERE id = ?`;
-        const params: SqlParams = [validToTs, Date.now(), id];
-        if (uid !== undefined) {
-            sql += uid === null ? " AND user_id IS NULL" : " AND user_id = ?";
-            if (uid !== null) params.push(uid);
-        }
+        const changes = await q.updateFactRaw.run(id, ["valid_to = ?", "last_updated = ?"], [validToTs, Date.now()], uid);
 
-        const changes = await runAsync(sql, params);
         if (changes > 0) {
-            if (env.verbose) {
-                logger.debug(
-                    `[TEMPORAL] Invalidated fact ${id} at ${validTo.toISOString()}`,
-                );
-            }
+            if (env.verbose) logger.debug(`[TEMPORAL] Invalidated fact ${id}`);
             eventBus.emit(EVENTS.TEMPORAL_FACT_DELETED, {
                 id,
                 userId: uid ?? undefined,
@@ -319,28 +190,17 @@ export const deleteFact = async (
     userId?: string | null,
 ): Promise<void> => {
     const uid = normalizeUserId(userId);
+    // Hard delete fact and orphaned edges using runUser directly as this specific cascade isn't in Repo yet
+    const changes = await runUser(`DELETE FROM ${TABLES.temporal_facts} WHERE id = ?`, [id], uid);
 
-    let sql = `DELETE FROM ${TABLES.temporal_facts} WHERE id = ?`;
-    const params: SqlParams = [id];
-    if (uid !== undefined) {
-        sql += uid === null ? " AND user_id IS NULL" : " AND user_id = ?";
-        if (uid !== null) params.push(uid);
-    }
-
-    const changes = await runAsync(sql, params);
     if (changes > 0) {
         // Also delete related edges (orphans)
-        let edgeSql = `DELETE FROM ${TABLES.temporal_edges} WHERE (source_id = ? OR target_id = ?)`;
-        const edgeParams: SqlParams = [id, id];
-        if (uid !== undefined) {
-            edgeSql +=
-                uid === null ? " AND user_id IS NULL" : " AND user_id = ?";
-            if (uid !== null) edgeParams.push(uid);
-        }
-        await runAsync(edgeSql, edgeParams);
-        if (env.verbose) {
-            logger.debug(`[TEMPORAL] Deleted fact ${id} and related edges`);
-        }
+        await runUser(
+            `DELETE FROM ${TABLES.temporal_edges} WHERE (source_id = ? OR target_id = ?)`,
+            [id, id],
+            uid
+        );
+        if (env.verbose) logger.debug(`[TEMPORAL] Deleted fact ${id} and related edges`);
     }
 };
 
@@ -357,49 +217,19 @@ export const insertEdge = async (
     const validFromTs = validFrom.getTime();
     const uid = normalizeUserId(userId);
 
-    // Use transaction for atomic "close old and insert new" or "update existing"
     return await transaction.run(async () => {
-        // First check: Do we already have this EXACT edge active?
-        // Integrity: Added FOR UPDATE for Postgres
-        let matchSql = `
-            SELECT id, weight, valid_from FROM ${TABLES.temporal_edges} 
-            WHERE source_id = ? AND target_id = ? AND relation_type = ? AND valid_to IS NULL
-        `;
-        if (env.metadataBackend === "postgres") {
-            matchSql += " FOR UPDATE";
-        }
-        const matchParams: SqlParams = [sourceId, targetId, relationType];
-        if (uid !== undefined) {
-            matchSql +=
-                uid === null ? " AND user_id IS NULL" : " AND user_id = ?";
-            if (uid !== null) matchParams.push(uid);
-        }
+        const match = await q.findActiveEdge.get(sourceId, targetId, relationType, uid) as TemporalEdgeRow | undefined;
 
-        const match = await getAsync<TemporalEdgeRow>(matchSql, matchParams);
         if (match) {
-            if (env.verbose) {
-                logger.debug(
-                    `[TEMPORAL] Existing active edge found between ${sourceId} and ${targetId}. Updating.`,
-                );
-            }
+            if (env.verbose) logger.debug(`[TEMPORAL] Existing active edge found. Updating.`);
             const now = Date.now();
             const newWeight = Math.max(match.weight || 0, weight);
-            await runAsync(
-                `
-                UPDATE ${TABLES.temporal_edges} 
-                SET weight = ?, metadata = ?, last_updated = ? 
-                WHERE id = ?
-            `,
-                [
-                    newWeight,
-                    metadata
-                        ? await getEncryption().encrypt(
-                            JSON.stringify(metadata),
-                        )
-                        : null,
-                    now,
-                    match.id,
-                ],
+
+            await q.updateEdgeWeight.run(
+                match.id,
+                newWeight,
+                metadata ? await getEncryption().encrypt(JSON.stringify(metadata)) : null,
+                now
             );
 
             eventBus.emit(EVENTS.TEMPORAL_EDGE_UPDATED, {
@@ -412,64 +242,30 @@ export const insertEdge = async (
             return match.id;
         }
 
-        // Second check: Invalidate existing edges of same type between same nodes if they overlap with the new one
-        // Integrity: Added FOR UPDATE for Postgres
-        let sql = `
-            SELECT id, valid_from FROM ${TABLES.temporal_edges} 
-            WHERE source_id = ? AND target_id = ? AND relation_type = ? AND valid_to IS NULL
-        `;
-        if (env.metadataBackend === "postgres") {
-            sql += " FOR UPDATE";
-        }
-        const params: SqlParams = [sourceId, targetId, relationType];
-
-        if (uid !== undefined) {
-            sql += uid === null ? " AND user_id IS NULL" : " AND user_id = ?";
-            if (uid !== null) params.push(uid);
-        }
-
-        const existing = await allAsync<TemporalEdgeRow>(sql, params);
-
+        const existing = await q.getOverlappingEdges.all(sourceId, targetId, relationType, validFromTs, uid) as TemporalEdgeRow[];
         for (const old of existing) {
             if (old.validFrom < validFromTs) {
-                await runAsync(
-                    `UPDATE ${TABLES.temporal_edges} SET valid_to = ? WHERE id = ?`,
-                    [validFromTs - 1, old.id],
-                );
-                if (env.verbose) {
-                    logger.debug(
-                        `[TEMPORAL] Closed edge ${old.id} at ${new Date(validFromTs - 1).toISOString()}`,
-                    );
-                }
+                await q.closeEdge.run(old.id, validFromTs - 1);
+                if (env.verbose) logger.debug(`[TEMPORAL] Closed edge ${old.id}`);
             }
         }
 
         const now = Date.now();
-        await runAsync(
-            `
-            INSERT INTO ${TABLES.temporal_edges} (id, user_id, source_id, target_id, relation_type, valid_from, valid_to, weight, last_updated, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
-        `,
-            [
-                id,
-                uid ?? null,
-                sourceId,
-                targetId,
-                relationType,
-                validFromTs,
-                weight,
-                now,
-                metadata
-                    ? await getEncryption().encrypt(JSON.stringify(metadata))
-                    : null,
-            ],
-        );
+        await q.insertEdgeRaw.run({
+            id,
+            userId: uid ?? null,
+            sourceId,
+            targetId,
+            relationType,
+            validFrom: validFromTs,
+            validTo: null,
+            weight,
+            lastUpdated: now,
+            metadata: metadata ? await getEncryption().encrypt(JSON.stringify(metadata)) : null
+        });
 
-        if (env.verbose) {
-            logger.debug(
-                `[TEMPORAL] Created edge: ${sourceId} --[${relationType}]--> ${targetId}`,
-            );
-        }
+        if (env.verbose) logger.debug(`[TEMPORAL] Created edge: ${sourceId} --[${relationType}]--> ${targetId}`);
+
         eventBus.emit(EVENTS.TEMPORAL_EDGE_CREATED, {
             id,
             userId: uid ?? undefined,
@@ -493,16 +289,7 @@ export const invalidateEdge = async (
     const uid = normalizeUserId(userId);
 
     return await transaction.run(async () => {
-        // Integrity: Fetch valid_from to ensure valid_to >= valid_from
-        let querySql = `SELECT valid_from FROM ${TABLES.temporal_edges} WHERE id = ?`;
-        const queryParams: SqlParams = [id];
-        if (uid !== undefined) {
-            querySql += uid === null ? " AND user_id IS NULL" : " AND user_id = ?";
-            if (uid !== null) queryParams.push(uid);
-        }
-
-        const existing = await getAsync<TemporalEdgeRow>(querySql, queryParams);
-
+        const existing = await q.getEdge.get(id, uid) as TemporalEdgeRow | undefined;
         if (!existing) {
             logger.error(`[TEMPORAL] Invalidation failed: Edge ${id} not found for user ${uid}`);
             return;
@@ -512,76 +299,46 @@ export const invalidateEdge = async (
         const validToTs = validTo.getTime();
 
         if (validToTs < validFromTs) {
-            throw new Error(`[TEMPORAL] Integrity Error: validTo (${new Date(validToTs).toISOString()}) cannot be before validFrom (${new Date(validFromTs).toISOString()})`);
+            throw new Error(`[TEMPORAL] Integrity Error: validTo cannot be before validFrom`);
         }
 
-        let sql = `UPDATE ${TABLES.temporal_edges} SET valid_to = ? WHERE id = ?`;
-        const params: SqlParams = [validToTs, id];
-        if (uid !== undefined) {
-            sql += uid === null ? " AND user_id IS NULL" : " AND user_id = ?";
-            if (uid !== null) params.push(uid);
-        }
+        await q.closeEdge.run(id, validToTs);
 
-        const changes = await runAsync(sql, params);
-        if (changes > 0) {
-            if (env.verbose) {
-                logger.debug(`[TEMPORAL] Invalidated edge ${id} at ${validTo.toISOString()}`);
-            }
-            eventBus.emit(EVENTS.TEMPORAL_EDGE_DELETED, {
-                id,
-                userId: uid ?? undefined,
-                validTo: validTo.getTime(),
-            });
-        }
+        if (env.verbose) logger.debug(`[TEMPORAL] Invalidated edge ${id}`);
+        eventBus.emit(EVENTS.TEMPORAL_EDGE_DELETED, {
+            id,
+            userId: uid ?? undefined,
+            validTo: validTo.getTime(),
+        });
     });
 };
 
-/**
- * Updates an existing edge by ID. Can verify ownership.
- * @param id - Edge UUID.
- * @param options - New weight or metadata.
- * @param userId - Owner context.
- */
 export const updateEdge = async (
     id: string,
     options: { weight?: number; metadata?: Record<string, unknown> },
     userId?: string | null,
 ): Promise<void> => {
     const updates: string[] = [];
-    const params: SqlParams = [];
+    const params: (string | number | null)[] = [];
     const uid = normalizeUserId(userId);
 
     if (options.weight !== undefined) {
         updates.push("weight = ?");
         params.push(options.weight);
     }
-
     if (options.metadata !== undefined) {
         updates.push("metadata = ?");
         params.push(await getEncryption().encrypt(JSON.stringify(options.metadata)));
     }
-
     updates.push("last_updated = ?");
     params.push(Date.now());
 
-    params.push(id);
-
     if (updates.length > 0) {
-        let sql = `UPDATE ${TABLES.temporal_edges} SET ${updates.join(", ")} WHERE id = ?`;
-        if (uid !== undefined) {
-            sql += uid === null ? " AND user_id IS NULL" : " AND user_id = ?";
-            if (uid !== null) params.push(uid);
-        }
-
-        const changes = await runAsync(sql, params);
+        const changes = await q.updateEdgeRaw.run(id, updates, params, uid);
         if (changes === 0) {
-            logger.error(
-                `[TEMPORAL] Update edge failed: Edge ${id} not found for user ${uid === undefined ? "ANY" : uid || "NULL"}`,
-            );
+            logger.error(`[TEMPORAL] Update edge failed: Edge ${id} not found for user ${uid}`);
         } else {
-            if (env.verbose) {
-                logger.debug(`[TEMPORAL] Updated edge ${id}`);
-            }
+            if (env.verbose) logger.debug(`[TEMPORAL] Updated edge ${id}`);
             eventBus.emit(EVENTS.TEMPORAL_EDGE_UPDATED, {
                 id,
                 userId: uid ?? undefined,
@@ -621,9 +378,7 @@ export const batchInsertFacts = async (
             );
             ids.push(id);
         }
-        if (env.verbose) {
-            logger.info(`[TEMPORAL] Batch inserted ${ids.length} facts`);
-        }
+        if (env.verbose) logger.info(`[TEMPORAL] Batch inserted ${ids.length} facts`);
         return ids;
     });
 };
@@ -634,31 +389,12 @@ export const applyConfidenceDecay = async (
 ): Promise<number> => {
     const now = Date.now();
     const oneDay = 86400000;
-
     const uid = normalizeUserId(userId);
-    let userClause = "";
-    const params: SqlParams = [decayRate, now, oneDay];
-    if (uid !== undefined) {
-        userClause = uid === null ? "AND user_id IS NULL" : "AND user_id = ?";
-        if (uid !== null) params.push(uid);
-    }
 
-    const isPg = env.metadataBackend === "postgres";
-    const maxFunc = isPg ? "GREATEST" : "MAX";
+    // Use repository method providing 'now' and 'oneDay'
+    const changes = await q.applyConfidenceDecay.run(decayRate, now, oneDay, uid);
 
-    const changes = await runAsync(
-        `
-        UPDATE ${TABLES.temporal_facts} 
-        SET confidence = ${maxFunc}(0.1, confidence * (1.0 - ? * ((? - last_updated) * 1.0 / ?)))
-        WHERE valid_to IS NULL AND confidence > 0.1
-        ${userClause}
-    `,
-        params,
-    );
-
-    if (env.verbose) {
-        logger.info(`[TEMPORAL] Applied confidence decay to ${changes} facts`);
-    }
+    if (env.verbose) logger.info(`[TEMPORAL] Applied confidence decay to ${changes} facts`);
     return changes;
 };
 
@@ -666,54 +402,30 @@ export const getActiveFactsCount = async (
     userId?: string | null,
 ): Promise<number> => {
     const uid = normalizeUserId(userId);
-    let sql = `SELECT COUNT(*) as count FROM ${TABLES.temporal_facts} WHERE valid_to IS NULL`;
-    const params: SqlParams = [];
-    if (uid !== undefined) {
-        sql += uid === null ? " AND user_id IS NULL" : " AND user_id = ?";
-        if (uid !== null) params.push(uid);
-    }
-    const result = await getAsync<{ count: number }>(sql, params);
-    return Number(result?.count || 0);
+    const result = await q.getActiveFactCount.get(uid);
+    return result?.c || 0;
 };
 
 export const getTotalFactsCount = async (
     userId?: string | null,
 ): Promise<number> => {
     const uid = normalizeUserId(userId);
-    let sql = `SELECT COUNT(*) as count FROM ${TABLES.temporal_facts}`;
-    const params: SqlParams = [];
-    if (uid !== undefined) {
-        sql += uid === null ? " WHERE user_id IS NULL" : " WHERE user_id = ?";
-        if (uid !== null) params.push(uid);
-    }
-    const result = await getAsync<{ count: number }>(sql, params);
-    return Number(result?.count || 0);
+    const result = await q.getFactCount.get(uid);
+    return result?.c || 0;
 };
 
 export const getActiveEdgesCount = async (
     userId?: string | null,
 ): Promise<number> => {
     const uid = normalizeUserId(userId);
-    let sql = `SELECT COUNT(*) as count FROM ${TABLES.temporal_edges} WHERE valid_to IS NULL`;
-    const params: SqlParams = [];
-    if (uid !== undefined) {
-        sql += uid === null ? " AND user_id IS NULL" : " AND user_id = ?";
-        if (uid !== null) params.push(uid);
-    }
-    const result = await getAsync<{ count: number }>(sql, params);
-    return Number(result?.count || 0);
+    const result = await q.getActiveEdgeCount.get(uid);
+    return result?.c || 0;
 };
 
 export const getTotalEdgesCount = async (
     userId?: string | null,
 ): Promise<number> => {
     const uid = normalizeUserId(userId);
-    let sql = `SELECT COUNT(*) as count FROM ${TABLES.temporal_edges}`;
-    const params: SqlParams = [];
-    if (uid !== undefined) {
-        sql += uid === null ? " WHERE user_id IS NULL" : " WHERE user_id = ?";
-        if (uid !== null) params.push(uid);
-    }
-    const result = await getAsync<{ count: number }>(sql, params);
-    return Number(result?.count || 0);
+    const result = await q.getEdgeCount.get(uid);
+    return result?.c || 0;
 };

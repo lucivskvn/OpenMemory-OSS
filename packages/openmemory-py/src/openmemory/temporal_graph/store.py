@@ -19,25 +19,12 @@ async def insert_fact(
     confidence: float = 1.0,
     metadata: Optional[Dict[str, Any]] = None,
     userId: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> str:
-    """
-    Insert a new temporal fact.
-
-    Args:
-        subject: The subject of the fact.
-        predicate: The relationship verb/type.
-        fact_object: The object of the fact.
-        validFrom: Timestamp (ms) when fact became true. Default: now.
-        confidence: Confidence score (0.0-1.0).
-        metadata: Optional metadata dict.
-        userId: Owner user ID.
-
-    Returns:
-        The UUID of the new fact.
-    """
+    # args...
     async with db.transaction():
         return await _insert_fact_core(
-            subject, predicate, fact_object, validFrom, confidence, metadata, userId
+            subject, predicate, fact_object, validFrom, confidence, metadata, userId=userId or user_id
         )
 
 
@@ -56,14 +43,6 @@ async def _insert_fact_core(
     validFromTs = validFrom if validFrom is not None else now
 
     t = q.tables
-    # Invalidate existing - Caller must ensure transaction context if needed,
-    # but db.async_execute handles locks. For atomicity, caller should use transaction.
-
-    # Check if we are already in a transaction?
-    # db.transaction() context manager ensures BEGIN.
-    # If we call this from batch_insert_facts which has transaction(), that's fine.
-    # If we call from insert_fact which wraps this in transaction(), that's fine.
-
     # Invalidate existing
     user_clause = "AND userId = ?" if userId else "AND userId IS NULL"
     user_param = (userId,) if userId else ()
@@ -168,9 +147,11 @@ async def insert_edge(
     weight: float = 1.0,
     metadata: Optional[Dict[str, Any]] = None,
     userId: Optional[str] = None,
+    user_id: Optional[str] = None,
     commit: bool = True,
 ) -> str:
     """Insert a new temporal edge between two facts."""
+    userId = userId or user_id
     edge_id = str(uuid.uuid4())
     now = int(time.time() * 1000)
     validFromTs = validFrom if validFrom is not None else now
@@ -229,11 +210,12 @@ async def invalidate_edge(edge_id: str, userId: str, validTo: Optional[int] = No
 
 
 async def batch_insert_facts(
-    facts: List[Dict[str, Any]], userId: Optional[str] = None
+    facts: List[Dict[str, Any]], userId: Optional[str] = None, user_id: Optional[str] = None
 ) -> List[str]:
     """
     Insert multiple temporal facts sequentially in a single transaction.
     """
+    uid = userId or user_id
     ids = []
     async with db.transaction():
         for f in facts:
@@ -244,18 +226,19 @@ async def batch_insert_facts(
                 validFrom=f.get("validFrom"),
                 confidence=f.get("confidence", 1.0),
                 metadata=f.get("metadata"),
-                userId=userId,
+                userId=uid,
             )
             ids.append(fid)
     return ids
 
 
 async def batch_insert_edges(
-    edges: List[Dict[str, Any]], userId: Optional[str] = None
+    edges: List[Dict[str, Any]], userId: Optional[str] = None, user_id: Optional[str] = None
 ) -> List[str]:
     """
     Insert multiple temporal edges sequentially in a single transaction.
     """
+    uid = userId or user_id
     ids = []
     async with db.transaction():
         for e in edges:
@@ -266,7 +249,7 @@ async def batch_insert_edges(
                 validFrom=e.get("validFrom"),
                 weight=e.get("weight", 1.0),
                 metadata=e.get("metadata"),
-                userId=userId,
+                userId=uid,
                 commit=False,  # Legacy param, insert_edge handles its own transaction or joins current
             )
             ids.append(eid)

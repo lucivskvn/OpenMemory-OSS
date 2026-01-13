@@ -1081,3 +1081,15 @@ export interface IngestSourceResult {
     success: boolean;
     result: unknown;
 }
+
+/**
+ * API Key metadata.
+ */
+export interface ApiKey {
+    id: string;             // Unique ID
+    keyPrefix: string;      // First few chars
+    description: string;
+    scopes: string[];
+    createdAt: number;
+    lastUsedAt?: number;
+}

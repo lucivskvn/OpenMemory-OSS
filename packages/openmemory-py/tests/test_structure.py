@@ -19,15 +19,14 @@ class TestStructure(unittest.TestCase):
         item = MemoryItem(
             id="test",
             content="test",
-            primary_sector="semantic",
-            created_at=1,
-            updated_at=1,
-            last_seen_at=1,
+            primarySector="semantic",
+            createdAt=1,
+            updatedAt=1,
+            lastSeenAt=1,
             tags=[],
             meta={},
             sectors=[],
-            feedback_score=0.0,
-            _debug=None,
+            feedbackScore=0.0,
         )
         self.assertEqual(item.content, "test")
 

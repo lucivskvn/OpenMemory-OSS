@@ -14,7 +14,21 @@ mock.module("../../src/core/db", () => ({
     allAsync: mockAll,
     getAsync: mockGet,
     transaction: { run: mockTransaction },
-    q: {},
+    q: {
+        findActiveFact: { get: mockGet },
+        findActiveEdge: { get: mockGet },
+        getOverlappingFacts: { all: mockAll },
+        getOverlappingEdges: { all: mockAll },
+        insFact: { run: mockRun },
+        insEdge: { run: mockRun },
+        insertFactRaw: { run: mockRun },
+        insertEdgeRaw: { run: mockRun },
+        updateFactRaw: { run: mockRun },
+        getActiveFactCount: { get: mockGet },
+        getFactCount: { get: mockGet },
+        getActiveEdgeCount: { get: mockGet },
+        getEdgeCount: { get: mockGet },
+    },
 }));
 
 mock.module("../../src/core/security", () => ({
@@ -99,16 +113,16 @@ describe("Temporal Graph Unit Suite (Strict)", () => {
     });
 
     test("getActiveFactsCount calls DB and returns number", async () => {
-        mockGet.mockResolvedValueOnce({ count: 42 } as any);
+        mockGet.mockResolvedValueOnce({ c: 42 } as any);
         const count = await import("../../src/temporal_graph/store").then(m => m.getActiveFactsCount("user1"));
         expect(count).toBe(42);
-        expect(mockGet).toHaveBeenCalledWith(expect.stringContaining("COUNT(*)"), expect.arrayContaining(["user1"]));
+        expect(mockGet).toHaveBeenCalledWith("user1");
     });
 
     test("getTotalFactsCount calls DB and returns number", async () => {
-        mockGet.mockResolvedValueOnce({ count: 100 } as any);
+        mockGet.mockResolvedValueOnce({ c: 100 } as any);
         const count = await import("../../src/temporal_graph/store").then(m => m.getTotalFactsCount("user1"));
         expect(count).toBe(100);
-        expect(mockGet).toHaveBeenCalledWith(expect.stringContaining("COUNT(*)"), expect.arrayContaining(["user1"]));
+        expect(mockGet).toHaveBeenCalledWith("user1");
     });
 });

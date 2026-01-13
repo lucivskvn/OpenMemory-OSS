@@ -9,7 +9,7 @@ from .query import query_facts_at_time, format_fact
 
 
 async def get_subject_timeline(
-    subject: str, predicate: Optional[str] = None, userId: Optional[str] = None
+    subject: str, predicate: Optional[str] = None, userId: Optional[str] = None, user_id: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
     Get a chronological list of changes (creating/invalidated) for a subject.
@@ -22,6 +22,7 @@ async def get_subject_timeline(
     Returns:
         Sorted list of TimelineEntry dicts.
     """
+    userId = userId or user_id
     conds = ["subject = ?"]
     params: List[Any] = [subject]
 
@@ -80,8 +81,10 @@ async def get_predicate_timeline(
     start: Optional[int] = None,
     end: Optional[int] = None,
     userId: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Get a timeline of all facts using a specific predicate."""
+    userId = userId or user_id
     conds = ["predicate = ?"]
     params: List[Any] = [predicate]
 
@@ -110,9 +113,10 @@ async def get_predicate_timeline(
 
 
 async def get_changes_in_window(
-    start: int, end: int, subject: Optional[str] = None, userId: Optional[str] = None
+    start: int, end: int, subject: Optional[str] = None, userId: Optional[str] = None, user_id: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """Get all temporal changes that occurred within a specific time window."""
+    userId = userId or user_id
     conds = []
     params: List[Any] = [start, end, start, end]  # from_ts, to_ts, from_ts, to_ts
 
@@ -164,9 +168,10 @@ async def get_changes_in_window(
 
 
 async def compare_time_points(
-    subject: str, t1: int, t2: int, userId: Optional[str] = None
+    subject: str, t1: int, t2: int, userId: Optional[str] = None, user_id: Optional[str] = None
 ) -> Dict[str, List[Dict[str, Any]]]:
     """Compare the state of a subject at two different points in time."""
+    userId = userId or user_id
     user_clause = "AND userId = ?" if userId else "AND userId IS NULL"
     user_param = (userId,) if userId else ()  # type: ignore[assignment]
 
@@ -209,9 +214,10 @@ async def compare_time_points(
 
 
 async def get_change_frequency(
-    subject: str, predicate: str, window_days: int = 30, userId: Optional[str] = None
+    subject: str, predicate: str, window_days: int = 30, userId: Optional[str] = None, user_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """Calculate the frequency of changes for a specific subject-predicate pair."""
+    userId = userId or user_id
     now = int(time.time()*1000)
     start = now - (window_days * 86400000)
 
@@ -250,9 +256,10 @@ async def get_change_frequency(
 
 
 async def get_volatile_facts(
-    subject: Optional[str] = None, limit: int = 10, userId: Optional[str] = None
+    subject: Optional[str] = None, limit: int = 10, userId: Optional[str] = None, user_id: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """Identify facts that change frequently (volatility analysis)."""
+    userId = userId or user_id
     conds = []
     params = []
     if subject:

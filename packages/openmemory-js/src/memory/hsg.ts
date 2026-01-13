@@ -297,7 +297,7 @@ export async function spreadingActivation(
 ): Promise<Array<{ id: string; weight: number; path: string[] }>> {
     const activationMap = await performSpreadingActivationRetrieval(
         initRes,
-        Math.min(maxExp, 3), // Iterations, not maxExp. Default to low hop count.
+        Math.min(maxExp, 3), // Max hops/iterations
         userId ?? undefined,
     );
 
@@ -325,13 +325,13 @@ export async function reinforceWaypoints(
         if (wp)
             await q.updWaypoint.run(
                 travPath[i],
+                travPath[i + 1],
+                uid,
                 Math.min(
                     reinforcement.maxWaypointWeight,
                     wp.weight + reinforcement.waypointBoost,
                 ),
                 now,
-                travPath[i + 1],
-                uid,
             );
     }
 }
@@ -518,9 +518,8 @@ export async function hsgQuery(
             temporalDimensionWeight: 1.2,
             reflectiveDimensionWeight: 0.7,
         };
-        const results: HsgQueryResult[] = [];
-        const seen = new Set<string>();
         const candidates = new Map<string, { vectorScore: number; searchSector: string }>();
+        const results: HsgQueryResult[] = [];
 
         // 1. Gather Candidates (Parallel Search)
         // Limit concurrency to avoid overloading vector store if many sectors
@@ -555,9 +554,17 @@ export async function hsgQuery(
         const candidateIds = Array.from(candidates.keys());
         if (candidateIds.length === 0) return [];
 
-        // 2. Batch Fetch Memories and Vectors
+        // 2. Batch Fetch Memories and Vectors with DB-side filtering
         const [memories, allVectors] = await Promise.all([
-            q.getMems.all(candidateIds, f?.userId),
+            q.hsgSearch.all(
+                candidateIds,
+                f?.userId,
+                candidateIds.length, // Fetch all candidates to allow full fusion ranking
+                f?.startTime,
+                f?.endTime,
+                f?.minSalience,
+                hybridParams.tau
+            ),
             vectorStore.getVectorsByIds(candidateIds, f?.userId),
         ]);
 
@@ -574,15 +581,6 @@ export async function hsgQuery(
         await Promise.all(memories.map(async (m) => {
             const cand = candidates.get(m.id);
             if (!cand) return;
-
-            // Filters
-            if (f?.startTime && (m.createdAt || 0) < f.startTime) return;
-            if (f?.endTime && (m.createdAt || 0) > f.endTime) return;
-            if (f?.minSalience) {
-                const age = (Date.now() - (m.lastSeenAt || 0)) / 86400000;
-                const sal = calcDecay(m.primarySector, m.salience || 0.5, age);
-                if (sal < f.minSalience) return;
-            }
 
             const decryptedContent = await enc.decrypt(m.content || "");
             if (!decryptedContent && m.content) {

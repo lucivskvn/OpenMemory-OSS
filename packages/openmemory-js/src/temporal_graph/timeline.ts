@@ -2,7 +2,7 @@
  * Temporal Knowledge Graph Timeline Analytics for OpenMemory.
  * Provides tools for chronological event streams, state comparison, and volatility tracking.
  */
-import { allAsync, SqlParams, SqlValue, TABLES, transaction } from "../core/db";
+import { q, transaction } from "../core/db";
 import { normalizeUserId } from "../utils";
 import { rowToFact } from "./query";
 import { TemporalFact, TemporalFactRow, TimelineEntry } from "./types";
@@ -50,33 +50,22 @@ export const getSubjectTimeline = async (
     predicate?: string,
     userId?: string | null,
 ): Promise<TimelineEntry[]> => {
-    const conditions = ["subject = ?"];
-    const params: SqlParams = [subject];
     const uid = normalizeUserId(userId);
 
-    if (uid === undefined) {
-        // No user filter (Any/System)
-    } else if (uid === null) {
-        conditions.push("user_id IS NULL");
-    } else {
-        conditions.push("user_id = ?");
-        params.push(uid);
-    }
+    // Use existing query function which allows filtering by subject (and optional predicate logic if we added it, but getFactsBySubject only takes subject)
+    // Actually repo `getFactsBySubject` takes `subject` and `includeHistorical`.
+    // It doesn't allow filtering by predicate in the SQL.
+    // So we fetch all for subject and filter in memory if predicate is provided.
 
+    // Efficient approach: fetch all history for subject
+    const rows = await q.getFactsBySubject.all(subject, 0, true, 10000, uid) as TemporalFactRow[];
+
+    let filtered = rows;
     if (predicate) {
-        conditions.push("predicate = ?");
-        params.push(predicate);
+        filtered = rows.filter(r => r.predicate === predicate);
     }
 
-    const sql = `
-        SELECT subject, predicate, object, confidence, valid_from, valid_to
-        FROM ${TABLES.temporal_facts}
-        WHERE ${conditions.join(" AND ")}
-        ORDER BY valid_from ASC
-    `;
-
-    const rows = await allAsync<any>(sql, params);
-    return rowsToTimelineEntries(rows);
+    return rowsToTimelineEntries(filtered);
 };
 
 export const getPredicateTimeline = async (
@@ -85,37 +74,11 @@ export const getPredicateTimeline = async (
     to?: Date,
     userId?: string | null,
 ): Promise<TimelineEntry[]> => {
-    const conditions = ["predicate = ?"];
-    const params: SqlParams = [predicate];
     const uid = normalizeUserId(userId);
+    const fromTs = from?.getTime();
+    const toTs = to?.getTime();
 
-    if (uid === undefined) {
-        // No filter
-    } else if (uid === null) {
-        conditions.push("user_id IS NULL");
-    } else {
-        conditions.push("user_id = ?");
-        params.push(uid);
-    }
-
-    if (from) {
-        conditions.push("valid_from >= ?");
-        params.push(from.getTime());
-    }
-
-    if (to) {
-        conditions.push("valid_from <= ?");
-        params.push(to.getTime());
-    }
-
-    const sql = `
-        SELECT subject, predicate, object, confidence, valid_from, valid_to
-        FROM ${TABLES.temporal_facts}
-        WHERE ${conditions.join(" AND ")}
-        ORDER BY valid_from ASC
-    `;
-
-    const rows = await allAsync<any>(sql, params);
+    const rows = await q.getFactsByPredicate.all(predicate, fromTs, toTs, uid) as TemporalFactRow[];
     return rowsToTimelineEntries(rows);
 };
 
@@ -130,41 +93,17 @@ export const getChangesInWindow = async (
 ): Promise<TimelineEntry[]> => {
     const fromTs = from.getTime();
     const toTs = to.getTime();
-    const conditions = [
-        "((valid_from >= ? AND valid_from <= ?) OR (valid_to >= ? AND valid_to <= ?))",
-    ];
-    const params: SqlParams = [fromTs, toTs, fromTs, toTs];
-
-    if (subject) {
-        conditions.push("subject = ?");
-        params.push(subject);
-    }
-
     const uid = normalizeUserId(userId);
-    if (uid === undefined) {
-        // No filter
-    } else if (uid === null) {
-        conditions.push("user_id IS NULL");
-    } else {
-        conditions.push("user_id = ?");
-        params.push(uid);
-    }
 
-    const sql = `
-        SELECT subject, predicate, object, confidence, valid_from, valid_to
-        FROM ${TABLES.temporal_facts}
-        WHERE ${conditions.join(" AND ")}
-        ORDER BY valid_from ASC
-    `;
+    const rows = await q.getChangesInWindow.all(fromTs, toTs, subject, uid) as TemporalFactRow[];
 
-    const rows = await allAsync<TemporalFactRow>(sql, params);
+    // Construct timeline but filter events strictly within window (Repo returns facts overlapping window boundary events)
     const timeline: TimelineEntry[] = [];
 
     for (const row of rows) {
         const rowFrom = Number(row.validFrom);
         const rowTo = row.validTo ? Number(row.validTo) : null;
 
-        // Efficiency: Only push events that actually fall within the window
         if (rowFrom >= fromTs && rowFrom <= toTs) {
             timeline.push({
                 timestamp: rowFrom,
@@ -210,61 +149,20 @@ export const compareTimePoints = async (
     const t2Ts = time2.getTime();
     const uid = normalizeUserId(userId);
 
-    let userClause = "";
-    let userParam: SqlValue[] = [];
+    // Use transaction for consistency if desired, though snapshot isolation might not be guaranteed across two SELECTs in SQLite without serializable.
+    // However, since we are reading historical data, it's likely stable unless active writes are happening.
 
-    if (uid === undefined) {
-        userClause = "1=1"; // No filter
-    } else if (uid === null) {
-        userClause = "user_id IS NULL";
-    } else {
-        userClause = "user_id = ?";
-        userParam = [uid];
-    }
-
-    // Integrity: Use transaction to ensure t1 and t2 queries see the same snapshot version
     return await transaction.run(async () => {
-        // Efficiency: Consolidated into a single query to reduce round-trips
-        const allFacts = await allAsync<TemporalFactRow>(
-            `
-            SELECT *
-            FROM ${TABLES.temporal_facts}
-            WHERE subject = ?
-            AND (
-                (valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?))
-                OR
-                (valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?))
-            )
-            AND ${userClause}
-        `,
-            [subject, t1Ts, t1Ts, t2Ts, t2Ts, ...userParam],
-        );
-
-        const factsT1: TemporalFactRow[] = [];
-        const factsT2: TemporalFactRow[] = [];
-
-        for (const f of allFacts) {
-            const rowFrom = Number(f.validFrom);
-            const rowTo = f.validTo ? Number(f.validTo) : null;
-
-            if (rowFrom <= t1Ts && (rowTo === null || rowTo >= t1Ts)) {
-                factsT1.push(f);
-            }
-            if (rowFrom <= t2Ts && (rowTo === null || rowTo >= t2Ts)) {
-                factsT2.push(f);
-            }
-        }
+        // Fetch facts at T1 using Repo
+        const rowsT1 = await q.queryFactsAtTime.all(t1Ts, subject, undefined, undefined, 0, uid) as TemporalFactRow[];
+        // Fetch facts at T2 using Repo
+        const rowsT2 = await q.queryFactsAtTime.all(t2Ts, subject, undefined, undefined, 0, uid) as TemporalFactRow[];
 
         const mapT1 = new Map<string, TemporalFactRow>();
         const mapT2 = new Map<string, TemporalFactRow>();
 
-        for (const f of factsT1) {
-            mapT1.set(f.predicate, f);
-        }
-
-        for (const f of factsT2) {
-            mapT2.set(f.predicate, f);
-        }
+        for (const f of rowsT1) mapT1.set(f.predicate, f);
+        for (const f of rowsT2) mapT2.set(f.predicate, f);
 
         const added: TemporalFact[] = [];
         const removed: TemporalFact[] = [];
@@ -312,35 +210,17 @@ export const getChangeFrequency = async (
     const windowStart = now - windowDays * 86400000;
     const uid = normalizeUserId(userId);
 
-    let userClause = "";
-    let userParam: SqlValue[] = [];
+    // Use getFactsByPredicate with validFrom filter
+    const rows = await q.getFactsByPredicate.all(predicate, windowStart, undefined, uid) as TemporalFactRow[];
 
-    if (uid === undefined) {
-        userClause = "1=1";
-    } else if (uid === null) {
-        userClause = "user_id IS NULL";
-    } else {
-        userClause = "user_id = ?";
-        userParam = [uid];
-    }
+    // Filter by subject in memory (since getFactsByPredicate doesn't filter subject)
+    const validRows = rows.filter(r => r.subject === subject);
 
-    const rows = await allAsync<TemporalFactRow>(
-        `
-        SELECT *
-        FROM ${TABLES.temporal_facts}
-        WHERE subject = ? AND predicate = ?
-        AND valid_from >= ?
-        AND ${userClause}
-        ORDER BY valid_from ASC
-    `,
-        [subject, predicate, windowStart, ...userParam],
-    );
-
-    const totalChanges = rows.length;
+    const totalChanges = validRows.length;
     let totalDuration = 0;
     let validDurations = 0;
 
-    for (const row of rows) {
+    for (const row of validRows) {
         if (row.validTo) {
             totalDuration += Number(row.validTo) - Number(row.validFrom);
             validDurations++;
@@ -375,41 +255,9 @@ export const getVolatileFacts = async (
         avgConfidence: number;
     }>
 > => {
-    const conds = [];
-    const params: SqlParams = [];
-    if (subject) {
-        conds.push("subject = ?");
-        params.push(subject);
-    }
-
     const uid = normalizeUserId(userId);
-    if (uid === undefined) {
-        // No filter
-    } else if (uid === null) {
-        conds.push("user_id IS NULL");
-    } else {
-        conds.push("user_id = ?");
-        params.push(uid);
-    }
+    const rows = await q.getVolatileFacts.all(subject, limit, uid) as { subject: string, predicate: string, change_count: number, avg_confidence: number }[];
 
-    const where = conds.length > 0 ? `WHERE ${conds.join(" AND ")}` : "";
-
-    const sql = `
-        SELECT subject, predicate, COUNT(*) as change_count, AVG(confidence) as avg_confidence
-        FROM ${TABLES.temporal_facts}
-        ${where}
-        GROUP BY subject, predicate
-        HAVING change_count > 1
-        ORDER BY change_count DESC, avg_confidence ASC
-        LIMIT ?
-    `;
-
-    const rows = await allAsync<{
-        subject: string;
-        predicate: string;
-        change_count: number;
-        avg_confidence: number;
-    }>(sql, [...params, limit]);
     return rows.map((row) => ({
         subject: row.subject,
         predicate: row.predicate,

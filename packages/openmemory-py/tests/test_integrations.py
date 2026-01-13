@@ -15,7 +15,7 @@ class TestAsyncBridge(unittest.TestCase):
     def test_run_sync_simple(self):
         async def simple_coro():
             return "success"
-        
+
         res = run_sync(simple_coro())
         self.assertEqual(res, "success")
 
@@ -42,35 +42,33 @@ class TestIntegrations(unittest.TestCase):
         item1 = MemoryItem(
             id="1",
             content="User: Hello",
-            created_at=1,
-            updated_at=1,
-            last_seen_at=1,
-            primary_sector="semantic",
+            createdAt=1,
+            updatedAt=1,
+            lastSeenAt=1,
+            primarySector="semantic",
             sectors=["semantic"],
             tags=[],
-            metadata={},
+            meta={},
             salience=0.5,
             user_id="u1",
-            feedback_score=0,
-            _debug=None,
+            feedbackScore=0,
         )
         item2 = MemoryItem(
             id="2",
             content="Assistant: Hi",
-            created_at=2,
-            updated_at=2,
-            last_seen_at=2,
-            primary_sector="semantic",
+            createdAt=2,
+            updatedAt=2,
+            lastSeenAt=2,
+            primarySector="semantic",
             sectors=["semantic"],
             tags=[],
-            metadata={},
+            meta={},
             salience=0.5,
             user_id="u1",
-            feedback_score=0,
-            _debug=None,
+            feedbackScore=0,
         )
 
-        self.mock_mem.history.return_value = [item1, item2] 
+        self.mock_mem.history.return_value = [item1, item2]
 
         history = OpenMemoryChatMessageHistory(self.mock_mem, user_id="u1")
 

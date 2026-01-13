@@ -51,6 +51,8 @@ import type {
     VolatileFactsResult,
     WaypointGraphResult,
     WaypointWeightResult,
+    SourceRegistryEntry,
+    ApiKey,
 } from "./core/types";
 
 // Explicit exports for better toolchain compatibility
@@ -288,7 +290,7 @@ export class MemoryClient {
         delete meta.createdAt;
 
         // Matches POST /memory/add schema
-        const body: Record<string, any> = {
+        const body: Record<string, unknown> = {
             content,
             userId: uid,
             tags,
@@ -454,6 +456,7 @@ export class MemoryClient {
         if (content) body.content = content;
         if (tags) body.tags = tags;
         if (metadata) body.metadata = metadata;
+        if (this.defaultUser) body.userId = this.defaultUser;
 
         const res = await this.request<{ id: string; ok: boolean }>(
             `/memory/${id}`,
@@ -1420,15 +1423,21 @@ export class MemoryClient {
         userId?: string,
     ): Promise<{ success: boolean; deletedCount: number }> {
         const uid = userId || this.defaultUser;
-        if (!uid)
-            throw new Error(
-                "UserId is required (neither argument nor defaultUser provided)",
-            );
+        const params = new URLSearchParams();
+        if (uid) params.append("userId", uid);
+
+        // Use the global/all delete route which supports userId filtering
         const res = await this.request<{
-            success: boolean;
-            deletedCount: number;
-        }>(`/memory/user/${uid}`, { method: "DELETE" });
-        return res;
+            ok: boolean;
+            success?: boolean;
+            deleted: number;
+            deletedCount?: number;
+        }>(`/memory/all?${params.toString()}`, { method: "DELETE" });
+
+        return {
+            success: res.ok ?? res.success ?? true,
+            deletedCount: res.deleted ?? res.deletedCount ?? 0
+        };
     }
 
     /**
@@ -1515,7 +1524,7 @@ export class MemoryClient {
         }[]
     > {
         // Server route is GET /admin/users/:userId/keys
-        const res = await this.request<{ keys: any[] }>(`/admin/users/${userId}/keys`);
+        const res = await this.request<{ keys: ApiKey[] }>(`/admin/users/${userId}/keys`);
         return res?.keys || [];
     }
 
@@ -1551,7 +1560,7 @@ export class MemoryClient {
         updatedAt: number;
         createdAt: number;
     }[]> {
-        const res = await this.request<{ sources: any[] }>(`/admin/users/${userId}/sources`);
+        const res = await this.request<{ sources: SourceRegistryEntry[] }>(`/admin/users/${userId}/sources`);
         return res?.sources || [];
     }
 
@@ -1584,7 +1593,7 @@ export class MemoryClient {
      * List all active API keys (Admin only).
      * @deprecated Use listUserKeys per user. Global listing is less efficient.
      */
-    async listApiKeys(): Promise<any[]> {
+    async listApiKeys(): Promise<ApiKey[]> {
         // Only per-user listing is supported in new Admin API
         // We can iterate users if needed, but for now we throw
         throw new Error("Deprecated. Use listUserKeys(userId).");
@@ -1914,7 +1923,7 @@ export class MemoryClient {
      */
     async setSourceConfig(
         type: string,
-        config: Record<string, any>,
+        config: Record<string, unknown>,
         status?: "enabled" | "disabled",
     ): Promise<{ ok: boolean }> {
         return await this.request<{ ok: boolean }>(`/source-configs/${type}`, {
@@ -2190,7 +2199,7 @@ export class AdminClient extends MemoryClient {
         createdAt: number;
         expiresAt: number;
     }[]> {
-        const res = await this.request<{ keys: any[] }>(`/admin/users/${userId}/keys`);
+        const res = await this.request<{ keys: ApiKey[] }>(`/admin/users/${userId}/keys`);
         return res?.keys || [];
     }
 

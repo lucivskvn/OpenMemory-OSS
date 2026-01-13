@@ -275,7 +275,10 @@ const EnvSchema = z.object({
                 .map((k) => k.trim())
                 .filter(Boolean),
         ),
+    encryptionSalt: strSchema("openmemory-salt-v1"),
     telemetryEndpoint: urlSchema("https://telemetry.spotit.dev"),
+    ingestSectionSize: numSchema(4000),
+    ingestLargeThreshold: numSchema(12000),
     logAuth: boolSchema.default(false),
     noAuth: boolSchema.default(false),
 
@@ -453,9 +456,12 @@ const parseEnv = () => {
         encryptionEnabled: process.env.OM_ENCRYPTION_ENABLED,
         encryptionKey: process.env.OM_ENCRYPTION_KEY,
         encryptionSecondaryKeys: process.env.OM_ENCRYPTION_SECONDARY_KEYS,
+        encryptionSalt: process.env.OM_ENCRYPTION_SALT,
         logAuth: process.env.OM_LOG_AUTH,
         noAuth: process.env.OM_NO_AUTH,
         telemetryEndpoint: process.env.OM_TELEMETRY_ENDPOINT,
+        ingestSectionSize: process.env.OM_INGEST_SECTION_SIZE,
+        ingestLargeThreshold: process.env.OM_INGEST_LARGE_THRESHOLD,
 
         tier: tier,
 

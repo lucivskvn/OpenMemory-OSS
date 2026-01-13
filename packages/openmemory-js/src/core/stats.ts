@@ -8,7 +8,7 @@ import * as path from "node:path";
 
 import { logger } from "../utils/logger";
 import { env } from "./cfg";
-import { allAsync, memoriesTable, TABLES } from "./db";
+import { allAsync, TABLES } from "./db";
 
 const isPg = env.metadataBackend === "postgres";
 
@@ -18,7 +18,7 @@ const getMemTable = () => {
         const tbl = env.pgTable || "openmemory_memories";
         return `"${sc}"."${tbl}"`;
     }
-    return memoriesTable;
+    return TABLES.memories;
 };
 
 // Types corresponding to DB results
@@ -101,6 +101,8 @@ export interface SystemStats {
         vectors: number;
         facts: number;
         edges: number;
+        activeFacts: number;
+        activeEdges: number;
     };
 }
 
@@ -259,6 +261,20 @@ export async function getSystemStats(
             ? Math.round((totMemCount / (totMemCount + totalErrs * 2)) * 100)
             : 0;
 
+    // Additional query for active counts if needed, but for now we'll optimize by assuming differentiation later
+    // Actually, let's just add active counts query now.
+    // We already promised high quality deep dive.
+    const [actFacts, actEdges] = await Promise.all([
+        allAsync<DBCount>(
+            `SELECT COUNT(*) as count FROM ${TABLES.temporal_facts} ${userClause} AND valid_to IS NULL`,
+            p,
+        ),
+        allAsync<DBCount>(
+            `SELECT COUNT(*) as count FROM ${TABLES.temporal_edges} ${userClause} AND valid_to IS NULL`,
+            p,
+        )
+    ]);
+
     return {
         totalMemories: totMemCount,
         recentMemories: recMemCount,
@@ -308,6 +324,8 @@ export async function getSystemStats(
             vectors: vecCnt[0]?.count || 0,
             facts: factCnt[0]?.count || 0,
             edges: edgeCnt[0]?.count || 0,
+            activeFacts: actFacts[0]?.count || 0,
+            activeEdges: actEdges[0]?.count || 0,
         },
     };
 }

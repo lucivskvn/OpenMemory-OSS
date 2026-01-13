@@ -26,12 +26,12 @@ _current_span: ContextVar[Optional["Span"]] = ContextVar("current_span", default
 class Span:
 
     def __init__(
-        self, name: str, userId: Optional[str] = None, parent: Optional["Span"] = None
+        self, name: str, userId: Optional[str] = None, user_id: Optional[str] = None, parent: Optional["Span"] = None
     ):
         self.id = str(uuid.uuid4())
         self.trace_id = parent.trace_id if parent else str(uuid.uuid4())
         self.parent_id = parent.id if parent else None
-        self.userId = userId or (parent.userId if parent else "anonymous")
+        self.userId = userId or user_id or (parent.userId if parent else "anonymous")
         self.name = name
         self.start_time = int(time.time() * 1000)
         self.end_time: Optional[int] = None
@@ -70,6 +70,11 @@ class Span:
             "status": self.status,
         }
 
+    @property
+    def user_id(self):
+        """Alias for userId"""
+        return self.userId
+
     def __enter__(self):
         self.token = _current_span.set(self)
         return self
@@ -103,10 +108,10 @@ class Tracer:
         self.mem = mem # Optional reference to memory system for explainability
 
     @staticmethod
-    def start_span(name: str, userId: Optional[str] = None) -> Span:
+    def start_span(name: str, userId: Optional[str] = None, user_id: Optional[str] = None) -> Span:
         """Start a new span, inheriting context if available."""
         parent = _current_span.get()
-        return Span(name, userId, parent)
+        return Span(name, userId=userId, user_id=user_id, parent=parent)
 
     @staticmethod
     def current_span() -> Optional[Span]:
@@ -124,7 +129,7 @@ class Tracer:
                 headers["x-user-id"] = span.userId
 
     async def explain_query(
-        self, query: str, userId: Optional[str] = None
+        self, query: str, userId: Optional[str] = None, user_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Explainable retrieval (Legacy 'trace' method).
@@ -132,9 +137,10 @@ class Tracer:
         if not self.mem:
             raise RuntimeError("Tracer not initialized with Memory instance")
 
-        with self.start_span("explain_query", userId=userId) as span:
+        uid = userId or user_id
+        with self.start_span("explain_query", userId=uid) as span:
             span.set_attribute("query", query)
-            results = await self.mem.search(query, userId=userId, debug=True)
+            results = await self.mem.search(query, userId=uid, debug=True)
 
             explanation = []
             for r in results:
@@ -147,7 +153,7 @@ class Tracer:
 
             return {
                 "query": query,
-                "userId": userId,
+                "userId": uid,
                 "results": explanation,
                 "trace_id": span.trace_id,
             }
@@ -160,8 +166,8 @@ def traced(name: Optional[str] = None):
         @wraps(func)
         async def wrapper(*args, **kwargs):
             span_name = name or func.__qualname__
-            # Try to find userId in kwargs
-            uid = kwargs.get("userId")
+            # Try to find userId/user_id in kwargs
+            uid = kwargs.get("userId") or kwargs.get("user_id")
             with Tracer.start_span(span_name, userId=uid) as span:
                 return await func(*args, **kwargs)
         return wrapper

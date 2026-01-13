@@ -116,3 +116,44 @@ class OpenMemoryRetriever(BaseRetriever):  # type: ignore
         for r in results:
             docs.append(Document(page_content=r.content, metadata=r.model_dump()))
         return docs
+
+
+class OpenMemoryVectorStore:
+    """VectorStore implementation for OpenMemory."""
+
+    def __init__(self, memory: Memory, user_id: str):
+        self.memory = memory
+        self.user_id = user_id
+
+    def add_texts(
+        self, texts: List[str], metadatas: Optional[List[dict]] = None, **kwargs
+    ) -> List[str]:
+        # Basic implementation mapping to memory.add
+        ids = []
+        for i, text in enumerate(texts):
+            meta = metadatas[i] if metadatas else {}
+            res = run_sync(self.memory.add(text, user_id=self.user_id, metadata=meta))
+            ids.append(res.id)
+        return ids
+
+    def similarity_search(self, query: str, k: int = 4, **kwargs) -> "List[Document]":
+        results = run_sync(self.memory.search(query, user_id=self.user_id, limit=k))
+        return [
+            Document(page_content=r.content, metadata=r.model_dump()) for r in results
+        ]
+
+    @classmethod
+    def from_texts(
+        cls,
+        texts: List[str],
+        embedding: Any,
+        metadatas: Optional[List[dict]] = None,
+        **kwargs,
+    ):
+        mem = kwargs.get("memory")
+        if not mem:
+            raise ValueError("memory instance required in kwargs")
+        user_id = kwargs.get("user_id", "default")
+        vs = cls(mem, user_id)
+        vs.add_texts(texts, metadatas)
+        return vs

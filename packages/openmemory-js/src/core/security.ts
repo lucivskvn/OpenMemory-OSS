@@ -2,7 +2,7 @@
  * @file Security module for OpenMemory.
  * Handles encryption-at-rest, key derivation (AES-256-GCM), and security boundary management.
  */
-import { now } from "../utils";
+import { now, fromBase64, toBase64 } from "../utils";
 import { logger } from "../utils/logger";
 import { env, reloadConfig } from "./cfg";
 
@@ -80,7 +80,7 @@ export class AesGcmProvider implements EncryptionProvider {
         const key = await crypto.subtle.deriveKey(
             {
                 name: "PBKDF2",
-                salt: enc.encode("openmemory-salt-v1"), // Deterministic salt for per-node derivation
+                salt: enc.encode(env.encryptionSalt),
                 iterations: 600000,
                 hash: "SHA-256",
             },
@@ -112,8 +112,8 @@ export class AesGcmProvider implements EncryptionProvider {
             );
 
             // Serialization: v1:iv:ciphertext in base64
-            const ivB64 = Buffer.from(iv).toString("base64");
-            const contentB64 = Buffer.from(encrypted).toString("base64");
+            const ivB64 = toBase64(iv);
+            const contentB64 = toBase64(encrypted);
             return `v1:${ivB64}:${contentB64}`;
         } catch (e) {
             const { getContext } = await import("./context");
@@ -141,17 +141,17 @@ export class AesGcmProvider implements EncryptionProvider {
             throw new SecurityError("Invalid ciphertext format");
         }
 
-        const iv = Buffer.from(parts[1], "base64");
-        const content = Buffer.from(parts[2], "base64");
+        const iv = fromBase64(parts[1]);
+        const content = fromBase64(parts[2]);
         const allSecrets = [this.primarySecret, ...this.secondarySecrets];
 
         for (const secret of allSecrets) {
             try {
                 const key = await this.getKey(secret);
                 const decent = await crypto.subtle.decrypt(
-                    { name: this.ALGO, iv },
+                    { name: this.ALGO, iv: iv as unknown as BufferSource },
                     key,
-                    content,
+                    content as unknown as BufferSource,
                 );
                 return new TextDecoder().decode(decent);
             } catch {

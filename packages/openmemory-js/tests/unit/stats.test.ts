@@ -14,16 +14,20 @@ describe("Stats Core", () => {
         // Close any existing connections
         await closeDb();
 
-        process.env.OM_DB_PATH = TEST_DB_PATH;
+        process.env.OM_DB_PATH = ":memory:";
         process.env.OM_VERBOSE = "true";
         reloadConfig();
 
         // Populate DB with some data
         // Populate DB with some data using raw SQL to be safe and simple
+        // First, insert with NULL user_id for the generic stats test
         await runAsync(`insert or replace into memories (id, content, primary_sector, tags, metadata, created_at, user_id, salience, decay_lambda, version) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            ["stat_test", "stat_test", "stats_test_sector", "[]", "{}", Date.now(), "stat_user_1", 1, 0, 1]);
+            ["stat_test", "stat_test", "stats_test_sector", "[]", "{}", Date.now(), null, 1, 0, 1]);
         await runAsync(`insert or replace into memories (id, content, primary_sector, tags, metadata, created_at, user_id, salience, decay_lambda, version) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            ["stat_test_2", "stat_test_2", "stats_test_sector", "[]", "{}", Date.now(), "stat_user_2", 1, 0, 1]);
+            ["stat_test_2", "stat_test_2", "stats_test_sector", "[]", "{}", Date.now(), null, 1, 0, 1]);
+        // Insert one with specific user for filtering test
+        await runAsync(`insert or replace into memories (id, content, primary_sector, tags, metadata, created_at, user_id, salience, decay_lambda, version) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ["stat_test_user", "stat_test_user", "stats_test_sector", "[]", "{}", Date.now(), "stat_user_1", 1, 0, 1]);
     });
 
     afterAll(async () => {

@@ -379,15 +379,17 @@ function updateStats() {
 // --- Temporal Graph Manager ---
 function setTemporalMode(mode) {
     TEMP_MODE = mode;
-    const btnFacts = document.getElementById('btnModeFacts');
-    const btnEdges = document.getElementById('btnModeEdges');
+    const btnGraph = document.getElementById('btnModeGraph');
     if (btnFacts) btnFacts.className = mode === 'facts' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
     if (btnEdges) btnEdges.className = mode === 'edges' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
+    if (btnGraph) btnGraph.className = mode === 'graph' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
 
     const pFacts = document.getElementById('panelFacts');
     const pEdges = document.getElementById('panelEdges');
+    const pGraph = document.getElementById('panelGraph');
     if (pFacts) pFacts.style.display = mode === 'facts' ? 'block' : 'none';
     if (pEdges) pEdges.style.display = mode === 'edges' ? 'block' : 'none';
+    if (pGraph) pGraph.style.display = mode === 'graph' ? 'block' : 'none';
 
     TEMP_PAGE = 1;
     loadTemporal();
@@ -399,6 +401,215 @@ async function loadTemporal() {
     const query = el.value;
     if (TEMP_MODE === 'facts') return loadFacts(query);
     if (TEMP_MODE === 'edges') return loadEdges(query);
+    if (TEMP_MODE === 'graph') return loadGraph(query);
+}
+
+// --- Graph Visualization (Vanilla JS Force Layout) ---
+let simulation = null;
+
+async function loadGraph(query) {
+    const svg = document.getElementById('graphSvg');
+    if (!svg) return;
+    svg.innerHTML = '<text x="50%" y="50%" fill="#777" text-anchor="middle" dominant-baseline="middle">Loading Graph...</text>';
+
+    try {
+        // Fetch snapshot of facts and edges for visualization
+        // Limit to prevent browser lag, maybe 100 facts + related edges
+        const [fRes, eRes] = await Promise.all([
+            fetchAPI('/temporal/fact?limit=100'),
+            fetchAPI('/temporal/edge?limit=200')
+        ]);
+
+        const facts = fRes.facts || [];
+        const edges = eRes.edges || [];
+
+        if (facts.length === 0) {
+            svg.innerHTML = '<text x="50%" y="50%" fill="#777" text-anchor="middle" dominant-baseline="middle">No Data to Visualize</text>';
+            return;
+        }
+
+        renderForceGraph(svg, facts, edges);
+    } catch (e) {
+        svg.innerHTML = `<text x="50%" y="50%" fill="red" text-anchor="middle" dominant-baseline="middle">Error: ${e.message}</text>`;
+    }
+}
+
+function renderForceGraph(svg, facts, edges) {
+    svg.innerHTML = ''; // Clear
+    const width = svg.clientWidth;
+    const height = svg.clientHeight;
+
+    // Prepared Nodes & Links
+    // Nodes: Subjects and Objects
+    const nodes = new Map();
+    const addNode = (id, type) => {
+        if (!nodes.has(id)) nodes.set(id, { id, type, x: Math.random() * width, y: Math.random() * height, vx: 0, vy: 0 });
+    };
+
+    facts.forEach(f => {
+        addNode(f.subject, 'subject');
+        addNode(f.object, 'object');
+    });
+
+    // Links: Predicates (Fact inner link) + Temporal Edges
+    const links = [];
+    facts.forEach(f => {
+        links.push({ source: f.subject, target: f.object, label: f.predicate, type: 'fact' });
+    });
+    edges.forEach(e => {
+        if (nodes.has(e.sourceId) && nodes.has(e.targetId)) {
+            links.push({ source: e.sourceId, target: e.targetId, label: e.relationType, type: 'edge' });
+        }
+    });
+
+    const nodeList = Array.from(nodes.values());
+
+    // Basic Simulation Loop
+    if (simulation) clearInterval(simulation);
+
+    // SVG Elements
+    // Create Arrows
+    const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+    defs.innerHTML = `
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="28" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#555" />
+    </marker>
+  `;
+    svg.appendChild(defs);
+
+    const linkG = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    svg.appendChild(linkG);
+    const nodeG = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    svg.appendChild(nodeG);
+    const labelG = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    svg.appendChild(labelG);
+
+    // Render
+    const linkEls = links.map(l => {
+        const el = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        el.setAttribute("stroke", l.type === 'fact' ? "#3b82f6" : "#10b981");
+        el.setAttribute("stroke-opacity", "0.6");
+        el.setAttribute("stroke-width", "1.5");
+        el.setAttribute("marker-end", "url(#arrowhead)");
+        linkG.appendChild(el);
+        return { ...l, el };
+    });
+
+    const nodeEls = nodeList.map(n => {
+        const el = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        el.setAttribute("r", "15"); // Bigger nodes
+        el.setAttribute("fill", n.type === 'subject' ? "#6366f1" : "#a855f7");
+        el.setAttribute("stroke", "#fff");
+        el.setAttribute("stroke-width", "2");
+        // Simple drag
+        el.addEventListener('mousedown', (e) => startDrag(e, n));
+        nodeG.appendChild(el);
+
+        const txt = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        txt.setAttribute("fill", "#ccc");
+        txt.setAttribute("font-size", "10px");
+        txt.setAttribute("text-anchor", "middle");
+        txt.setAttribute("dy", "25");
+        txt.textContent = n.id.length > 15 ? n.id.substring(0, 12) + "..." : n.id;
+        labelG.appendChild(txt);
+
+        return { ...n, el, txt };
+    });
+
+    // Physics Constants
+    const k = 100; // Repulsion constant
+    const c = 0.05; // Spring constant
+    const damping = 0.85;
+
+    let dragNode = null;
+
+    function startDrag(e, node) {
+        dragNode = node;
+        svg.addEventListener('mousemove', onDrag);
+        svg.addEventListener('mouseup', stopDrag);
+    }
+    function onDrag(e) {
+        if (!dragNode) return;
+        const rect = svg.getBoundingClientRect();
+        dragNode.x = e.clientX - rect.left;
+        dragNode.y = e.clientY - rect.top;
+        dragNode.vx = 0; dragNode.vy = 0;
+    }
+    function stopDrag() {
+        dragNode = null;
+        svg.removeEventListener('mousemove', onDrag);
+        svg.removeEventListener('mouseup', stopDrag);
+    }
+
+    simulation = setInterval(() => {
+        // Repulsion
+        for (let i = 0; i < nodeList.length; i++) {
+            for (let j = i + 1; j < nodeList.length; j++) {
+                const a = nodeList[i];
+                const b = nodeList[j];
+                const dx = a.x - b.x;
+                const dy = a.y - b.y;
+                const distSq = dx * dx + dy * dy + 0.1;
+                const dist = Math.sqrt(distSq);
+                const force = k * k / distSq;
+                const fx = (dx / dist) * force;
+                const fy = (dy / dist) * force;
+                a.vx += fx; a.vy += fy;
+                b.vx -= fx; b.vy -= fy;
+            }
+        }
+
+        // Spring
+        linkEls.forEach(l => {
+            const s = nodeList.find(n => n.id === l.source);
+            const t = nodeList.find(n => n.id === l.target);
+            if (!s || !t) return;
+            const dx = t.x - s.x;
+            const dy = t.y - s.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const force = (dist - 100) * c; // Rest length 100
+            const fx = (dx / dist) * force;
+            const fy = (dy / dist) * force;
+            s.vx += fx; s.vy += fy;
+            t.vx -= fx; t.vy -= fy;
+        });
+
+        // Center Gravity
+        nodeList.forEach(n => {
+            n.vx += (width / 2 - n.x) * 0.01;
+            n.vy += (height / 2 - n.y) * 0.01;
+        });
+
+        // Update
+        nodeList.forEach(n => {
+            if (n !== dragNode) {
+                n.vx *= damping;
+                n.vy *= damping;
+                n.x += n.vx;
+                n.y += n.vy;
+            }
+            // Bounds
+            n.x = Math.max(20, Math.min(width - 20, n.x));
+            n.y = Math.max(20, Math.min(height - 20, n.y));
+
+            n.el.setAttribute("cx", n.x);
+            n.el.setAttribute("cy", n.y);
+            n.txt.setAttribute("x", n.x);
+            n.txt.setAttribute("y", n.y + 15); // Offset label
+        });
+
+        linkEls.forEach(l => {
+            const s = nodeList.find(n => n.id === l.source);
+            const t = nodeList.find(n => n.id === l.target);
+            if (s && t) {
+                l.el.setAttribute("x1", s.x);
+                l.el.setAttribute("y1", s.y);
+                l.el.setAttribute("x2", t.x);
+                l.el.setAttribute("y2", t.y);
+            }
+        });
+
+    }, 1000 / 30); // 30 FPS
 }
 
 function changeTemporalPage(delta) {

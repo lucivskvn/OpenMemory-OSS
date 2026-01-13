@@ -14,7 +14,7 @@ import { BaseSource } from "../sources/base";
 import * as t_query from "../temporal_graph/query";
 import * as t_store from "../temporal_graph/store";
 import * as t_timeline from "../temporal_graph/timeline";
-import { normalizeUserId, parseJSON } from "../utils";
+import { normalizeUserId, parseJSON, toBase64 } from "../utils";
 import { logger } from "../utils/logger";
 import { env } from "./cfg";
 import { q, vectorStore } from "./db";
@@ -51,6 +51,9 @@ export const parseMemory = async (row: MemoryRow): Promise<MemoryItem> => {
         content: await enc.decrypt(row.content),
         tags: row.tags ? parseJSON(row.tags) : [],
         metadata: row.metadata ? parseJSON(row.metadata) : {},
+        compressedVecStr: row.compressedVec
+            ? toBase64(row.compressedVec)
+            : undefined,
     };
 };
 
@@ -105,6 +108,24 @@ export class Memory {
         eventBus.emit("memory_added", item);
         return item;
     }
+
+    /**
+     * Batch add memories.
+     * Currently iterates sequentially, but poised for batch optimization.
+     * @param items List of memory contents and options.
+     */
+    async addBatch(items: Array<{ content: string; tags?: string[]; metadata?: Record<string, unknown> }>, opts?: { userId?: string | null }) {
+        const results = [];
+        for (const item of items) {
+            results.push(await this.add(item.content, {
+                userId: opts?.userId,
+                tags: item.tags,
+                ...item.metadata
+            }));
+        }
+        return results;
+    }
+
 
     /**
      * Ingest a document from raw data (Text, Binary, etc).
@@ -209,7 +230,12 @@ export class Memory {
      */
     async delete(id: string, userId?: string | null) {
         const uid = getUid(userId, this.defaultUserId);
-        return await q.delMem.run(id, uid ?? undefined);
+        const item = await this.get(id, uid);
+        const res = await q.delMem.run(id, uid ?? undefined);
+        if (res > 0 && item) {
+            eventBus.emit("memory_deleted", item);
+        }
+        return res;
     }
 
     /**

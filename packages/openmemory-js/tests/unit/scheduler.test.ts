@@ -1,9 +1,13 @@
 
-import { describe, expect, test, mock, spyOn } from "bun:test";
+import { describe, expect, test, mock, spyOn, afterAll } from "bun:test";
 import { registerInterval, unregisterInterval, getSchedulerStats, stopAllMaintenance } from "../../src/core/scheduler";
 import { sleep } from "../../src/utils";
 
 describe("Scheduler", () => {
+    // ... tests ...
+    afterAll(() => {
+        stopAllMaintenance();
+    });
     test("should execute task and track stats", async () => {
         const id = "test-task-" + Date.now();
         let ran = false;

@@ -11,6 +11,16 @@ class MockConnector(BaseConnector):
         
     async def authenticate(self):
         pass
+
+    async def _connect(self, **creds) -> bool:
+        return True
+
+    async def _list_items(self, **filters) -> list:
+        return []
+
+    async def _fetch_item(self, item_id: str):
+        # Allow extract to control failure, or implement logic here
+        pass
         
     async def extract(self, **kwargs):
         raise ConnectorError("Simulated Failure", retryable=True)

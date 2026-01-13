@@ -3,6 +3,7 @@
  * Handles document extraction, summarization, chunking, and hierarchical storage.
  */
 import { get_generator } from "../ai/adapters";
+import { env } from "../core/cfg";
 import { q, transaction } from "../core/db";
 import { triggerMaintenance } from "../core/scheduler";
 import { IngestionConfig, IngestionResult } from "../core/types";
@@ -95,7 +96,7 @@ async function createRootMemory(
             extraction.metadata.contentType as string | undefined
         )?.toUpperCase() || "DOCUMENT";
     const sectionCount = Math.ceil(
-        text.length / (config?.secSz || DEFAULT_SECTION_SIZE),
+        text.length / (config?.secSz || env.ingestSectionSize),
     );
     const content = `[Document: ${contentType}]\n\n${summarySnippet}\n\n[Full content split across ${sectionCount} sections]`;
 
@@ -130,7 +131,7 @@ async function ingestRootChild(
     const uid = normalizeUserId(userId);
     const rootId = await createRootMemory(text, extraction, metadata, userId, config, overrides);
 
-    const size = config?.secSz || DEFAULT_SECTION_SIZE;
+    const size = config?.secSz || env.ingestSectionSize;
     const sections = splitText(text, size);
 
     const childItems = sections.map((section, i) => ({
@@ -171,7 +172,7 @@ export async function ingestDocument(
     userId?: string | null,
     overrides?: { id?: string; createdAt?: number },
 ): Promise<IngestionResult> {
-    const threshold = config?.lgThresh || DEFAULT_LARGE_THRESHOLD;
+    const threshold = config?.lgThresh || env.ingestLargeThreshold;
     const uid = normalizeUserId(userId);
 
     const extraction = await extractText(contentType, data);
@@ -235,7 +236,7 @@ export async function ingestUrl(
     overrides?: { id?: string; createdAt?: number },
 ): Promise<IngestionResult> {
     const extraction = await extractURL(url);
-    const threshold = config?.lgThresh || DEFAULT_LARGE_THRESHOLD;
+    const threshold = config?.lgThresh || env.ingestLargeThreshold;
     const estimatedTokens = Number(extraction.metadata.estimatedTokens) || 0;
     const useRootChild = config?.forceRoot || estimatedTokens > threshold;
     const uid = normalizeUserId(userId);

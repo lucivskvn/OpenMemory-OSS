@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 from typing import Literal, List, Optional, Any, Dict, Union, TypeVar, overload
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, PrivateAttr, field_validator
+from pydantic import BaseModel, Field, PrivateAttr
 
 # load .env from project root
 msg_root = Path(__file__).parent.parent.parent.parent / ".env"
@@ -26,7 +26,6 @@ class OpenMemoryConfig(BaseModel):
     mode: str = "standard"
     db_url: str = Field(default="sqlite:///openmemory.db")
     db_path: str = Field(default_factory=lambda: os.getenv("OM_DB_PATH", get_base_db_path()))
-    max_threads: int = 20
     
     # Context
     max_context_items: int = 16
@@ -43,7 +42,6 @@ class OpenMemoryConfig(BaseModel):
     # AI / Embeddings
     tier: str = "hybrid"
     emb_kind: str = "synthetic"
-    emb_fallback: bool = True
     embedding_fallback: List[str] = ["synthetic"]
     embed_delay_ms: int = 200
     
@@ -62,7 +60,7 @@ class OpenMemoryConfig(BaseModel):
     aws_secret_access_key: Optional[str] = None
     
     # Vector / HSG
-    vec_dim: int = 768
+    vec_dim: int = 1536
     min_score: float = 0.3
     keyword_boost: float = 2.5
     seg_size: int = 10000
@@ -115,31 +113,26 @@ class OpenMemoryConfig(BaseModel):
     decay_emotional: float = 0.02
     decay_reflective: float = 0.001
     
-    # Server
-    server_api_key: Optional[str] = None
-
-    # Encryption (Parity with JS)
+    # Security
     encryption_enabled: bool = False
     encryption_key: Optional[str] = None
-    encryption_secondary_keys: List[str] = []
-
-    # Database Tables (Parity with JS SDK)
+    encryption_secondary_keys: Optional[List[str]] = None
+    
+    # Database
+    max_threads: int = 10
     pg_schema: str = "public"
-    pg_table: str = "openmemory_memories"
-    vector_table: Optional[str] = None # Defaults to vectors (sqlite) or {pg_table}_vectors (pg)
-    users_table: Optional[str] = None # Defaults to users (sqlite) or {pg_schema}.openmemory_users (pg)
-    vector_store_backend: Optional[str] = None # sqlite, postgres, valkey, etc.
-
-    @field_validator("pg_schema", "pg_table", "vector_table", "users_table")
-    @classmethod
-    def validate_sql_identifiers(cls, v: Optional[str]) -> Optional[str]:
-        if v is None: return v
-        # Allow only alphanumeric and underscores.
-        import re
-        if not re.match(r"^[a-zA-Z0-9_]+$", v):
-             raise ValueError(f"Invalid SQL identifier '{v}': must be alphanumeric/underscore only.")
-        return v
-
+    pg_table: str = "memories"
+    users_table: str = "users"
+    vector_table: str = "vectors"
+    
+    # Vector Store
+    vector_store_backend: str = "sqlite"
+    
+    # AI
+    emb_fallback: Optional[List[str]] = None
+    
+    # Server
+    server_api_key: Optional[str] = None
 
     @property
     def database_url(self) -> str:
@@ -202,10 +195,9 @@ def load_config() -> OpenMemoryConfig:
     data = {}
     
     # Core
-    data["port"] = int(os.getenv("PORT", 8080))  # Default to 8080 per architecture spec
+    data["port"] = int(os.getenv("PORT", 3000)) # Note: old code used 3000 for server, 8080 default elsewhere? Let's match old code: 3000
     data["mode"] = os.getenv("OM_MODE", "standard").lower()
     data["db_url"] = get("db", "url", "OM_DB_URL", "sqlite:///openmemory.db")
-    data["max_threads"] = int(os.getenv("OM_MAX_THREADS", 20))
     
     # Context
     data["max_context_items"] = int(get("context", "max_items", "OM_MAX_CONTEXT_ITEMS", 16))
@@ -245,7 +237,7 @@ def load_config() -> OpenMemoryConfig:
         try: return type_cast(v)  # type: ignore[call-arg, return-value]
         except: return default
 
-    data["vec_dim"] = env_or("OM_VEC_DIM", 768, int)
+    data["vec_dim"] = env_or("OM_VEC_DIM", 1536, int)
     data["min_score"] = env_or("OM_MIN_SCORE", 0.3, float)
     data["keyword_boost"] = env_or("OM_KEYWORD_BOOST", 2.5, float)
     data["seg_size"] = env_or("OM_SEG_SIZE", 10000, int)
@@ -271,21 +263,6 @@ def load_config() -> OpenMemoryConfig:
     data["verbose"] = env_or("OM_VERBOSE", False, bool)
     data["classifier_train_interval"] = env_or("OM_CLASSIFIER_TRAIN_INTERVAL", 360, int)
     data["server_api_key"] = os.getenv("API_KEY")
-
-    # DB Tables
-    data["pg_schema"] = get("db", "schema", "OM_PG_SCHEMA", "public")
-    data["pg_table"] = get("db", "table", "OM_PG_TABLE", "openmemory_memories")
-    data["vector_table"] = get("db", "vector_table", "OM_VECTOR_TABLE", None)
-    data["users_table"] = get("db", "users_table", "OM_USERS_TABLE", None)
-    data["vector_store_backend"] = get("db", "vector_backend", "OM_VECTOR_BACKEND", "sqlite")
-
-    # Encryption
-    data["encryption_enabled"] = s_bool(get("security", "encryption_enabled", "OM_ENCRYPTION_ENABLED", False))
-    data["encryption_key"] = get("security", "encryption_key", "OM_ENCRYPTION_KEY", None) or os.getenv("OM_API_KEY")
-    
-    sec_keys = get("security", "secondary_keys", "OM_ENCRYPTION_SECONDARY_KEYS", "")
-    data["encryption_secondary_keys"] = sec_keys.split(",") if sec_keys else []
-
 
     # Reflect
     data["auto_reflect"] = s_bool(get("reflect", "enabled", "OM_AUTO_REFLECT", True))

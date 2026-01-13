@@ -12,7 +12,7 @@ mem_client = Memory()
 async def add_memory(req: AddRequest, auth_user: str = Depends(get_current_user_id)):
     uid = resolve_user(auth_user, req.userId)
     return await mem_client.add(
-        req.content, user_id=uid, tags=req.tags, metadata=req.metadata
+        req.content, user_id=uid, tags=req.tags, meta=req.metadata
     )
 
 @router.post("/batch")
