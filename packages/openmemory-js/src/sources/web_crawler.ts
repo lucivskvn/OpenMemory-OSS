@@ -107,10 +107,11 @@ export class WebCrawlerSource extends BaseSource {
                     this.timeout,
                 );
 
-                await validateUrl(url);
-                const resp = await fetch(url, {
+                const { url: safeUrl, originalUrl } = await validateUrl(url);
+                const resp = await fetch(safeUrl, {
                     headers: {
                         "User-Agent": "OpenMemory-Crawler/1.0 (compatible)",
+                        "Host": new URL(originalUrl).hostname,
                     },
                     signal: controller.signal,
                 });
@@ -201,6 +202,7 @@ export class WebCrawlerSource extends BaseSource {
 
                 // find and queue links
                 if (followLinks && depth < this.maxDepth) {
+                    logger.debug(`[web_crawler] Extracting links from ${url} (depth ${depth})`);
                     $("a[href]").each((_idx: number, el: unknown) => {
                         // Element type depends on Cheerio version, treat as generic object for selector
                         const $el = $(el as any);
@@ -222,6 +224,7 @@ export class WebCrawlerSource extends BaseSource {
 
                             if (!this.visited.has(cleanUrl)) {
                                 if (toVisit.length < 500) {
+                                    logger.debug(`[web_crawler] Queuing link: ${cleanUrl}`);
                                     toVisit.push({
                                         url: cleanUrl,
                                         depth: depth + 1,
@@ -230,10 +233,12 @@ export class WebCrawlerSource extends BaseSource {
                                     logger.warn(`[web_crawler] Queue full (500), skipping ${cleanUrl}`);
                                 }
                             }
-                        } catch {
-                            // ignore
+                        } catch (e) {
+                            logger.warn(`[web_crawler] Failed to parse link: ${e}`);
                         }
                     });
+                } else {
+                    logger.debug(`[web_crawler] Not following links. Follow: ${followLinks}, Depth: ${depth}/${this.maxDepth}`);
                 }
 
                 // Sustainability: Respect rate limit and delay between requests
@@ -284,10 +289,11 @@ export class WebCrawlerSource extends BaseSource {
         const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
         try {
-            await validateUrl(itemId);
-            const resp = await fetch(itemId, {
+            const { url: safeUrl, originalUrl } = await validateUrl(itemId);
+            const resp = await fetch(safeUrl, {
                 headers: {
                     "User-Agent": "OpenMemory-Crawler/1.0 (compatible)",
+                    "Host": new URL(originalUrl).hostname,
                 },
                 signal: controller.signal,
             });
@@ -297,22 +303,49 @@ export class WebCrawlerSource extends BaseSource {
             if (!resp.ok)
                 throw new Error(`http ${resp.status}: ${resp.statusText}`);
 
+            const MAX_HTML_SIZE = 10 * 1024 * 1024; // 10MB
             const contentLength = resp.headers.get("content-length");
+
             if (
                 contentLength &&
-                parseInt(contentLength, 10) > 10 * 1024 * 1024
+                parseInt(contentLength, 10) > MAX_HTML_SIZE
             ) {
                 throw new Error(
                     `Content-Length ${contentLength} exceeds 10MB limit`,
                 );
             }
 
-            const html = await resp.text();
-            if (html.length > 10 * 1024 * 1024) {
-                throw new Error(
-                    `Body length ${html.length} exceeds 10MB limit`,
-                );
+            // Streaming Read Implementation
+            let html = "";
+            if (resp.body) {
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder();
+                let totalBytes = 0;
+
+                try {
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        totalBytes += value.byteLength;
+                        if (totalBytes > MAX_HTML_SIZE) {
+                            await reader.cancel();
+                            throw new Error(`Body exceeds 10MB limit (streamed check)`);
+                        }
+                        html += decoder.decode(value, { stream: true });
+                    }
+                    html += decoder.decode(); // final flush
+                } catch (e: unknown) {
+                    throw e; // Re-throw to be caught by outer block
+                }
+            } else {
+                // Fallback for non-sw environments or mocks
+                html = await resp.text();
+                if (html.length > MAX_HTML_SIZE) {
+                    throw new Error(`Body length ${html.length} exceeds 10MB limit`);
+                }
             }
+
             const $: CheerioAPI = cheerioMod.load(html);
 
             const { text, metadata: extMetadata } = await extractHTML(html);

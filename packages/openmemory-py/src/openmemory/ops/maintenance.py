@@ -8,11 +8,32 @@ from ..core.db import q, db
 from ..core.learned_classifier import LearnedClassifier
 from ..core.config import env
 from ..utils.vectors import buf_to_vec
+from ..memory.reflect import run_reflection
+from ..memory.decay import apply_decay
 
 logger = logging.getLogger("maintenance")
 
 # Concurrent training limit
 TRAINING_SEMAPHORE = asyncio.Semaphore(3)
+
+async def trigger_maintenance(task: str):
+    """
+    Trigger a maintenance task (reflect, decay) in the background.
+    Safe for local mode (asyncio.create_task).
+    """
+    async def _safe_run():
+        try:
+            if task == "reflect":
+                await run_reflection()
+            elif task == "decay":
+                await apply_decay()
+            else:
+                logger.warning(f"[maintenance] Unknown task triggered: {task}")
+        except Exception as e:
+            logger.error(f"[maintenance] Background task {task} failed: {e}")
+
+    # Fire and forget
+    asyncio.create_task(_safe_run())
 
 async def log_maintenance(op: str, details: Dict[str, Any], status: str = "success", error: Optional[str] = None):
     """Log a maintenance operation to the database."""

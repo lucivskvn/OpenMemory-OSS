@@ -1,3 +1,7 @@
+"""
+Audited: 2026-01-19
+Pydantic models and type definitions for OpenMemory SDK.
+"""
 from typing import List, Optional, Dict, Any, Union, Literal
 from pydantic import BaseModel, Field, ConfigDict
 from .constants import COGNITIVE_PARAMS
@@ -8,22 +12,22 @@ class AddRequest(BaseModel):
     content: str
     tags: List[str] = []
     metadata: Dict[str, Any] = {}
-    userId: Optional[str] = Field(default=None, alias="user_id")
+    userId: Optional[str] = Field(None, alias="user_id")
     id: Optional[str] = None
-    createdAt: Optional[int] = None
+    createdAt: Optional[int] = Field(None, alias="created_at")
 
     model_config = ConfigDict(populate_by_name=True)
 
 class BatchAddRequest(BaseModel):
     items: List[AddRequest]
-    userId: Optional[str] = Field(default=None, alias="user_id")
+    userId: Optional[str] = Field(None, alias="user_id")
 
     model_config = ConfigDict(populate_by_name=True)
 
 class QueryRequest(BaseModel):
     query: str
     limit: int = 10
-    userId: Optional[str] = Field(default=None, alias="user_id")
+    userId: Optional[str] = None
     filters: Dict[str, Any] = {}
 
     model_config = ConfigDict(populate_by_name=True)
@@ -31,38 +35,46 @@ class QueryRequest(BaseModel):
 class ReinforceRequest(BaseModel):
     id: str
     boost: float = 0.1
-    userId: Optional[str] = Field(default=None, alias="user_id")
+    userId: Optional[str] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
 class MemRow(BaseModel):
     id: str
     content: str
-    primarySector: str
+    primarySector: str = Field(..., alias="primary_sector")
     tags: Optional[str] = None
-    meta: Optional[str] = None
-    userId: Optional[str] = Field(default=None, alias="user_id")
-    createdAt: int
-    updatedAt: int
-    lastSeenAt: int = COGNITIVE_PARAMS["DEFAULT_LAST_SEEN_AT"]
+    metadata: Optional[str] = None
+    userId: Optional[str] = Field(None, alias="user_id")
+    createdAt: int = Field(..., alias="created_at")
+    updatedAt: int = Field(..., alias="updated_at")
+    lastSeenAt: int = Field(COGNITIVE_PARAMS["DEFAULT_LAST_SEEN_AT"], alias="last_seen_at")
     salience: float = COGNITIVE_PARAMS["DEFAULT_SALIENCE"]
-    decayLambda: float = COGNITIVE_PARAMS["DEFAULT_DECAY_LAMBDA"]
+    decayLambda: float = Field(COGNITIVE_PARAMS["DEFAULT_DECAY_LAMBDA"], alias="decay_lambda")
     version: int = COGNITIVE_PARAMS["DEFAULT_VERSION"]
     segment: int = COGNITIVE_PARAMS["DEFAULT_SEGMENT"]
     simhash: Optional[str] = None
-    generatedSummary: Optional[str] = None
-    meanDim: Optional[int] = None
-    meanVec: Optional[bytes] = None
-    compressedVec: Optional[bytes] = None
-    feedbackScore: Optional[float] = None
+    generatedSummary: Optional[str] = Field(None, alias="generated_summary")
+    meanDim: Optional[int] = Field(None, alias="mean_dim")
+    meanVec: Optional[bytes] = Field(None, alias="mean_vec")
+    compressedVec: Optional[bytes] = Field(None, alias="compressed_vec")
+    feedbackScore: Optional[float] = Field(None, alias="feedback_score")
 
     model_config = ConfigDict(populate_by_name=True)
 
     def __getitem__(self, item):
-        return getattr(self, item)
+        try:
+            return getattr(self, item)
+        except AttributeError:
+            if item == "feedback_score": return self.feedbackScore
+            raise
 
     def get(self, key, default=None):
-        return getattr(self, key, default)
+        try:
+            return getattr(self, key)
+        except AttributeError:
+            if key == "feedback_score": return self.feedbackScore
+            return default
 
 class IngestRequest(BaseModel):
     source: Optional[Literal["file", "link", "connector"]] = None
@@ -70,7 +82,7 @@ class IngestRequest(BaseModel):
     data: str
     metadata: Dict[str, Any] = {}
     config: Dict[str, Any] = {}
-    userId: Optional[str] = Field(default=None, alias="user_id")
+    userId: Optional[str] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -84,9 +96,9 @@ class LgmStoreReq(BaseModel):
     tags: Optional[List[str]] = None
     metadata: Optional[Dict[str, Any]] = None
     namespace: Optional[str] = None
-    graphId: Optional[str] = None
+    graphId: Optional[str] = Field(None, alias="graph_id")
     reflective: Optional[bool] = None
-    userId: Optional[str] = Field(default=None, alias="user_id")
+    userId: Optional[str] = Field(None, alias="user_id")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -94,24 +106,24 @@ class LgmStoreReq(BaseModel):
 class MemoryItem(BaseModel):
     id: str
     content: str
-    primarySector: str
+    primarySector: str = Field(..., alias="primary_sector")
     tags: List[str] = []
-    meta: Dict[str, Any] = {}
-    userId: Optional[str] = Field(default=None, alias="user_id")
-    createdAt: int
-    updatedAt: int
-    lastSeenAt: int = COGNITIVE_PARAMS["DEFAULT_LAST_SEEN_AT"]
+    metadata: Dict[str, Any] = {}
+    userId: Optional[str] = Field(None, alias="user_id")
+    createdAt: int = Field(..., alias="created_at")
+    updatedAt: int = Field(..., alias="updated_at")
+    lastSeenAt: int = Field(COGNITIVE_PARAMS["DEFAULT_LAST_SEEN_AT"], alias="last_seen_at")
     salience: float = COGNITIVE_PARAMS["DEFAULT_SALIENCE"]
-    decayLambda: float = COGNITIVE_PARAMS["DEFAULT_DECAY_LAMBDA"]
+    decayLambda: float = Field(COGNITIVE_PARAMS["DEFAULT_DECAY_LAMBDA"], alias="decay_lambda")
     version: int = COGNITIVE_PARAMS["DEFAULT_VERSION"]
     segment: int = COGNITIVE_PARAMS["DEFAULT_SEGMENT"]
     simhash: Optional[str] = None
-    generatedSummary: Optional[str] = None
+    generatedSummary: Optional[str] = Field(None, alias="generated_summary")
     sectors: List[str] = []
     score: Optional[float] = None
     path: Optional[List[str]] = None
     trace: Optional[Dict[str, Any]] = None
-    feedbackScore: Optional[float] = None
+    feedbackScore: Optional[float] = Field(None, alias="feedback_score")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -124,7 +136,7 @@ class MemoryItem(BaseModel):
 
 class GraphMemoryItem(MemoryItem):
     node: str
-    compressedVecStr: Optional[str] = None
+    compressedVecStr: Optional[str] = Field(None, alias="compressed_vec_str")
     debug: Optional[Dict[str, Any]] = None
 
     model_config = ConfigDict(populate_by_name=True)
@@ -137,7 +149,7 @@ class GraphMemoryItem(MemoryItem):
 
 class TemporalFact(BaseModel):
     id: str
-    userId: Optional[str] = Field(default=None, alias="user_id")
+    userId: Optional[str] = None
     subject: str
     predicate: str
     object: str
@@ -152,7 +164,7 @@ class TemporalFact(BaseModel):
 
 class TemporalEdge(BaseModel):
     id: str
-    userId: Optional[str] = Field(default=None, alias="user_id")
+    userId: Optional[str] = None
     sourceId: str
     targetId: str
     relationType: str
@@ -169,36 +181,51 @@ class TemporalQuery(BaseModel):
     predicate: Optional[str] = None
     object: Optional[str] = None
     at: Optional[Union[int, float]] = None
-    from_: Optional[Union[int, float]] = None
+    from_: Optional[Union[int, float]] = Field(None, alias="from")
     to: Optional[Union[int, float]] = None
-    minConfidence: Optional[float] = None
+    minConfidence: Optional[float] = Field(None, alias="min_confidence")
     limit: int = 100
 
     model_config = ConfigDict(populate_by_name=True)
+
+class TimelineQuery(BaseModel):
+    hours: int = 24
+
+class MaintenanceQuery(BaseModel):
+    hours: int = 24
+
+class SettingsBody(BaseModel):
+    settings: Dict[str, Any]
 
 class LgmRetrieveReq(BaseModel):
     node: str
     query: Optional[str] = None
     namespace: Optional[str] = None
-    graph_id: Optional[str] = None
+    graphId: Optional[str] = Field(None, alias="graph_id")
     limit: Optional[int] = None
-    include_metadata: Optional[bool] = None
-    user_id: Optional[str] = None
+    includeMetadata: Optional[bool] = Field(None, alias="include_metadata")
+    userId: Optional[str] = Field(None, alias="user_id")
+
+    model_config = ConfigDict(populate_by_name=True)
 
 class LgmContextReq(BaseModel):
     node: Optional[str] = None
-    graph_id: Optional[str] = None
+    graphId: Optional[str] = Field(None, alias="graph_id")
     namespace: Optional[str] = None
-    user_id: Optional[str] = None
+    userId: Optional[str] = Field(None, alias="user_id")
     limit: Optional[int] = None
 
+    model_config = ConfigDict(populate_by_name=True)
+
 class LgmReflectionReq(BaseModel):
-    graph_id: str
+    graphId: str = Field(..., alias="graph_id")
     node: str
     content: str
-    context_ids: Optional[List[str]] = None
+    contextIds: Optional[List[str]] = Field(None, alias="context_ids")
     namespace: Optional[str] = None
-    user_id: Optional[str] = None
+    userId: Optional[str] = Field(None, alias="user_id")
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 # --- Ingestion Types (Parity with JS SDK) ---
@@ -291,8 +318,8 @@ class IdePattern(BaseModel):
 class IdePatternsResult(BaseModel):
     """Result of pattern retrieval."""
     success: bool
-    session_id: str = Field(..., alias="sessionId")
-    pattern_count: int = Field(..., alias="patternCount")
+    sessionId: str = Field(..., alias="session_id")
+    patternCount: int = Field(..., alias="pattern_count")
     patterns: List[IdePattern] = []
 
     model_config = ConfigDict(populate_by_name=True)
@@ -302,8 +329,8 @@ class IdePatternsResult(BaseModel):
 
 class CompressionMetrics(BaseModel):
     """Metrics from vector compression."""
-    original_tokens: int = Field(..., alias="originalTokens")
-    compressed_tokens: int = Field(..., alias="compressedTokens")
+    originalTokens: int = Field(..., alias="original_tokens")
+    compressedTokens: int = Field(..., alias="compressed_tokens")
     ratio: float
     saved: int
     pct: float
@@ -327,10 +354,10 @@ class CompressionResult(BaseModel):
 class CompressionStats(BaseModel):
     """Aggregate compression statistics."""
     total: int
-    original_tokens: int = Field(..., alias="originalTokens")
-    compressed_tokens: int = Field(..., alias="compressedTokens")
+    originalTokens: int = Field(..., alias="original_tokens")
+    compressedTokens: int = Field(..., alias="compressed_tokens")
     saved: int
-    avg_ratio: float = Field(..., alias="avgRatio")
+    avgRatio: float = Field(..., alias="avg_ratio")
     latency: float
     algorithms: Dict[str, int]
     updated: int
@@ -343,9 +370,10 @@ class CompressionStats(BaseModel):
 class LgStoreResult(BaseModel):
     """Result of LangGraph store operation."""
     success: bool
-    memory_id: str = Field(..., alias="memoryId")
+    memoryId: str = Field(..., alias="memory_id")
     node: str
     memory: Optional[MemoryItem] = None
+    reflectionId: Optional[str] = Field(None, alias="reflection_id")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -379,7 +407,7 @@ class LgContextResult(BaseModel):
 class LgReflectResult(BaseModel):
     """Result of LangGraph reflection operation."""
     success: bool
-    reflection_id: str = Field(..., alias="reflectionId")
+    reflectionId: str = Field(..., alias="reflection_id")
     insights: List[str] = []
 
     model_config = ConfigDict(populate_by_name=True)
@@ -390,57 +418,57 @@ class LgReflectResult(BaseModel):
 class SectorStat(BaseModel):
     sector: str
     count: int
-    avg_salience: float = Field(..., alias="avgSalience")
+    avgSalience: float = Field(..., alias="avg_salience")
 
     model_config = ConfigDict(populate_by_name=True)
 
 class DecayStats(BaseModel):
     total: int
-    avg_lambda: str = Field(..., alias="avgLambda")
-    min_salience: str = Field(..., alias="minSalience")
-    max_salience: str = Field(..., alias="maxSalience")
+    avgLambda: str = Field(..., alias="avg_lambda")
+    minSalience: str = Field(..., alias="min_salience")
+    maxSalience: str = Field(..., alias="max_salience")
 
     model_config = ConfigDict(populate_by_name=True)
 
 class RequestStats(BaseModel):
     total: int
     errors: int
-    error_rate: str = Field(..., alias="errorRate")
-    last_hour: int = Field(..., alias="lastHour")
+    errorRate: str = Field(..., alias="error_rate")
+    lastHour: int = Field(..., alias="last_hour")
 
     model_config = ConfigDict(populate_by_name=True)
 
 class QpsStats(BaseModel):
     peak: float
     average: float
-    cache_hit_rate: float = Field(..., alias="cacheHitRate")
+    cacheHitRate: float = Field(..., alias="cache_hit_rate")
 
     model_config = ConfigDict(populate_by_name=True)
 
 class SystemResourceStats(BaseModel):
-    memory_usage: int = Field(..., alias="memoryUsage")
-    heap_used: int = Field(..., alias="heapUsed")
-    heap_total: int = Field(..., alias="heapTotal")
+    memoryUsage: int = Field(..., alias="memory_usage")
+    heapUsed: int = Field(..., alias="heap_used")
+    heapTotal: int = Field(..., alias="heap_total")
     uptime: Dict[str, int]
 
     model_config = ConfigDict(populate_by_name=True)
 
 class ConfigStats(BaseModel):
     port: int
-    vec_dim: int = Field(..., alias="vecDim")
-    cache_segments: int = Field(..., alias="cacheSegments")
-    max_active: int = Field(..., alias="maxActive")
-    decay_interval: int = Field(..., alias="decayInterval")
-    embed_provider: str = Field(..., alias="embedProvider")
+    vecDim: int = Field(..., alias="vec_dim")
+    cacheSegments: int = Field(..., alias="cache_segments")
+    maxActive: int = Field(..., alias="max_active")
+    decayInterval: int = Field(..., alias="decay_interval")
+    embedProvider: str = Field(..., alias="embed_provider")
 
     model_config = ConfigDict(populate_by_name=True)
 
 class SystemStats(BaseModel):
-    total_memories: int = Field(..., alias="totalMemories")
-    recent_memories: int = Field(..., alias="recentMemories")
-    sector_counts: Dict[str, int] = Field(..., alias="sectorCounts")
-    avg_salience: str = Field(..., alias="avgSalience")
-    decay_stats: DecayStats = Field(..., alias="decayStats")
+    totalMemories: int = Field(..., alias="total_memories")
+    recentMemories: int = Field(..., alias="recent_memories")
+    sectorCounts: Dict[str, int] = Field(..., alias="sector_counts")
+    avgSalience: str = Field(..., alias="avg_salience")
+    decayStats: DecayStats = Field(..., alias="decay_stats")
     requests: RequestStats
     qps: QpsStats
     system: SystemResourceStats
@@ -453,23 +481,56 @@ class MaintenanceOperationStat(BaseModel):
     decay: int
     reflection: int
     consolidation: int
+    
+    model_config = ConfigDict(populate_by_name=True)
 
 class MaintenanceTotals(BaseModel):
     cycles: int
     reflections: int
     consolidations: int
+    efficiency: Optional[int] = 0
+    
+    model_config = ConfigDict(populate_by_name=True)
 
 class MaintenanceStats(BaseModel):
     operations: List[MaintenanceOperationStat]
     totals: MaintenanceTotals
+    
+    model_config = ConfigDict(populate_by_name=True)
+
+class MaintenanceLog(BaseModel):
+    id: int
+    type: str
+    status: str
+    message: Optional[str] = None
+    duration: Optional[int] = None
+    timestamp: int = Field(..., alias="ts")
+    userId: Optional[str] = Field(None, alias="user_id")
 
     model_config = ConfigDict(populate_by_name=True)
+
+class MaintenanceStatus(BaseModel):
+    ok: bool
+    activeJobs: List[str] = Field(default_factory=list, alias="active_jobs")
+    count: int
+
+    model_config = ConfigDict(populate_by_name=True)
+
+class SectorsResponse(BaseModel):
+    sectors: List[str]
+    configs: Dict[str, Any]
+    stats: List[SectorStat]
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+
 
 # --- Dynamics/Graph Result Types (Parity with JS SDK) ---
 
 class ResonanceResult(BaseModel):
     success: bool
-    resonance_modulated_score: float = Field(..., alias="resonanceModulatedScore")
+    resonanceModulatedScore: float = Field(..., alias="resonance_modulated_score")
     parameters: Dict[str, Any]
 
     model_config = ConfigDict(populate_by_name=True)
@@ -478,7 +539,7 @@ class RetrievalResult(BaseModel):
     success: bool
     query: str
     sector: str
-    min_energy: float = Field(..., alias="minEnergy")
+    minEnergy: float = Field(..., alias="min_energy")
     count: int
     memories: List[Dict[str, Any]]
 
@@ -486,39 +547,39 @@ class RetrievalResult(BaseModel):
 
 class ReinforcementResult(BaseModel):
     success: bool
-    propagated_count: int = Field(..., alias="propagatedCount")
-    new_salience: float = Field(..., alias="newSalience")
+    propagatedCount: int = Field(..., alias="propagated_count")
+    newSalience: float = Field(..., alias="new_salience")
 
     model_config = ConfigDict(populate_by_name=True)
 
 class ActivationResultItem(BaseModel):
-    memory_id: str = Field(..., alias="memoryId")
-    activation_level: float = Field(..., alias="activationLevel")
+    memoryId: str = Field(..., alias="memory_id")
+    activationLevel: float = Field(..., alias="activation_level")
 
     model_config = ConfigDict(populate_by_name=True)
 
 class SpreadingActivationResult(BaseModel):
     success: bool
-    initial_count: int = Field(..., alias="initialCount")
+    initialCount: int = Field(..., alias="initial_count")
     iterations: int
-    total_activated: int = Field(..., alias="totalActivated")
+    totalActivated: int = Field(..., alias="total_activated")
     results: List[ActivationResultItem]
 
     model_config = ConfigDict(populate_by_name=True)
 
 class WaypointWeightResult(BaseModel):
     success: bool
-    source_id: str = Field(..., alias="sourceId")
-    target_id: str = Field(..., alias="targetId")
+    sourceId: str = Field(..., alias="source_id")
+    targetId: str = Field(..., alias="target_id")
     weight: float
-    time_gap_days: float = Field(..., alias="timeGapDays")
+    timeGapDays: float = Field(..., alias="time_gap_days")
     details: Dict[str, bool]
 
     model_config = ConfigDict(populate_by_name=True)
 
 class SalienceResult(BaseModel):
     success: bool
-    calculated_salience: float = Field(..., alias="calculatedSalience")
+    calculatedSalience: float = Field(..., alias="calculated_salience")
     parameters: Dict[str, Any]
 
     model_config = ConfigDict(populate_by_name=True)
@@ -528,7 +589,17 @@ class TopMemory(BaseModel):
     content: str
     sector: str
     salience: float
-    last_seen: int = Field(..., alias="lastSeen")
+    lastSeen: int = Field(..., alias="last_seen")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+class SourceRegistryEntry(BaseModel):
+    userId: Optional[str] = Field(None, alias="user_id")
+    type: str
+    config: Optional[str] = None
+    status: str
+    createdAt: int = Field(0, alias="created_at")
+    updatedAt: int = Field(0, alias="updated_at")
 
     model_config = ConfigDict(populate_by_name=True)
 

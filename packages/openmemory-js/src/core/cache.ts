@@ -28,11 +28,7 @@ class MemoryCacheAdapter implements ICache {
     }
 
     async set(key: string, value: string, ttlSeconds?: number): Promise<void> {
-        // SimpleCache doesn't support per-item TTL dynamic updates easily without clearing,
-        // but our implementation allows set. We'll ignore specific TTL for simplicity in this fallback or re-instantiate if needed?
-        // Actually SimpleCache checks TTL on get.
-        // For strict compliance we might need a better memory cache, but this suffices for fallback.
-        this.cache.set(key, value);
+        this.cache.set(key, value, ttlSeconds ? ttlSeconds * 1000 : undefined);
     }
 
     async del(key: string): Promise<void> {

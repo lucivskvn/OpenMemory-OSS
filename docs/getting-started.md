@@ -5,11 +5,13 @@ OpenMemory provides a drop-in, SQL-native long-term memory layer for your AI age
 ## Installation
 
 ### Python
+
 ```bash
 pip install openmemory
 ```
 
 ### Bun / TypeScript
+
 ```bash
 bun add openmemory-js
 ```
@@ -43,9 +45,9 @@ const { Memory } = require('openmemory-js');
 
 async function main() {
     const mem = new Memory();
-    await mem.add("I prefer coffee over tea.", { user_id: 'user_123' });
+    await mem.add("I prefer coffee over tea.", { userId: 'user_123' });
     
-    const context = await mem.search("What do I drink?", { user_id: 'user_123' });
+    const context = await mem.search("What do I drink?", { userId: 'user_123' });
     console.log(context);
 }
 
@@ -53,6 +55,7 @@ main();
 ```
 
 ## Configuration
+
 - `OM_DB_URL`: (Python) Database connection string (e.g., `postgresql://user:pass@host:port/db`)
 - `OM_DB_PATH`: (Node.js) Path to SQLite database file.
 - `OM_METADATA_BACKEND`: (Node.js) Set to `postgres` to use PostgreSQL for metadata.

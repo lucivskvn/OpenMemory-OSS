@@ -12,13 +12,13 @@
  * - Package version
  * - System RAM/CPU info
  */
-import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+
+
+import * as os from "node:os";
+import * as path from "node:path";
 
 import { logger } from "../utils/logger";
-import { env } from "./cfg";
+import { env, VERSION } from "./cfg";
 
 const DISABLED = !env.telemetryEnabled;
 
@@ -29,23 +29,19 @@ const gatherVersion = async (): Promise<string> => {
     if (versionCache) return versionCache;
 
     // 1. Try environment variable (common in CI/CD)
-    if (process.env.npm_package_version) {
-        versionCache = process.env.npm_package_version;
+    if (Bun.env.npm_package_version) {
+        versionCache = Bun.env.npm_package_version;
         return versionCache;
     }
 
     // 2. Try reading package.json relative to current file
     try {
-        const pkgPath = path.resolve(__dirname, "../../package.json");
-        const exists = await fs
-            .stat(pkgPath)
-            .then(() => true)
-            .catch(() => false);
+        const pkgPath = path.resolve(import.meta.dir, "../../package.json");
+        const file = Bun.file(pkgPath);
 
-        if (exists) {
-            const content = await fs.readFile(pkgPath, "utf-8");
+        if (await file.exists()) {
             try {
-                const json = JSON.parse(content);
+                const json = await file.json();
                 versionCache = json.version || "unknown";
                 return versionCache!;
             } catch {
@@ -57,7 +53,7 @@ const gatherVersion = async (): Promise<string> => {
     }
 
     // 3. Fallback to hardcoded version if bundled or file access fails
-    versionCache = "2.3.0";
+    versionCache = VERSION;
     return versionCache;
 };
 
@@ -68,11 +64,12 @@ export const sendTelemetry = async () => {
         const storageMb = ramMb * 4;
 
         // anonymize hostname
-        const hostHash = crypto
-            .createHash("sha256")
-            .update(os.hostname())
-            .digest("hex")
-            .substring(0, 12);
+        // anonymize hostname
+        const hostHash = await (async () => {
+            const enc = new TextEncoder();
+            const hash = await globalThis.crypto.subtle.digest("SHA-256", enc.encode(os.hostname()));
+            return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 12);
+        })();
 
         const payload = {
             name: hostHash,

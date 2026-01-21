@@ -12,7 +12,7 @@ export async function getPersistedConfig<T>(
     type: string,
 ): Promise<T | null> {
     try {
-        const row = await q.getSourceConfig.get(userId, type);
+        const row = (await q.getSourceConfig.get(userId, type)) as any;
         if (!row || !row.config || row.status === "disabled") return null;
 
         const enc = getEncryption();

@@ -7,8 +7,8 @@ import { Clock, Calendar } from "lucide-react";
 
 // Custom type for our client-side aggregation
 interface AggregatedBucket {
-    bucket_key: string;
-    timestamp_ms: number;
+    bucketKey: string;
+    timestampMs: number;
     counts: Record<string, number>;
 }
 
@@ -57,7 +57,7 @@ export const Timeline = ({ data, isLoading }: TimelineProps) => {
 
             <div className="flex-1 min-h-[120px] flex items-end gap-1 overflow-x-auto pb-2 custom-scrollbar">
                 {data.map((bucket) => {
-                    const date = new Date(bucket.timestamp_ms);
+                    const date = new Date(bucket.timestampMs);
                     const total = Object.values(bucket.counts).reduce((a, b) => a + b, 0);
                     const heightPercent = maxCount > 0 ? (total / maxCount) * 100 : 0;
 
@@ -72,7 +72,7 @@ export const Timeline = ({ data, isLoading }: TimelineProps) => {
                     };
 
                     return (
-                        <div key={bucket.bucket_key} className="flex flex-col items-center gap-2 group min-w-[30px] flex-shrink-0">
+                        <div key={bucket.bucketKey} className="flex flex-col items-center gap-2 group min-w-[30px] flex-shrink-0">
                             {/* Bar Stack */}
                             <div className="w-4 bg-zinc-800/50 rounded-full overflow-hidden relative flex flex-col-reverse justify-start transition-all duration-300 group-hover:w-6" style={{ height: '100px' }}>
                                 {/* Render stacked segments */}

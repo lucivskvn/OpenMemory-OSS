@@ -1,100 +1,49 @@
 # Security Policy
 
+## Supported Versions
+
+Use the latest stable version of OpenMemory to ensure you have the most up-to-date security patches.
+
+| Version | Supported          |
+| ------- | ------------------ |
+| 2.x     | :white_check_mark: |
+| 1.x     | :x:                |
+
 ## Reporting a Vulnerability
 
-We take the security of OpenMemory seriously. If you believe you have found a security vulnerability, please report it to us as described below.
+If you discover a security vulnerability within this project, please report it privately.
 
-### Where to Report
+**DO NOT** open a public GitHub issue.
 
-**Please do NOT report security vulnerabilities through public GitHub issues.**
+- **Email**: security@openmemory.ai
+- **Response Time**: We aim to acknowledge reports within 48 hours.
 
-Instead, please report them via one of the following methods:
+## Security Features
 
-1. **Email**: Send an email to bob@holacorp.net
-2. **GitHub Security Advisories**: Use the [GitHub Security Advisory](https://github.com/CaviraOSS/OpenMemory/security/advisories) feature
-3. **Private disclosure**: Contact maintainers directly for sensitive issues
+OpenMemory implements a "Secure by Default" philosophy.
 
-### What to Include
+### 1. Authentication
+- **Fail-Closed**: The system defaults to denying access ("Fail-Closed") if authentication keys are missing or invalid.
+- **Timing-Safe**: API key validation uses constant-time comparison algorithms to prevent timing attacks.
+- **Hashing**: Client IDs and Keys are hashed using SHA-256 before storage or comparison.
 
-Please include the following information in your report:
+### 2. Data Protection
+- **Encryption**: Optional AES-256-GCM encryption for stored memories (`OM_ENCRYPTION_ENABLED=true`).
+- **Key Rotation**: Supports encryption key rotation (pending v1.11 schema).
+- **Isolation**: Tenant data is logically isolated by `user_id` enforced at the database query layer.
 
-- **Description**: A clear description of the vulnerability
-- **Impact**: The potential impact of the vulnerability
-- **Reproduction**: Step-by-step instructions to reproduce the issue
-- **Affected versions**: Which versions of OpenMemory are affected
-- **Suggested fix**: If you have suggestions for how to fix the issue
-- **Your contact information**: So we can follow up with questions
+### 3. Rate Limiting
+- **Adaptive Throttling**: The API implements strictly enforced rate limiting (default: 100 req/min).
+- **Fail-Closed Strategy**: In distributed deployments, if the rate-limit store (Redis) is unavailable, the system denies requests to prevent abuse.
 
-### Response Timeline
+### 4. Input Validation
+- **Strict Typing**: All inputs are validated against Zod schemas (TS) or Pydantic models (Python).
+- **SQL Injection Prevention**: All database queries use parameterized statements.
+- **Payload Limits**: strictly enforced 10MB limit on `web_crawler` and API bodies to prevent DoS/OOM attacks.
 
-We aim to respond to security reports within the following timeframes:
+## Best Practices for Deployment
 
-- **Initial response**: Within 48 hours
-- **Assessment completion**: Within 7 days
-- **Fix development**: Within 30 days (depending on complexity)
-- **Public disclosure**: After fix is released and users have time to update
-
-### Security Update Process
-
-1. **Vulnerability confirmed**: We verify the reported vulnerability
-2. **Fix development**: We develop and test a security fix
-3. **Security advisory**: We prepare a security advisory
-4. **Coordinated disclosure**: We release the fix and advisory together
-5. **CVE assignment**: We request a CVE if applicable
-
-## Security Best Practices
-
-### For Users
-
-#### Server Security
-
-- **Authentication**: Always use authentication in production
-- **HTTPS**: Use HTTPS/TLS for all communications
-- **Network isolation**: Run OpenMemory behind a firewall
-- **Regular updates**: Keep OpenMemory updated to the latest version
-- **Environment variables**: Store sensitive configuration in environment variables
-- **Access control**: Limit access to the OpenMemory server
-
-#### API Key Security
-
-- **Secure storage**: Store embedding provider API keys securely
-- **Rotation**: Rotate API keys regularly
-- **Least privilege**: Use API keys with minimal required permissions
-- **Monitoring**: Monitor API key usage for anomalies
-
-#### Data Protection
-
-- **Input validation**: Validate all inputs before storing
-- **Sensitive data**: Avoid storing sensitive personal information
-- **Backup security**: Secure database backups
-- **Audit logging**: Enable audit logging for security events
-
-### For Developers
-
-#### Code Security
-
-- **Input sanitization**: Sanitize all user inputs
-- **SQL injection prevention**: Use parameterized queries
-- **XSS prevention**: Escape output appropriately
-- **CSRF protection**: Implement CSRF protection
-- **Rate limiting**: Implement rate limiting on API endpoints
-
-#### Dependency Security
-
-- **Regular updates**: Keep dependencies updated
-- **Vulnerability scanning**: Regularly scan for vulnerable dependencies
-- **Minimal dependencies**: Use minimal required dependencies
-- **License compliance**: Ensure dependency licenses are compatible
-
-#### Development Security
-
-- **Secure coding practices**: Follow secure coding guidelines
-- **Code review**: Require security-focused code reviews
-- **Static analysis**: Use static analysis tools
-- **Secrets management**: Never commit secrets to version control
-
-## Questions?
-
-If you have any questions about this security policy, please contact us at security@cavira.app or create a GitHub discussion.
-
-Thank you for helping keep OpenMemory and our users safe!
+1.  **Enable Encryption**: Set `OM_ENCRYPTION_ENABLED=true` and provide a strong `OM_ENCRYPTION_KEY`.
+2.  **Use TLS**: Always terminate SSL/TLS at your load balancer or reverse proxy.
+3.  **Rotate Keys**: Regularly rotate your `OM_API_KEY` and Service/Cloud provider credentials.
+4.  **Isolate Networks**: Deploy the Vector Store (Redis/Postgres) in a private subnet.

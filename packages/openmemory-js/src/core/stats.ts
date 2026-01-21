@@ -2,8 +2,6 @@
  * System Statistics Module for OpenMemory.
  * Provides deep insights into memory counts, salience distribution, and system health.
  */
-import { existsSync } from "node:fs";
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 import { logger } from "../utils/logger";
@@ -121,9 +119,9 @@ const getDbSz = async (): Promise<number> => {
                     ? env.dbPath
                     : path.resolve(process.cwd(), env.dbPath);
 
-            if (existsSync(dbp)) {
-                const st = await fs.stat(dbp);
-                return Math.round(st.size / 1024 / 1024);
+            const file = Bun.file(dbp);
+            if (await file.exists()) {
+                return Math.round(file.size / 1024 / 1024);
             }
             return 0;
         }
@@ -133,11 +131,25 @@ const getDbSz = async (): Promise<number> => {
     }
 };
 
+/**
+ * Aggregates system-wide statistics for monitoring and dashboard display.
+ * 
+ * **Performance Note**: This function executes distinct COUNT/AVG queries across large tables. 
+ * While optimized with indices, it should be cached or called infrequently (e.g., dashboard polling).
+ * 
+ * @param userId - Optional user ID to scope statistics to a single tenant.
+ * @param qpsHist - A history of QPS values for calculating averages.
+ * @returns {Promise<SystemStats>} A comprehensive object containing memory counts, vector store stats, and system health metrics.
+ */
 export async function getSystemStats(
     userId: string | undefined,
     qpsHist: number[],
 ): Promise<SystemStats> {
     const memTable = getMemTable();
+
+    // NOTE: These aggregate queries (COUNT, AVG, MIN, MAX) over the entire table 
+    // can be slow on large datasets (>1M rows) without specific indexes or materialized views.
+    // Acceptable for Admin Dashboard usage, but avoid calling in hot paths.
 
     // User-scoped memory stats
     const userClause = userId

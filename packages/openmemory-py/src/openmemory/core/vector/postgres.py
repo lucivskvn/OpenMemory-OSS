@@ -83,8 +83,9 @@ class PostgresVectorStore(VectorStore):
             vec_str = json.dumps(r["vector"])
             data.append((r["id"], r["sector"], r.get("user_id"), vec_str, r["dim"]))
 
-        async with pool.acquire() as conn:  # type: ignore[union-attr]  # type: ignore[union-attr]
-            await conn.executemany(sql, data)
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.executemany(sql, data)
 
     async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]:
         pool = await self._get_pool()
@@ -178,8 +179,16 @@ class PostgresVectorStore(VectorStore):
                 for key, val in meta.items():
                     if val is not None:
                         # Simple text search on metadata for parity
+                        val_str = json.dumps(val) if isinstance(val, (dict, list)) else str(val)
+                        # Remove braces for partial match if needed? No, strict match better for structure.
+                        # But loose LIKE '%key%val%' is extremely loose.
+                        # Better path: if val is complex, just try to match the key and simple val?
+                        # Given the goal is namespace matching: lgm: { namespace: ... }
+                        # User passes filters={'metadata': {'lgm': {'namespace': ns}}}
+                        # match '%lgm%{"namespace": "ns"}%' (approx)
+                        
                         filter_sql += f" AND m.metadata LIKE ${arg_idx}"
-                        args.append(f"%{key}%{val}%")
+                        args.append(f"%{key}%{val_str}%")
                         arg_idx += 1
 
         # <=> is cosine distance operator

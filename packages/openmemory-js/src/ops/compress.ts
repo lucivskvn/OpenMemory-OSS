@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 import { env } from "../core/cfg";
 import type {
     CompressionMetrics,
@@ -10,6 +8,57 @@ import { normalizeUserId } from "../utils";
 import { SimpleCache } from "../utils/cache";
 
 export { CompressionMetrics, CompressionResult, CompressionStats };
+
+const FILLER_WORDS = [
+    /(?:,\s*)?\b(just|really|very|quite|rather|somewhat|somehow)\b/gi,
+    /(?:,\s*)?\b(actually|basically|essentially|literally)\b/gi,
+    /(?:,\s*)?\b(I think that|I believe that|It seems that|It appears that)\b/gi,
+    /(?:,\s*)?\b(in order to)\b/gi,
+];
+
+const SEMANTIC_REPLACEMENTS: [RegExp, string][] = [
+    [/\bat this point in time\b/gi, "now"],
+    [/\bdue to the fact that\b/gi, "because"],
+    [/\bin the event that\b/gi, "if"],
+    [/\bfor the purpose of\b/gi, "to"],
+    [/\bin the near future\b/gi, "soon"],
+    [/\ba number of\b/gi, "several"],
+    [/\bprior to\b/gi, "before"],
+    [/\bsubsequent to\b/gi, "after"],
+];
+
+const SYNTACTIC_CONTRACTIONS: [RegExp, string][] = [
+    [/\bdo not\b/gi, "don't"],
+    [/\bcannot\b/gi, "can't"],
+    [/\bwill not\b/gi, "won't"],
+    [/\bshould not\b/gi, "shouldn't"],
+    [/\bwould not\b/gi, "wouldn't"],
+    [/\bit is\b/gi, "it's"],
+    [/\bthat is\b/gi, "that's"],
+    [/\bwhat is\b/gi, "what's"],
+    [/\bwho is\b/gi, "who's"],
+    [/\bthere is\b/gi, "there's"],
+    [/\bhas been\b/gi, "been"],
+    [/\bhave been\b/gi, "been"],
+];
+
+const TECH_ABBREVIATIONS: [RegExp, string][] = [
+    [/\bJavaScript\b/gi, "JS"],
+    [/\bTypeScript\b/gi, "TS"],
+    [/\bPython\b/gi, "Py"],
+    [/\bapplication\b/gi, "app"],
+    [/\bfunction\b/gi, "fn"],
+    [/\bparameter\b/gi, "param"],
+    [/\bargument\b/gi, "arg"],
+    [/\breturn\b/gi, "ret"],
+    [/\bvariable\b/gi, "var"],
+    [/\bconstant\b/gi, "const"],
+    [/\bdatabase\b/gi, "db"],
+    [/\brepository\b/gi, "repo"],
+    [/\benvironment\b/gi, "env"],
+    [/\bconfiguration\b/gi, "config"],
+    [/\bdocumentation\b/gi, "docs"],
+];
 
 /**
  * Engine for semantic and syntactic text compression.
@@ -44,9 +93,10 @@ class MemoryCompressionEngine {
      */
     private countTokens(text: string): number {
         if (!text) return 0;
-        const words = text.split(/\s+/).length;
+        // Improved heuristic: characters/4.5 + words/0.75 for technical text
+        const words = text.split(/\s+/).filter(Boolean).length;
         const chars = text.length;
-        return Math.ceil(chars / 4 + words / 2);
+        return Math.max(1, Math.ceil(chars / 4.2 + words / 1.5));
     }
 
     /**
@@ -73,31 +123,13 @@ class MemoryCompressionEngine {
 
         compressed = uniqueSentences.join("").trim();
 
-        const fillerWords = [
-            /(?:,\s*)?\b(just|really|very|quite|rather|somewhat|somehow)\b/gi,
-            /(?:,\s*)?\b(actually|basically|essentially|literally)\b/gi,
-            /(?:,\s*)?\b(I think that|I believe that|It seems that|It appears that)\b/gi,
-            /(?:,\s*)?\b(in order to)\b/gi,
-        ];
-
-        for (const pattern of fillerWords) {
+        for (const pattern of FILLER_WORDS) {
             compressed = compressed.replace(pattern, "");
         }
 
         compressed = compressed.replace(/\s+/g, " ").trim();
 
-        const replacements: [RegExp, string][] = [
-            [/\bat this point in time\b/gi, "now"],
-            [/\bdue to the fact that\b/gi, "because"],
-            [/\bin the event that\b/gi, "if"],
-            [/\bfor the purpose of\b/gi, "to"],
-            [/\bin the near future\b/gi, "soon"],
-            [/\ba number of\b/gi, "several"],
-            [/\bprior to\b/gi, "before"],
-            [/\bsubsequent to\b/gi, "after"],
-        ];
-
-        for (const [pattern, replacement] of replacements) {
+        for (const [pattern, replacement] of SEMANTIC_REPLACEMENTS) {
             compressed = compressed.replace(pattern, replacement);
         }
 
@@ -111,22 +143,8 @@ class MemoryCompressionEngine {
         if (!text || text.length < 30) return text;
 
         let compressed = text;
-        const contractions: [RegExp, string][] = [
-            [/\bdo not\b/gi, "don't"],
-            [/\bcannot\b/gi, "can't"],
-            [/\bwill not\b/gi, "won't"],
-            [/\bshould not\b/gi, "shouldn't"],
-            [/\bwould not\b/gi, "wouldn't"],
-            [/\bit is\b/gi, "it's"],
-            [/\bthat is\b/gi, "that's"],
-            [/\bwhat is\b/gi, "what's"],
-            [/\bwho is\b/gi, "who's"],
-            [/\bthere is\b/gi, "there's"],
-            [/\bhas been\b/gi, "been"],
-            [/\bhave been\b/gi, "been"],
-        ];
 
-        for (const [pattern, replacement] of contractions) {
+        for (const [pattern, replacement] of SYNTACTIC_CONTRACTIONS) {
             compressed = compressed.replace(pattern, replacement);
         }
 
@@ -162,25 +180,7 @@ class MemoryCompressionEngine {
             "$2",
         );
 
-        const technicalAbbreviations: [RegExp, string][] = [
-            [/\bJavaScript\b/gi, "JS"],
-            [/\bTypeScript\b/gi, "TS"],
-            [/\bPython\b/gi, "Py"],
-            [/\bapplication\b/gi, "app"],
-            [/\bfunction\b/gi, "fn"],
-            [/\bparameter\b/gi, "param"],
-            [/\bargument\b/gi, "arg"],
-            [/\breturn\b/gi, "ret"],
-            [/\bvariable\b/gi, "var"],
-            [/\bconstant\b/gi, "const"],
-            [/\bdatabase\b/gi, "db"],
-            [/\brepository\b/gi, "repo"],
-            [/\benvironment\b/gi, "env"],
-            [/\bconfiguration\b/gi, "config"],
-            [/\bdocumentation\b/gi, "docs"],
-        ];
-
-        for (const [pattern, replacement] of technicalAbbreviations) {
+        for (const [pattern, replacement] of TECH_ABBREVIATIONS) {
             compressed = compressed.replace(pattern, replacement);
         }
 
@@ -292,7 +292,8 @@ class MemoryCompressionEngine {
             return this.compress(text, "semantic", userId);
 
         const isCode =
-            /\b(function|const|let|var|def|class|import|export)\b/.test(text);
+            /\b(function|const|let|var|def|class|import|export|fn|func|namespace|include|pub|trait|impl)\b/.test(text) ||
+            /[{}:;](?:\s*[\w$]+\s*[:=]\s*|\s*[\w$]+\s*\()/.test(text); // Structural signs of code/JSON
         const hasUrls = /https?:\/\//.test(text);
         const isVerbose = text.split(/\s+/).length > 100;
 
@@ -329,7 +330,9 @@ class MemoryCompressionEngine {
             "aggressive",
         ] as const) {
             const result = this.compress(text, algorithm, userId);
-            report[algorithm] = result.metrics;
+            if (result.metrics) {
+                report[algorithm] = result.metrics;
+            }
         }
         return report;
     }
@@ -371,19 +374,16 @@ class MemoryCompressionEngine {
     }
 
     private calculateHash(text: string): string {
-        if (typeof Bun !== "undefined") {
+        if (typeof Bun !== "undefined" && Bun.hash) {
             return Bun.hash(text).toString();
         }
 
-        // Synchronous fallback for Node.js
-        // Helper to avoid top-level import conflicts if strictly targeting Bun, 
-        // but safe since we catch the environment. 
-        // Ideally we import at top, but let's just use createHash if imported.
-        // Actually, let's fix the top level import.
-
-        // For now, assume Node environment has crypto available globally or via require if CJS.
-        // But better: use the top level import I will add.
-        return createHash("sha256").update(text).digest("hex");
+        // Fallback for non-Bun environments (DJB2 Hash)
+        let hash = 5381;
+        for (let i = 0; i < text.length; i++) {
+            hash = (hash * 33) ^ text.charCodeAt(i);
+        }
+        return (hash >>> 0).toString();
     }
 
     private updateStats(metrics: CompressionMetrics): void {

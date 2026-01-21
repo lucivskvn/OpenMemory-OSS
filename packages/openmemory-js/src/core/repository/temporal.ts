@@ -1,4 +1,7 @@
 import { BaseRepository } from "./base";
+import type { TemporalFactRow, TemporalEdgeRow, TemporalQuery } from "../types/temporal";
+import type { SectorType } from "../types/primitives";
+import { applySqlUser } from "../db_utils";
 
 export class TemporalRepository extends BaseRepository {
     // --- Batch / User Management ---
@@ -66,10 +69,11 @@ export class TemporalRepository extends BaseRepository {
     /**
      * Update the confidence and metadata of an existing fact.
      */
-    async updateFactConfidence(id: string, confidence: number, metadata: string | null, now: number) {
+    async updateFactConfidence(id: string, confidence: number, metadata: Record<string, unknown> | string | null, now: number) {
+        const meta: string | null = (typeof metadata === "object" && metadata !== null) ? JSON.stringify(metadata) : (metadata as string | null);
         return await this.runAsync(
             `UPDATE ${this.tables.temporal_facts} SET confidence = ?, last_updated = ?, metadata = ? WHERE id = ?`,
-            [confidence, now, metadata, id]
+            [confidence, now, meta, id]
         );
     }
 
@@ -88,26 +92,22 @@ export class TemporalRepository extends BaseRepository {
     /**
      * Invalidate a fact by setting valid_to.
      */
-    async closeFact(id: string, validTo: number, userId?: string) {
-        if (userId) {
-            return await this.runAsync(
-                `UPDATE ${this.tables.temporal_facts} SET valid_to = ? WHERE id = ? AND user_id = ?`,
-                [validTo, id, userId]
-            );
-        }
-        return await this.runAsync(
+    async closeFact(id: string, validTo: number, userId?: string | null) {
+        return await this.runUser(
             `UPDATE ${this.tables.temporal_facts} SET valid_to = ? WHERE id = ?`,
-            [validTo, id]
+            [validTo, id],
+            userId
         );
     }
 
     /**
      * Insert a raw fact record.
      */
-    async insertFactRaw(fact: { id: string, userId: string | null, subject: string, predicate: string, object: string, validFrom: number, validTo: number | null, confidence: number, lastUpdated: number, metadata: string | null }) {
+    async insertFactRaw(fact: { id: string, userId: string | null, subject: string, predicate: string, object: string, validFrom: number, validTo: number | null, confidence: number, lastUpdated: number, metadata: Record<string, unknown> | string | null }) {
+        const meta: string | null = (typeof fact.metadata === "object" && fact.metadata !== null) ? JSON.stringify(fact.metadata) : (fact.metadata as string | null);
         return await this.runAsync(
             `INSERT INTO ${this.tables.temporal_facts} (id, user_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [fact.id, fact.userId, fact.subject, fact.predicate, fact.object, fact.validFrom, fact.validTo, fact.confidence, fact.lastUpdated, fact.metadata]
+            [fact.id, fact.userId, fact.subject, fact.predicate, fact.object, fact.validFrom, fact.validTo, fact.confidence, fact.lastUpdated, meta]
         );
     }
 
@@ -115,7 +115,7 @@ export class TemporalRepository extends BaseRepository {
      * Update arbitrary fields of a fact (internal use).
      */
     async updateFactRaw(id: string, updates: string[], params: any[], userId: string | null | undefined): Promise<number> {
-        // Validate column names in updates against allowlist
+        // Security: Validate column names in updates against allowlist
         const allowedColumns = ['confidence', 'valid_to', 'metadata', 'last_updated'];
         const columnRegex = /^(\w+)\s*=/i;
 
@@ -126,12 +126,8 @@ export class TemporalRepository extends BaseRepository {
             }
         }
 
-        let sql = `UPDATE ${this.tables.temporal_facts} SET ${updates.join(", ")} WHERE id = ?`;
-        if (userId !== undefined) {
-            sql += userId === null ? " AND user_id IS NULL" : " AND user_id = ?";
-        }
-        const finalParams = [...params, id, ...(userId !== undefined && userId !== null ? [userId] : [])];
-        return await this.runAsync(sql, finalParams);
+        const sql = `UPDATE ${this.tables.temporal_facts} SET ${updates.join(", ")} WHERE id = ?`;
+        return await this.runUser(sql, [...params, id], userId);
     }
 
     /**
@@ -157,10 +153,11 @@ export class TemporalRepository extends BaseRepository {
     /**
      * Update edge weight and metadata.
      */
-    async updateEdgeWeight(id: string, weight: number, metadata: string | null, now: number) {
+    async updateEdgeWeight(id: string, weight: number, metadata: Record<string, unknown> | string | null, now: number) {
+        const meta: string | null = (typeof metadata === "object" && metadata !== null) ? JSON.stringify(metadata) : (metadata as string | null);
         return await this.runAsync(
             `UPDATE ${this.tables.temporal_edges} SET weight = ?, metadata = ?, last_updated = ? WHERE id = ?`,
-            [weight, metadata, now, id]
+            [weight, meta, now, id]
         );
     }
 
@@ -178,17 +175,22 @@ export class TemporalRepository extends BaseRepository {
     /**
      * Invalidate an edge.
      */
-    async closeEdge(id: string, validTo: number) {
-        return await this.runAsync(`UPDATE ${this.tables.temporal_edges} SET valid_to = ? WHERE id = ?`, [validTo, id]);
+    async closeEdge(id: string, validTo: number, userId?: string | null) {
+        return await this.runUser(
+            `UPDATE ${this.tables.temporal_edges} SET valid_to = ? WHERE id = ?`,
+            [validTo, id],
+            userId
+        );
     }
 
     /**
      * Insert raw edge record.
      */
-    async insertEdgeRaw(edge: { id: string, userId: string | null, sourceId: string, targetId: string, relationType: string, validFrom: number, validTo: number | null, weight: number, lastUpdated: number, metadata: string | null }) {
+    async insertEdgeRaw(edge: { id: string, userId: string | null, sourceId: string, targetId: string, relationType: string, validFrom: number, validTo: number | null, weight: number, lastUpdated: number, metadata: Record<string, unknown> | string | null }) {
+        const meta: string | null = (typeof edge.metadata === "object" && edge.metadata !== null) ? JSON.stringify(edge.metadata) : (edge.metadata as string | null);
         return await this.runAsync(
             `INSERT INTO ${this.tables.temporal_edges} (id, user_id, source_id, target_id, relation_type, valid_from, valid_to, weight, last_updated, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [edge.id, edge.userId, edge.sourceId, edge.targetId, edge.relationType, edge.validFrom, edge.validTo, edge.weight, edge.lastUpdated, edge.metadata]
+            [edge.id, edge.userId, edge.sourceId, edge.targetId, edge.relationType, edge.validFrom, edge.validTo, edge.weight, edge.lastUpdated, meta]
         );
     }
 
@@ -214,25 +216,19 @@ export class TemporalRepository extends BaseRepository {
             }
         }
 
-        let sql = `UPDATE ${this.tables.temporal_edges} SET ${updates.join(", ")} WHERE id = ?`;
-        if (userId !== undefined) {
-            sql += userId === null ? " AND user_id IS NULL" : " AND user_id = ?";
-        }
-        const finalParams = [...params, id, ...(userId !== undefined && userId !== null ? [userId] : [])];
-        return await this.runAsync(sql, finalParams);
+        const sql = `UPDATE ${this.tables.temporal_edges} SET ${updates.join(", ")} WHERE id = ?`;
+        return await this.runUser(sql, [...params, id], userId);
     }
 
     /**
      * Hard delete an edge.
      */
     async deleteEdgeRaw(id: string, userId: string | null | undefined): Promise<number> {
-        let sql = `DELETE FROM ${this.tables.temporal_edges} WHERE id = ?`;
-        const params: any[] = [id];
-        if (userId !== undefined) {
-            sql += userId === null ? " AND user_id IS NULL" : " AND user_id = ?";
-            if (userId !== null) params.push(userId);
-        }
-        return await this.runAsync(sql, params);
+        return await this.runUser(
+            `DELETE FROM ${this.tables.temporal_edges} WHERE id = ?`,
+            [id],
+            userId
+        );
     }
 
     // --- Batch / Maintenance ---
@@ -242,20 +238,12 @@ export class TemporalRepository extends BaseRepository {
      */
     async applyConfidenceDecay(decayRate: number, now: number, oneDay: number, userId: string | null | undefined) {
         const maxFunc = this.isPg ? "GREATEST" : "MAX";
-        const params: any[] = [decayRate, now, oneDay];
-        let userClause = "";
-
-        if (userId !== undefined) {
-            userClause = userId === null ? "AND user_id IS NULL" : "AND user_id = ?";
-            if (userId !== null) params.push(userId);
-        }
-
-        return await this.runAsync(
+        return await this.runUser(
             `UPDATE ${this.tables.temporal_facts} 
             SET confidence = ${maxFunc}(0.1, confidence * (1.0 - ? * ((? - last_updated) * 1.0 / ?)))
-            WHERE valid_to IS NULL AND confidence > 0.1
-            ${userClause}`,
-            params
+            WHERE valid_to IS NULL AND confidence > 0.1`,
+            [decayRate, now, oneDay],
+            userId
         );
     }
 
@@ -352,15 +340,17 @@ export class TemporalRepository extends BaseRepository {
      * Pattern search for facts.
      */
     async searchFacts(pattern: string, type: "subject" | "predicate" | "object" | "all", timestamp: number | undefined, limit: number, userId: string | null | undefined): Promise<any[]> {
-        const searchPattern = `%${pattern}%`;
+        // Escape LIKE wildcards to prevent pattern injection
+        const escapedPattern = pattern.replace(/[%_|]/g, '|$&');
+        const searchPattern = `%${escapedPattern}%`;
         let fieldClause: string;
         let params: any[];
 
         if (type === "all") {
-            fieldClause = "(subject LIKE ? OR predicate LIKE ? OR object LIKE ?)";
+            fieldClause = "(subject LIKE ? escape '|' OR predicate LIKE ? escape '|' OR object LIKE ? escape '|')";
             params = [searchPattern, searchPattern, searchPattern];
         } else {
-            fieldClause = `${type} LIKE ?`;
+            fieldClause = `${type} LIKE ? escape '|'`;
             params = [searchPattern];
         }
         let timeClause = "";
@@ -379,6 +369,18 @@ export class TemporalRepository extends BaseRepository {
      * Get facts related to a specific fact ID via edges.
      */
     async getRelatedFacts(factId: string, relationType: string | undefined, timestamp: number, userId: string | null | undefined): Promise<any[]> {
+        const params: any[] = [factId, timestamp, timestamp, timestamp, timestamp];
+        let userClause = "";
+
+        if (userId !== undefined) {
+            if (userId === null) {
+                userClause = "AND e.user_id IS NULL AND f.user_id IS NULL";
+            } else {
+                userClause = "AND e.user_id = ? AND f.user_id = ?";
+                params.push(userId, userId);
+            }
+        }
+
         let sql = `
             SELECT f.*, e.relation_type, e.weight
             FROM ${this.tables.temporal_edges} e
@@ -386,21 +388,15 @@ export class TemporalRepository extends BaseRepository {
             WHERE e.source_id = ?
             AND (e.valid_from <= ? AND (e.valid_to IS NULL OR e.valid_to >= ?))
             AND (f.valid_from <= ? AND (f.valid_to IS NULL OR f.valid_to >= ?))
+            ${userClause}
         `;
-        const params: any[] = [factId, timestamp, timestamp, timestamp, timestamp];
 
         if (relationType) {
             sql += " AND e.relation_type = ?";
             params.push(relationType);
         }
 
-        let userClause = "";
-        if (userId !== undefined) {
-            userClause = userId === null ? "AND e.user_id IS NULL AND f.user_id IS NULL" : "AND e.user_id = ? AND f.user_id = ?";
-            if (userId !== null) params.push(userId, userId);
-        }
-
-        sql += ` ${userClause} ORDER BY e.weight DESC, f.confidence DESC`;
+        sql += ` ORDER BY e.weight DESC, f.confidence DESC`;
         return await this.allAsync(sql, params);
     }
 
@@ -465,25 +461,48 @@ export class TemporalRepository extends BaseRepository {
         let sql = `
             SELECT subject, predicate, COUNT(*) as change_count, AVG(confidence) as avg_confidence
             FROM ${this.tables.temporal_facts}
-            WHERE 1=1
         `;
         const params: any[] = [];
 
         if (subject) {
-            sql += " AND subject = ?";
+            sql += " WHERE subject = ?";
             params.push(subject);
         }
 
-        // Manual user clause for GROUP BY query compatibility
-        let userClause = "";
-        if (userId !== undefined) {
-            userClause = userId === null ? "AND user_id IS NULL" : "AND user_id = ?";
-            if (userId !== null) params.push(userId);
-        }
+        const { sql: finalSql, params: finalParams } = applySqlUser(sql, params, userId);
+        const fullSql = `${finalSql} GROUP BY subject, predicate HAVING COUNT(*) > 1 ORDER BY change_count DESC, avg_confidence ASC LIMIT ?`;
+        return await this.allAsync(fullSql, [...finalParams, limit]);
+    }
+    /**
+     * Get facts for a specific subject and predicate (timeline optimization).
+     */
+    async getFactsBySubjectAndPredicate(subject: string, predicate: string, userId: string | null | undefined): Promise<any[]> {
+        return await this.allUser(
+            `SELECT * FROM ${this.tables.temporal_facts} WHERE subject = ? AND predicate = ? ORDER BY valid_from ASC LIMIT 10000`,
+            [subject, predicate],
+            userId
+        );
+    }
 
-        sql += ` ${userClause} GROUP BY subject, predicate HAVING COUNT(*) > 1 ORDER BY change_count DESC, avg_confidence ASC LIMIT ?`;
-        params.push(limit);
+    /**
+     * Delete a fact by ID.
+     */
+    async deleteFactCascade(id: string, userId: string | null | undefined): Promise<number> {
+        return await this.runUser(
+            `DELETE FROM ${this.tables.temporal_facts} WHERE id = ?`,
+            [id],
+            userId
+        );
+    }
 
-        return await this.allAsync(sql, params);
+    /**
+     * Delete edges connected to a specific node (fact ID or subject).
+     */
+    async deleteEdgesByNode(nodeId: string, userId: string | null | undefined): Promise<number> {
+        return await this.runUser(
+            `DELETE FROM ${this.tables.temporal_edges} WHERE source_id = ? OR target_id = ?`,
+            [nodeId, nodeId],
+            userId
+        );
     }
 }

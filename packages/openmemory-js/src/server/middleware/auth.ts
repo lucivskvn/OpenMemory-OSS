@@ -1,17 +1,22 @@
-import { timingSafeEqual } from "node:crypto";
-
+import { Elysia } from "elysia";
 import { env } from "../../core/cfg";
-import { runInContext, SecurityContext } from "../../core/context";
 import { AuthScope, UserContext } from "../../core/types";
+export type { UserContext };
 import { logger } from "../../utils/logger";
-import { AppError, sendError } from "../errors";
+import { AppError } from "../errors";
+import { normalizeUserId } from "../../utils";
+
+function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
+    if (a.length !== b.length) return false;
+    let mismatch = 0;
+    for (let i = 0; i < a.length; i++) {
+        mismatch |= (a[i] ^ b[i]);
+    }
+    return mismatch === 0;
+}
 
 const authConfig = {
     apiKeyHeader: "x-api-key",
-    // Rate limits can stay static or be dynamic too, but keys must be dynamic for sure
-    rateLimitEnabled: env.rateLimitEnabled,
-    rateLimitWindowMs: env.rateLimitWindowMs,
-    rateLimitMaxRequests: env.rateLimitMaxRequests,
     publicEndpoints: [
         "/health",
         "/api/system/health",
@@ -20,6 +25,7 @@ const authConfig = {
         "/setup/verify",
         "/setup/status",
         "/sources/webhook",
+        "/public",
     ],
 };
 
@@ -29,282 +35,228 @@ function isPublicEndpoint(path: string): boolean {
     );
 }
 
-function extractApiKey(req: AdvancedRequest): string | null {
-    // 1. Check configured API key header
-    const headerKey = req.headers[authConfig.apiKeyHeader];
-    const apiKey = Array.isArray(headerKey) ? headerKey[0] : headerKey;
-    if (apiKey) return apiKey;
+// Helper to extract key from request
+function extractApiKey(req: Request): string | null {
+    const headers = req.headers;
+    const headerKey = headers.get(authConfig.apiKeyHeader);
+    if (headerKey) return headerKey;
 
-    // 2. Check Authorization Header (Bearer/ApiKey scheme)
-    const authHeader = req.headers["authorization"];
-    const token = Array.isArray(authHeader) ? authHeader[0] : authHeader;
-
-    if (token) {
-        if (token.startsWith("Bearer ")) return token.slice(7);
-        if (token.startsWith("ApiKey ")) return token.slice(7);
+    const authHeader = headers.get("authorization");
+    if (authHeader) {
+        if (authHeader.startsWith("Bearer ")) return authHeader.slice(7);
+        if (authHeader.startsWith("ApiKey ")) return authHeader.slice(7);
     }
 
-    // 3. Check Query Parameters (common for Streams/WebSockets)
-    if (req.query) {
-        // cast query to any or Record because Server update might allow it, but let's be safe
-        const q = req.query as Record<string, string | string[] | undefined>;
-        const queryToken = q.token || q.apiKey;
-        if (queryToken && typeof queryToken === "string") return queryToken;
-    }
+    const url = new URL(req.url);
+    const queryToken = url.searchParams.get("token") || url.searchParams.get("apiKey");
+    if (queryToken) return queryToken;
+
     return null;
 }
 
-function validateApiKey(provided: string, expected?: string): boolean {
-    if (!provided || !expected || provided.length !== expected.length)
-        return false;
-    return timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
-}
-
-
-
-/**
- * Derives a stable client ID.
- * Uses SHA-256 hash of the API key if provided, otherwise falls back to IP address.
- */
-async function getClientId(req: { ip?: string }, apiKey: string | null): Promise<string> {
-    if (apiKey) {
-        const hash = await crypto.subtle.digest("SHA-256", Buffer.from(apiKey));
-        return Buffer.from(hash).toString("hex").slice(0, 16);
-    }
-    return req.ip || "unknown";
-}
-
-import { AdvancedRequest, AdvancedResponse, NextFunction } from "../server";
-
-/**
- * Middleware to authenticate requests via API keys.
- */
-export const authenticateApiRequest = async (
-    req: AdvancedRequest,
-    res: AdvancedResponse,
-    next: NextFunction,
-) => {
+async function validateApiKey(provided: string, expected?: string): Promise<boolean> {
+    if (!provided || !expected) return false;
     try {
-        const path = req.path || req.url || "";
-        const isPublic = isPublicEndpoint(path);
+        const enc = new TextEncoder();
+        const h1 = await globalThis.crypto.subtle.digest("SHA-256", enc.encode(provided));
+        const h2 = await globalThis.crypto.subtle.digest("SHA-256", enc.encode(expected));
+        return timingSafeEqual(new Uint8Array(h1), new Uint8Array(h2));
+    } catch {
+        return false;
+    }
+}
 
-        // Even for public/anonymous, we want a context for requestId traceability
-        const getBaseCtx = (): SecurityContext => ({
-            requestId: req.requestId,
-        });
+async function getClientId(ip: string | null, apiKey: string | null): Promise<string> {
+    const enc = new TextEncoder();
+    if (apiKey) {
+        const hash = await globalThis.crypto.subtle.digest("SHA-256", enc.encode(apiKey));
+        return Buffer.from(hash).toString("hex");
+    }
+    if (ip) {
+        const hash = await globalThis.crypto.subtle.digest("SHA-256", enc.encode(`ip:${ip}`));
+        return `ip_${Buffer.from(hash).toString("hex").slice(0, 32)}`;
+    }
+    const randomBytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+    return `anon_${Buffer.from(randomBytes).toString("hex")}`;
+}
 
-        if (isPublic) {
-            return await runInContext(getBaseCtx(), () => next());
+/**
+ * Elysia Auth Plugin
+ * Derives `user` context for each request.
+ */
+// Helper to get user from context or store (for refactoring transition)
+export const getUser = (ctx: any): UserContext | undefined => {
+    return ctx.user || ctx.store?.user;
+};
+
+export const authPlugin = (app: Elysia) => app.derive(async (ctx) => {
+    const { request, set, path, store } = ctx;
+
+    // Public bypass
+    if (isPublicEndpoint(path)) {
+        return { user: undefined };
+    }
+
+    const currentApiKey = env.apiKey || "";
+    const currentAdminKey = env.adminKey || "";
+    const provided = extractApiKey(request);
+
+    // Security Block if no keys
+    if (currentApiKey === "" && currentAdminKey === "") {
+        if (!provided && Bun.env.OM_NO_AUTH !== "true" && !env.noAuth) {
+            if (env.isProd) {
+                logger.error("[AUTH] 🚨 FATAL: No API keys configured in PRODUCTION mode. Request blocked.");
+                set.status = 500;
+                throw new Error("Authentication Configuration Error");
+            }
+            logger.error("[AUTH] 🛑 Security Block: No API Keys set.");
+            set.status = 500;
+            throw new Error("Authentication Configuration Error");
         }
 
-        // Dynamic check of env config
-        const currentApiKey = env.apiKey;
-        const currentAdminKey = env.adminKey;
-
-        // If no keys configured...
-        if (
-            (!currentApiKey || currentApiKey === "") &&
-            (!currentAdminKey || currentAdminKey === "")
-        ) {
-            // CRITICAL: Prevent insecure default in production
-            if (env.mode === "production" || env.isProd) {
-                logger.error(
-                    "[AUTH] 🚨 FATAL: No API keys configured in PRODUCTION mode. Request blocked.",
-                );
-                return sendError(
-                    res,
-                    new AppError(
-                        500,
-                        "CONFIGURATION_ERROR",
-                        "Server is running in PRODUCTION mode but no API keys are configured. Please set OM_API_KEY or OM_ADMIN_KEY.",
-                    ),
-                );
-            }
-
-            // In Dev/Test mode, REQUIRE explicit opt-in for anonymous admin
-            if (!env.noAuth) {
-                logger.error(
-                    "[AUTH] 🛑 Security Block: No API Keys set and OM_NO_AUTH is not enabled.",
-                );
-                return sendError(
-                    res,
-                    new AppError(
-                        500,
-                        "CONFIGURATION_ERROR",
-                        "Security Block: No API keys are configured. To run in insecure mode (Anonymous Admin), you MUST set OM_NO_AUTH=true. Otherwise, set OM_API_KEY or OM_ADMIN_KEY.",
-                    ),
-                );
-            }
-
-            if (!req.user) {
-                logger.warn(
-                    "[AUTH] ⚠️  Running in Anonymous Admin Mode (OM_NO_AUTH=true). Logic is open.",
-                );
-            }
-
-            // Assign default admin access if no auth configured (DEV MODE ONLY + OPT-IN)
-            req.user = {
+        // Anonymous Admin Mode
+        if (!provided && (Bun.env.OM_NO_AUTH === "true" || env.noAuth)) {
+            const user = {
                 id: "anonymous",
                 scopes: ["admin:all"] as AuthScope[],
             };
-
-            const ctx: SecurityContext = {
-                ...getBaseCtx(),
-                userId: req.user.id,
-                scopes: req.user.scopes,
-                isAdmin: true,
-            };
-
-            return await runInContext(ctx, () => next());
+            return { user };
         }
-
-        const provided = extractApiKey(req);
-        if (!provided) {
-            return sendError(
-                res,
-                new AppError(
-                    401,
-                    "AUTHENTICATION_REQUIRED",
-                    "This server requires an API key for access. Please provide it in the 'x-api-key' header or as a Bearer token.",
-                ),
-            );
-        }
-
-        let scopes: AuthScope[] = [];
-        let isValid = false;
-
-        // Check Admin Key (Env)
-        if (currentAdminKey && validateApiKey(provided, currentAdminKey)) {
-            scopes = ["admin:all"];
-            isValid = true;
-        }
-        // Check Standard API Key (Env)
-        else if (currentApiKey && validateApiKey(provided, currentApiKey)) {
-            scopes = ["memory:read", "memory:write"];
-            isValid = true;
-        } else {
-            if (env.isTest) {
-                logger.debug(`[AUTH_DEBUG] Key mismatch. Provided: ${provided.slice(0, 3)}... ExpectedAdmin: ${currentAdminKey ? currentAdminKey.slice(0, 3) + '...' : 'null'}, ExpectedUser: ${currentApiKey ? currentApiKey.slice(0, 3) + '...' : 'null'}`);
-            }
-            // Check DB for dynamic keys
-            // We need to hash the provided key to lookup (since we store hashes)
-            // But wait, the standard is usually to store the hash of the key.
-            // My previous logic in `users.ts` registers `om_hex` and stores `hash(om_hex)`.
-            // So we must hash `provided` here.
-
-            const hashBuffer = await crypto.subtle.digest(
-                "SHA-256",
-                Buffer.from(provided),
-            );
-            const hash = Buffer.from(hashBuffer).toString("hex");
-
-            // Import `q` dynamically to avoid circular issues if any (but auth -> db is usually fine)
-            const { q } = await import("../../core/db");
-            const dbKey = await q.getApiKey.get(hash);
-
-            if (dbKey) {
-                isValid = true;
-                // Identify the user explicitly from the DB record
-                // This SUPPORTS MULTI-TENANCY: The request is now tied to dbKey.userId
-                req.user = {
-                    id: dbKey.userId,
-                    scopes:
-                        dbKey.role === "admin"
-                            ? ["admin:all"]
-                            : ["memory:read", "memory:write"],
-                };
-
-                // Add note to logger?
-                // logger.debug(`[AUTH] Authenticated as ${dbKey.userId} (${dbKey.role})`);
-            }
-        }
-
-        if (!isValid) {
-            return sendError(
-                res,
-                new AppError(
-                    403,
-                    "INVALID_API_KEY",
-                    "The provided API key is incorrect.",
-                ),
-            );
-        }
-
-        // If we found the user in the DB, use that ID. Otherwise fallback to legacy hash (for Env keys)
-        let clientId = req.user?.id;
-        if (!clientId) {
-            clientId = await getClientId(req, provided);
-            const userCtx: UserContext = { id: clientId, scopes };
-            req.user = userCtx;
-        }
-
-
-
-        const ctx: SecurityContext = {
-            userId: req.user?.id,
-            scopes: req.user?.scopes,
-            isAdmin: (req.user?.scopes || []).includes("admin:all"),
-            requestId: req.requestId,
-        };
-
-        return await runInContext(ctx, () => next());
-    } catch (e) {
-        next(e);
     }
-};
+
+    if (!provided) {
+        set.status = 401;
+        throw new Error("Authentication required");
+    }
+
+    let scopes: AuthScope[] = [];
+    let isValid = false;
+    let dbUserId: string | undefined;
+
+    // 1. Check Admin Key
+    if (currentAdminKey && await validateApiKey(provided, currentAdminKey)) {
+        scopes = ["admin:all"];
+        isValid = true;
+    }
+    // 2. Check Standard Key
+    else if (currentApiKey && await validateApiKey(provided, currentApiKey)) {
+        scopes = ["memory:read", "memory:write"];
+        isValid = true;
+    }
+    // 3. Check DB
+    else {
+        const enc = new TextEncoder();
+        const hashBuffer = await globalThis.crypto.subtle.digest("SHA-256", enc.encode(provided));
+        const hash = Buffer.from(hashBuffer).toString("hex");
+
+        // Lazy load DB query
+        const { q } = await import("../../core/db");
+        const dbKey = await q.getApiKey.get(hash);
+
+        if (dbKey) {
+            isValid = true;
+            dbUserId = dbKey.userId;
+            scopes = dbKey.role === "admin"
+                ? ["admin:all"]
+                : dbKey.role === "read_only"
+                    ? ["memory:read"]
+                    : ["memory:read", "memory:write"];
+        }
+    }
+
+    if (!isValid) {
+        set.status = 403;
+        throw new Error("Invalid API Key");
+    }
+
+    // Final User ID Resolution
+    let clientId = dbUserId;
+    if (!clientId) {
+        clientId = await getClientId(null, provided);
+    }
+
+    const user: UserContext = {
+        id: clientId,
+        scopes
+    };
+
+    // Log Auth if enabled
+    if (env.logAuth) {
+        const hash = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(provided));
+        const hex = Buffer.from(hash).toString("hex").slice(0, 8);
+        logger.info(`[AUTH] Authenticated ${user.id} scopes=[${scopes.join(',')}] key=${hex}`);
+    }
+
+    // Compatibility: Also set in store for plugins accessing store.user
+    if (store) {
+        (store as any).user = user;
+    }
+
+    return { user };
+});
+
 
 /**
- * Middleware to log authenticated requests for audit trails.
+ * Legacy RBAC Helper for manual checks inside handlers
  */
-export async function logAuthenticatedRequest(
-    req: AdvancedRequest,
-    _res: AdvancedResponse,
-    next: NextFunction,
-) {
-    try {
-        const key = extractApiKey(req);
-        if (key) {
-            const hash = await crypto.subtle.digest(
-                "SHA-256",
-                Buffer.from(key),
-            );
-            const hex = Buffer.from(hash).toString("hex").slice(0, 8);
-            logger.info(`[AUTH] ${req.method} ${req.path} `, { keyHash: hex });
-        }
-        await next();
-    } catch (e) {
-        logger.error("[AUTH] Logging failed:", { error: e });
-        next();
-    }
-}
-
-/**
- * Standardized RBAC check: Verifies if the requester is the target user or an admin.
- * Throws 403 if access is denied.
- */
-export function verifyUserAccess(req: AdvancedRequest, targetUserId: string | null | undefined): void {
-    const authUserId = req.user?.id; // IDs are normalized in middleware usually, but be safe?
-    // Middleware extractApiKey -> q.getApiKey -> returns ID from DB (normalized there?)
-    // Basic normalization:
+export function verifyUserAccess(user: UserContext | undefined, targetUserId: string | null | undefined): string | null {
+    const authUserId = user?.id;
     const nAuth = authUserId ? authUserId.trim() : null;
-    const nTarget = targetUserId ? targetUserId.trim() : null;
+    let nTarget = targetUserId ? targetUserId.trim() : null;
 
-    const isAdmin = (req.user?.scopes || []).includes("admin:all");
-
-    if (nAuth && nAuth !== nTarget && !isAdmin) {
-        throw new AppError(403, "FORBIDDEN", "Access denied");
+    if (nTarget === "me" && nAuth) {
+        nTarget = nAuth;
     }
+
+    const isAdmin = (user?.scopes || []).includes("admin:all");
+
+    if (!isAdmin) {
+        if (!nAuth) {
+            if (nTarget) throw new AppError(401, "UNAUTHORIZED", "Authentication required for user access");
+        } else {
+            if (nAuth !== nTarget) throw new AppError(403, "FORBIDDEN", "Access denied");
+        }
+    }
+    return nTarget;
 }
 
 /**
- * Middleware: Requires 'admin:all' scope.
+ * Helper to resolve the effective target user ID based on auth context and request/query param.
+ * - If Admin: Can impersonate any user (if clientUserId provided) or target self.
+ * - If User: Can only target self (clientUserId must match or be null/undefined).
+ * - Enforces correct null/undefined handling for global vs user-scoped resources.
  */
-export const requireAdmin = (req: AdvancedRequest, res: AdvancedResponse, next: NextFunction) => {
-    const isAdmin = (req.user?.scopes || []).includes("admin:all");
-    if (!isAdmin) {
-        return sendError(res, new AppError(403, "FORBIDDEN", "Admin access required"));
-    }
-    next();
-};
+export const getEffectiveUserId = (user: UserContext | undefined, clientUserId: string | null | undefined): string | null => {
+    // 0. Pre-normalize
+    const normalizedClient = clientUserId ? normalizeUserId(clientUserId) : null;
+    const normalizedAuth = user?.id ? normalizeUserId(user.id) : null;
+    const isAdmin = (user?.scopes || []).includes("admin:all");
 
-// Removed interval cleanup as cache now handles TTL expiration natively
+    // 1. Admin Override Logic
+    if (isAdmin) {
+        // If admin provides a specific user ID, use it.
+        // If admin provides explicit "null" or nothing, they might intend global context (depending on caller).
+        // But usually, if clientUserId is provided, we respect it.
+        if (normalizedClient) return normalizedClient;
+
+        // If no clientUserId, we default to the admin's own ID? 
+        // OR do we return null (global)? 
+        // Context: In `memory.ts`, if query.userId is undefined, we default to auth's ID usually.
+        // Let's mirror the robust logic from memory.ts:
+        // "const targetUserId = (isAdmin && normalizedClient !== undefined) ? normalizedClient : normalizedUser;"
+        // Wait, normalizedClient is null if undefined/empty.
+        if (clientUserId !== undefined && clientUserId !== null) return normalizedClient ?? null;
+
+        // If clientUserId was NOT provided, fallback to Admin's own ID.
+        return normalizedAuth ?? null;
+    }
+
+    // 2. Regular User Logic
+    // Must target self.
+    // verifyUserAccess handles the check "if client says user X, but I am Y -> Error"
+    // It also handles "if client says nothing, defaults to me".
+    // But verifyUserAccess returns the ID.
+
+    // We pass 'clientUserId' as the target. If it's null/undefined, verifyUserAccess usually requires auth.
+    return verifyUserAccess(user, normalizedClient) ?? null;
+};

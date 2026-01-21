@@ -10,11 +10,9 @@ async def test_temporal_graph_crud():
     # Mock DB
     with patch("openmemory.temporal_graph.store.db") as mock_db, \
          patch("openmemory.temporal_graph.store.q") as mock_q, \
-         patch("openmemory.temporal_graph.query.db") as mock_query_db, \
-         patch("openmemory.temporal_graph.query.q") as mock_query_q:
+         patch("openmemory.temporal_graph.query.db") as mock_query_db:
          
         mock_q.tables = {"temporal_facts": "tf", "temporal_edges": "te"}
-        mock_query_q.tables = {"temporal_facts": "tf", "temporal_edges": "te"}
         
         # 1. Insert Fact
         mock_db.transaction.return_value.__aenter__.return_value = None
@@ -53,8 +51,8 @@ async def test_temporal_timeline_query():
         
         # Mock timeline data
         mock_db.async_fetchall = AsyncMock(return_value=[
-            {"subject": "Alice", "predicate": "loc", "object": "A", "confidence": 1.0, "valid_from": 100, "valid_to": 200},
-            {"subject": "Alice", "predicate": "loc", "object": "B", "confidence": 1.0, "valid_from": 200, "valid_to": None}
+            {"subject": "Alice", "predicate": "loc", "object": "A", "confidence": 1.0, "validFrom": 100, "validMAlias": 100, "validTo": 200},
+            {"subject": "Alice", "predicate": "loc", "object": "B", "confidence": 1.0, "validFrom": 200, "validMAlias": 200, "validTo": None}
         ])
         
         tl = await get_subject_timeline("Alice", user_id="u1")

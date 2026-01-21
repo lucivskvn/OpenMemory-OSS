@@ -1,14 +1,15 @@
 "use client";
 import React from "react";
 import { cn } from "@/lib/utils";
-import type { MaintLogEntry } from "@/lib/types";
+import type { MaintLogEntry, MaintenanceStatus } from "@/lib/types";
 
 interface MaintenanceFeedProps {
     logs: MaintLogEntry[];
+    status?: MaintenanceStatus | null;
 }
 
-export const MaintenanceFeed: React.FC<MaintenanceFeedProps> = ({ logs }) => {
-    if (!logs.length) {
+export const MaintenanceFeed: React.FC<MaintenanceFeedProps> = ({ logs, status }) => {
+    if (!logs.length && (!status || status.activeJobs.length === 0)) {
         return (
             <div className="glass-card p-8 text-center text-zinc-500 italic text-sm">
                 No maintenance logs found.
@@ -20,8 +21,25 @@ export const MaintenanceFeed: React.FC<MaintenanceFeedProps> = ({ logs }) => {
         <div className="glass-card flex flex-col gap-4 max-h-[400px]">
             <h2 className="text-xl font-bold px-1 border-b border-white/5 pb-2 flex justify-between items-center">
                 <span>System Ops</span>
-                <span className="text-[10px] bg-white/5 px-2 py-1 rounded-full text-zinc-500 font-bold uppercase tracking-widest">Last 24h</span>
+                <div className="flex items-center gap-2">
+                    {status && status.activeJobs.length > 0 && (
+                        <span className="text-[10px] bg-yellow-500/10 text-yellow-500 px-2 py-1 rounded-full font-black uppercase tracking-widest animate-pulse border border-yellow-500/20">
+                            {status.activeJobs.length} Active
+                        </span>
+                    )}
+                    <span className="text-[10px] bg-white/5 px-2 py-1 rounded-full text-zinc-500 font-bold uppercase tracking-widest">Last 24h</span>
+                </div>
             </h2>
+            {status && status.activeJobs.length > 0 && (
+                <div className="bg-yellow-500/5 p-3 rounded-xl border border-yellow-500/10 flex flex-col gap-2">
+                    <span className="text-[9px] font-black text-yellow-500/60 uppercase tracking-widest">Running Now</span>
+                    {status.activeJobs.map((job: string, i: number) => (
+                        <div key={i} className="flex justify-between items-center text-xs">
+                            <span className="font-bold text-yellow-200">{job}</span>
+                        </div>
+                    ))}
+                </div>
+            )}
             <div className="flex-1 overflow-y-auto pr-2 flex flex-col gap-2 custom-scrollbar">
                 {logs.map((log) => (
                     <div

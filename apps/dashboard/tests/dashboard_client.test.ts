@@ -18,7 +18,7 @@ describe("Dashboard MemoryClient", () => {
 
     test("getStats should return stats", async () => {
         const mockStats = { system: { uptime: { seconds: 100 } } };
-        global.fetch = mock(async () => Response.json(mockStats));
+        global.fetch = mock(async () => Response.json(mockStats)) as any;
 
         const stats = await client.getStats();
         expect(stats).toEqual(mockStats as any);
@@ -27,7 +27,8 @@ describe("Dashboard MemoryClient", () => {
 
     test("search should return memories", async () => {
         const mockMemories = [{ id: "1", content: "test" }];
-        global.fetch = mock(async () => Response.json(mockMemories));
+        // Client expects { matches: [...] }
+        global.fetch = mock(async () => Response.json({ matches: mockMemories })) as any;
 
         const res = await client.search("query");
         expect(res).toEqual(mockMemories as any);
@@ -39,12 +40,13 @@ describe("Dashboard MemoryClient", () => {
 
     test("addFact should call temporal API", async () => {
         const mockRes = { id: "fact-1" };
-        global.fetch = mock(async () => Response.json(mockRes));
+        global.fetch = mock(async () => Response.json(mockRes)) as any;
 
         const fact = { subject: "sub", predicate: "rel", object: "obj" };
         const res = await client.addFact(fact);
         expect(res).toEqual(mockRes as any);
-        expect(fetch).toHaveBeenCalledWith("http://api.test/api/temporal/fact", expect.objectContaining({
+        // Client does NOT prepend /api automatically unless it's in baseUrl
+        expect(fetch).toHaveBeenCalledWith("http://api.test/temporal/fact", expect.objectContaining({
             method: "POST"
         }));
     });

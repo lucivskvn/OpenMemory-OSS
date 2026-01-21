@@ -60,10 +60,10 @@ async def handle_list_tools() -> list[Tool]:
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Free-form search text"},
-                    "k": {"type": "integer", "default": 10, "description": "Max results"},
-                    "user_id": {"type": "string", "description": "User context"},
+                    "limit": {"type": "integer", "default": 10, "description": "Max results"},
+                    "userId": {"type": "string", "description": "User context"},
                     "sector": {"type": "string", "description": "Restrict to sector (lexical, semantic, etc)"},
-                    "min_salience": {"type": "number", "description": "Minimum salience threshold"}
+                    "minSalience": {"type": "number", "description": "Minimum salience threshold"}
                 },
                 "required": ["query"]
             }
@@ -75,7 +75,7 @@ async def handle_list_tools() -> list[Tool]:
                 "type": "object",
                 "properties": {
                     "content": {"type": "string", "description": "Memory content"},
-                    "user_id": {"type": "string"},
+                    "userId": {"type": "string"},
                     "tags": {"type": "array", "items": {"type": "string"}},
                     "metadata": {"type": "object"}
                 },
@@ -89,8 +89,8 @@ async def handle_list_tools() -> list[Tool]:
                 "type": "object",
                 "properties": {
                     "id": {"type": "string"},
-                    "include_vectors": {"type": "boolean", "default": False, "description": "Include vector data"},
-                    "user_id": {"type": "string", "description": "Verify user ownership"}
+                    "includeVectors": {"type": "boolean", "default": False, "description": "Include vector data"},
+                    "userId": {"type": "string", "description": "Verify user ownership"}
                 },
                 "required": ["id"]
             }
@@ -103,7 +103,7 @@ async def handle_list_tools() -> list[Tool]:
                 "properties": {
                     "limit": {"type": "integer", "default": 20},
                     "sector": {"type": "string", "description": "Filter by sector"},
-                    "user_id": {"type": "string"}
+                    "userId": {"type": "string"}
                 }
             }
         ),
@@ -115,7 +115,7 @@ async def handle_list_tools() -> list[Tool]:
                 "properties": {
                     "id": {"type": "string", "description": "Memory identifier to reinforce"},
                     "boost": {"type": "number", "default": 0.1, "minimum": 0.01, "maximum": 1.0, "description": "Salience boost amount"},
-                    "user_id": {"type": "string", "description": "Verify user ownership"}
+                    "userId": {"type": "string", "description": "Verify user ownership"}
                 },
                 "required": ["id"]
             }
@@ -132,7 +132,7 @@ async def handle_list_tools() -> list[Tool]:
                 "properties": {
                     "url": {"type": "string", "description": "URL to ingest"},
                     "tags": {"type": "array", "items": {"type": "string"}},
-                    "user_id": {"type": "string"}
+                    "userId": {"type": "string"}
                 },
                 "required": ["url"]
             }
@@ -150,9 +150,9 @@ async def handle_list_tools() -> list[Tool]:
                     "subject": {"type": "string", "description": "Subject entity"},
                     "predicate": {"type": "string", "description": "Relationship type"},
                     "object": {"type": "string", "description": "Object entity"},
-                    "valid_from": {"type": "string", "description": "ISO date for when fact became true"},
+                    "validFrom": {"type": "string", "description": "ISO date for when fact became true"},
                     "confidence": {"type": "number", "default": 1.0},
-                    "user_id": {"type": "string"},
+                    "userId": {"type": "string"},
                     "metadata": {"type": "object"}
                 },
                 "required": ["subject", "predicate", "object"]
@@ -168,7 +168,7 @@ async def handle_list_tools() -> list[Tool]:
                     "predicate": {"type": "string"},
                     "object": {"type": "string"},
                     "at": {"type": "string", "description": "ISO date to query state at"},
-                    "user_id": {"type": "string"}
+                    "userId": {"type": "string"}
                 }
             }
         ),
@@ -179,7 +179,7 @@ async def handle_list_tools() -> list[Tool]:
                 "type": "object",
                 "properties": {
                     "subject": {"type": "string"},
-                    "user_id": {"type": "string"}
+                    "userId": {"type": "string"}
                 },
                 "required": ["subject"]
             }
@@ -190,13 +190,13 @@ async def handle_list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "source_id": {"type": "string"},
-                    "target_id": {"type": "string"},
-                    "relation_type": {"type": "string"},
+                    "sourceId": {"type": "string"},
+                    "targetId": {"type": "string"},
+                    "relationType": {"type": "string"},
                     "weight": {"type": "number", "default": 1.0},
-                    "user_id": {"type": "string"}
+                    "userId": {"type": "string"}
                 },
-                "required": ["source_id", "target_id", "relation_type"]
+                "required": ["sourceId", "targetId", "relationType"]
             }
         ),
         Tool(
@@ -205,10 +205,10 @@ async def handle_list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "source_id": {"type": "string"},
-                    "target_id": {"type": "string"},
-                    "relation_type": {"type": "string"},
-                    "user_id": {"type": "string"}
+                    "sourceId": {"type": "string"},
+                    "targetId": {"type": "string"},
+                    "relationType": {"type": "string"},
+                    "userId": {"type": "string"}
                 }
             }
         ),
@@ -220,7 +220,7 @@ async def handle_list_tools() -> list[Tool]:
                 "properties": {
                     "query": {"type": "string"},
                     "limit": {"type": "integer", "default": 10},
-                    "user_id": {"type": "string"}
+                    "userId": {"type": "string"}
                 },
                 "required": ["query"]
             }
@@ -238,10 +238,10 @@ async def handle_list_tools() -> list[Tool]:
                     "node": {"type": "string", "description": "Node name (plan, reflect, etc)"},
                     "content": {"type": "string"},
                     "namespace": {"type": "string"},
-                    "graph_id": {"type": "string"},
+                    "graphId": {"type": "string"},
                     "tags": {"type": "array", "items": {"type": "string"}},
                     "reflective": {"type": "boolean"},
-                    "user_id": {"type": "string"}
+                    "userId": {"type": "string"}
                 },
                 "required": ["node", "content", "namespace"]
             }
@@ -253,9 +253,9 @@ async def handle_list_tools() -> list[Tool]:
                 "type": "object",
                 "properties": {
                     "namespace": {"type": "string", "default": "default"},
-                    "graph_id": {"type": "string"},
+                    "graphId": {"type": "string"},
                     "limit": {"type": "integer"},
-                    "user_id": {"type": "string"}
+                    "userId": {"type": "string"}
                 },
                 "required": ["namespace"]
             }
@@ -269,7 +269,7 @@ async def handle_list_tools() -> list[Tool]:
                     "file": {"type": "string"},
                     "line": {"type": "integer"},
                     "content": {"type": "string"},
-                    "user_id": {"type": "string"}
+                    "userId": {"type": "string"}
                 },
                 "required": ["file", "line", "content"]
             }
@@ -280,10 +280,10 @@ async def handle_list_tools() -> list[Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "active_files": {"type": "array", "items": {"type": "string"}},
-                    "user_id": {"type": "string"}
+                    "activeFiles": {"type": "array", "items": {"type": "string"}},
+                    "userId": {"type": "string"}
                 },
-                "required": ["active_files"]
+                "required": ["activeFiles"]
             }
         )
     ])
@@ -295,21 +295,21 @@ async def handle_call_tool(name: str, arguments: dict | None, mem_inst: Memory) 
 
     try:
         if name == "openmemory_query":
-            q = args.get("query")
-            if not isinstance(q, str) or not q:
+            q_str = args.get("query")
+            if not isinstance(q_str, str) or not q_str:
                 return [TextContent(type="text", text="Missing query text")]  # type: ignore[arg-type]
-            limit = args.get("k", 10)
-            uid = args.get("user_id")
+            limit = args.get("limit", 10)
+            uid = args.get("userId")
             sector = args.get("sector")
-            min_salience = args.get("min_salience")
+            min_salience = args.get("minSalience")
 
             filters = {}
             if sector: filters["sector"] = sector
             if min_salience is not None: filters["minSalience"] = min_salience
 
-            results = await mem_inst.search(q, user_id=uid, limit=limit, **filters)
-
-            summary = f"Found {len(results)} matches for '{q}'"
+            results = await mem_inst.search(q_str, user_id=uid, limit=limit, **filters)
+            
+            summary = f"Found {len(results)} matches for '{q_str}'"
             json_res = json.dumps(results, default=str, indent=2)
 
             return [
@@ -321,7 +321,7 @@ async def handle_call_tool(name: str, arguments: dict | None, mem_inst: Memory) 
             content = args.get("content")
             if not isinstance(content, str) or not content:
                 return [TextContent(type="text", text="Missing content to store")]  # type: ignore[arg-type]
-            uid = args.get("user_id")
+            uid = args.get("userId")
             tags = args.get("tags", [])
             meta = args.get("metadata", {})
 
@@ -336,14 +336,14 @@ async def handle_call_tool(name: str, arguments: dict | None, mem_inst: Memory) 
             mid = args.get("id")
             if not isinstance(mid, str) or not mid:
                 return [TextContent(type="text", text="Missing memory id")]
-            uid = args.get("user_id")
+            uid = args.get("userId")
             # Now using the strengthened SDK get() which checks ownership
             m = await mem_inst.get(mid, user_id=uid)
             if not m:
                 return [TextContent(type="text", text=f"Memory {mid} not found or access denied")]
 
             target = dict(m)
-            if not args.get("include_vectors"):
+            if not args.get("includeVectors"):
                 # Remove vector fields if not requested to reduce noise
                 keys = list(target.keys())
                 for k in keys:
@@ -354,7 +354,7 @@ async def handle_call_tool(name: str, arguments: dict | None, mem_inst: Memory) 
 
         elif name == "openmemory_list":
             limit = args.get("limit", 20)
-            uid = args.get("user_id")
+            uid = args.get("userId")
             sector = args.get("sector")
 
             # We need to support sector filter in memory.history or do manual filtering
@@ -374,7 +374,7 @@ async def handle_call_tool(name: str, arguments: dict | None, mem_inst: Memory) 
             if not isinstance(mid, str) or not mid:
                 return [TextContent(type="text", text="Missing memory id to reinforce")]
             boost = args.get("boost", 0.1)
-            uid = args.get("user_id")
+            uid = args.get("userId")
 
             if uid:
                 # Direct DB check since reinforce_memory doesn't check owner yet (it's low level)
@@ -392,7 +392,7 @@ async def handle_call_tool(name: str, arguments: dict | None, mem_inst: Memory) 
             if not isinstance(url, str) or not url:
                 return [TextContent(type="text", text="Missing url")]
             tags = args.get("tags", [])
-            uid = args.get("user_id")
+            uid = args.get("userId")
 
             res = await ingest_url(url, tags=tags, user_id=uid)
             return [
@@ -415,9 +415,9 @@ async def handle_call_tool(name: str, arguments: dict | None, mem_inst: Memory) 
             subject = cast(str, subject)
             predicate = cast(str, predicate)
             obj = cast(str, obj)
-            valid_from = args.get("valid_from")
+            valid_from = args.get("validFrom")
             confidence = args.get("confidence", 1.0)
-            uid = args.get("user_id")
+            uid = args.get("userId")
             meta = args.get("metadata")
 
             ts = None
@@ -435,7 +435,7 @@ async def handle_call_tool(name: str, arguments: dict | None, mem_inst: Memory) 
             predicate = args.get("predicate")
             obj = args.get("object")
             at = args.get("at")
-            uid = args.get("user_id")
+            uid = args.get("userId")
 
             ts = None
             if at:
@@ -452,7 +452,7 @@ async def handle_call_tool(name: str, arguments: dict | None, mem_inst: Memory) 
 
         elif name == "openmemory_temporal_timeline":
             subject = args.get("subject")
-            uid = args.get("user_id")
+            uid = args.get("userId")
 
             subject = cast(str, subject)
             timeline = await get_subject_timeline(subject, user_id=uid)  # type: ignore[call-arg]
@@ -462,30 +462,30 @@ async def handle_call_tool(name: str, arguments: dict | None, mem_inst: Memory) 
             ]
 
         elif name == "openmemory_temporal_edge_create":
-            src = args.get("source_id")
-            dst = args.get("target_id")
-            rel = args.get("relation_type")
+            src = args.get("sourceId")
+            dst = args.get("targetId")
+            rel = args.get("relationType")
             if not all(isinstance(x, str) and x for x in [src, dst, rel]):
                 return [
                     TextContent(
                         type="text",
-                        text="source_id, target_id, and relation_type are required",
+                        text="sourceId, targetId, and relationType are required",
                     )
                 ]
             src = cast(str, src)
             dst = cast(str, dst)
             rel = cast(str, rel)
             wt = args.get("weight", 1.0)
-            uid = args.get("user_id")
+            uid = args.get("userId")
 
             eid = await insert_edge(src, dst, rel, weight=wt, user_id=uid)  # type: ignore[call-arg]
             return [TextContent(type="text", text=f"Created temporal edge {eid}")]
 
         elif name == "openmemory_temporal_edge_query":
-            src = args.get("source_id")
-            dst = args.get("target_id")
-            rel = args.get("relation_type")
-            uid = args.get("user_id")
+            src = args.get("sourceId")
+            dst = args.get("targetId")
+            rel = args.get("relationType")
+            uid = args.get("userId")
 
             edges = await query_edges(source_id=src, target_id=dst, relation_type=rel, user_id=uid)  # type: ignore[call-arg]
             return [
@@ -498,7 +498,7 @@ async def handle_call_tool(name: str, arguments: dict | None, mem_inst: Memory) 
             if not isinstance(q_str, str) or not q_str:
                 return [TextContent(type="text", text="Missing query string")]
             limit = args.get("limit", 10)
-            uid = args.get("user_id")
+            uid = args.get("userId")
 
             facts = await search_facts(q_str, limit=limit, user_id=uid)  # type: ignore[call-arg]
             return [
@@ -511,10 +511,10 @@ async def handle_call_tool(name: str, arguments: dict | None, mem_inst: Memory) 
                 node=cast(str, args.get("node")),
                 content=cast(str, args.get("content")),
                 namespace=cast(str, args.get("namespace")),
-                graph_id=args.get("graph_id"),  # type: ignore[call-arg]  # type: ignore[call-arg]
+                graphId=args.get("graphId"),  # type: ignore[call-arg]  # type: ignore[call-arg]
                 tags=args.get("tags"),
                 reflective=args.get("reflective"),
-                user_id=args.get("user_id"),  # type: ignore[call-arg]  # type: ignore[call-arg]
+                userId=args.get("userId"),  # type: ignore[call-arg]  # type: ignore[call-arg]
             )
             res = await store_node_mem(req)
             return [
@@ -525,9 +525,9 @@ async def handle_call_tool(name: str, arguments: dict | None, mem_inst: Memory) 
         elif name == "openmemory_get_graph_context":
             req = LgmContextReq(  # type: ignore[call-arg]
                 namespace=cast(str, args.get("namespace") or "default"),
-                graph_id=args.get("graph_id"),  # type: ignore[call-arg]  # type: ignore[call-arg]
+                graphId=args.get("graphId"),  # type: ignore[call-arg]  # type: ignore[call-arg]
                 limit=args.get("limit"),
-                user_id=args.get("user_id"),  # type: ignore[call-arg]  # type: ignore[call-arg]
+                userId=args.get("userId"),  # type: ignore[call-arg]  # type: ignore[call-arg]
             )
             ctx = await get_graph_ctx(req)
             return [
@@ -539,7 +539,7 @@ async def handle_call_tool(name: str, arguments: dict | None, mem_inst: Memory) 
             file_p = cast(str, args.get("file"))
             line = cast(int, args.get("line")) # Unused in simple implementation?
             content = cast(str, args.get("content"))
-            uid = args.get("user_id")
+            uid = args.get("userId")
 
             # Using content as query if not specific logic
             # Simulating query logic from router: "search relevant"
@@ -557,8 +557,8 @@ async def handle_call_tool(name: str, arguments: dict | None, mem_inst: Memory) 
             ]
 
         elif name == "openmemory_ide_patterns":
-            active_files = args.get("active_files", [])
-            uid = args.get("user_id")
+            active_files = args.get("activeFiles", [])
+            uid = args.get("userId")
 
             # Simulate session ID from first file or generic?
             # ide.py expects session_id.

@@ -1,5 +1,11 @@
+/**
+ * @file agents.ts
+ * @description Standalone toolset for Agent integrations.
+ * @audited 2026-01-19
+ */
 import { Memory } from "../core/memory";
 import { AppError } from "../server/errors";
+import { env } from "../core/cfg";
 import { normalizeUserId, safeDate } from "../utils";
 
 /**
@@ -28,8 +34,8 @@ export class OpenMemoryTools {
      */
     async search(
         query: string,
-        limit = 5,
-        userId?: string,
+        limit = 10,
+        userId?: string | null,
     ): Promise<
         { content: string; score: number; created: number; id: string }[]
     > {
@@ -41,14 +47,14 @@ export class OpenMemoryTools {
             );
 
         const finalUserId = normalizeUserId(userId) || this.defaultUserId;
-        if (!finalUserId)
+        if (!finalUserId && !env.noAuth)
             throw new AppError(
                 400,
                 "BAD_REQUEST",
                 "User ID is required for Agent operations to prevent data leakage.",
             );
 
-        const m = userId ? new Memory(finalUserId) : this.memory;
+        const m = finalUserId ? new Memory(finalUserId) : this.memory;
         const results = await m.search(query, { limit });
         return results.map((r) => ({
             content: r.content,
@@ -67,7 +73,7 @@ export class OpenMemoryTools {
     async store(
         content: string,
         tags: string[] = [],
-        userId?: string,
+        userId?: string | null,
     ): Promise<{ status: string; id: string; sector: string }> {
         if (!content || typeof content !== "string")
             throw new AppError(
@@ -77,10 +83,10 @@ export class OpenMemoryTools {
             );
 
         const finalUserId = normalizeUserId(userId) || this.defaultUserId;
-        if (!finalUserId)
+        if (!finalUserId && !env.noAuth)
             throw new AppError(400, "BAD_REQUEST", "User ID is required.");
 
-        const m = userId ? new Memory(finalUserId) : this.memory;
+        const m = finalUserId ? new Memory(finalUserId) : this.memory;
         const res = await m.add(content, { tags });
 
         return {
@@ -102,11 +108,11 @@ export class OpenMemoryTools {
         userId?: string | null;
     }): Promise<import("../temporal_graph/types").TemporalFact[]> {
         const finalUserId = normalizeUserId(query.userId) || this.defaultUserId;
-        if (!finalUserId)
+        if (!finalUserId && !env.noAuth)
             throw new AppError(400, "BAD_REQUEST", "User ID is required.");
 
         const atDate = safeDate(query.at) || new Date();
-        const m = query.userId ? new Memory(finalUserId) : this.memory;
+        const m = finalUserId ? new Memory(finalUserId) : this.memory;
 
         return await m.temporal.queryFacts(
             query.subject,
@@ -130,10 +136,10 @@ export class OpenMemoryTools {
     ): Promise<import("../temporal_graph/types").TemporalFact[]> {
         if (!query) throw new AppError(400, "BAD_REQUEST", "Query is required");
         const finalUserId = normalizeUserId(userId) || this.defaultUserId;
-        if (!finalUserId)
+        if (!finalUserId && !env.noAuth)
             throw new AppError(400, "BAD_REQUEST", "User ID is required.");
 
-        const m = userId ? new Memory(finalUserId) : this.memory;
+        const m = finalUserId ? new Memory(finalUserId) : this.memory;
         return await m.temporal.search(query, { limit });
     }
 
@@ -164,11 +170,11 @@ export class OpenMemoryTools {
             );
 
         const finalUserId = normalizeUserId(userId) || this.defaultUserId;
-        if (!finalUserId)
+        if (!finalUserId && !env.noAuth)
             throw new AppError(400, "BAD_REQUEST", "User ID is required.");
 
         const from = safeDate(validFrom) || new Date();
-        const m = userId ? new Memory(finalUserId) : this.memory;
+        const m = finalUserId ? new Memory(finalUserId) : this.memory;
         const id = await m.temporal.add(subject, predicate, object, {
             validFrom: from,
             confidence,
@@ -194,10 +200,10 @@ export class OpenMemoryTools {
             throw new AppError(400, "BAD_REQUEST", "Fact ID is required");
 
         const finalUserId = normalizeUserId(userId) || this.defaultUserId;
-        if (!finalUserId)
+        if (!finalUserId && !env.noAuth)
             throw new AppError(400, "BAD_REQUEST", "User ID is required.");
 
-        const m = userId ? new Memory(finalUserId) : this.memory;
+        const m = finalUserId ? new Memory(finalUserId) : this.memory;
         await m.temporal.updateFact(factId, confidence, metadata);
         return { status: "success", factId };
     }
@@ -216,11 +222,11 @@ export class OpenMemoryTools {
         if (!factId)
             throw new AppError(400, "BAD_REQUEST", "Fact ID is required");
         const finalUserId = normalizeUserId(userId) || this.defaultUserId;
-        if (!finalUserId)
+        if (!finalUserId && !env.noAuth)
             throw new AppError(400, "BAD_REQUEST", "User ID is required.");
 
         const toDate = safeDate(validTo) || new Date();
-        const m = userId ? new Memory(finalUserId) : this.memory;
+        const m = finalUserId ? new Memory(finalUserId) : this.memory;
         await m.temporal.invalidateFact(factId, toDate);
         return {
             status: "success",
@@ -240,23 +246,25 @@ export class OpenMemoryTools {
     async storeTemporalEdge(
         source: string,
         target: string,
-        relation: string,
+        relationType: string,
         weight = 1.0,
+        metadata?: Record<string, unknown>,
         userId?: string | null,
     ): Promise<{ id: string; status: string }> {
-        if (!source || !target || !relation)
+        if (!source || !target || !relationType)
             throw new AppError(
                 400,
                 "BAD_REQUEST",
-                "Source, target, and relation are required",
+                "Source, target, and relationType are required",
             );
         const finalUserId = normalizeUserId(userId) || this.defaultUserId;
-        if (!finalUserId)
+        if (!finalUserId && !env.noAuth)
             throw new AppError(400, "BAD_REQUEST", "User ID is required.");
 
-        const m = userId ? new Memory(finalUserId) : this.memory;
-        const id = await m.temporal.addEdge(source, target, relation, {
+        const m = finalUserId ? new Memory(finalUserId) : this.memory;
+        const id = await m.temporal.addEdge(source, target, relationType, {
             weight,
+            metadata,
         });
         return { id, status: "success" };
     }
@@ -277,10 +285,10 @@ export class OpenMemoryTools {
         if (!edgeId) throw new AppError(400, "BAD_REQUEST", "Edge ID is required");
 
         const finalUserId = normalizeUserId(userId) || this.defaultUserId;
-        if (!finalUserId)
+        if (!finalUserId && !env.noAuth)
             throw new AppError(400, "BAD_REQUEST", "User ID is required.");
 
-        const m = userId ? new Memory(finalUserId) : this.memory;
+        const m = finalUserId ? new Memory(finalUserId) : this.memory;
         await m.temporal.updateEdge?.(edgeId, weight, metadata);
 
         return { status: "success", edgeId };
@@ -316,13 +324,17 @@ export class OpenMemoryTools {
         graphId?: string,
         userId?: string,
     ) {
+        const finalUserId = normalizeUserId(userId) || this.defaultUserId;
+        if (!finalUserId && !env.noAuth)
+            throw new AppError(400, "BAD_REQUEST", "User ID is required.");
+
         const { storeNodeMem } = await import("./graph");
         return await storeNodeMem({
             node,
             content,
             namespace,
             graphId,
-            userId: normalizeUserId(userId) || this.defaultUserId || undefined,
+            userId: finalUserId || undefined,
         });
     }
 
@@ -340,12 +352,16 @@ export class OpenMemoryTools {
         limit = 20,
         userId?: string,
     ) {
+        const finalUserId = normalizeUserId(userId) || this.defaultUserId;
+        if (!finalUserId && !env.noAuth)
+            throw new AppError(400, "BAD_REQUEST", "User ID is required.");
+
         const { getGraphCtx } = await import("./graph");
         return await getGraphCtx({
             namespace,
             graphId,
             limit,
-            userId: normalizeUserId(userId) || this.defaultUserId || undefined,
+            userId: finalUserId || undefined,
         });
     }
 
@@ -374,7 +390,7 @@ export class OpenMemoryTools {
                         limit: {
                             type: "integer",
                             description: "Maximum results to return.",
-                            default: 5,
+                            default: 10,
                         },
                         userId: {
                             type: "string",
@@ -462,6 +478,7 @@ export class OpenMemoryTools {
                     "Store a structured, time-aware fact into the knowledge graph (e.g., 'User lives in Paris' valid from '2020-01-01').",
                 parameters: {
                     type: "object",
+                    required: baseRequired(["subject", "predicate", "object"]),
                     properties: {
                         subject: { type: "string" },
                         predicate: { type: "string" },
@@ -471,9 +488,12 @@ export class OpenMemoryTools {
                             type: "string",
                             description: "ISO date string or timestamp.",
                         },
+                        metadata: {
+                            type: "object",
+                            description: "Optional structured metadata.",
+                        },
                         userId: { type: "string" },
                     },
-                    required: baseRequired(["subject", "predicate", "object"]),
                 },
             },
             {
@@ -526,14 +546,18 @@ export class OpenMemoryTools {
                             type: "string",
                             description: "Target entity ID.",
                         },
-                        relation: {
+                        relationType: {
                             type: "string",
                             description: "Type of relation.",
                         },
                         weight: { type: "number", default: 1.0 },
+                        metadata: {
+                            type: "object", // Added to support metadata
+                            description: "Optional edge metadata."
+                        },
                         userId: { type: "string" },
                     },
-                    required: baseRequired(["source", "target", "relation"]),
+                    required: baseRequired(["source", "target", "relationType"]),
                 },
             },
             {

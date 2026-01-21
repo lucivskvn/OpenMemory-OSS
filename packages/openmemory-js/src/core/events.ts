@@ -1,10 +1,11 @@
 import { EventEmitter } from "events";
 
+import { env } from "./cfg";
 import { getContext } from "./context";
 import {
     IdeSessionPayload,
     IdeSuggestionPayload,
-    MemoryAddedPayload,
+    MemoryItem,
 } from "./types";
 import { logger } from "../utils/logger";
 
@@ -12,6 +13,7 @@ import { logger } from "../utils/logger";
 export const EVENTS = {
     MEMORY_ADDED: "memory_added",
     MEMORY_UPDATED: "memory_updated",
+    MEMORY_DELETED: "memory_deleted",
     IDE_SUGGESTION: "ide_suggestion",
     IDE_SESSION_UPDATE: "ide_session_update",
     TEMPORAL_FACT_CREATED: "temporal:fact:created",
@@ -28,12 +30,17 @@ export interface OpenMemoryEventMap {
      * Fired when a new memory (episodic, semantic, etc.) is added to the system.
      * Guaranteed to be fully hydrated with ID and primary sector.
      */
-    [EVENTS.MEMORY_ADDED]: MemoryAddedPayload;
+    [EVENTS.MEMORY_ADDED]: MemoryItem;
 
     /**
      * Fired when a memory is modified (content, tags, or metadata).
      */
-    [EVENTS.MEMORY_UPDATED]: { id: string; userId?: string | null;[key: string]: unknown };
+    [EVENTS.MEMORY_UPDATED]: Partial<MemoryItem> & { id: string };
+
+    /**
+     * Fired when a memory is deleted.
+     */
+    [EVENTS.MEMORY_DELETED]: { id: string; userId?: string | null };
 
     /**
      * Fired when the IDE integration detects a new pattern or suggestion.
@@ -123,18 +130,14 @@ export interface OpenMemoryEventMap {
 class TypedEventEmitter extends EventEmitter {
     constructor() {
         super();
-        // Configurable max listeners from env or default to 100
-        const maxListeners = parseInt(process.env.OM_EVENT_MAX_LISTENERS || "100", 10);
-        this.setMaxListeners(isNaN(maxListeners) ? 100 : maxListeners);
+        const maxListeners = env.eventMaxListeners || 100;
+        this.setMaxListeners(maxListeners);
     }
 
     /**
      * Synchronously calls each of the listeners registered for the event named `eventName`.
      * Hardened to isolate listener errors and inject context metadata.
-     */
-    /**
-     * Synchronously calls each of the listeners registered for the event named `eventName`.
-     * Hardened to isolate listener errors and inject context metadata.
+     * Catches async listener errors to prevent unhandled promise rejections.
      */
     override emit<K extends keyof OpenMemoryEventMap>(
         event: K,
@@ -142,9 +145,15 @@ class TypedEventEmitter extends EventEmitter {
     ): boolean {
         const ctx = getContext();
         if (ctx?.requestId && typeof payload === "object" && payload !== null) {
-            // Inject requestId into payload if not present
+            // Inject requestId into payload if not present and not frozen
             const p = payload as Record<string, unknown>;
-            if (!p.requestId) p.requestId = ctx.requestId;
+            if (!p.requestId && !Object.isFrozen(p)) {
+                try {
+                    p.requestId = ctx.requestId;
+                } catch (e) {
+                    // Ignore mutation errors if read-only
+                }
+            }
         }
 
         // Use rawListeners to ensure we get the exact functions (including wrappers)
@@ -155,7 +164,18 @@ class TypedEventEmitter extends EventEmitter {
         for (const listener of listeners) {
             try {
                 // Call directly. Our custom 'once' wrapper handles self-removal.
-                (listener as Function)(payload);
+                const result = (listener as Function)(payload);
+
+                // If the listener returns a Promise (async), we must catch rejections
+                // because simple try-catch block above only catches synchronous errors.
+                if (result instanceof Promise) {
+                    result.catch((error: unknown) => {
+                        logger.error(`[EVENTS] Async error in listener for ${String(event)}:`, {
+                            error,
+                            requestId: ctx?.requestId,
+                        });
+                    });
+                }
             } catch (error) {
                 logger.error(`[EVENTS] Error in listener for ${String(event)}:`, {
                     error,
@@ -201,6 +221,14 @@ class TypedEventEmitter extends EventEmitter {
         listener: (payload: OpenMemoryEventMap[K]) => void,
     ): this {
         return super.off(event, listener);
+    }
+
+    /**
+     * Resets the event bus by removing all listeners for all events.
+     * Useful for test isolation.
+     */
+    clearListeners(): void {
+        this.removeAllListeners();
     }
 }
 

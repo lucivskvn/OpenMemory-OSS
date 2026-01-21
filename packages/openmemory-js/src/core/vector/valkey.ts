@@ -5,7 +5,7 @@
 import { normalizeUserId } from "../../utils";
 import { retry } from "../../utils/index";
 import { logger } from "../../utils/logger";
-import { bufferToVector, vectorToBuffer } from "../../utils/vectors";
+import { bufferToVector, vectorToUint8Array } from "../../utils/vectors";
 import { getRedisClient } from "../redis";
 import { VectorStore } from "../vector_store";
 
@@ -59,10 +59,14 @@ export class ValkeyVectorStore implements VectorStore {
                         "TAG",
                         "id",
                         "TAG",
+                        "metadata",
+                        "TEXT",
+                        "dim",
+                        "NUMERIC",
                         "v",
                         "VECTOR",
-                        "FLAT",
-                        "6",
+                        "HNSW",
+                        "12",
                         "TYPE",
                         "FLOAT32",
                         "DIM",
@@ -101,10 +105,10 @@ export class ValkeyVectorStore implements VectorStore {
     ): Promise<void> {
         await this.ensureIndex(sector, dim);
         const key = `vec:${sector}:${id}`;
-        const blob = vectorToBuffer(vector);
+        const blob = vectorToUint8Array(vector);
         const mapping: Record<string, string | Buffer> = {
             id,
-            v: blob,
+            v: Buffer.from(blob),
             userId: this.getValkeyId(userId),
             metadata: metadata ? JSON.stringify(metadata) : "",
         };
@@ -147,10 +151,10 @@ export class ValkeyVectorStore implements VectorStore {
                 const pipe = client.pipeline();
                 for (const item of items) {
                     const key = `vec:${item.sector}:${item.id}`;
-                    const blob = vectorToBuffer(item.vector);
+                    const blob = vectorToUint8Array(item.vector);
                     const mapping: Record<string, string | Buffer> = {
                         id: item.id,
-                        v: blob,
+                        v: Buffer.from(blob),
                         userId: this.getValkeyId(userId),
                         dim: item.dim.toString(),
                         metadata: item.metadata ? JSON.stringify(item.metadata) : "",
@@ -279,7 +283,7 @@ export class ValkeyVectorStore implements VectorStore {
         _filter?: { metadata?: Record<string, unknown> },
     ): Promise<Array<{ id: string; score: number }>> {
         const indexName = `idx:${sector}`;
-        const blob = vectorToBuffer(queryVec);
+        const blob = vectorToUint8Array(queryVec);
 
         const uid = normalizeUserId(userId);
         let query = "";
@@ -314,7 +318,7 @@ export class ValkeyVectorStore implements VectorStore {
                         "PARAMS",
                         "2",
                         "blob",
-                        blob,
+                        Buffer.from(blob),
                         "SORTBY",
                         "score",
                         "ASC",
@@ -470,34 +474,114 @@ export class ValkeyVectorStore implements VectorStore {
     async getVectorsBySector(
         sector: string,
         userId?: string | null,
+        limit: number = 1000,
+        offset: number = 0,
     ): Promise<Array<{ id: string; vector: number[]; dim: number }>> {
-        const results: Array<{ id: string; vector: number[]; dim: number }> =
-            [];
-        let cursor = "0";
-        const prefix = `vec:${sector}:`;
-        const client = getRedisClient();
-        do {
-            const res = await client.scan(
-                cursor,
-                "MATCH",
-                `${prefix}*`,
-                "COUNT",
-                500,
-            );
-            cursor = res[0];
-            const keys = res[1];
-            for (const key of keys) {
-                const data = await client.hgetall(key);
-                if (data && data.v && (!userId || data.userId === userId)) {
+        const indexName = `idx:${sector}`;
+        const uid = normalizeUserId(userId);
+
+        // Strategy A: Use RediSearch (Efficient)
+        try {
+            const query = uid !== undefined
+                ? `(@userId:{${this.getValkeyId(userId)}})`
+                : "*";
+
+            const res = (await getRedisClient().call(
+                "FT.SEARCH",
+                indexName,
+                query,
+                "LIMIT",
+                offset.toString(),
+                limit.toString(),
+                "RETURN", "3", "id", "v", "dim"
+            )) as unknown as [number, ...any[]];
+
+            if (!res || res[0] === 0) return [];
+
+            const results: Array<{ id: string; vector: number[]; dim: number }> = [];
+            for (let i = 1; i < res.length; i += 2) {
+                const fields = res[i + 1];
+                // Parse generic array response from Redis
+                let id = "";
+                let v: Buffer | null = null;
+                let dim = 0;
+                for (let j = 0; j < fields.length; j += 2) {
+                    if (fields[j] === "id") id = fields[j + 1];
+                    else if (fields[j] === "v") v = fields[j + 1];
+                    else if (fields[j] === "dim") dim = parseInt(fields[j + 1]);
+                }
+
+                // Handle binary data correctly (ioredis returns Buffer for Buffer args usually)
+                // If v is string (lazy dependency), bufferToVector handles it? 
+                // bufferToVector expects Buffer.
+                if (id && v) {
+                    // Ensure v is Buffer
+                    const buf = Buffer.isBuffer(v) ? v : Buffer.from(v as any);
                     results.push({
-                        id: data.id,
-                        vector: bufferToVector(data.v as unknown as Buffer),
-                        dim: parseInt(data.dim),
+                        id,
+                        vector: bufferToVector(buf),
+                        dim: dim || 0
                     });
                 }
             }
-        } while (cursor !== "0");
-        return results;
+            return results;
+
+        } catch (e: any) {
+            // Strategy B: Fallback to SCAN (Slow, O(N))
+            // Only if index missing or error
+            if (!e.message?.includes("Unknown index")) {
+                logger.warn(`[VALKEY] FT.SEARCH failed for ${sector}, falling back to SCAN.`, { error: e });
+            }
+
+            const results: Array<{ id: string; vector: number[]; dim: number }> = [];
+            let cursor = "0";
+            const prefix = `vec:${sector}:`;
+            const client = getRedisClient();
+            let skipped = 0;
+
+            do {
+                const res = await client.scan(
+                    cursor,
+                    "MATCH",
+                    `${prefix}*`,
+                    "COUNT",
+                    100, // Batch size
+                );
+                cursor = res[0];
+                const keys = res[1];
+
+                // Pipeline fetching values
+                if (keys.length > 0) {
+                    const pipe = client.pipeline();
+                    for (const k of keys) pipe.hgetall(k);
+                    const items = await pipe.exec();
+
+                    if (items) {
+                        for (const itemRes of items) {
+                            const [err, data] = itemRes as [Error | null, any];
+                            if (!err && data && data.v && (!userId || data.userId === uid)) {
+                                if (skipped < offset) {
+                                    skipped++;
+                                    continue;
+                                }
+                                if (results.length >= limit) {
+                                    return results;
+                                }
+
+                                results.push({
+                                    id: data.id,
+                                    vector: bufferToVector(data.v as unknown as Buffer),
+                                    dim: parseInt(data.dim),
+                                });
+                            }
+                        }
+                    }
+                }
+                if (results.length >= limit) break; // Optimization
+            } while (cursor !== "0");
+
+            return results;
+        }
     }
 
     async deleteVectorsByUser(userId: string): Promise<void> {
@@ -598,6 +682,13 @@ export class ValkeyVectorStore implements VectorStore {
 
     async getAllVectorIds(userId?: string | null): Promise<Set<string>> {
         const ids = new Set<string>();
+        for await (const id of this.iterateVectorIds(userId)) {
+            ids.add(id);
+        }
+        return ids;
+    }
+
+    async *iterateVectorIds(userId?: string | null): AsyncIterable<string> {
         let cursor = "0";
         const client = getRedisClient();
         const normalizedTarget = normalizeUserId(userId);
@@ -608,65 +699,55 @@ export class ValkeyVectorStore implements VectorStore {
                 "MATCH",
                 "idx:id_sectors:*",
                 "COUNT",
-                500,
+                100,
             );
             cursor = res[0];
             const keys = res[1];
 
+            if (keys.length === 0) continue;
+
+            const chunkIds: string[] = [];
+            for (const k of keys) {
+                const id = k.split(":").pop();
+                if (id) chunkIds.push(id);
+            }
+
+            if (chunkIds.length === 0) continue;
+
             if (normalizedTarget === undefined) {
-                // Global access: just parse IDs
-                for (const k of keys) {
-                    const id = k.split(":").pop();
-                    if (id) ids.add(id);
-                }
+                // Global access: just yield IDs
+                for (const id of chunkIds) yield id;
             } else {
                 // Pipeline ownership checks
                 const pipe = client.pipeline();
-                const chunkIds: string[] = [];
-
+                // Get sectors for each ID to find a representative key
                 for (const k of keys) {
-                    const id = k.split(":").pop();
-                    if (id) {
-                        chunkIds.push(id);
-                        pipe.smembers(k); // Get sectors
-                    }
+                    pipe.smembers(k);
                 }
 
-                if (chunkIds.length > 0) {
-                    const results = await pipe.exec();
-                    if (results) {
-                        // Second pass pipeline for HGET matches
-                        const verifyPipe = client.pipeline();
-                        const verifyMap: number[] = []; // Map pipe index to ID index
+                const results = await pipe.exec();
+                if (results) {
+                    // Second pass pipeline for HGET matches
+                    const verifyPipe = client.pipeline();
+                    const verifyMap: number[] = []; // Map pipe index to chunk index
 
-                        for (let i = 0; i < results.length; i++) {
-                            const [err, sectors] = results[i] as [
-                                Error | null,
-                                string[],
-                            ];
-                            if (!err && sectors && sectors.length > 0) {
-                                // Check first sector
-                                const key = `vec:${sectors[0]}:${chunkIds[i]}`;
-                                verifyPipe.hget(key, "userId");
-                                verifyMap.push(i);
-                            }
+                    for (let i = 0; i < results.length; i++) {
+                        const [err, sectors] = results[i] as [Error | null, string[]];
+                        if (!err && sectors && sectors.length > 0) {
+                            // Check first sector
+                            const key = `vec:${sectors[0]}:${chunkIds[i]}`;
+                            verifyPipe.hget(key, "userId");
+                            verifyMap.push(i);
                         }
+                    }
 
-                        if (verifyMap.length > 0) {
-                            const verifyResults = await verifyPipe.exec();
-                            if (verifyResults) {
-                                for (let j = 0; j < verifyResults.length; j++) {
-                                    const [vErr, owner] = verifyResults[j] as [
-                                        Error | null,
-                                        string | null,
-                                    ];
-                                    if (
-                                        !vErr &&
-                                        normalizeUserId(owner) ===
-                                        normalizedTarget
-                                    ) {
-                                        ids.add(chunkIds[verifyMap[j]]);
-                                    }
+                    if (verifyMap.length > 0) {
+                        const verifyResults = await verifyPipe.exec();
+                        if (verifyResults) {
+                            for (let j = 0; j < verifyResults.length; j++) {
+                                const [vErr, owner] = verifyResults[j] as [Error | null, string | null];
+                                if (!vErr && normalizeUserId(owner) === normalizedTarget) {
+                                    yield chunkIds[verifyMap[j]];
                                 }
                             }
                         }
@@ -674,8 +755,12 @@ export class ValkeyVectorStore implements VectorStore {
                 }
             }
         } while (cursor !== "0");
+    }
 
-        return ids;
+    async cleanupOrphanedVectors(_userId?: string | null): Promise<{ deleted: number }> {
+        // Valkey implementation of orphaned cleanup is complex as it requires cross-checking with SQL DB.
+        // For now, we rely on application-level consistency (deleteMemory calling deleteVectors).
+        return { deleted: 0 };
     }
 
     async disconnect(): Promise<void> {

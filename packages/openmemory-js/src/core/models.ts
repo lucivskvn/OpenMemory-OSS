@@ -2,7 +2,6 @@
  * @file Model configuration loader for embedding providers.
  * Loads model mappings from models.yml or falls back to sensible defaults.
  */
-import { existsSync,readFileSync } from "node:fs"; // Fallback for sync contexts
 import { join } from "node:path";
 
 import { parse } from "yaml";
@@ -46,28 +45,18 @@ export const loadModelsAsync = async (): Promise<ModelCfg> => {
 };
 
 // Sync loader for legacy/startup interactions (Node Compatibility)
+// strictly requires loadModelsAsync to be called first in Bun environment
 export const loadModelsSync = (): ModelCfg => {
     if (cfg) return cfg;
-    const p = join(__dirname, "../../../models.yml");
-    if (!existsSync(p)) {
-        logger.error("[MODELS] models.yml not found, using defaults");
-        cfg = getDefaults(); // Cache default
-        return cfg!;
-    }
-    try {
-        const yml = readFileSync(p, "utf-8");
-        cfg = parseYaml(yml);
-
-        if (env.verbose)
-            logger.info(
-                `[MODELS] Loaded models.yml (${Object.keys(cfg).length} sectors)`,
-            );
-        return cfg!;
-    } catch (e) {
-        logger.error("[MODELS] Failed to parse models.yml:", { error: e });
-        cfg = getDefaults();
-        return cfg!;
-    }
+    // Fallback to defaults first to avoid crashing if just checking types/defaults, 
+    // BUT log warning that async init was skipped.
+    // Actually, for "Native Bun", we should rely on async. 
+    // If we return defaults, we might mask issues. 
+    // But crashing might break some specific synchronous tool.
+    // Let's log warn and return defaults.
+    logger.warn("[MODELS] loadModelsSync called before loadModelsAsync! Returning defaults.");
+    cfg = getDefaults();
+    return cfg!;
 };
 
 
@@ -129,7 +118,7 @@ const getDefaults = (): ModelCfg => ({
  */
 export const getModel = (sector: string, provider: string): string => {
     // Environment variable overrides
-    if (provider === "ollama" && env.ollamaModel) return env.ollamaModel;
+    if (provider === "ollama" && env.ollamaEmbedModel) return env.ollamaEmbedModel;
     if (provider === "openai" && env.openaiModel) return env.openaiModel;
     if (provider === "gemini" && env.geminiModel) return env.geminiModel;
     if (provider === "aws" && env.awsModel) return env.awsModel;

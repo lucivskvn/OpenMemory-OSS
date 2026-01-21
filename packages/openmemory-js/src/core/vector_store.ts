@@ -40,21 +40,25 @@ export interface VectorStore {
         id: string,
         sector: string,
         userId?: string | null,
-    ): Promise<{ vector: number[]; dim: number } | null>;
+    ): Promise<{ vector: number[]; dim: number; metadata?: Record<string, unknown> } | null>;
     getVectorsById(
         id: string,
         userId?: string | null,
-    ): Promise<Array<{ sector: string; vector: number[]; dim: number }>>;
+    ): Promise<Array<{ sector: string; vector: number[]; dim: number; metadata?: Record<string, unknown> }>>;
     getVectorsByIds(
         ids: string[],
         userId?: string | null,
     ): Promise<
-        Array<{ id: string; sector: string; vector: number[]; dim: number }>
+        Array<{ id: string; sector: string; vector: number[]; dim: number; metadata?: Record<string, unknown> }>
     >;
     getVectorsBySector(
         sector: string,
         userId?: string | null,
+        limit?: number,
+        offset?: number,
     ): Promise<Array<{ id: string; vector: number[]; dim: number }>>;
     getAllVectorIds(userId?: string | null): Promise<Set<string>>;
+    iterateVectorIds(userId?: string | null): AsyncIterable<string>;
+    cleanupOrphanedVectors(userId?: string | null): Promise<{ deleted: number }>;
     disconnect?(): Promise<void>;
 }

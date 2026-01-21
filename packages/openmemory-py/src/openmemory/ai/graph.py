@@ -77,7 +77,7 @@ def build_meta(p: LgmStoreReq, sec: str, ns: str, ext: Optional[Dict[str, Any]] 
         "node": p.node.lower(),
         "sector": sec,
         "namespace": ns,
-        "graphId": p.graphId,  # type: ignore[attr-defined]
+        "graphId": p.graphId,
         "storedAt": now(),
         "mode": "langgraph",
         **(ext or {}),
@@ -96,25 +96,23 @@ async def get_mems_by_tag(sector: str, tag: str, limit: int, offset: int, user_i
     t = q.tables
     sql = f"""
         SELECT * FROM {t['memories']}
-        WHERE primary_sector = $1
-        AND tags LIKE $2
+        WHERE primary_sector = ?
+        AND tags LIKE ?
     """
     params: List[Any] = [sector, f"%{tag}%"]
 
-    idx = 3
     if user_id:
-        sql += f" AND user_id = ${idx}"
+        sql += f" AND user_id = ?"
         params.append(user_id)
-        idx += 1
 
-    sql += f" ORDER BY last_seen_at DESC LIMIT ${idx} OFFSET ${idx+1}"
+    sql += f" ORDER BY last_seen_at DESC LIMIT ? OFFSET ?"
     params.extend([limit, offset])
 
     rows = await db.async_fetchall(sql, tuple(params))
     return [MemRow(**r) for r in rows]
 
 async def create_auto_refl(p: LgmStoreReq, stored_id: str, ns: str) -> Optional[MemoryItem]:
-    gid = p.graph_id  # type: ignore[attr-defined]  # type: ignore[attr-defined]
+    gid = p.graphId
     refl_tags = build_tags(
         ["lgm:auto:reflection", f"lgm:source:{stored_id}"],
         "reflect", ns, gid
@@ -145,16 +143,16 @@ async def create_auto_refl(p: LgmStoreReq, stored_id: str, ns: str) -> Optional[
         content=content,
         tags=stringify_json(refl_tags),
         metadata=refl_meta,
-        user_id=normalize_user_id(p.user_id)  # type: ignore[attr-defined]  # type: ignore[attr-defined]
+        user_id=normalize_user_id(p.userId)
     )
 
     return MemoryItem(  # type: ignore[call-arg]
         id=res["id"],
         content=res["content"],
-        primary_sector=res["primary_sector"],  # type: ignore[call-arg]
+        primarySector=res["primary_sector"],  # type: ignore[call-arg]
         sectors=res["sectors"],
-        created_at=now(),  # type: ignore[call-arg]
-        updated_at=now(),  # type: ignore[call-arg]
+        createdAt=now(),  # type: ignore[call-arg]
+        updatedAt=now(),  # type: ignore[call-arg]
         tags=refl_tags,
         metadata=refl_meta,  # type: ignore[call-arg]
         salience=res.get("salience", 0.5)
@@ -167,9 +165,9 @@ async def store_node_mem(p: LgmStoreReq) -> LgStoreResult:
     ns = resolve_ns(p.namespace)
     node = p.node.lower()
     sec = resolve_sector(node)
-    tag_list = build_tags(p.tags, node, ns, p.graphId)  # type: ignore[arg-type]
+    tag_list = build_tags(p.tags, node, ns, p.graphId)
     meta = build_meta(p, sec, ns)
-    user_id = normalize_user_id(p.userId)  # type: ignore[arg-type]
+    user_id = normalize_user_id(p.userId)
 
     res = await add_hsg_memory(
         content=p.content,
@@ -181,18 +179,18 @@ async def store_node_mem(p: LgmStoreReq) -> LgStoreResult:
     stored = GraphMemoryItem(  # type: ignore[call-arg]
         id=res["id"],
         content=p.content,
-        primary_sector=res["primary_sector"],  # type: ignore[call-arg]
+        primarySector=res["primary_sector"],  # type: ignore[call-arg]
         sectors=res["sectors"],
         node=node,
         tags=tag_list,
         metadata=meta,  # type: ignore[call-arg]
-        created_at=res["created_at"],  # type: ignore[call-arg]
-        updated_at=res["created_at"],  # type: ignore[call-arg]
-        last_seen_at=res["created_at"],  # type: ignore[call-arg]
+        createdAt=res["created_at"],  # type: ignore[call-arg]
+        updatedAt=res["created_at"],  # type: ignore[call-arg]
+        lastSeenAt=res["created_at"],  # type: ignore[call-arg]
         salience=res.get("salience", 0.5),
-        user_id=user_id,  # type: ignore[call-arg]
+        userId=user_id,  # type: ignore[call-arg]
         simhash=res.get("simhash"),
-        generated_summary=res.get("generated_summary")  # type: ignore[call-arg]
+        generatedSummary=res.get("generated_summary")  # type: ignore[call-arg]
     )
 
     refl_enabled = getattr(env, 'lg_reflective', False)
@@ -207,10 +205,10 @@ async def store_node_mem(p: LgmStoreReq) -> LgStoreResult:
 
     return LgStoreResult(  # type: ignore[call-arg]
         success=True,
-        memory_id=res["id"],  # type: ignore[call-arg]
+        memoryId=res["id"],  # type: ignore[call-arg]
         node=node,
-        memory=stored
-        # reflection_id not in LgStoreResult type currently
+        memory=stored,
+        reflectionId=refl_id
     )
 
 async def retrieve_node_mems(p: LgmRetrieveReq) -> LgRetrieveResult:  # type: ignore[return]
@@ -220,9 +218,9 @@ async def retrieve_node_mems(p: LgmRetrieveReq) -> LgRetrieveResult:  # type: ig
     node = p.node.lower()
     sec = resolve_sector(node)
     limit = p.limit or getattr(env, 'lg_max_context', 50)
-    inc_meta = p.include_metadata or False
-    gid = p.graph_id  # type: ignore[attr-defined]  # type: ignore[attr-defined]
-    user_id = normalize_user_id(p.user_id)  # type: ignore[attr-defined]  # type: ignore[attr-defined]
+    inc_meta = p.includeMetadata or False
+    gid = p.graphId
+    user_id = normalize_user_id(p.userId)
 
     items: List[GraphMemoryItem] = []
 
@@ -231,9 +229,10 @@ async def retrieve_node_mems(p: LgmRetrieveReq) -> LgRetrieveResult:  # type: ig
         matches = await hsg_query(
             p.query,
             k=limit * 2,
-            filters={  # type: ignore[arg-type]
+            filters={
                 "sectors": [sec],
-                "user_id": user_id
+                "user_id": user_id,
+                "metadata": {"lgm": {"namespace": ns}}
             }
         )
         for m in matches:
@@ -247,18 +246,18 @@ async def retrieve_node_mems(p: LgmRetrieveReq) -> LgRetrieveResult:  # type: ig
              hyd = GraphMemoryItem(  # type: ignore[call-arg]
                  id=m["id"],
                  content=m["content"],
-                 primary_sector=m["primary_sector"],  # type: ignore[call-arg]
+                 primarySector=m["primary_sector"],  # type: ignore[call-arg]
                  sectors=m.get("sectors", [m["primary_sector"]]),
-                 node=node,
-                 tags=parse_json_safe(m.get("tags"), []),
-                 metadata=m_meta if inc_meta else {},  # type: ignore[call-arg]
-                 created_at=m["created_at"],  # type: ignore[call-arg]
-                 updated_at=m.get("updated_at", 0),  # type: ignore[call-arg]
-                 last_seen_at=m.get("last_seen_at", 0),  # type: ignore[call-arg]
+                 node=m_meta["lgm"]["node"],
+                 tags=m.get("tags", []),
+                 metadata=m_meta,  # type: ignore[call-arg]
+                 createdAt=m["created_at"],  # type: ignore[call-arg]
+                 updatedAt=m["updated_at"],  # type: ignore[call-arg]
+                 lastSeenAt=m.get("last_seen_at", 0),  # type: ignore[call-arg]
                  salience=m.get("salience", 0.5),
-                 user_id=m.get("user_id"),  # type: ignore[call-arg]
-                 score=m.get("score"),
-                 path=m.get("path")
+                 userId=m.get("user_id"),  # type: ignore[call-arg]
+                 generatedSummary=m.get("generated_summary"),  # type: ignore[call-arg]
+                 score=m.get("score")
              )
              items.append(hyd)
              if len(items) >= limit: break
@@ -267,25 +266,25 @@ async def retrieve_node_mems(p: LgmRetrieveReq) -> LgRetrieveResult:  # type: ig
         rows = await get_mems_by_tag(sec, f"lgm:namespace:{ns}", limit * 4, 0, user_id)
         for row in rows:
             # metadata in MemRow is Optional[str]
-            row_meta = parse_json_safe(row.metadata  # type: ignore[attr-defined], {})  # type: ignore[possibly-unbound]
+            row_meta = parse_json_safe(row.metadata, {})  # type: ignore[attr-defined]
             if not matches_ns(row_meta, ns, gid):  # type: ignore[possibly-unbound]
                 continue
 
             hyd = GraphMemoryItem(  # type: ignore[call-arg]
                  id=row.id,
                  content=row.content,
-                 primary_sector=row.primary_sector,  # type: ignore[call-arg]
-                 sectors=[row.primary_sector],
+                 primarySector=row.primarySector,  # type: ignore[call-arg]
+                 sectors=[row.primarySector],
                  node=node,
                  tags=parse_json_safe(row.tags, []),
                  metadata=row_meta if inc_meta else {},  # type: ignore[call-arg]
-                 created_at=row.created_at,  # type: ignore[call-arg]
-                 updated_at=row.updated_at,  # type: ignore[call-arg]
-                 last_seen_at=row.last_seen_at,  # type: ignore[call-arg]
+                 createdAt=row.createdAt,  # type: ignore[call-arg]
+                 updatedAt=row.updatedAt,  # type: ignore[call-arg]
+                 lastSeenAt=row.lastSeenAt,  # type: ignore[call-arg]
                  salience=row.salience,
-                 user_id=row.user_id,  # type: ignore[call-arg]
+                 userId=row.userId,  # type: ignore[call-arg]
                  simhash=row.simhash,
-                 generated_summary=row.generated_summary  # type: ignore[call-arg]
+                 generatedSummary=row.generatedSummary  # type: ignore[call-arg]
             )
             items.append(hyd)
             if len(items) >= limit: break
@@ -307,10 +306,10 @@ async def get_graph_ctx(p: LgmContextReq) -> LgContextResult:
         req = LgmRetrieveReq(
             node=n,
             namespace=ns,
-            graph_id=p.graph_id,
+            graphId=p.graphId,
             limit=per_node_limit,
-            include_metadata=True,
-            user_id=p.user_id
+            includeMetadata=True,
+            userId=p.userId
         )
         tasks.append(retrieve_node_mems(req))
 
@@ -358,8 +357,8 @@ async def create_refl(p: LgmReflectionReq) -> LgReflectResult:
         # Auto synthesize
         ctx_res = await get_graph_ctx(LgmContextReq(
             namespace=ns,
-            graph_id=p.graph_id,
-            user_id=p.user_id
+            graphId=p.graphId,
+            userId=p.userId
         ))
         if ctx_res.context:
             hdr = f"Reflection synthesized from LangGraph context (namespace={ns})"
@@ -369,22 +368,22 @@ async def create_refl(p: LgmReflectionReq) -> LgReflectResult:
         raise ValueError("reflection content could not be derived")
 
     tags = ["lgm:manual:reflection"]
-    if p.context_ids:
-        tags.extend([f"lgm:context:{cid}" for cid in p.context_ids])
+    if p.contextIds:
+        tags.extend([f"lgm:context:{cid}" for cid in p.contextIds])
 
     meta = {
-        "lgmContextIds": p.context_ids or []
+        "lgmContextIds": p.contextIds or []
     }
 
     store_req = LgmStoreReq(
         node=node,
         content=content,
         namespace=ns,
-        graph_id=p.graph_id,
+        graphId=p.graphId,
         tags=tags,
         metadata=meta,
         reflective=False,
-        user_id=p.user_id
+        userId=p.userId
     )
 
     res = await store_node_mem(store_req)
@@ -401,10 +400,10 @@ async def get_thread_history(p: LgmRetrieveReq) -> Dict[str, Any]:
     Returns format matching JS: { namespace, graphId, userId, count, history: [...] }
     """
     ns = resolve_ns(p.namespace)
-    if not p.graph_id:
+    if not p.graphId:
         raise ValueError("graphId required for history")
 
-    user_id = normalize_user_id(p.user_id)  # type: ignore[attr-defined]  # type: ignore[attr-defined]
+    user_id = normalize_user_id(p.userId)
     nodes = list(NODE_SECTOR_MAP.keys())
 
     tasks = []
@@ -414,9 +413,9 @@ async def get_thread_history(p: LgmRetrieveReq) -> Dict[str, Any]:
         req = LgmRetrieveReq(
             node=n,
             namespace=ns,
-            graph_id=p.graph_id,
+            graphId=p.graphId,
             limit=100,
-            user_id=user_id
+            userId=user_id
         )
         tasks.append(retrieve_node_mems(req))
 
@@ -437,11 +436,11 @@ async def get_thread_history(p: LgmRetrieveReq) -> Dict[str, Any]:
                  all_items.extend([m for m in res.memories if isinstance(m, GraphMemoryItem)])
 
     # Sort by createdAt ascending (JS: a.createdAt - b.createdAt)
-    all_items.sort(key=lambda x: x.created_at)
+    all_items.sort(key=lambda x: x.createdAt)
 
     return {
         "namespace": ns,
-        "graphId": p.graph_id,
+        "graphId": p.graphId,
         "userId": user_id,
         "count": len(all_items),
         "history": [
@@ -449,7 +448,7 @@ async def get_thread_history(p: LgmRetrieveReq) -> Dict[str, Any]:
                 "id": i.id,
                 "node": i.node,
                 "content": i.content,
-                "timestamp": time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime(i.created_at/1000)),
+                "timestamp": time.strftime('%Y-%m-%dT%H:%M:%S.000Z', time.gmtime(i.createdAt/1000)),
                 "metadata": i.metadata
             }
             for i in all_items
@@ -458,6 +457,7 @@ async def get_thread_history(p: LgmRetrieveReq) -> Dict[str, Any]:
 
 def get_lg_cfg() -> Dict[str, Any]:
     """Get langgraph configuration."""
+    return {
         "success": True,
         "config": {
             "nodes": list(NODE_SECTOR_MAP.keys()),

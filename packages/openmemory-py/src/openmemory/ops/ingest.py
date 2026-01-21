@@ -8,6 +8,8 @@ from typing import List, Dict, Any, Optional
 from ..core.db import q, db
 from ..memory.hsg import add_hsg_memory
 from .extract import extract_text, extract_url
+from .compress import compression_engine
+from .maintenance import trigger_maintenance
 
 from ..utils.chunking import chunk_text
 
@@ -19,6 +21,22 @@ from ..core.security import get_encryption
 LG_THRESH = 8000
 SEC_SIZE = 3000
 
+# Adaptive Maintenance Triggers
+INGESTION_COUNTER = 0
+REFLECTION_TRIGGER_THRESHOLD = 20
+DECAY_TRIGGER_THRESHOLD = 50
+
+def trigger_post_ingest_maintenance():
+    global INGESTION_COUNTER
+    INGESTION_COUNTER += 1
+    
+    if INGESTION_COUNTER % REFLECTION_TRIGGER_THRESHOLD == 0:
+        logger.info(f"[ingest] Triggering reflection (counter: {INGESTION_COUNTER})")
+        asyncio.create_task(trigger_maintenance("reflect"))
+        
+    if INGESTION_COUNTER % DECAY_TRIGGER_THRESHOLD == 0:
+        logger.info(f"[ingest] Triggering decay (counter: {INGESTION_COUNTER})")
+        asyncio.create_task(trigger_maintenance("decay"))
 
 async def mk_root(
     txt: str, ex: Dict, meta: Optional[Dict] = None, user_id: Optional[str] = None, tags: Optional[str] = None
@@ -35,7 +53,17 @@ async def mk_root(
     Returns:
         The ID of the created root memory.
     """
-    summ = txt[:500] + "..." if len(txt) > 500 else txt
+    # Intelligent Summarization (Sync with JS)
+    summ = ""
+    # Use compression engine for fast summarization (default)
+    # TODO: Add AI summarization option if OPENAI_API_KEY is present
+    comp = compression_engine.compress(txt, "semantic")
+    summ_text = comp.get("comp", "")
+    if len(summ_text) > 800:
+        summ = summ_text[:800] + "..."
+    else:
+        summ = summ_text
+
     ctype = ex["metadata"]["content_type"].upper()
     sec_count = int(len(txt) / SEC_SIZE) + 1
     content = f"[Document: {ctype}]\n\n{summ}\n\n[Full content split across {sec_count} sections]"
@@ -117,6 +145,7 @@ async def link(
 async def _execute_single_strategy(text: str, tags: str, meta: Dict, user_id: Optional[str]) -> Dict[str, Any]:
     """Internal helper for single memory ingestion."""
     r = await add_hsg_memory(text, tags, meta, user_id)
+    trigger_post_ingest_maintenance()
     return {
         "root_memory_id": r["id"],
         "child_count": 0,
@@ -140,6 +169,7 @@ async def _execute_root_child_strategy(
             cid = await mk_child(c["text"], i, len(chunks), rid_val, meta, user_id, tags=tags)
             await link(rid_val, cid, i, user_id)
 
+        trigger_post_ingest_maintenance()
         return {
             "root_memory_id": rid_val,
             "child_count": len(chunks),
@@ -215,7 +245,7 @@ async def ingest_url(
     """
     Ingest text content from a URL with automatic strategy selection.
     """
-    ex = await extract_url(url, user_id=user_id)
+    ex = await extract_url(url, user_id=user_id, config=cfg)
 
     th = cfg.get("lg_thresh", LG_THRESH) if cfg else LG_THRESH
     sz = cfg.get("sec_sz", SEC_SIZE) if cfg else SEC_SIZE

@@ -1,3 +1,8 @@
+/**
+ * @file Server Entry Checkpoint
+ * Initializes the application, runs migrations, handles telemetry,
+ * and manages the graceful shutdown lifecycle.
+ */
 import { runAutoDiscovery } from "../ai/discovery";
 import { env } from "../core/cfg";
 import { q } from "../core/db";
@@ -6,6 +11,12 @@ import { sendTelemetry } from "../core/telemetry";
 import { configureLogger, logger } from "../utils/logger";
 import { app, startBackgroundProcess, stopServer } from "./index";
 import { setupTokenManager } from "./setup_token";
+import { WebhookService } from "../core/services/webhooks";
+
+const SHUTDOWN_TIMEOUT = 5000;
+
+// Start Webhook Dispatcher
+WebhookService.start();
 
 // Initialize logger with configuration
 configureLogger({
@@ -27,6 +38,13 @@ try {
     process.exit(1);
 }
 
+// CRITICAL SECURITY: Fail to start in production if no keys are configured
+if (env.isProd && !env.apiKey && !env.adminKey) {
+    logger.error("🚨 [FATAL] No API keys configured in PRODUCTION mode.");
+    logger.error("   You MUST set OM_API_KEY or OM_ADMIN_KEY to secure the server.");
+    process.exit(1);
+}
+
 const serverInstance = app.listen(env.port);
 
 logger.info(`[SERVER] Running on http://localhost:${serverInstance.port}`);
@@ -39,7 +57,7 @@ void (async () => {
             const token = setupTokenManager.generate();
             const msg = [
                 "",
-                "╔════════════════════════════════════════════════════════════════════╗",
+                "╔════════════════════════════════════════════════════════════════════╝",
                 "║               OPENMEMORY SETUP REQUIRED                            ║",
                 "╠════════════════════════════════════════════════════════════════════╣",
                 "║  No Admin users found.                                             ║",
@@ -80,7 +98,7 @@ const shutdown = async (signal: string) => {
     const forceExitTimeout = setTimeout(() => {
         logger.error("[SHUTDOWN] Timeout forced exit.");
         process.exit(1);
-    }, 5000);
+    }, SHUTDOWN_TIMEOUT);
 
     try {
         if (serverInstance) {

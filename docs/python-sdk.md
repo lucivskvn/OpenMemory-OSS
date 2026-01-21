@@ -55,7 +55,7 @@ results = await client.search("query")
 *   **Core**: `add`, `get`, `update`, `delete`, `search`, `list`, `list_users`, `import_memory`
 *   **Ingestion**: 
     *   `ingest(content_type, data, user_id, metadata)`
-    *   `ingest_url(url, user_id, metadata)`
+    *   `ingest_url(url, user_id, metadata, config)`: configuration dict supports `userAgent`.
 *   **Temporal Graph**:
     *   `add_fact(subject, predicate, object, valid_from, confidence)`
     *   `add_edge(source_id, target_id, relation_type, weight)`

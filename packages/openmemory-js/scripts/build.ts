@@ -4,64 +4,101 @@
  * Uses Bun native APIs for multi-OS compatibility.
  */
 
-async function build() {
-    console.log("📦 Building OpenMemory JS SDK...\n");
+// List of entry points
+const entrypoints = [
+    "./src/server/start.ts",
+    "./src/index.ts",
+    "./src/ai/mcp.ts",
+    "./src/ai/graph.ts",
+    "./src/client.ts",
+    "./src/cli.ts"
+];
 
-    // External packages that have bundling issues or are better as runtime deps
-    const externals = [
-        "@huggingface/transformers",
-        "onnxruntime-node",
-        "@modelcontextprotocol/sdk",
-        "@aws-sdk/client-bedrock-runtime",
-        "@aws-sdk/core",
-        "@anthropic-ai/sdk",
-        "@azure/msal-node",
-        "@notionhq/client",
-        "@octokit/rest",
-        "openai",
-        "googleapis",
-        "pg",
-        "ioredis",
-        "pdf-parse",
-        "mammoth",
-        "cheerio",
-        "fluent-ffmpeg",
-    ];
+// External dependencies - exclude heavy libs or those with native bindings
+const externals = [
+    "@huggingface/transformers",
+    "onnxruntime-node",
+    "@modelcontextprotocol/sdk",
+    "@aws-sdk/client-bedrock-runtime",
+    "@aws-sdk/core",
+    "@anthropic-ai/sdk",
+    "@azure/msal-node",
+    "@notionhq/client",
+    "@octokit/rest",
+    "openai",
+    "googleapis",
+    "pg",
+    "ioredis",
+    "pdf-parse",
+    "mammoth",
+    "cheerio",
+    "fluent-ffmpeg",
+    "zod", // Usually better to share zod instance if possible, but external safeguards versions
+];
 
-    const bundleProc = Bun.spawn([
-        "bun", "build",
-        "./src/server/start.ts", "./src/index.ts", "./src/ai/mcp.ts",
-        "./src/ai/graph.ts", "./src/client.ts", "./src/cli.ts",
-        "--outdir", "./dist", "--target", "bun",
-        ...externals.flatMap(ext => ["--external", ext])
-    ], { cwd: import.meta.dir + "/.." });
-
-    const bundleExitCode = await bundleProc.exited;
-    if (bundleExitCode !== 0) {
-        console.error("❌ Bundle step failed");
-        process.exit(1);
-    }
-    console.log("✅ Bundle complete\n");
-
-    // Generate type declarations using tsc (more reliable than Bun DTS for complex projects)
-    console.log("📝 Generating type declarations with tsc...");
-    const tscProc = Bun.spawn(["bun", "x", "tsc", "-p", "tsconfig.build.json"], {
-        cwd: import.meta.dir + "/..",
-        stdout: "inherit",
-        stderr: "inherit"
+try {
+    // Single pass build for generic target
+    const result = await Bun.build({
+        entrypoints: entrypoints,
+        outdir: "./dist",
+        target: "bun",
+        external: externals,
+        splitting: false,
+        minify: true, // Switched to true for Bun 1.3.6 performance boost
+        sourcemap: "external",
+        // @ts-ignore - metafile is available in Bun 1.3.6+
+        metafile: true,
     });
 
-    const tscExitCode = await tscProc.exited;
-    if (tscExitCode !== 0) {
-        console.error("❌ Type generation failed");
+    if (!result.success) {
+        console.error("❌ Build failed");
+        for (const message of result.logs) {
+            console.error(message);
+        }
         process.exit(1);
     }
-    console.log("✅ Type declarations generated\n");
+    console.log("✅ Bundle complete");
 
-    console.log("🎉 Build complete!");
+    // @ts-ignore - Analyze metafile if successful
+    if (result.metafile) {
+        console.log("📊 Bundle Analysis (Bun 1.3.6):");
+        // @ts-ignore
+        for (const [path, info] of Object.entries(result.metafile.outputs)) {
+            // @ts-ignore
+            console.log(`  - ${path}: ${(info.bytes / 1024).toFixed(2)} KB`);
+        }
+    }
+
+    console.log("📝 Generating type declarations...");
+    // Bun Native DTS generation (experimental but preferred for pure Bun)
+    // We use `tsc` via Bun if highly complex types, but let's try to stick to native if user wants "Native Bun Tooling".
+    // However, `Bun.build` with `dts: true` is not yet fully capable of multi-entry complex projects in all versions.
+    // Let's rely on `bun build --dts` CLI equivalent or tsc. 
+    // Given "avoid Nodejs as much possible", we run tsc via bun.
+
+    const dtsProc = Bun.spawn([
+        "bun",
+        "./node_modules/typescript/bin/tsc",
+        "--emitDeclarationOnly",
+        "--declaration",
+        "--outDir", "./dist",
+        "--project", "tsconfig.build.json"
+    ], {
+        cwd: import.meta.dir + "/..",
+        stdout: "inherit",
+        stderr: "inherit",
+    });
+
+    const dtsExit = await dtsProc.exited;
+    if (dtsExit !== 0) {
+        console.error("❌ Type declaration generation failed");
+        process.exit(1);
+    }
+    console.log("✅ Types generated");
+
+} catch (e) {
+    console.error("Build Error:", e);
+    process.exit(1);
 }
 
-build().catch((err) => {
-    console.error("❌ Build failed:", err);
-    process.exit(1);
-});
+console.log("🎉 Build Check Complete");

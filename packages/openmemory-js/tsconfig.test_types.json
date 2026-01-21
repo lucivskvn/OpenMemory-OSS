@@ -1,0 +1,15 @@
+{
+    "extends": "./tsconfig.build.json",
+    "compilerOptions": {
+        "moduleResolution": "bundler",
+        "baseUrl": "./",
+        "paths": {
+            "zod": [
+                "node_modules/zod"
+            ]
+        }
+    },
+    "include": [
+        "src/ai/mcp_tools_core.ts"
+    ]
+}

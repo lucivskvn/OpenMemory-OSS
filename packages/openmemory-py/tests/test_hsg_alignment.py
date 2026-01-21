@@ -9,19 +9,20 @@ from openmemory.core.db import db, q  # type: ignore[import-untyped]  # type: ig
 from openmemory.ai.adapters import reset_adapter  # type: ignore[import-untyped]  # type: ignore[import-untyped]
 
 @pytest.fixture(autouse=True)
-async def cleanup_adapters():
+def cleanup_adapters():
+    from openmemory.utils.async_bridge import run_sync
     # Force cleanup of global state
     hsg_state.coact_buf = []
     hsg_state.cache = {}
     
-    await db.disconnect()
+    run_sync(db.disconnect())
     db._lock = None # Force regeneration
     db._tx_lock = None
     reset_adapter()
     
     yield
     
-    await db.disconnect()
+    run_sync(db.disconnect())
     db._lock = None
     db._tx_lock = None
     reset_adapter()

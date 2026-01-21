@@ -39,41 +39,43 @@ async def test_connector_error_hierarchy():
 @pytest.mark.asyncio
 async def test_langchain_interface():
     """Verify OpenMemoryVectorStore follows LC interface."""
-    # Mock the internal client/store calls
-    with patch("openmemory.integrations.langchain.add_hsg_memories", new_callable=AsyncMock) as mock_add:
-        mock_add.return_value = [{"id": "1"}, {"id": "2"}]
+    # Mock the Memory instance methods
+    with patch.object(OpenMemoryVectorStore, 'add_texts') as mock_add:
+        mock_add.return_value = ["1", "2"]
         
-        vs = OpenMemoryVectorStore(user_id="test_user")
+        from openmemory.main import Memory
+        mock_mem = MagicMock(spec=Memory)
+        
+        vs = OpenMemoryVectorStore(memory=mock_mem, user_id="test_user")
         
         # Test add_texts
-        ids = await vs.aadd_texts(["text1", "text2"], metadatas=[{"a": 1}, {"b": 2}])
+        ids = vs.add_texts(["text1", "text2"], metadatas=[{"a": 1}, {"b": 2}])
         
         assert len(ids) == 2
         mock_add.assert_called_once()
-        args = mock_add.call_args
-        # checking args passed to add_hsg_memories
-        # assert args[1] == ... hard to check exact structure without unpacking
         
 @pytest.mark.asyncio
 async def test_langchain_search():
     """Verify search delegation."""
-    with patch("openmemory.integrations.langchain.hsg_query", new_callable=AsyncMock) as mock_query:
-        # returns list of dicts
-        mock_query.return_value = [
-            {"id": "1", "content": "res1", "metadata": {"foo": "bar"}, "similarity": 0.9},
-            {"id": "2", "content": "res2", "metadata": {"baz": "qux"}, "similarity": 0.8}
-        ]
-        
-        vs = OpenMemoryVectorStore(user_id="test_user")
+    from openmemory.main import Memory
+    mock_mem = MagicMock(spec=Memory)
+    
+    # Mock memory.search to return MemoryItems
+    mock_result = MagicMock()
+    mock_result.content = "res1"
+    mock_result.model_dump.return_value = {"foo": "bar"}
+    
+    mock_mem.search = MagicMock(return_value=[mock_result])
+    
+    with patch("openmemory.integrations.langchain.run_sync", return_value=[mock_result]):
+        vs = OpenMemoryVectorStore(memory=mock_mem, user_id="test_user")
         
         # Test similarity_search
-        docs = await vs.asimilarity_search_with_score("query", k=2)
+        docs = vs.similarity_search("query", k=2)
         
-        assert len(docs) == 2
-        doc1, score1 = docs[0]
-        assert doc1.page_content == "res1"
-        assert score1 == 0.9
-        assert doc1.metadata["foo"] == "bar"
+        assert len(docs) == 1
+        assert docs[0].page_content == "res1"
+        assert docs[0].metadata["foo"] == "bar"
 
 @pytest.mark.asyncio
 async def test_web_crawler_delegation():

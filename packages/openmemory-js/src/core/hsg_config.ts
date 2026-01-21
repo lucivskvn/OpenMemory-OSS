@@ -51,3 +51,39 @@ export const sectorConfigs: Record<SectorType | string, SectorConfig> = {
         ],
     },
 };
+
+/**
+ * Global scoring parameters for hybrid retrieval.
+ */
+export const scoringWeights = {
+    similarity: env.scoringSimilarity ?? 1.0,
+    overlap: env.scoringOverlap ?? 0.5,
+    waypoint: env.scoringWaypoint ?? 0.3,
+    recency: env.scoringRecency ?? 0.2,
+    tagMatch: env.scoringTagMatch ?? 0.4,
+    salience: env.scoringSalience ?? 0.1,
+    keyword: env.scoringKeyword ?? 0.05,
+};
+
+/**
+ * Parameters for waypoints and spreading activation.
+ */
+export const hybridParams = {
+    alphaReinforce: 0.1,
+    beta: 2.0,
+    epsilon: 1e-6,
+    tau: 0.5,
+    tauHours: env.graphTemporalWindow / 3600000,
+    eta: 0.2,
+};
+
+/**
+ * Weights for synthetic embedding generation.
+ */
+export const syntheticWeights: Record<string, number> = {
+    episodic: 1.3,
+    semantic: 1.0,
+    procedural: 1.2,
+    emotional: 1.4,
+    reflective: 0.9,
+};

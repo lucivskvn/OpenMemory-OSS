@@ -25,10 +25,11 @@ logger = logging.getLogger("openmemory.connectors")
 class SourceError(Exception):
     """Base exception for source errors"""
     def __init__(
-        self, msg: str, source: Optional[str] = None, cause: Optional[Exception] = None
+        self, msg: str, source: Optional[str] = None, cause: Optional[Exception] = None, retryable: bool = False
     ):
         self.source = source
         self.cause = cause
+        self.retryable = retryable
         super().__init__(f"[{source}] {msg}" if source else msg)
 
 ConnectorError = SourceError

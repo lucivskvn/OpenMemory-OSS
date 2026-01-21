@@ -13,7 +13,8 @@ class MockDoc:
         return self.metadata
 
 mock_lc.Document = MockDoc
-mock_lc.BaseRetriever = object
+from pydantic import BaseModel
+mock_lc.BaseRetriever = BaseModel
 mock_lc.BaseChatMessageHistory = object
 
 sys.modules["langchain_core"] = mock_lc

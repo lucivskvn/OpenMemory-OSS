@@ -1,12 +1,15 @@
+import { Elysia } from "elysia";
 import { z } from "zod";
 
 import { Memory } from "../../core/memory";
 import { safeDate } from "../../utils";
 import { logger } from "../../utils/logger";
-import { AppError, sendError } from "../errors";
-import { validateBody, validateQuery } from "../middleware/validate";
-import type { AdvancedRequest, AdvancedResponse, ServerApp } from "../server";
+import { AppError } from "../errors";
+import type { UserContext } from "../middleware/auth";
+import { normalizeUserId } from "../../utils";
+import { verifyUserAccess, getUser, getEffectiveUserId } from "../middleware/auth";
 
+// --- Schemas ---
 const FactSchema = z.object({
     subject: z.string().min(1),
     predicate: z.string().min(1),
@@ -14,6 +17,7 @@ const FactSchema = z.object({
     validFrom: z.string().or(z.number()).optional(),
     confidence: z.number().min(0).max(1).optional().default(1.0),
     metadata: z.record(z.string(), z.any()).optional(),
+    userId: z.string().optional(),
 });
 
 const QueryFactSchema = z.object({
@@ -22,41 +26,45 @@ const QueryFactSchema = z.object({
     object: z.string().optional(),
     at: z.string().or(z.number()).optional(),
     minConfidence: z.coerce.number().optional().default(0.1),
+    userId: z.string().optional(),
 });
-
-type FactBody = z.infer<typeof FactSchema>;
-type QueryFact = z.infer<typeof QueryFactSchema>;
 
 export const CurrentFactSchema = z.object({
     subject: z.string().min(1),
     predicate: z.string().min(1),
     at: z.string().or(z.number()).optional(),
+    userId: z.string().optional(),
 });
 
 export const TimelineSchema = z.object({
     subject: z.string().min(1),
     predicate: z.string().optional(),
+    userId: z.string().optional(),
 });
 
 export const PredicateHistorySchema = z.object({
     predicate: z.string().min(1),
     from: z.string().or(z.number()).optional(),
     to: z.string().or(z.number()).optional(),
+    userId: z.string().optional(),
 });
 
 export const UpdateFactSchema = z.object({
     confidence: z.number().min(0).max(1).optional(),
     metadata: z.record(z.string(), z.any()).optional(),
+    userId: z.string().optional(),
 });
 
 export const InvalidateSchema = z.object({
     validTo: z.string().or(z.number()).optional(),
+    userId: z.string().optional(),
 });
 
 export const SubjectFactsSchema = z.object({
     at: z.string().or(z.number()).optional(),
     includeHistorical: z.coerce.boolean().optional(),
-    limit: z.coerce.number().optional(),
+    limit: z.coerce.number().max(1000).optional(),
+    userId: z.string().optional(),
 });
 
 export const SearchFactsSchema = z.object({
@@ -66,12 +74,14 @@ export const SearchFactsSchema = z.object({
         .optional()
         .default("all"),
     at: z.string().or(z.number()).optional(),
-    limit: z.coerce.number().optional(),
+    limit: z.coerce.number().max(1000).optional(),
+    userId: z.string().optional(),
 });
 
 export const VolatileSchema = z.object({
     subject: z.string().optional(),
-    limit: z.coerce.number().optional().default(10),
+    limit: z.coerce.number().max(1000).optional().default(10),
+    userId: z.string().optional(),
 });
 
 export const CreateEdgeSchema = z.object({
@@ -81,6 +91,7 @@ export const CreateEdgeSchema = z.object({
     validFrom: z.string().or(z.number()).optional(),
     weight: z.number().min(0).max(1).optional().default(1.0),
     metadata: z.record(z.string(), z.any()).optional(),
+    userId: z.string().optional(),
 });
 
 export const EdgeQuerySchema = z.object({
@@ -88,18 +99,21 @@ export const EdgeQuerySchema = z.object({
     targetId: z.string().optional(),
     relationType: z.string().optional(),
     at: z.string().or(z.number()).optional(),
-    limit: z.coerce.number().optional(),
+    limit: z.coerce.number().max(1000).optional(),
     offset: z.coerce.number().optional(),
+    userId: z.string().optional(),
 });
 
 export const DecaySchema = z.object({
     decayRate: z.number().optional(),
+    userId: z.string().optional(),
 });
 
 export const CompareSchema = z.object({
     subject: z.string().min(1),
     time1: z.string().or(z.number()).optional(),
     time2: z.string().or(z.number()).optional(),
+    userId: z.string().optional(),
 });
 
 export const GraphContextSchema = z.object({
@@ -112,777 +126,503 @@ export const GraphContextSchema = z.object({
 export const UpdateEdgeSchema = z.object({
     weight: z.number().min(0).max(1).optional(),
     metadata: z.record(z.string(), z.any()).optional(),
+    userId: z.string().optional(),
 });
 
-// Utility safeDate imported from ../../utils
-import { normalizeUserId } from "../../utils";
+export const IdParamsSchema = z.object({
+    id: z.string().min(1),
+});
+
+export const SubjectParamsSchema = z.object({
+    subject: z.string().min(1),
+});
 
 /**
- * Helper to resolve the user context based on auth scope and request parameters.
- * Enforces tenant isolation for non-admin users.
+ * Registers Temporal Memory routes.
  */
-const getEffectiveUserId = (req: AdvancedRequest, overrideUserId?: string): string | null | undefined => {
-    const isAdmin = (req.user?.scopes || []).includes("admin:all");
-    let userId = req.user?.id;
+export const temporalRoutes = (app: Elysia) => app.group("/temporal", (app) => {
 
-    if (isAdmin && overrideUserId) {
-        userId = overrideUserId;
-    } else if (!userId) {
-        // Unauthenticated (Open Mode) or Fallback
-        userId = overrideUserId;
-    }
+    return app
+        /**
+         * POST /temporal/fact
+         * Creates a new temporal fact.
+         */
+        .post("/fact", async ({ body, ...ctx }) => {
+            const user = getUser(ctx);
+            const b = FactSchema.parse(body);
+            const effectiveUserId = getEffectiveUserId(user, b.userId);
 
-    return normalizeUserId(userId);
-};
+            const validFromDate = b.validFrom
+                ? safeDate(b.validFrom) || new Date()
+                : new Date();
 
-export const createTemporalFact = async (
-    req: AdvancedRequest,
-    res: AdvancedResponse,
-) => {
-    try {
-        const { subject, predicate, object, validFrom, confidence, metadata, userId: bodyUserId } =
-            req.body as FactBody & { userId?: string };
+            const m = new Memory(effectiveUserId);
+            const id = await m.temporal.add(
+                b.subject,
+                b.predicate,
+                b.object,
+                {
+                    validFrom: validFromDate,
+                    confidence: b.confidence,
+                    metadata: b.metadata,
+                }
+            );
 
-        const effectiveUserId = getEffectiveUserId(req, bodyUserId);
+            return {
+                id,
+                subject: b.subject,
+                predicate: b.predicate,
+                object: b.object,
+                validFrom: validFromDate.getTime(),
+                confidence: b.confidence,
+                message: "Fact created successfully",
+            };
+        })
 
-        const validFromDate = validFrom
-            ? safeDate(validFrom) || new Date()
-            : new Date();
+        /**
+         * GET /temporal/fact
+         * Retrieves temporal facts based on query parameters.
+         */
+        .get("/fact", async ({ query, ...ctx }) => {
+            const user = getUser(ctx);
+            const q = QueryFactSchema.parse(query);
 
-        const m = new Memory(effectiveUserId);
-        const id = await m.temporal.add(
-            subject,
-            predicate,
-            object,
-            {
-                validFrom: validFromDate,
-                confidence,
-                metadata,
+            if (!q.subject && !q.predicate && !q.object) {
+                throw new AppError(400, "MISSING_QUERY", "At least one of subject, predicate, or object is required");
             }
-        );
 
-        res.json({
-            id,
-            subject,
-            predicate,
-            object,
-            validFrom: validFromDate.getTime(),
-            confidence,
-            message: "Fact created successfully",
-        });
-    } catch (error: unknown) {
-        logger.error("[TEMPORAL API] Error creating fact:", { error });
-        sendError(res, error);
-    }
-};
-
-// [Modified] getTemporalFact
-export const getTemporalFact = async (
-    req: AdvancedRequest,
-    res: AdvancedResponse,
-) => {
-    try {
-        const query = req.query as unknown as QueryFact;
-        const { subject, predicate, object, at, minConfidence } = query;
-
-        if (!subject && !predicate && !object) {
-            return sendError(
-                res,
-                new AppError(
-                    400,
-                    "MISSING_QUERY",
-                    "At least one of subject, predicate, or object is required",
-                ),
-            );
-        }
-
-        const atDate = at ? safeDate(at) : new Date();
-        if (at && !atDate) {
-            return sendError(
-                res,
-                new AppError(400, "INVALID_DATE", "Invalid 'at' date format"),
-            );
-        }
-
-        // Coerced by Zod
-        const minConf = minConfidence ?? 0.1;
-        const effectiveUserId = getEffectiveUserId(req, (query as any).userId);
-
-        const m = new Memory(effectiveUserId);
-        const facts = await m.temporal.queryFacts(
-            subject,
-            predicate,
-            object,
-            atDate!,
-            minConf,
-        );
-
-        res.json({
-            facts,
-            query: {
-                subject,
-                predicate,
-                object,
-                at: atDate!.toISOString(),
-                minConfidence: minConf,
-            },
-            count: facts.length,
-        });
-    } catch (error: unknown) {
-        logger.error("[TEMPORAL API] Error querying facts:", { error });
-        sendError(res, error);
-    }
-};
-
-export const getCurrentTemporalFact = async (
-    req: AdvancedRequest,
-    res: AdvancedResponse,
-) => {
-    try {
-        const { subject, predicate, at, userId: queryUserId } = req.query as unknown as z.infer<
-            typeof CurrentFactSchema
-        > & { userId?: string };
-
-        const atDate = at ? safeDate(at) : new Date();
-        const effectiveUserId = getEffectiveUserId(req, queryUserId);
-
-        const m = new Memory(effectiveUserId);
-        const fact = await m.temporal.get(
-            subject,
-            predicate,
-        );
-
-        if (!fact) {
-            return sendError(
-                res,
-                new AppError(404, "NOT_FOUND", "No current fact found", {
-                    subject,
-                    predicate,
-                }),
-            );
-        }
-
-        res.json({ fact });
-    } catch (error: unknown) {
-        logger.error("[TEMPORAL API] Error getting current fact:", { error });
-        sendError(res, error);
-    }
-};
-
-export const getTemporalGraphContext = async (
-    req: AdvancedRequest,
-    res: AdvancedResponse,
-) => {
-    try {
-        const { factId, relationType, at, userId } = req.query as unknown as z.infer<
-            typeof GraphContextSchema
-        >;
-        const effectiveUserId = getEffectiveUserId(req, userId);
-
-        const atDate = at ? safeDate(at) : new Date();
-
-        const m = new Memory(effectiveUserId);
-        const results = await m.temporal.getGraphContext(
-            factId,
-            relationType,
-            atDate,
-        );
-
-        res.json({ results });
-    } catch (error: unknown) {
-        logger.error("[TEMPORAL API] Error getting graph context:", { error });
-        sendError(res, error);
-    }
-};
-
-export const updateTemporalFact = async (
-    req: AdvancedRequest,
-    res: AdvancedResponse,
-) => {
-    try {
-        const { id } = req.params;
-        if (!id)
-            return sendError(
-                res,
-                new AppError(400, "MISSING_ID", "Fact ID is required"),
-            );
-
-        const { confidence, metadata, userId: bodyUserId } = req.body as z.infer<
-            typeof UpdateFactSchema
-        > & { userId?: string };
-        const effectiveUserId = getEffectiveUserId(req, bodyUserId);
-
-        const m = new Memory(effectiveUserId);
-        await m.temporal.updateFact(id, confidence, metadata);
-
-        res.json({
-            id,
-            message: "Fact updated successfully",
-        });
-    } catch (error: unknown) {
-        logger.error("[TEMPORAL API] Error updating fact:", { error });
-        sendError(res, error);
-    }
-};
-
-export const invalidateTemporalFact = async (
-    req: AdvancedRequest,
-    res: AdvancedResponse,
-) => {
-    try {
-        const { id } = req.params;
-        if (!id)
-            return sendError(
-                res,
-                new AppError(400, "MISSING_ID", "Fact ID is required"),
-            );
-
-        const { validTo, userId: bodyUserId } = req.body as z.infer<typeof InvalidateSchema> & { userId?: string };
-        const effectiveUserId = getEffectiveUserId(req, bodyUserId);
-
-        const validToDate = validTo
-            ? safeDate(validTo) || new Date()
-            : new Date();
-
-        const m = new Memory(effectiveUserId);
-        await m.temporal.invalidateFact(id, validToDate);
-
-        res.json({
-            id,
-            validTo: validToDate.toISOString(),
-            message: "Fact invalidated successfully",
-        });
-    } catch (error: unknown) {
-        logger.error("[TEMPORAL API] Error invalidating fact:", { error });
-        sendError(res, error);
-    }
-};
-
-export const getEntityTimeline = async (
-    req: AdvancedRequest,
-    res: AdvancedResponse,
-) => {
-    try {
-        const { subject, predicate, userId: queryUserId } = req.query as unknown as z.infer<
-            typeof TimelineSchema
-        > & { userId?: string };
-
-        const effectiveUserId = getEffectiveUserId(req, queryUserId);
-
-        const m = new Memory(effectiveUserId);
-        const timeline = await m.temporal.history(subject, predicate);
-
-        res.json({
-            subject,
-            predicate,
-            timeline,
-            count: timeline.length,
-        });
-    } catch (error: unknown) {
-        logger.error("[TEMPORAL API] Error getting timeline:", { error });
-        sendError(res, error);
-    }
-};
-
-export const getPredicateHistory = async (
-    req: AdvancedRequest,
-    res: AdvancedResponse,
-) => {
-    try {
-        const { predicate, from, to, userId: queryUserId } = req.query as unknown as z.infer<
-            typeof PredicateHistorySchema
-        > & { userId?: string };
-
-        const fromDate = from ? safeDate(from) : undefined;
-        const toDate = to ? safeDate(to) : undefined;
-        const effectiveUserId = getEffectiveUserId(req, queryUserId);
-
-        const m = new Memory(effectiveUserId);
-        const timeline = await m.temporal.getPredicateHistory(
-            predicate,
-            fromDate,
-            toDate,
-        );
-
-        res.json({
-            predicate,
-            from: fromDate?.toISOString(),
-            to: toDate?.toISOString(),
-            timeline,
-            count: timeline.length,
-        });
-    } catch (error: unknown) {
-        logger.error("[TEMPORAL API] Error getting predicate timeline:", {
-            error,
-        });
-        sendError(res, error);
-    }
-};
-
-export const getSubjectFacts = async (
-    req: AdvancedRequest,
-    res: AdvancedResponse,
-) => {
-    try {
-        const { subject } = req.params;
-        if (!subject)
-            return sendError(
-                res,
-                new AppError(
-                    400,
-                    "MISSING_SUBJECT",
-                    "Subject parameter is required",
-                ),
-            );
-
-        const { at, includeHistorical, limit } = req.query as unknown as z.infer<
-            typeof SubjectFactsSchema
-        >;
-        const atDate = at ? safeDate(at) : undefined;
-        if (at && !atDate) {
-            return sendError(
-                res,
-                new AppError(400, "INVALID_DATE", "Invalid 'at' date format"),
-            );
-        }
-
-        // Coerced by Zod
-        const includeHist = includeHistorical === true;
-        const limitVal = limit || 100;
-        const effectiveUserId = getEffectiveUserId(req, (req.query as any).userId);
-
-        const m = new Memory(effectiveUserId);
-        const facts = await m.temporal.getFactsBySubject(
-            subject,
-            atDate || undefined,
-            includeHist,
-            limitVal
-        );
-
-        res.json({
-            subject,
-            at: atDate?.toISOString(),
-            includeHistorical: includeHist,
-            facts,
-            count: facts.length,
-        });
-    } catch (error: unknown) {
-        logger.error("[TEMPORAL API] Error getting subject facts:", { error });
-        sendError(res, error);
-    }
-};
-
-export const searchTemporalFacts = async (
-    req: AdvancedRequest,
-    res: AdvancedResponse,
-) => {
-    try {
-        const { pattern, type, at, limit } = req.query as unknown as z.infer<
-            typeof SearchFactsSchema
-        >;
-        const atDate = at ? safeDate(at) : undefined;
-        if (at && !atDate) {
-            return sendError(
-                res,
-                new AppError(400, "INVALID_DATE", "Invalid 'at' date format"),
-            );
-        }
-        const limitValue = limit || 100;
-        const effectiveUserId = getEffectiveUserId(req, (req.query as any).userId);
-
-        const m = new Memory(effectiveUserId);
-        const facts = await m.temporal.search(
-            pattern,
-            {
-                type: type as any,
-                at: atDate,
-                limit: limitValue
+            const atDate = q.at ? safeDate(q.at) : new Date();
+            if (q.at && !atDate) {
+                throw new AppError(400, "INVALID_DATE", "Invalid 'at' date format");
             }
-        );
 
-        res.json({
-            pattern,
-            type,
-            at: atDate?.toISOString(),
-            facts,
-            count: facts.length,
-        });
-    } catch (error: unknown) {
-        logger.error("[TEMPORAL API] Error searching facts:", { error });
-        sendError(res, error);
-    }
-};
+            const minConf = q.minConfidence ?? 0.1;
+            const effectiveUserId = getEffectiveUserId(user, q.userId);
 
-export const compareFacts = async (
-    req: AdvancedRequest,
-    res: AdvancedResponse,
-) => {
-    try {
-        const { subject, time1, time2 } = req.query as unknown as z.infer<
-            typeof CompareSchema
-        >;
-
-        const t2 = time2 ? safeDate(time2) : new Date();
-        const t1 = time1 ? safeDate(time1) : new Date(Date.now() - 86400000); // Default to 24h ago
-
-        if (!t1 || !t2) {
-            return sendError(
-                res,
-                new AppError(400, "INVALID_DATE", "Invalid date format"),
+            const m = new Memory(effectiveUserId);
+            const facts = await m.temporal.queryFacts(
+                q.subject,
+                q.predicate,
+                q.object,
+                atDate!,
+                minConf,
             );
-        }
 
-        const effectiveUserId = getEffectiveUserId(req, (req.query as any).userId);
+            return {
+                facts,
+                query: {
+                    subject: q.subject,
+                    predicate: q.predicate,
+                    object: q.object,
+                    at: atDate!.toISOString(),
+                    minConfidence: minConf,
+                },
+                count: facts.length,
+            };
+        })
 
-        const m = new Memory(effectiveUserId);
-        const comparison = await m.temporal.compare(
-            subject,
-            t1,
-            t2
-        );
+        /**
+         * GET /temporal/fact/current
+         * Retrieves the current fact for a subject/predicate.
+         */
+        .get("/fact/current", async ({ query, ...ctx }) => {
+            const user = getUser(ctx);
+            const q = CurrentFactSchema.parse(query);
+            const effectiveUserId = getEffectiveUserId(user, q.userId);
 
-        res.json({
-            subject,
-            time1: t1.toISOString(),
-            time2: t2.toISOString(),
-            comparison,
-        });
-    } catch (error: unknown) {
-        logger.error("[TEMPORAL API] Error comparing facts:", { error });
-        sendError(res, error);
-    }
-};
+            const m = new Memory(effectiveUserId);
+            const fact = await m.temporal.get(
+                q.subject,
+                q.predicate,
+            );
 
-export const getTemporalStats = async (
-    req: AdvancedRequest,
-    res: AdvancedResponse,
-) => {
-    try {
-        const effectiveUserId = getEffectiveUserId(req, (req.query as any).userId);
-
-        const m = new Memory(effectiveUserId);
-        const stats = await m.temporal.stats();
-
-        // Facade stats returns { facts: { total, active }, edges: { total, active } }
-        res.json(stats);
-
-        // Original returned manually constructed:
-        /*
-        res.json({
-            facts: {
-                total: factCount,
-                active: activeFactCount,
-            },
-            edges: {
-                total: edgeCount,
-                active: activeEdgeCount,
-            },
-        });
-        */
-        // Facade output matches exactly.
-        return;
-    } catch (error: unknown) {
-        logger.error("[TEMPORAL API] Error getting stats:", { error });
-        sendError(res, error);
-    }
-};
-
-export const applyDecay = async (
-    req: AdvancedRequest,
-    res: AdvancedResponse,
-) => {
-    try {
-        const { decayRate, userId: bodyUserId } = req.body as z.infer<typeof DecaySchema> & { userId?: string };
-        const effectiveUserId = getEffectiveUserId(req, bodyUserId);
-
-        const m = new Memory(effectiveUserId);
-        const changes = await m.temporal.decay(decayRate);
-
-        res.json({
-            message: "Decay applied successfully",
-            changes,
-        });
-    } catch (error: unknown) {
-        logger.error("[TEMPORAL API] Error applying decay:", { error });
-        sendError(res, error);
-    }
-};
-
-export const getMostVolatile = async (
-    req: AdvancedRequest,
-    res: AdvancedResponse,
-) => {
-    try {
-        const { subject, limit } = req.query as unknown as z.infer<
-            typeof VolatileSchema
-        >;
-
-        // Coerced by Zod
-        const limitValue = limit || 10;
-        const effectiveUserId = getEffectiveUserId(req, (req.query as any).userId);
-
-        const m = new Memory(effectiveUserId);
-        const volatile = await m.temporal.volatile(
-            subject,
-            limitValue
-        );
-
-        res.json({
-            subject,
-            limit: limitValue,
-            volatileFacts: volatile,
-            count: volatile.length,
-        });
-    } catch (error: unknown) {
-        logger.error("[TEMPORAL API] Error getting volatile facts:", { error });
-        sendError(res, error);
-    }
-};
-
-export const createTemporalEdge = async (
-    req: AdvancedRequest,
-    res: AdvancedResponse,
-) => {
-    try {
-        const {
-            sourceId,
-            targetId,
-            relationType,
-            validFrom,
-            weight,
-            metadata,
-            userId: bodyUserId,
-        } = req.body as z.infer<typeof CreateEdgeSchema> & { userId?: string };
-
-        const effectiveUserId = getEffectiveUserId(req, bodyUserId);
-
-        const validFromDate = validFrom
-            ? safeDate(validFrom) || new Date()
-            : new Date();
-
-        const m = new Memory(effectiveUserId);
-        const id = await m.temporal.addEdge(
-            sourceId,
-            targetId,
-            relationType,
-            {
-                validFrom: validFromDate,
-                weight,
-                metadata
+            if (!fact) {
+                throw new AppError(404, "NOT_FOUND", "No current fact found", {
+                    subject: q.subject,
+                    predicate: q.predicate,
+                });
             }
-        );
 
-        res.json({
-            id,
-            sourceId,
-            targetId,
-            relationType,
-            validFrom: validFromDate.getTime(),
-            ok: true,
-            message: "Edge created successfully",
-        });
-    } catch (error: unknown) {
-        logger.error("[TEMPORAL API] Error creating edge:", { error });
-        sendError(res, error);
-    }
-};
+            return { fact };
+        })
 
-export const getTemporalEdges = async (
-    req: AdvancedRequest,
-    res: AdvancedResponse,
-) => {
-    try {
-        const { sourceId, targetId, relationType, at, limit, offset, userId: queryUserId } =
-            req.query as unknown as z.infer<typeof EdgeQuerySchema> & { userId?: string };
+        /**
+         * PATCH /temporal/fact/:id
+         * Updates a temporal fact.
+         */
+        .patch("/fact/:id", async ({ params, body, ...ctx }) => {
+            const user = getUser(ctx);
+            const p = IdParamsSchema.parse(params);
+            const b = UpdateFactSchema.parse(body);
 
-        const effectiveUserId = getEffectiveUserId(req, queryUserId);
-        const atDate = at ? safeDate(at) : new Date();
-        const limitVal = limit || 100;
-        const offsetVal = offset || 0;
+            const effectiveUserId = getEffectiveUserId(user, b.userId);
 
-        if (at && !atDate) {
-            return sendError(
-                res,
-                new AppError(400, "INVALID_DATE", "Invalid 'at' date format"),
-            );
-        }
+            const m = new Memory(effectiveUserId);
+            await m.temporal.updateFact(p.id, b.confidence, b.metadata);
 
-        const m = new Memory(effectiveUserId);
-        const edges = await m.temporal.getEdges(
-            sourceId,
-            targetId,
-            relationType,
-            atDate!,
-            limitVal,
-            offsetVal,
-        );
+            return {
+                id: p.id,
+                message: "Fact updated successfully",
+            };
+        })
 
-        res.json({ edges, count: edges.length });
-    } catch (error: unknown) {
-        logger.error("[TEMPORAL API] Error querying edges:", { error });
-        sendError(res, error);
-    }
-};
+        /**
+         * DELETE /temporal/fact/:id
+         * Invalidates a temporal fact (soft delete with validTo).
+         */
+        .delete("/fact/:id", async ({ params, body, ...ctx }) => {
+            const user = getUser(ctx);
+            const p = IdParamsSchema.parse(params);
+            const b = InvalidateSchema.parse(body);
+            const effectiveUserId = getEffectiveUserId(user, b.userId);
 
-export const invalidateTemporalEdge = async (
-    req: AdvancedRequest,
-    res: AdvancedResponse,
-) => {
-    try {
-        const { id } = req.params;
-        if (!id)
-            return sendError(
-                res,
-                new AppError(400, "MISSING_ID", "Edge ID is required"),
-            );
+            const validToDate = b.validTo
+                ? safeDate(b.validTo) || new Date()
+                : new Date();
 
-        const { validTo, userId: bodyUserId } = req.body as { validTo?: string | number, userId?: string };
-        const effectiveUserId = getEffectiveUserId(req, bodyUserId);
+            const m = new Memory(effectiveUserId);
+            await m.temporal.invalidateFact(p.id, validToDate);
 
-        const validToDate = validTo
-            ? safeDate(validTo) || new Date()
-            : new Date();
+            return {
+                id: p.id,
+                validTo: validToDate.toISOString(),
+                message: "Fact invalidated successfully",
+            };
+        })
 
-        const m = new Memory(effectiveUserId);
-        await m.temporal.invalidateEdge(id, validToDate);
+        /**
+         * GET /temporal/timeline
+         * Retrieves the timeline for an entity.
+         */
+        .get("/timeline", async ({ query, ...ctx }) => {
+            const user = getUser(ctx);
+            const q = TimelineSchema.parse(query);
+            const effectiveUserId = getEffectiveUserId(user, q.userId);
 
-        res.json({
-            id,
-            validTo: validToDate.toISOString(),
-            message: "Edge invalidated successfully",
-        });
-    } catch (error: unknown) {
-        logger.error("[TEMPORAL API] Error invalidating edge:", { error });
-        sendError(res, error);
-    }
-};
+            const m = new Memory(effectiveUserId);
+            const timeline = await m.temporal.history(q.subject, q.predicate);
 
-export function temporalRoutes(app: ServerApp) {
-    app.post(
-        "/temporal/fact",
-        validateBody(FactSchema),
-        createTemporalFact,
-    );
-    app.get(
-        "/temporal/fact",
-        validateQuery(QueryFactSchema),
-        getTemporalFact,
-    );
+            return {
+                subject: q.subject,
+                predicate: q.predicate,
+                timeline,
+                count: timeline.length,
+            };
+        })
 
-    app.get(
-        "/temporal/fact/current",
-        validateQuery(CurrentFactSchema),
-        getCurrentTemporalFact,
-    );
+        /**
+         * GET /temporal/history/predicate
+         * Retrieves the history of a predicate.
+         */
+        .get("/history/predicate", async ({ query, ...ctx }) => {
+            const user = getUser(ctx);
+            const q = PredicateHistorySchema.parse(query);
+            const effectiveUserId = getEffectiveUserId(user, q.userId);
 
-    app.patch(
-        "/temporal/fact/:id",
-        validateBody(UpdateFactSchema),
-        updateTemporalFact,
-    );
+            const fromDate = q.from ? safeDate(q.from) : undefined;
+            const toDate = q.to ? safeDate(q.to) : undefined;
 
-    app.delete(
-        "/temporal/fact/:id",
-        validateBody(InvalidateSchema),
-        invalidateTemporalFact,
-    );
-
-    app.get(
-        "/temporal/timeline",
-        validateQuery(TimelineSchema),
-        getEntityTimeline,
-    );
-
-    app.get(
-        "/temporal/history/predicate",
-        validateQuery(PredicateHistorySchema),
-        getPredicateHistory,
-    );
-
-    app.get(
-        "/temporal/subject/:subject",
-        validateQuery(SubjectFactsSchema),
-        getSubjectFacts,
-    );
-
-    app.get(
-        "/temporal/search",
-        validateQuery(SearchFactsSchema),
-        searchTemporalFacts,
-    );
-
-    app.get(
-        "/temporal/compare",
-        validateQuery(CompareSchema),
-        compareFacts,
-    );
-
-    app.get(
-        "/temporal/graph-context",
-        validateQuery(GraphContextSchema),
-        getTemporalGraphContext,
-    );
-
-    app.get("/temporal/stats", getTemporalStats);
-    app.post("/temporal/decay", validateBody(DecaySchema), applyDecay);
-
-    app.get(
-        "/temporal/volatile",
-        validateQuery(VolatileSchema),
-        getMostVolatile,
-    );
-
-    app.post(
-        "/temporal/edge",
-        validateBody(CreateEdgeSchema),
-        createTemporalEdge,
-    );
-
-    app.get(
-        "/temporal/edge",
-        validateQuery(EdgeQuerySchema),
-        getTemporalEdges,
-    );
-
-    app.delete(
-        "/temporal/edge/:id",
-        validateBody(InvalidateSchema),
-        invalidateTemporalEdge,
-    );
-
-    app.patch(
-        "/temporal/edge/:id",
-        validateBody(UpdateEdgeSchema),
-        updateTemporalEdge,
-    );
-}
-
-export const updateTemporalEdge = async (
-    req: AdvancedRequest,
-    res: AdvancedResponse,
-) => {
-    try {
-        const { id } = req.params;
-        if (!id)
-            return sendError(
-                res,
-                new AppError(400, "MISSING_ID", "Edge ID is required"),
+            const m = new Memory(effectiveUserId);
+            const timeline = await m.temporal.getPredicateHistory(
+                q.predicate,
+                fromDate,
+                toDate,
             );
 
-        const { weight, metadata } = req.body as z.infer<typeof UpdateEdgeSchema>;
-        // Use effective user ID from body or context - similar to other methods if needed
-        const effectiveUserId = getEffectiveUserId(req, undefined);
+            return {
+                predicate: q.predicate,
+                from: fromDate?.toISOString(),
+                to: toDate?.toISOString(),
+                timeline,
+                count: timeline.length,
+            };
+        })
 
-        const m = new Memory(effectiveUserId);
-        // Note: updateEdge was added to Memory/Store in Phase 76, ensure it exists
-        await m.temporal.updateEdge(id, effectiveUserId, weight, metadata);
+        /**
+         * GET /temporal/compare
+         * Compares facts at two points in time.
+         */
+        .get("/compare", async ({ query, ...ctx }) => {
+            const q = CompareSchema.parse(query);
 
-        res.json({
-            id,
-            message: "Edge updated successfully",
+            const t2 = q.time2 ? safeDate(q.time2) : new Date();
+            const t1 = q.time1 ? safeDate(q.time1) : new Date(Date.now() - 86400000); // Default to 24h ago
+
+            if (!t1 || !t2) {
+                throw new AppError(400, "INVALID_DATE", "Invalid date format");
+            }
+
+            const user = getUser(ctx);
+            const effectiveUserId = getEffectiveUserId(user, q.userId);
+
+            const m = new Memory(effectiveUserId);
+            const comparison = await m.temporal.compare(
+                q.subject,
+                t1,
+                t2
+            );
+
+            return {
+                subject: q.subject,
+                time1: t1.toISOString(),
+                time2: t2.toISOString(),
+                comparison,
+            };
+        })
+
+        /**
+         * GET /temporal/graph-context
+         * Retrieves graph context for a fact.
+         */
+        .get("/graph-context", async ({ query, ...ctx }) => {
+            const user = getUser(ctx);
+            const q = GraphContextSchema.parse(query);
+            const effectiveUserId = getEffectiveUserId(user, q.userId);
+
+            const atDate = q.at ? safeDate(q.at) : new Date();
+
+            const m = new Memory(effectiveUserId);
+            const results = await m.temporal.getGraphContext(
+                q.factId,
+                { relationType: q.relationType, at: atDate }
+            );
+
+            return { results };
+        })
+
+        /**
+         * GET /temporal/stats
+         * Retrieves stats about temporal memory.
+         * Only admin or authenticated user should probably see this?
+         */
+        .get("/stats", async ({ query, ...ctx }) => {
+            const user = getUser(ctx);
+            const effectiveUserId = getEffectiveUserId(user, (query as any).userId);
+
+            const m = new Memory(effectiveUserId);
+            const stats = await m.temporal.stats();
+            return stats;
+        })
+
+        /**
+         * POST /temporal/decay
+         * Applies time-based decay.
+         */
+        .post("/decay", async ({ body, ...ctx }) => {
+            const user = getUser(ctx);
+            const b = DecaySchema.parse(body);
+            const effectiveUserId = getEffectiveUserId(user, b.userId);
+
+            const m = new Memory(effectiveUserId);
+            const changes = await m.temporal.decay(b.decayRate);
+
+            return {
+                message: "Decay applied successfully",
+                changes,
+            };
+        })
+
+        /**
+         * GET /temporal/volatile
+         * Retrieves most volatile facts.
+         */
+        .get("/volatile", async ({ query, ...ctx }) => {
+            const user = getUser(ctx);
+            const q = VolatileSchema.parse(query);
+            const effectiveUserId = getEffectiveUserId(user, q.userId);
+
+            const m = new Memory(effectiveUserId);
+            try {
+                const volatile = await m.temporal.volatile(q.subject, q.limit);
+                return {
+                    subject: q.subject,
+                    limit: q.limit,
+                    volatileFacts: volatile.volatileFacts,
+                    count: volatile.count,
+                };
+            } catch (err: any) {
+                logger.error("Failed to get volatile facts", { error: err });
+                return { subject: q.subject, limit: q.limit, volatileFacts: [], count: 0 };
+            }
+        })
+
+        /**
+         * POST /temporal/edge
+         * Creates a new temporal edge.
+         */
+        .post("/edge", async ({ body, ...ctx }) => {
+            const user = getUser(ctx);
+            const b = CreateEdgeSchema.parse(body);
+            const effectiveUserId = getEffectiveUserId(user, b.userId);
+
+            const validFromDate = b.validFrom
+                ? safeDate(b.validFrom) || new Date()
+                : new Date();
+
+            const m = new Memory(effectiveUserId);
+            const id = await m.temporal.addEdge(
+                b.sourceId,
+                b.targetId,
+                b.relationType,
+                {
+                    validFrom: validFromDate,
+                    weight: b.weight,
+                    metadata: b.metadata
+                }
+            );
+
+            return {
+                id,
+                sourceId: b.sourceId,
+                targetId: b.targetId,
+                relationType: b.relationType,
+                validFrom: validFromDate.getTime(),
+                ok: true,
+                success: true,
+                message: "Edge created successfully",
+            };
+        })
+
+        /**
+         * GET /temporal/edge
+         * Retrieves temporal edges.
+         */
+        .get("/edge", async ({ query, ...ctx }) => {
+            const user = getUser(ctx);
+            const q = EdgeQuerySchema.parse(query);
+            const effectiveUserId = getEffectiveUserId(user, q.userId);
+
+            const atDate = q.at ? safeDate(q.at as string | number) : new Date();
+            if (q.at && !atDate) {
+                throw new AppError(400, "INVALID_DATE", "Invalid 'at' date format");
+            }
+            const limitVal = q.limit || 100;
+            const offsetVal = q.offset || 0;
+
+            const m = new Memory(effectiveUserId);
+            const edges = await m.temporal.getEdges(
+                q.sourceId,
+                q.targetId,
+                q.relationType,
+                atDate!,
+                limitVal,
+                offsetVal,
+            );
+
+            return { edges, count: edges.length };
+        })
+
+        /**
+         * DELETE /temporal/edge/:id
+         * Invalidates a temporal edge.
+         */
+        .delete("/edge/:id", async ({ params, body, ...ctx }) => {
+            const user = getUser(ctx);
+            const p = IdParamsSchema.parse(params);
+            const b = InvalidateSchema.parse(body);
+            const effectiveUserId = getEffectiveUserId(user, b.userId);
+
+            const validToDate = b.validTo
+                ? safeDate(b.validTo) || new Date()
+                : new Date();
+
+            const m = new Memory(effectiveUserId);
+            await m.temporal.invalidateEdge(p.id, validToDate);
+
+            return {
+                id: p.id,
+                validTo: validToDate.toISOString(),
+                message: "Edge invalidated successfully",
+            };
+        })
+
+        /**
+         * PATCH /temporal/edge/:id
+         * Updates a temporal edge.
+         */
+        .patch("/edge/:id", async ({ params, body, ...ctx }) => {
+            const user = getUser(ctx);
+            const p = IdParamsSchema.parse(params);
+            const b = UpdateEdgeSchema.parse(body);
+            const effectiveUserId = getEffectiveUserId(user, b.userId);
+
+            const m = new Memory(effectiveUserId);
+            await m.temporal.updateEdge(p.id, b.weight, b.metadata);
+
+            return {
+                id: p.id,
+                message: "Edge updated successfully",
+            };
+        })
+
+        /**
+         * GET /temporal/subject/:subject
+         * Retrieves facts for a specific subject.
+         * NOTE: Placing this LAST to avoid collision if we had other routes starting with /temporal/subject... but we don't.
+         */
+        .get("/subject/:subject", async ({ params, query, ...ctx }) => {
+            const user = getUser(ctx);
+            const p = SubjectParamsSchema.parse(params);
+            const q = SubjectFactsSchema.parse(query);
+            const effectiveUserId = getEffectiveUserId(user, q.userId);
+
+            const atDate = q.at ? safeDate(q.at) : undefined;
+            if (q.at && !atDate) {
+                throw new AppError(400, "INVALID_DATE", "Invalid 'at' date format");
+            }
+
+            const includeHist = q.includeHistorical === true;
+            const limitVal = q.limit || 100;
+
+            const m = new Memory(effectiveUserId);
+            const facts = await m.temporal.getFactsBySubject(
+                p.subject,
+                atDate || undefined,
+                includeHist,
+                limitVal
+            );
+
+            return {
+                subject: p.subject,
+                at: atDate?.toISOString(),
+                includeHistorical: includeHist,
+                facts,
+                count: facts.length,
+            };
+        })
+
+        /**
+         * GET /temporal/search
+         * Searches temporal facts.
+         */
+        .get("/search", async ({ query, ...ctx }) => {
+            const user = getUser(ctx);
+            const q = SearchFactsSchema.parse(query);
+            const effectiveUserId = getEffectiveUserId(user, q.userId);
+
+            const atDate = q.at ? safeDate(q.at as string | number) : undefined;
+            if (q.at && !atDate) {
+                throw new AppError(400, "INVALID_DATE", "Invalid 'at' date format");
+            }
+            const limitValue = q.limit || 100;
+
+            const m = new Memory(effectiveUserId);
+            const facts = await m.temporal.search(
+                q.pattern,
+                {
+                    type: q.type as any,
+                    at: atDate,
+                    limit: limitValue
+                }
+            );
+
+            return {
+                pattern: q.pattern,
+                type: q.type,
+                at: atDate?.toISOString(),
+                facts,
+                count: facts.length,
+            };
         });
-    } catch (error: unknown) {
-        logger.error("[TEMPORAL API] Error updating edge:", { error });
-        sendError(res, error);
-    }
-};
+
+});

@@ -1,8 +1,9 @@
 import { BaseRepository } from "./base";
-import { LogEntry } from "../types";
+import type { LogEntry, EmbedLogParams, MaintLogParams } from "../types/system";
 
 export class LogRepository extends BaseRepository {
-    async insLog(id: string, userId: string | null | undefined, model: string, status: string, ts: number, err: string | null) {
+    async insLog(params: import("../types").EmbedLogParams) {
+        const { id, userId, model, status, ts, err } = params;
         return await this.runAsync(
             `insert into ${this.tables.embed_logs}(id,user_id,model,status,ts,err) values(?,?,?,?,?,?) on conflict(id) do update set status=excluded.status,err=excluded.err`,
             [id, userId ?? null, model, status, ts, err ?? null],
@@ -32,14 +33,16 @@ export class LogRepository extends BaseRepository {
         );
     }
 
-    async logMaintOp(op: string, status: string, details: string, ts: number, userId?: string | null) {
+    async logMaintOp(params: import("../types").MaintLogParams) {
+        const { op, userId, status, details, ts } = params;
         return await this.runAsync(
             `insert into ${this.tables.maint_logs}(op,user_id,status,details,ts) values(?,?,?,?,?)`,
             [op, userId ?? null, status, details, ts],
         );
     }
 
-    async insMaintLog(userId: string | null | undefined, status: string, details: string, ts: number) {
+    async insMaintLog(params: Omit<import("../types").MaintLogParams, "op">) {
+        const { userId, status, details, ts } = params;
         return await this.runAsync(
             `insert into ${this.tables.maint_logs}(op,user_id,status,details,ts) values('routine',?,?,?,?)`,
             [userId ?? null, status, details, ts],

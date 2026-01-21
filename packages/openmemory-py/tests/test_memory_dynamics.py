@@ -49,11 +49,11 @@ async def test_decay_cold_storage_logic():
                      "content": "test content",
                      "summary": "test summary",
                      "salience": 0.1, # Low salience to trigger decay
-                     "decay_lambda": 0.05,
-                     "last_seen_at": 0, # Very old
-                     "updated_at": 0,
-                     "primary_sector": "semantic",
-                     "feedback_score": 0
+                     "decayLambda": 0.05,
+                     "lastSeenAt": 0, # Very old
+                     "updatedAt": 0,
+                     "primarySector": "semantic",
+                     "feedbackScore": 0
                  }
              ]
         ]

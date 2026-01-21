@@ -27,10 +27,10 @@ async def get_subject_timeline(
     params: List[Any] = [subject]
 
     if userId:
-        conds.append("userId = ?")
+        conds.append("user_id = ?")
         params.append(userId)
     else:
-        conds.append("userId IS NULL")
+        conds.append("user_id IS NULL")
 
     if predicate:
         conds.append("predicate = ?")
@@ -38,7 +38,7 @@ async def get_subject_timeline(
 
     t = q.tables
     sql = f"""
-        SELECT subject, predicate, object, confidence, validFrom, validTo
+        SELECT subject, predicate, object, confidence, valid_from as validFrom, valid_to as validTo
         FROM {t['temporal_facts']}
         WHERE {' AND '.join(conds)}
         ORDER BY validFrom ASC
@@ -89,10 +89,10 @@ async def get_predicate_timeline(
     params: List[Any] = [predicate]
 
     if userId:
-        conds.append("userId = ?")
+        conds.append("user_id = ?")
         params.append(userId)
     else:
-        conds.append("userId IS NULL")
+        conds.append("user_id IS NULL")
 
     if start is not None:
         conds.append("validFrom >= ?")
@@ -103,7 +103,7 @@ async def get_predicate_timeline(
 
     t = q.tables
     sql = f"""
-        SELECT subject, predicate, object, confidence, validFrom, validTo
+        SELECT subject, predicate, object, confidence, valid_from as validFrom, valid_to as validTo
         FROM {t['temporal_facts']}
         WHERE {' AND '.join(conds)}
         ORDER BY validFrom ASC
@@ -124,16 +124,16 @@ async def get_changes_in_window(
         conds.append("subject = ?")
         params.append(subject)
     if userId:
-        conds.append("userId = ?")
+        conds.append("user_id = ?")
         params.append(userId)
 
     where_sub = f"AND {' AND '.join(conds)}" if conds else ""
 
     t = q.tables
     sql = f"""
-        SELECT subject, predicate, object, confidence, validFrom, validTo
+        SELECT subject, predicate, object, confidence, valid_from as validFrom, valid_to as validTo
         FROM {t['temporal_facts']}
-        WHERE ((validFrom >= ? AND validFrom <= ?) OR (validTo >= ? AND validTo <= ?))
+        WHERE ((valid_from >= ? AND valid_from <= ?) OR (valid_to >= ? AND valid_to <= ?))
         {where_sub}
     """
     rows = await db.async_fetchall(sql, tuple(params))
@@ -172,15 +172,15 @@ async def compare_time_points(
 ) -> Dict[str, List[Dict[str, Any]]]:
     """Compare the state of a subject at two different points in time."""
     userId = userId or user_id
-    user_clause = "AND userId = ?" if userId else "AND userId IS NULL"
+    user_clause = "AND user_id = ?" if userId else "AND user_id IS NULL"
     user_param = (userId,) if userId else ()  # type: ignore[assignment]
 
     t = q.tables
     sql1 = f"""
-        SELECT id, userId, subject, predicate, object, validFrom, validTo, confidence, lastUpdated, metadata
+        SELECT id, user_id, subject, predicate, object, valid_from as validFrom, valid_to as validTo, confidence, last_updated, metadata
         FROM {t['temporal_facts']}
         WHERE subject = ?
-        AND validFrom <= ? AND (validTo IS NULL OR validTo >= ?)
+        AND valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?)
         {user_clause}
     """
     f1 = await db.async_fetchall(sql1, (subject, t1, t1) + user_param)  # type: ignore[arg-type]
@@ -221,15 +221,15 @@ async def get_change_frequency(
     now = int(time.time()*1000)
     start = now - (window_days * 86400000)
 
-    user_clause = "AND userId = ?" if userId else ""
+    user_clause = "AND user_id = ?" if userId else ""
     user_param = (userId,) if userId else ()
 
     t = q.tables
     sql = f"""
-        SELECT validFrom, validTo
+        SELECT valid_from as validFrom, valid_to as validTo
         FROM {t['temporal_facts']}
         WHERE subject = ? AND predicate = ?
-        AND validFrom >= ?
+        AND valid_from >= ?
         {user_clause}
         ORDER BY validFrom ASC
     """
@@ -266,7 +266,7 @@ async def get_volatile_facts(
         conds.append("subject = ?")
         params.append(subject)
     if userId:
-        conds.append("userId = ?")
+        conds.append("user_id = ?")
         params.append(userId)
 
     where = f"WHERE {' AND '.join(conds)}" if conds else ""

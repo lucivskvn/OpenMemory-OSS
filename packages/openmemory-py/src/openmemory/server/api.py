@@ -11,7 +11,7 @@ from ..utils.logger import setup_logging
 from .routers import (
     memory_router, ide_router, dashboard_router, temporal_router,
     compression_router, langgraph_router, sources_router, sources_cfg_router,
-    users_router, admin_router
+    users_router, admin_router, system_router
 )
 from .dependencies import get_current_user_id
 from .dependencies import get_current_user_id, verify_admin
@@ -175,6 +175,12 @@ app.include_router(
     prefix="/admin",
     tags=["admin"],
     dependencies=[Depends(get_current_user_id), Depends(verify_admin)],
+)
+app.include_router(
+    system_router,
+    prefix="/api/system",
+    tags=["system"],
+    dependencies=[Depends(get_current_user_id)],
 )
 
 

@@ -113,48 +113,69 @@ export class OneDriveSource extends BaseSource<OneDriveCreds, OneDriveFilters> {
             ? `${this.graphUrl}/users/${userPrincipal}/drive`
             : `${this.graphUrl}/me/drive`;
 
-        const url =
+        // Queue for recursion: [api_url, logical_path]
+        const initialUrl =
             folderPath === "/"
                 ? `${base}/root/children`
                 : `${base}/root:/${folderPath.replace(/^\/|\/$/g, "")}:/children`;
 
+        const queue: string[] = [initialUrl];
         const results: SourceItem[] = [];
-        let nextUrl: string | null = url;
+        const processedUrls = new Set<string>();
 
         try {
-            while (nextUrl) {
-                const resp: Response = await fetch(nextUrl, {
-                    headers: { Authorization: `Bearer ${this.accessToken}` },
-                });
+            while (queue.length > 0) {
+                const currentUrl = queue.shift()!;
+                if (processedUrls.has(currentUrl)) continue;
+                processedUrls.add(currentUrl);
 
-                if (!resp.ok)
-                    throw new Error(`http ${resp.status}: ${resp.statusText}`);
+                let nextLink: string | null = currentUrl;
 
-                const data = (await resp.json()) as {
-                    value?: Record<string, unknown>[];
-                    "@odata.nextLink"?: string;
-                };
-
-                for (const item of data.value || []) {
-                    const driveId = (item.parentReference as { driveId?: string })?.driveId;
-                    results.push({
-                        id: driveId ? `${driveId}:${item.id}` : String(item.id),
-                        name: String(item.name || "untitled"),
-                        type:
-                            "folder" in item
-                                ? "folder"
-                                : (item.file as { mimeType?: string })
-                                    ?.mimeType || "file",
-                        size: Number(item.size || 0),
-                        modified: String(item.lastModifiedDateTime || ""),
-                        path:
-                            (item.parentReference as { path?: string })?.path ||
-                            "",
-                        userPrincipal,
+                while (nextLink) {
+                    const resp: Response = await fetch(nextLink, {
+                        headers: { Authorization: `Bearer ${this.accessToken}` },
                     });
-                }
 
-                nextUrl = (data["@odata.nextLink"] as string) || null;
+                    if (!resp.ok) {
+                        logger.warn(`[onedrive] Failed to list ${nextLink}: ${resp.status}`);
+                        break;
+                    }
+
+                    const data = (await resp.json()) as {
+                        value?: Record<string, unknown>[];
+                        "@odata.nextLink"?: string;
+                    };
+
+                    for (const item of data.value || []) {
+                        const driveId = (item.parentReference as { driveId?: string })?.driveId;
+                        const isFolder = "folder" in item;
+
+                        results.push({
+                            id: driveId ? `${driveId}:${item.id}` : String(item.id),
+                            name: String(item.name || "untitled"),
+                            type: isFolder
+                                ? "folder"
+                                : (item.file as { mimeType?: string })?.mimeType || "file",
+                            size: Number(item.size || 0),
+                            modified: String(item.lastModifiedDateTime || ""),
+                            path: (item.parentReference as { path?: string })?.path || "",
+                            userPrincipal,
+                        });
+
+                        // Add folder children to queue
+                        if (isFolder && item.id) {
+                            queue.push(`${base}/items/${item.id}/children`);
+                        }
+                    }
+
+                    nextLink = (data["@odata.nextLink"] as string) || null;
+                    if (nextLink) await this.rateLimiter.acquire();
+
+                    if (results.length >= 2000) { // Higher limit for recursive drives
+                        logger.warn(`[onedrive] Hit hard limit of 2000 items`);
+                        return results;
+                    }
+                }
                 await this.rateLimiter.acquire();
             }
         } catch (e: unknown) {

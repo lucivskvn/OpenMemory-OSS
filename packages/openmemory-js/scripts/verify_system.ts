@@ -1,8 +1,8 @@
 
 import { expect } from "bun:test";
 
-const BASE_URL = process.env.BASE_URL || "http://localhost:8080";
-const ADMIN_KEY = process.env.OM_ADMIN_KEY || "admin-secret"; // Ensure this matches server env
+const BASE_URL = Bun.env.BASE_URL || "http://localhost:8080";
+const ADMIN_KEY = Bun.env.OM_ADMIN_KEY || "admin-secret"; // Ensure this matches server env
 
 console.log(`[VERIFY] Target: ${BASE_URL}`);
 console.log(`[VERIFY] Admin Key: ${ADMIN_KEY.substring(0, 3)}...`);

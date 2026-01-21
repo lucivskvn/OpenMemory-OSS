@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Brain, Database, Settings, Activity, Wifi, ChevronLeft, ChevronRight } from "lucide-react";
+import { LayoutDashboard, Brain, Database, Settings, Activity, Wifi, Shield, Download, ChevronLeft, ChevronRight } from "lucide-react";
 import { client } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { OpenMemoryEvent } from "@/lib/types";
@@ -35,7 +35,12 @@ export const Sidebar = () => {
     const navItems = [
         { href: "/", label: "Dashboard", icon: LayoutDashboard },
         { href: "/graph", label: "Temporal Graph", icon: Activity },
+        { href: "/dynamics", label: "Dynamics Graph", icon: Brain },
         { href: "/memory", label: "Memory Store", icon: Database },
+        { href: "/audit", label: "Audit Logs", icon: Wifi },
+        { href: "/admin", label: "Security & Users", icon: Shield },
+        { href: "/portability", label: "Data Portability", icon: Download },
+        { href: "/settings", label: "System Config", icon: Settings },
     ];
 
     return (

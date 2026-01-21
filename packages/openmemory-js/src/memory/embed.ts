@@ -4,7 +4,7 @@
  */
 import { env, tier } from "../core/cfg";
 import { q } from "../core/db";
-import { sectorConfigs } from "../core/hsg_config";
+import { sectorConfigs, syntheticWeights } from "../core/hsg_config";
 import { getModel } from "../core/models";
 import { normalizeUserId, retry } from "../utils";
 import { addSynonymTokens, canonicalTokensFromText } from "../utils/text";
@@ -12,9 +12,10 @@ import {
     aggregateVectors,
     bufferToVector,
     cosineSimilarity,
-    vectorToBuffer,
+    resizeVector,
+    vectorToUint8Array,
 } from "../utils/vectors";
-export { aggregateVectors, bufferToVector, cosineSimilarity, vectorToBuffer };
+export { aggregateVectors, bufferToVector, cosineSimilarity, resizeVector, vectorToUint8Array };
 import { BedrockRuntimeClient, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
 import { env as hfEnv, pipeline } from "@huggingface/transformers";
 import OpenAI from "openai";
@@ -87,51 +88,53 @@ export interface EmbeddingResult {
     dim: number;
 }
 
-const compressVec = (v: number[], td: number): number[] => {
-    if (v.length <= td) return v;
-    const c = new Float32Array(td),
-        bs = v.length / td;
-    for (let i = 0; i < td; i++) {
-        const s = Math.floor(i * bs),
-            e = Math.floor((i + 1) * bs);
-        let sum = 0,
-            cnt = 0;
-        for (let j = s; j < e && j < v.length; j++) {
-            sum += v[j];
-            cnt++;
-        }
-        c[i] = cnt > 0 ? sum / cnt : 0;
-    }
-    let n = 0;
-    for (let i = 0; i < td; i++) n += c[i] * c[i];
-    n = Math.sqrt(n);
-    if (n > 0) for (let i = 0; i < td; i++) c[i] /= n;
-    return Array.from(c);
-};
+/**
+ * @deprecated Use resizeVector from utils
+ */
+const compressVec = (v: number[], td: number): number[] => resizeVector(v, td);
 
-const fuseVecs = (syn: number[], sem: number[]): number[] => {
-    const synLength = syn.length;
-    const semLength = sem.length;
-    const totalLength = synLength + semLength;
-    const f = new Array(totalLength);
-    let sumOfSquares = 0;
-    for (let i = 0; i < synLength; i++) {
-        const val = syn[i] * 0.6;
-        f[i] = val;
-        sumOfSquares += val * val;
-    }
-    for (let i = 0; i < semLength; i++) {
-        const val = sem[i] * 0.4;
-        f[synLength + i] = val;
-        sumOfSquares += val * val;
-    }
-    if (sumOfSquares > 0) {
-        const norm = Math.sqrt(sumOfSquares);
-        for (let i = 0; i < totalLength; i++) {
-            f[i] /= norm;
+const providerHealthCache = new Map<string, { healthy: boolean; until: number }>();
+
+export function fuseVecs(vecs: number[][], weights?: number[]): number[] {
+    if (vecs.length === 0) return [];
+    if (vecs.length === 1) return vecs[0];
+
+    const w = weights || vecs.map(() => 1 / vecs.length);
+
+    // Normalize weights to sum to 1
+    const weightSum = w.reduce((a, b) => a + b, 0);
+    const normalizedWeights = w.map(weight => weight / weightSum);
+
+    const dim = vecs[0].length;
+    const fused = new Array(dim).fill(0);
+
+    for (let i = 0; i < vecs.length; i++) {
+        // Ensure dimensions match
+        if (vecs[i].length !== dim) {
+            // Handle mismatch if necessary or skip
+            continue;
+        }
+        for (let j = 0; j < dim; j++) {
+            fused[j] += vecs[i][j] * normalizedWeights[i];
         }
     }
-    return f;
+
+    // Normalize result vector
+    const magnitude = Math.sqrt(fused.reduce((sum, val) => sum + val * val, 0));
+    if (magnitude > 0) {
+        for (let i = 0; i < fused.length; i++) {
+            fused[i] /= magnitude;
+        }
+    }
+
+    return fused;
+}
+
+const EXPECTED_DIMENSIONS: Record<string, number> = {
+    'openai': 1536,
+    'gemini': 768,
+    'ollama': 4096,
+    'local': 384
 };
 
 export async function embedForSector(t: string, s: string): Promise<number[]> {
@@ -140,15 +143,60 @@ export async function embedForSector(t: string, s: string): Promise<number[]> {
             `[EMBED] Provider: ${env.embKind}, Tier: ${tier}, Sector: ${s}`,
         );
     if (!sectorConfigs[s]) throw new Error(`Unknown sector: ${s}`);
+
+    // Synthetic only
     if (tier === "hybrid") return genSynEmb(t, s);
+
+    // Smart tier: Fuse synthetic + semantic
     if (tier === "smart" && env.embKind !== "synthetic") {
-        const syn = genSynEmb(t, s),
-            sem = await getSemEmb(t, s),
-            comp = compressVec(sem, 128);
-        return fuseVecs(syn, comp);
+        const syn = genSynEmb(t, s);
+        let sem = await getSemEmb(t, s);
+
+        // Dimension check & Resize
+        const expectedDim = EXPECTED_DIMENSIONS[env.embKind];
+        // Use env.vecDim as the target dimension for fusion
+        const targetDim = env.vecDim || 768;
+
+        // Verify provider dimension if known
+        if (expectedDim && sem.length !== expectedDim) {
+            logger.warn(`[Embed] Dimension mismatch for ${env.embKind}: expected ${expectedDim}, got ${sem.length}`);
+        }
+
+        // Resize sem to match targetDim for fusion
+        if (sem.length !== targetDim) {
+            sem = resizeVector(sem, targetDim);
+        }
+
+        // Resize syn to match targetDim (should already be, but safe check)
+        if (syn.length !== targetDim) {
+            // syn is generated with env.vecDim in genSynEmb, so this is just sanity
+            const synResized = resizeVector(syn, targetDim);
+            return fuseVecs([synResized, sem], [0.4, 0.6]);
+        }
+
+        return fuseVecs([syn, sem], [0.4, 0.6]);
     }
+
     if (tier === "fast") return genSynEmb(t, s);
-    return await getSemEmb(t, s);
+
+    // Default: just semantic
+    const sem = await getSemEmb(t, s);
+
+    // Check dimensions
+    const expectedDim = EXPECTED_DIMENSIONS[env.embKind];
+    if (expectedDim && sem.length !== expectedDim) {
+        logger.error(`[Embed] Dimension mismatch for ${env.embKind}`, {
+            expected: expectedDim,
+            actual: sem.length
+        });
+        // We might want to resize here too to avoid downstream errors, 
+        // or just return as is if resizeVector updates are handled elsewhere.
+        // For now, let's enforce env.vecDim if set
+        if (env.vecDim && sem.length !== env.vecDim) {
+            return resizeVector(sem, env.vecDim);
+        }
+    }
+    return sem;
 }
 
 /**
@@ -219,13 +267,21 @@ async function embedWithProvider(
     }
 }
 
-// Get semantic embedding with configurable fallback chain
+// Get semantic embedding with configurable fallback chain and health checks
 async function getSemEmb(t: string, s: string): Promise<number[]> {
-    // Deduplicate providers to avoid wasteful retries (e.g., gemini,gemini,synthetic)
+    // Deduplicate providers to avoid wasteful retries
     const providers = [...new Set([env.embKind, ...env.embeddingFallback])];
 
     for (let i = 0; i < providers.length; i++) {
         const provider = providers[i];
+
+        // Check health cache
+        const health = providerHealthCache.get(provider);
+        if (health && !health.healthy && Date.now() < health.until) {
+            if (env.verbose) logger.debug(`[Embed] Skipping unhealthy provider ${provider}`);
+            continue;
+        }
+
         try {
             const result = await retry(
                 () => embedWithProvider(provider, t, s),
@@ -244,10 +300,22 @@ async function getSemEmb(t: string, s: string): Promise<number[]> {
                     `[EMBED] Fallback to ${provider} succeeded for sector: ${s}`,
                 );
             }
+            // Mark as healthy
+            providerHealthCache.set(provider, { healthy: true, until: 0 });
             return result;
         } catch (e) {
-            // const _errMsg = e instanceof Error ? e.message : String(e);
+            const msg = e instanceof Error ? e.message : String(e);
             const nextProvider = providers[i + 1];
+
+            // Check if rate limited
+            if (msg.includes('rate limit') || msg.includes('429')) {
+                // Mark as unhealthy for 5 minutes
+                providerHealthCache.set(provider, {
+                    healthy: false,
+                    until: Date.now() + 300000
+                });
+                logger.warn(`[Embed] Provider ${provider} rate limited, marked unhealthy for 5min`);
+            }
 
             if (nextProvider) {
                 logger.error(
@@ -263,7 +331,7 @@ async function getSemEmb(t: string, s: string): Promise<number[]> {
             }
         }
     }
-    // Fallback if providers array is empty (shouldn't happen with defaults)
+    // Fallback if providers array is empty or all skipped
     return genSynEmb(t, s);
 }
 
@@ -275,6 +343,12 @@ async function embBatchWithFallback(
 
     for (let i = 0; i < providers.length; i++) {
         const provider = providers[i];
+        // Check health cache
+        const health = providerHealthCache.get(provider);
+        if (health && !health.healthy && Date.now() < health.until) {
+            continue;
+        }
+
         try {
             let result: Record<string, number[]>;
             switch (provider) {
@@ -313,6 +387,11 @@ async function embBatchWithFallback(
         } catch (e) {
             const errMsg = e instanceof Error ? e.message : String(e);
 
+            // Rate limit check
+            if (errMsg.includes('rate limit') || errMsg.includes('429')) {
+                providerHealthCache.set(provider, { healthy: false, until: Date.now() + 300000 });
+            }
+
             // Log fallback attempt
             const nextProvider = providers[i + 1];
 
@@ -321,15 +400,25 @@ async function embBatchWithFallback(
                     `[EMBED] ${provider} batch failed: ${errMsg}, trying ${nextProvider}`,
                 );
             } else {
-                logger.error(
-                    `[EMBED] All providers failed for batch. Last error (${provider}): ${errMsg}. Using synthetic.`,
-                );
-                // Fall back to synthetic for all sectors
-                const result: Record<string, number[]> = {};
-                for (const [s, t] of Object.entries(txts)) {
-                    result[s] = genSynEmb(t, s);
+                // Try fallback to INDIVIDUAL embeddings before giving up to synthetic
+                logger.warn(`[Embed] Batch failed for ${provider}, falling back to individual`);
+                try {
+                    const results: Record<string, number[]> = {};
+                    for (const [s, t] of Object.entries(txts)) {
+                        results[s] = await getSemEmb(t, s); // Uses full fallback chain
+                    }
+                    return results;
+                } catch (individualErr) {
+                    logger.error(
+                        `[EMBED] All providers failed for batch and individual fallback. Last error (${provider}): ${errMsg}. Using synthetic.`,
+                    );
+                    // Fall back to synthetic for all sectors
+                    const result: Record<string, number[]> = {};
+                    for (const [s, t] of Object.entries(txts)) {
+                        result[s] = genSynEmb(t, s);
+                    }
+                    return result;
                 }
-                return result;
             }
         }
     }
@@ -404,12 +493,19 @@ const taskMap: Record<string, string> = {
     reflective: "SEMANTIC_SIMILARITY",
 };
 
+// Cross-platform sleep helper to ensure compatibility with both Bun and Node.js
+const sleep = (ms: number) =>
+    typeof Bun !== "undefined" && Bun.sleep
+        ? Bun.sleep(ms)
+        : new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 async function embGemini(
     txts: Record<string, string>,
 ): Promise<Record<string, number[]>> {
     if (!env.geminiKey) throw new Error("Gemini key missing");
     const prom = gemQ.then(async () => {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents?key=${env.geminiKey}`;
+        // SECURITY: API key moved to headers instead of URL query
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:batchEmbedContents`;
         for (let a = 0; a < 3; a++) {
             try {
                 const reqs = Object.entries(txts).map(([s, t]) => {
@@ -422,7 +518,10 @@ async function embGemini(
                 });
                 const r = await fetchWithTimeout(url, {
                     method: "POST",
-                    headers: { "content-type": "application/json" },
+                    headers: {
+                        "content-type": "application/json",
+                        "x-goog-api-key": env.geminiKey, // Secure header-based auth
+                    },
                     body: JSON.stringify({ requests: reqs }),
                 });
                 if (!r.ok) {
@@ -434,11 +533,7 @@ async function embGemini(
                         logger.warn(
                             `[EMBED] Gemini rate limit (${a + 1}/3), waiting ${d}ms`,
                         );
-                        if (typeof Bun !== "undefined" && Bun.sleep) {
-                            await Bun.sleep(d);
-                        } else {
-                            await new Promise((x) => setTimeout(x, d));
-                        }
+                        await sleep(d);
                         continue;
                     }
                     throw new Error(`Gemini: ${r.status}`);
@@ -447,8 +542,8 @@ async function embGemini(
                 const out: Record<string, number[]> = {};
                 let i = 0;
                 for (const s of Object.keys(txts))
-                    out[s] = resizeVec(data.embeddings[i++].values, env.vecDim);
-                await Bun.sleep(1500);
+                    out[s] = resizeVector(data.embeddings[i++].values, env.vecDim);
+                await sleep(1500);
                 return out;
             } catch (e) {
                 const errMsg = e instanceof Error ? e.message : String(e);
@@ -460,7 +555,7 @@ async function embGemini(
                 logger.error(`[EMBED] Gemini error (${a + 1}/3):`, {
                     error: e,
                 });
-                await Bun.sleep(1000 * Math.pow(2, a));
+                await sleep(1000 * Math.pow(2, a));
             }
         }
         throw new Error("Gemini: exhausted retries");
@@ -475,12 +570,12 @@ async function embGemini(
  */
 async function resolveOllamaModel(t: string, s: string, userId?: string | null): Promise<string> {
     // 1. Try Persistent Config (populated by discovery or manually)
-    const { getPersistedConfig } = await import("../core/persisted_cfg");
-    const pConfig = await getPersistedConfig<Record<string, string>>(normalizeUserId(userId) || null, "ollama_embeddings");
+    const { getPersistedConfig } = await import("../core/persisted_cfg.js");
 
     // 2. Try Env Config (OM_OLLAMA_EMBED_MODELS)
     const eConfig = env.ollamaEmbedModels as Record<string, string>;
 
+    const pConfig = (await getPersistedConfig(userId ?? null, "ollama_embed_models")) as Record<string, string> || {};
     const config = { ...eConfig, ...pConfig };
 
     // A. Sector-specific override from config
@@ -520,12 +615,12 @@ async function embOllama(t: string, s: string, userId?: string | null): Promise<
             });
             if (!r2.ok) throw new Error(`Ollama legacy: ${r2.status}`);
             const data = (await r2.json()) as OllamaEmbeddingResponse;
-            return resizeVec(data.embedding, env.vecDim);
+            return resizeVector(data.embedding, env.vecDim);
         }
         throw new Error(`Ollama: ${r.status}`);
     }
     const data = (await r.json()) as { embeddings: number[][] };
-    return resizeVec(data.embeddings[0], env.vecDim);
+    return resizeVector(data.embeddings[0], env.vecDim);
 }
 
 async function embBatchOllama(
@@ -553,7 +648,7 @@ async function embBatchOllama(
     const data = (await r.json()) as { embeddings: number[][] };
 
     const out: Record<string, number[]> = {};
-    secs.forEach((s, i) => (out[s] = resizeVec(data.embeddings[i], env.vecDim)));
+    secs.forEach((s, i) => (out[s] = resizeVector(data.embeddings[i], env.vecDim)));
     return out;
 }
 
@@ -587,7 +682,7 @@ async function embAWS(t: string, s: string): Promise<number[]> {
         const response = await client.send(command);
         const jsonString = new TextDecoder().decode(response.body);
         const parsedResponse = JSON.parse(jsonString);
-        return resizeVec(parsedResponse.embedding, env.vecDim);
+        return resizeVector(parsedResponse.embedding, env.vecDim);
     } catch (error) {
         throw new Error(
             `AWS error: ${error instanceof Error ? error.message : String(error)}`,
@@ -604,7 +699,7 @@ async function embLocal(t: string, s: string): Promise<number[]> {
         const v = Array.from(output.data as Float32Array);
 
         if (env.localEmbeddingResize) {
-            return resizeVec(v, env.vecDim);
+            return resizeVector(v, env.vecDim);
         }
         return v;
     } catch (e) {
@@ -648,13 +743,7 @@ const addPosFeat = (vec: Float32Array, dim: number, pos: number, w: number) => {
     vec[idx] += w * Math.sin(ang);
     vec[(idx + 1) % dim] += w * Math.cos(ang);
 };
-const secWts: Record<string, number> = {
-    episodic: 1.3,
-    semantic: 1.0,
-    procedural: 1.2,
-    emotional: 1.4,
-    reflective: 0.9,
-};
+// Synthetic weights centralized in hsg_config.ts
 const normV = (v: Float32Array) => {
     let n = 0;
     for (let i = 0; i < v.length; i++) n += v[i] * v[i];
@@ -663,6 +752,15 @@ const normV = (v: Float32Array) => {
     for (let i = 0; i < v.length; i++) v[i] *= inv;
 };
 
+/**
+ * Generates a synthetic embedding vector for a given text and sector.
+ * Used for fast and hybrid tiers where speed is prioritized over deep semantics,
+ * or as a robust fallback for external provider failures.
+ * 
+ * @param t - The text to embed.
+ * @param s - The sector identifier.
+ * @returns A normalized numeric vector of size env.vecDim.
+ */
 export function genSynEmb(t: string, s: string): number[] {
     const d = env.vecDim || 768,
         v = new Float32Array(d).fill(0);
@@ -678,7 +776,7 @@ export function genSynEmb(t: string, s: string): number[] {
         const tok = et[i];
         tc.set(tok, (tc.get(tok) || 0) + 1);
     }
-    const sw = secWts[s] || 1.0,
+    const sw = syntheticWeights[s] || 1.0,
         dl = Math.log(1 + el);
     for (const [tok, c] of tc) {
         const tf = c / el,
@@ -722,12 +820,6 @@ export function genSynEmb(t: string, s: string): number[] {
     return Array.from(v);
 }
 
-const resizeVec = (v: number[], t: number) => {
-    if (v.length === t) return v;
-    if (v.length > t) return v.slice(0, t);
-    return [...v, ...Array(t - v.length).fill(0)];
-};
-
 const CACHE = new Map<string, { val: EmbeddingResult[]; ts: number }>();
 const CACHE_TTL = 5 * 60 * 1000;
 const CACHE_SIZE = 500;
@@ -748,21 +840,35 @@ export async function embedMultiSector(
     userId?: string | null,
 ): Promise<EmbeddingResult[]> {
     const uid = normalizeUserId(userId);
-    // Cache Check (only if no chunks, as chunks complicate cache keys)
-    if ((!chunks || chunks.length <= 1) && CACHE.has(txt)) {
-        const c = CACHE.get(txt)!;
+    // Cache Check (unique key avoiding collisions)
+    // Use env.embKind and sector names in key if possible, but here chunks complicate it.
+    // If no chunks, we can use the text + provider + tier as reasonable key.
+    // NOTE: We don't have sector here easily without iterating, but `embedMultiSector` implies all requested sectors?
+    // Actually the function takes `secs` array.
+    const cacheKey = `${env.embKind}:${tier}:${secs.sort().join(',')}:${txt.substring(0, 100)}`;
+
+    if ((!chunks || chunks.length <= 1) && CACHE.has(cacheKey)) {
+        const c = CACHE.get(cacheKey)!;
         if (Date.now() - c.ts < CACHE_TTL) {
             // LRU: Refresh position
-            CACHE.delete(txt);
-            CACHE.set(txt, c);
+            CACHE.delete(cacheKey);
+            CACHE.set(cacheKey, c);
             return c.val;
         } else {
-            CACHE.delete(txt); // Expired
+            CACHE.delete(cacheKey); // Expired
         }
     }
 
     const r: EmbeddingResult[] = [];
-    await q.insLog.run(id, uid, "multi-sector", "pending", Date.now(), null);
+    // Track assignment progress
+    await q.insLog.run({
+        id,
+        userId: uid,
+        model: "multi-sector",
+        status: "pending",
+        ts: Date.now(),
+        err: null,
+    });
     for (let a = 0; a < 3; a++) {
         try {
             const simp = env.embedMode === "simple";
@@ -818,7 +924,7 @@ export async function embedMultiSector(
                         } else v = await embedForSector(txt, s);
                         r.push({ sector: s, vector: v, dim: v.length });
                         if (env.embedDelayMs > 0 && i < secs.length - 1)
-                            await Bun.sleep(env.embedDelayMs);
+                            await sleep(env.embedDelayMs);
                     }
                 }
             }
@@ -826,11 +932,12 @@ export async function embedMultiSector(
 
             // Update Cache
             if ((!chunks || chunks.length <= 1) && r.length > 0) {
+                const cacheKey = `${env.embKind}:${tier}:${secs.sort().join(',')}:${txt.substring(0, 100)}`;
                 if (CACHE.size >= CACHE_SIZE) {
                     const first = CACHE.keys().next().value;
                     if (first) CACHE.delete(first);
                 }
-                CACHE.set(txt, { val: r, ts: Date.now() });
+                CACHE.set(cacheKey, { val: r, ts: Date.now() });
             }
 
             return r;
@@ -843,7 +950,7 @@ export async function embedMultiSector(
                 );
                 throw e;
             }
-            await Bun.sleep(1000 * Math.pow(2, a));
+            await sleep(1000 * Math.pow(2, a));
         }
     }
     throw new Error("Embedding failed after retries");
@@ -912,4 +1019,18 @@ export const getEmbeddingInfo = () => {
         i.type = "synthetic";
     }
     return i;
+};
+
+/**
+ * Service object for Embedding operations.
+ * Use this for better testability (mocking).
+ */
+export const Embedder = {
+    embedMultiSector,
+    embedForSector,
+    embedQueryForAllSectors,
+    embed,
+    genSynEmb,
+    getEmbeddingProvider,
+    getEmbeddingInfo,
 };

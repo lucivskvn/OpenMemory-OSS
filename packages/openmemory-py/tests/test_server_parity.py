@@ -14,7 +14,8 @@ def setup_env():
     from openmemory.core.db import db  # type: ignore[import-untyped]
     db.connect(force=True)
     yield
-    db.disconnect()
+    from openmemory.core.utils.async_bridge import run_sync
+    run_sync(db.disconnect())
 
 def test_health():
     res = test_client.get("/health")

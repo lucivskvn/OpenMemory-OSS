@@ -25,9 +25,9 @@ pip install openmemory-py --upgrade
 ```
 
 ```python
-from openmemory.client import OpenMemory
+from openmemory.client import Memory
 
-mem = OpenMemory()
+mem = Memory()
 await mem.add("user prefers dark mode", user_id="u1")
 results = await mem.search("preferences", user_id="u1")
 ```
@@ -261,6 +261,12 @@ Ingest content directly from a URL.
 
 ```python
 result = await mem.ingest_url("https://example.com/docs")
+
+# With custom User-Agent
+result = await mem.ingest_url(
+    "https://example.com/docs", 
+    config={"userAgent": "MyCustomBot/1.0"}
+)
 ```
 
 ### `temporal` (Knowledge Graph)
@@ -317,8 +323,12 @@ mem = Memory(
     api_key='your-api-key'
 )
 
-# Admin operations (Remote Only)
-keys = await mem.users.list_api_keys()
+# Get System Stats
+stats = await mem.get_stats()
+print(f"Total Memories: {stats['total_memories']}")
+
+# Admin operations
+users = await mem.list_users()
 ```
 
 ---

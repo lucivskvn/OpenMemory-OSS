@@ -7,16 +7,32 @@
         "declaration": true,
         "emitDeclarationOnly": true,
         "skipLibCheck": true,
+        "allowImportingTsExtensions": false,
+        "isolatedModules": true,
+        "incremental": true,
+        "tsBuildInfoFile": ".tsbuildinfo.build",
         "types": [
             "bun-types"
         ]
     },
     "include": [
-        "src"
+        "src/index.ts",
+        "src/client.ts",
+        "src/clients/**/*.ts",
+        "src/core/types/**/*.ts"
     ],
     "exclude": [
+        "src/server",
+        "src/ops",
+        "src/ai",
+        "src/sources",
+        "src/temporal_graph",
+        "src/cli",
+        "src/memory",
+        "src/utils",
         "tests",
         "**/*.test.ts",
-        "node_modules"
+        "node_modules",
+        "dist"
     ]
 }

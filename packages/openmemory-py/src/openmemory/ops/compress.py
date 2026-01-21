@@ -1,6 +1,7 @@
 import re
 import time
 import hashlib
+import math
 import logging
 from typing import Dict, Any, List, Optional
 
@@ -40,10 +41,10 @@ class MemoryCompressionEngine:
             Approximate token count.
         """
         if not t: return 0
-        w = len(re.split(r"\s+", t.strip()))
+        w = len([x for x in re.split(r"\s+", t.strip()) if x])
         c = len(t)
-        # Heuristic: 4 chars/token + extra for punctuation/whitespace
-        return int(c / 4 + w / 2) + 1
+        # Improved heuristic: characters/4.2 + words/1.5 for technical text
+        return max(1, math.ceil(c / 4.2 + w / 1.5))
         
     def sem(self, t: str) -> str:
         """
@@ -238,7 +239,8 @@ class MemoryCompressionEngine:
         """
         if not t or len(t) < 50: return self.compress(t, "semantic")
         # Detect if text looks like code, has URLs, or is verbose
-        code = bool(re.search(r"\b(function|const|let|var|def|class|import|export)\b", t))
+        code = bool(re.search(r"\b(function|const|let|var|def|class|import|export|fn|func|namespace|include|pub|trait|impl)\b", t)) or \
+               bool(re.search(r"[{}:;](?:\s*[\w$]+\s*[:=]\s*|\s*[\w$]+\s*\()", t))
         urls = bool(re.search(r"https?://", t))
         verb = len(t.split()) > 100
         

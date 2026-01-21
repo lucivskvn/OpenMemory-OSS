@@ -79,7 +79,7 @@ class MemoryRetriever(BaseRetriever):  # type: ignore[misc]
     """
     LangChain compatible retriever for OpenMemory.
     """
-    mem: Memory
+    mem: Any
     user_id: str = "anonymous"
     k: int = 4
 

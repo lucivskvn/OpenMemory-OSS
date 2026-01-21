@@ -1,3 +1,7 @@
+"""
+Audited: 2026-01-19
+Hierarchical Semantic Graph (HSG) memory storage and retrieval.
+"""
 import time
 import math
 import asyncio
@@ -329,12 +333,8 @@ async def _learned_refine(content: str, mean_vec: List[float], user_id: str, for
     """Refine memory sectors using user-specific learned classifier."""
     refined = {"primary": None, "additional": []}
     try:
-        model_row = await q.get_classifier_model(user_id)
-        if model_row:
-            model = {
-                "weights": json.loads(model_row["weights"]),
-                "biases": json.loads(model_row["biases"])
-            }
+        model = await LearnedClassifier.load(user_id)
+        if model:
             learned_cls = LearnedClassifier.predict(mean_vec, model)
             if learned_cls["confidence"] > 0.4:
                 logger.info(f"[HSG] Learned Refinement for {user_id}: {learned_cls['primary']} (conf: {learned_cls['confidence']:.2f})")
@@ -365,7 +365,7 @@ async def add_hsg_memory(content: str, tags: Optional[str] = None, metadata: Any
 
         existing = await q.get_mem_by_simhash(simhash, user_id)
 
-        if existing and hamming_dist(simhash, existing["simhash"]) <= COGNITIVE_PARAMS["HAMMING_THRESHOLD"] and not id_override:
+        if existing and hamming_dist(simhash, existing["simhash"]) == 0 and not id_override:
             now = int(time.time()*1000)
             boost = min(1.0, (existing["salience"] or 0) + COGNITIVE_PARAMS["DEDUPLICATION_BOOST"])
             # Fast update for existing memory
@@ -520,7 +520,7 @@ async def add_hsg_memories(items: List[Dict[str, Any]], user_id: Optional[str] =
             content = item["content"]
             sh = compute_simhash(content)
             existing = await q.get_mem_by_simhash(sh, user_id)
-            if existing and hamming_dist(sh, existing["simhash"]) <= COGNITIVE_PARAMS["HAMMING_THRESHOLD"]:
+            if existing and hamming_dist(sh, existing["simhash"]) == 0:
                 now = int(time.time()*1000)
                 boost = min(1.0, (existing["salience"] or 0) + COGNITIVE_PARAMS["DEDUPLICATION_BOOST"])
                 await q.upd_seen(existing["id"], now, boost, now, user_id)
@@ -681,12 +681,12 @@ async def _coactivation_worker():
 
         mem_map = {}
         if unique_ids:
-            # We fetch without user_id constraint initially and validate later, or do we?
-            # get_mems_by_ids allows optional user_id. Here we might have mixed users if buffer isn't pure.
-            # But the loop checks for user mismatch.
-            # Let's fetch all.
             fetched = await q.get_mems_by_ids(list(unique_ids))
             mem_map = {m["id"]: m for m in fetched}
+
+        # Batch fetch all relevant waypoints
+        wp_pairs = [(p[1], p[2]) for p in pairs]
+        wp_map = await q.get_waypoints_for_pairs(wp_pairs, pairs[0][0] if pairs else None)
 
         for uid, a, b in pairs:
             try:
@@ -702,19 +702,17 @@ async def _coactivation_worker():
                 time_diff = abs(memA["last_seen_at"] - memB["last_seen_at"])
                 temp_fact = math.exp(-time_diff / tau_ms)
 
-                # Use raw SQL to handle OR REPLACE easily as in single_waypoint
-                row = await db.async_fetchone(f"SELECT weight, created_at, user_id FROM {t['waypoints']} WHERE src_id=? AND dst_id=?", (a, b))
-                cur_wt = row["weight"] if row else 0.0
+                wp = wp_map.get(f"{a}:{b}")
+                cur_wt = wp["weight"] if wp else 0.0
                 new_wt = min(1.0, cur_wt + HYBRID_PARAMS["eta"] * (1.0 - cur_wt) * temp_fact)
 
-                user_id = row["user_id"] if row else (memA["user_id"] or memB["user_id"] or "anonymous")
-                created_at = row["created_at"] if row else now
+                user_id = wp["user_id"] if wp else (memA["user_id"] or memB["user_id"] or "anonymous")
+                created_at = wp["created_at"] if wp else now
 
                 await db.async_execute(f"INSERT OR REPLACE INTO {t['waypoints']}(src_id, dst_id, user_id, weight, created_at, updated_at) VALUES (?,?,?,?,?,?)",
                            (a, b, user_id, new_wt, created_at, now))
             except Exception as e:
                 logger.warning(f"[HSG] Coactivation worker error: {e}")
-                pass
 
 def trigger_coactivation_sync():
     asyncio.create_task(_coactivation_worker())
@@ -837,12 +835,8 @@ async def hsg_query(
         # Refine using Learned Classifier
         if f.get("user_id"):
             try:
-                model_row = await q.get_classifier_model(f["user_id"])
-                if model_row:
-                    model = {
-                        "weights": json.loads(model_row["weights"]),
-                        "biases": json.loads(model_row["biases"])
-                    }
+                model = await LearnedClassifier.load(f["user_id"])
+                if model:
                     emb_res_for_mean = []
                     for sec, vec in qe.items():
                         emb_res_for_mean.append({"sector": sec, "vector": vec, "dim": len(vec)})
@@ -963,7 +957,7 @@ async def hsg_query(
 
         t = q.tables
         placeholders = ",".join(["?"] * len(ids))
-        m_rows = await db.async_fetchall(f"SELECT  # type: ignore[arg-type]  # type: ignore[arg-type] * FROM {t['memories']} WHERE id IN ({placeholders})", tuple(ids))
+        m_rows = await db.async_fetchall(f"SELECT * FROM {t['memories']} WHERE id IN ({placeholders})", tuple(ids)) # type: ignore[arg-type]
         m_map = {m["id"]: m for m in m_rows}
 
         kw_scores = {}
@@ -1093,8 +1087,8 @@ async def hsg_query(
 
         # Update feedback scores (EMA) and reinforcement
         for r in top:
-            # EMA update for feedback_score - using cached value
-            cur_fb = r.feedback_score
+            # EMA update for feedbackScore - using cached value
+            cur_fb = r.feedbackScore
             new_fb = cur_fb * 0.9 + r.score * 0.1
             await q.upd_feedback(r.id, new_fb, user_id=f.get("user_id"))
 
@@ -1114,7 +1108,7 @@ async def hsg_query(
                 propagated_count = await _propagate_reinforcement(r.id, rsal, r.salience, r.path, ctx_uid, now_ts)
 
             await on_query_hit(
-                r.id, r.primary_sector, lambda t: embed_for_sector(t, r.primary_sector, user_id=f.get("user_id"))
+                r.id, r.primarySector, lambda t: embed_for_sector(t, r.primarySector, user_id=f.get("user_id"))
             )
 
         await db.async_commit()

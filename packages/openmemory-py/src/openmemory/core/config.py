@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 from typing import Literal, List, Optional, Any, Dict, Union, TypeVar, overload
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
 # load .env from project root
 msg_root = Path(__file__).parent.parent.parent.parent / ".env"
@@ -60,11 +60,11 @@ class OpenMemoryConfig(BaseModel):
     aws_secret_access_key: Optional[str] = None
     
     # Vector / HSG
-    vec_dim: int = 1536
+    vec_dim: int = 768 # Default to Hybrid (768)
     min_score: float = 0.3
     keyword_boost: float = 2.5
     seg_size: int = 10000
-    max_vector_dim: int = 1536
+    max_vector_dim: int = 768 # Match vec_dim
     min_vector_dim: int = 64
     summary_layers: int = 3
     
@@ -117,6 +117,7 @@ class OpenMemoryConfig(BaseModel):
     encryption_enabled: bool = False
     encryption_key: Optional[str] = None
     encryption_secondary_keys: Optional[List[str]] = None
+    encryption_salt: str = "openmemory-salt-v1"
     
     # Database
     max_threads: int = 10
@@ -133,6 +134,15 @@ class OpenMemoryConfig(BaseModel):
     
     # Server
     server_api_key: Optional[str] = None
+    
+    @field_validator("pg_table", "pg_schema", "users_table", "vector_table")
+    @classmethod
+    def validate_sql_identifier(cls, v: str) -> str:
+        if not v:
+            return v
+        if not v.replace("_", "").isalnum():
+            raise ValueError("SQL identifier must be alphanumeric (underscores allowed)")
+        return v
 
     @property
     def database_url(self) -> str:
@@ -143,6 +153,10 @@ class OpenMemoryConfig(BaseModel):
         self.db_url = val
         if val.startswith("sqlite:///"):
             self.db_path = val.replace("sqlite:///", "")
+
+    @property
+    def debug(self) -> bool:
+        return self.verbose
 
     def update_config(self, **kwargs):
         """Programmatically update config values at runtime."""
@@ -195,7 +209,7 @@ def load_config() -> OpenMemoryConfig:
     data = {}
     
     # Core
-    data["port"] = int(os.getenv("PORT", 3000)) # Note: old code used 3000 for server, 8080 default elsewhere? Let's match old code: 3000
+    data["port"] = int(os.getenv("OM_PORT", os.getenv("PORT", 3000)))
     data["mode"] = os.getenv("OM_MODE", "standard").lower()
     data["db_url"] = get("db", "url", "OM_DB_URL", "sqlite:///openmemory.db")
     
@@ -209,11 +223,11 @@ def load_config() -> OpenMemoryConfig:
     data["decay_interval"] = int(get("decay", "interval_min", "OM_DECAY_INTERVAL", 5))
 
     # AI
-    data["openai_key"] = get("ai", "openai_key", "OPENAI_API_KEY", "") or os.getenv("OM_OPENAI_API_KEY")
+    data["openai_key"] = get("ai", "openai_key", "OM_OPENAI_API_KEY", os.getenv("OPENAI_API_KEY"))
     data["openai_base_url"] = get("ai", "openai_base", "OM_OPENAI_BASE_URL", "https://api.openai.com/v1")
     data["openai_model"] = get("ai", "openai_model", "OM_OPENAI_MODEL", None)
     
-    data["ollama_base_url"] = get("ai", "ollama_base_url", "OLLAMA_BASE_URL", "http://localhost:11434")
+    data["ollama_base_url"] = get("ai", "ollama_base_url", "OM_OLLAMA_BASE_URL", "http://localhost:11434")
     data["ollama_model"] = get("ai", "ollama_model", "OLLAMA_MODEL", "llama3")
     
     data["tier"] = get("ai", "tier", "OM_TIER", "hybrid")
@@ -222,7 +236,7 @@ def load_config() -> OpenMemoryConfig:
     fallback = get("ai", "embedding_fallback", "OM_EMBEDDING_FALLBACK", "synthetic")
     data["embedding_fallback"] = fallback.split(",") if isinstance(fallback, str) else fallback
     
-    data["gemini_key"] = get("ai", "gemini_key", "GEMINI_API_KEY", os.getenv("OM_GEMINI_KEY"))
+    data["gemini_key"] = get("ai", "gemini_key", "OM_GEMINI_API_KEY", os.getenv("GEMINI_API_KEY"))
     data["aws_region"] = get("ai", "aws_region", "AWS_REGION", None)
     data["aws_access_key_id"] = get("ai", "aws_access_key_id", "AWS_ACCESS_KEY_ID", None)
     data["aws_secret_access_key"] = get("ai", "aws_secret_access_key", "AWS_SECRET_ACCESS_KEY", None)
@@ -237,13 +251,13 @@ def load_config() -> OpenMemoryConfig:
         try: return type_cast(v)  # type: ignore[call-arg, return-value]
         except: return default
 
-    data["vec_dim"] = env_or("OM_VEC_DIM", 1536, int)
+    data["vec_dim"] = env_or("OM_VEC_DIM", 768, int)
     data["min_score"] = env_or("OM_MIN_SCORE", 0.3, float)
     data["keyword_boost"] = env_or("OM_KEYWORD_BOOST", 2.5, float)
     data["seg_size"] = env_or("OM_SEG_SIZE", 10000, int)
     data["decay_threads"] = env_or("OM_DECAY_THREADS", 3, int)
     data["decay_cold_threshold"] = env_or("OM_DECAY_COLD_THRESHOLD", 0.25, float)
-    data["max_vector_dim"] = env_or("OM_MAX_VECTOR_DIM", 1536, int)
+    data["max_vector_dim"] = env_or("OM_MAX_VECTOR_DIM", 768, int)
     data["min_vector_dim"] = env_or("OM_MIN_VECTOR_DIM", 64, int)
     data["summary_layers"] = env_or("OM_SUMMARY_LAYERS", 3, int)
     data["decay_ratio"] = env_or("OM_DECAY_RATIO", 0.03, float)
@@ -292,6 +306,8 @@ def load_config() -> OpenMemoryConfig:
     data["decay_procedural"] = env_or("OM_DECAY_PROCEDURAL", 0.008, float)
     data["decay_emotional"] = env_or("OM_DECAY_EMOTIONAL", 0.02, float)
     data["decay_reflective"] = env_or("OM_DECAY_REFLECTIVE", 0.001, float)
+
+    data["encryption_salt"] = os.getenv("OM_ENCRYPTION_SALT", "openmemory-salt-v1")
 
     return OpenMemoryConfig(**data)
 

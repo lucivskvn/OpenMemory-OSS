@@ -13,7 +13,7 @@ export function useMemoryStream(
     }, [onEvent]);
 
     useEffect(() => {
-        const cleanup = client.listen((evt) => {
+        const cleanup = client.listen((evt: OpenMemoryEvent) => {
             if (onEventRef.current) {
                 onEventRef.current(evt);
             }

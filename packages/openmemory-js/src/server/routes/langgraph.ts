@@ -1,3 +1,5 @@
+
+import { Elysia } from "elysia";
 import { z } from "zod";
 
 import {
@@ -13,10 +15,9 @@ import type {
     LgmRetrieveRequest,
     LgmStoreRequest,
 } from "../../core/types";
+import { getUser, getEffectiveUserId } from "../middleware/auth";
+import type { UserContext } from "../middleware/auth";
 import { logger } from "../../utils/logger";
-import { sendError } from "../errors";
-import { validateBody } from "../middleware/validate";
-import type { AdvancedRequest, AdvancedResponse, ServerApp } from "../server";
 
 const LgmStoreSchema = z.object({
     node: z.string().min(1),
@@ -56,133 +57,85 @@ const LgmReflectionSchema = z.object({
     depth: z.enum(["shallow", "deep"]).optional(),
 });
 
-// Routes definition
-
 /**
  * Registers LangGraph Memory (LGM) integration routes.
  * Enables storing and retrieving graph-aware memories.
- * @param app The server application instance.
  */
-export function langGraphRoutes(app: ServerApp) {
-    /**
-     * GET /lgm/config
-     * Returns the current LangGraph memory configuration.
-     */
-    app.get("/lgm/config", (_req: AdvancedRequest, res: AdvancedResponse) => {
-        res.json(getLgCfg());
-    });
+export const langGraphRoutes = (app: Elysia) => app.group("/lgm", (app) => {
+    return app
+        /**
+         * GET /lgm/config
+         * Returns the current LangGraph memory configuration.
+         */
+        .get("/config", () => {
+            return getLgCfg();
+        })
 
-    /**
-     * POST /lgm/store
-     * Stores a node-specific memory within a graph namespace.
-     * Supports tagging, metadata, and optional reflection trigger.
-     */
-    app.post(
-        "/lgm/store",
-        validateBody(LgmStoreSchema),
-        async (req: AdvancedRequest, res: AdvancedResponse) => {
-            try {
-                const body = req.body as z.infer<typeof LgmStoreSchema>;
-                const isAdmin = (req.user?.scopes || []).includes("admin:all");
-                let userId = req.user?.id;
-                if (isAdmin && body.userId) userId = body.userId;
+        /**
+         * POST /lgm/store
+         * Stores a node-specific memory within a graph namespace.
+         */
+        .post("/store", async ({ body, ...ctx }) => {
+            const data = LgmStoreSchema.parse(body);
+            const user = getUser(ctx);
+            const userId = getEffectiveUserId(user, data.userId);
 
-                const payload: LgmStoreRequest = {
-                    ...body,
-                    userId,
-                };
+            const payload: LgmStoreRequest = {
+                ...data,
+                userId,
+            };
 
-                const r = await storeNodeMem(payload);
-                res.json(r);
-            } catch (e: unknown) {
-                logger.error("[LGM] store error:", { error: e });
-                sendError(res, e);
-            }
-        },
-    );
+            return await storeNodeMem(payload);
+        })
 
-    /**
-     * POST /lgm/retrieve
-     * Retrieves node memories for a specific graph/namespace.
-     */
-    app.post(
-        "/lgm/retrieve",
-        validateBody(LgmRetrieveSchema),
-        async (req: AdvancedRequest, res: AdvancedResponse) => {
-            try {
-                const body = req.body as z.infer<typeof LgmRetrieveSchema>;
-                const isAdmin = (req.user?.scopes || []).includes("admin:all");
-                let userId = req.user?.id;
-                if (isAdmin && body.userId) userId = body.userId;
+        /**
+         * POST /lgm/retrieve
+         * Retrieves node memories for a specific graph/namespace.
+         */
+        .post("/retrieve", async ({ body, ...ctx }) => {
+            const data = LgmRetrieveSchema.parse(body);
+            const user = getUser(ctx);
+            const userId = getEffectiveUserId(user, data.userId);
 
-                const payload: LgmRetrieveRequest = {
-                    ...body,
-                    userId,
-                };
+            const payload: LgmRetrieveRequest = {
+                ...data,
+                userId,
+            };
 
-                const r = await retrieveNodeMems(payload);
-                res.json(r);
-            } catch (e: unknown) {
-                logger.error("[LGM] retrieve error:", { error: e });
-                sendError(res, e);
-            }
-        },
-    );
+            return await retrieveNodeMems(payload);
+        })
 
-    /**
-     * POST /lgm/context
-     * Gets distilled context for a node from previous memories.
-     * Useful for priming an agent before execution.
-     */
-    app.post(
-        "/lgm/context",
-        validateBody(LgmContextSchema),
-        async (req: AdvancedRequest, res: AdvancedResponse) => {
-            try {
-                const body = req.body as z.infer<typeof LgmContextSchema>;
-                const isAdmin = (req.user?.scopes || []).includes("admin:all");
-                let userId = req.user?.id;
-                if (isAdmin && body.userId) userId = body.userId;
+        /**
+         * POST /lgm/context
+         * Gets distilled context for a node from previous memories.
+         */
+        .post("/context", async ({ body, ...ctx }) => {
+            const data = LgmContextSchema.parse(body);
+            const user = getUser(ctx);
+            const userId = getEffectiveUserId(user, data.userId);
 
-                const payload: LgmContextRequest = {
-                    ...body,
-                    userId,
-                };
+            const payload: LgmContextRequest = {
+                ...data,
+                userId,
+            };
 
-                const r = await getGraphCtx(payload);
-                res.json(r);
-            } catch (e: unknown) {
-                logger.error("[LGM] context error:", { error: e });
-                sendError(res, e);
-            }
-        },
-    );
+            return await getGraphCtx(payload);
+        })
 
-    /**
-     * POST /lgm/reflection
-     * Triggers a deeper reflective analysis of node memories.
-     */
-    app.post(
-        "/lgm/reflection",
-        validateBody(LgmReflectionSchema),
-        async (req: AdvancedRequest, res: AdvancedResponse) => {
-            try {
-                const body = req.body as z.infer<typeof LgmReflectionSchema>;
-                const isAdmin = (req.user?.scopes || []).includes("admin:all");
-                let userId = req.user?.id;
-                if (isAdmin && body.userId) userId = body.userId;
+        /**
+         * POST /lgm/reflection
+         * Triggers a deeper reflective analysis of node memories.
+         */
+        .post("/reflection", async ({ body, ...ctx }) => {
+            const data = LgmReflectionSchema.parse(body);
+            const user = getUser(ctx);
+            const userId = getEffectiveUserId(user, data.userId);
 
-                const payload: LgmReflectionRequest = {
-                    ...body,
-                    userId,
-                };
+            const payload: LgmReflectionRequest = {
+                ...data,
+                userId,
+            };
 
-                const r = await createRefl(payload);
-                res.json(r);
-            } catch (e: unknown) {
-                logger.error("[LGM] reflection error:", { error: e });
-                sendError(res, e);
-            }
-        },
-    );
-}
+            return await createRefl(payload);
+        });
+});

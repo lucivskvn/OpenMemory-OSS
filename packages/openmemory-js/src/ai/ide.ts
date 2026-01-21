@@ -1,6 +1,7 @@
 import { q } from "../core/db";
+import { env } from "../core/cfg";
 import { getEncryption } from "../core/security";
-import { IdeContextItem, IdePattern, MemoryRow } from "../core/types";
+import { IdeContextItem, IdeContextResult, IdePattern, IdePatternsResult, MemoryRow } from "../core/types";
 import { hsgQuery } from "../memory/hsg";
 import { normalizeUserId, parseJSON } from "../utils";
 import { logger } from "../utils/logger";
@@ -16,13 +17,18 @@ export async function getIdeContext(args: {
     userId?: string;
     sessionId?: string;
     limit?: number;
-}): Promise<import("../core/types").IdeContextResult> {
+}): Promise<IdeContextResult> {
     const { file, line, content, sessionId, limit = 5 } = args;
     const userId = normalizeUserId(args.userId);
+    if (!userId && !env.noAuth) {
+        // IDE tools should generally require a user context unless auth is disabled
+        throw new Error("User ID is required for IDE context retrieval.");
+    }
 
     // Use "content" + "file" + line context as query for semantic retrieval
     const lineContext = line > 0 ? ` line:${line}` : "";
-    const query = `${file}${lineContext} ${content.slice(0, 100)}`;
+    const cleanContent = content.slice(0, 100).replace(/["'`]/g, ""); // Sanitize content snippet
+    const query = `${file}${lineContext} ${cleanContent}`;
 
     // Increase search breadth if a file filter is applied to avoid missing context
     const searchLimit = file ? Math.max(limit * 4, 20) : limit;
@@ -71,17 +77,17 @@ export async function getIdeContext(args: {
         }
     }
 
-    const formatted: IdeContextItem[] = filtered
+    const formatted = filtered
         .map((r) => ({
             memoryId: r.id,
             content: r.content,
             primarySector: r.primarySector,
-            sectors: r.sectors,
+            sectors: r.sectors || [],
             score: r.score,
             salience: r.salience,
             lastSeenAt: r.lastSeenAt,
-            path: r.path,
-        }))
+            path: r.path || [],
+        } as IdeContextItem))
         .slice(0, limit);
 
     if (graphContext) {
@@ -112,18 +118,21 @@ export async function getIdePatterns(args: {
     activeFiles?: string[];
     userId?: string;
     sessionId?: string;
-}): Promise<import("../core/types").IdePatternsResult> {
+}): Promise<IdePatternsResult> {
     const userId = normalizeUserId(args.userId);
+    if (!userId && !env.noAuth) {
+        throw new Error("User ID is required for IDE pattern retrieval.");
+    }
     const { sessionId } = args;
 
     let procedural: MemoryRow[] = [];
 
     if (sessionId) {
         // Query specifically for session-linked memories
-        // Note: getMemByMetadataLike uses LIKE with the pattern, sessionId is sanitized by normalizeUserId pattern
-        const sanitizedSessionId = sessionId.replace(/[\"'%_]/g, ""); // Remove SQL special chars
+        // Sanitization: Ensure sessionId only contains alphanumeric and standard separators
+        const sanitizedSessionId = sessionId.replace(/[^a-zA-Z0-9_\-.:]/g, "");
         const allSessionMemories = await q.getMemByMetadataLike.all(
-            `"ideSessionId":"${sanitizedSessionId}"`,
+            `%"ideSessionId":"${sanitizedSessionId}"%`,
             userId,
         );
         procedural = allSessionMemories.filter(
@@ -147,15 +156,16 @@ export async function getIdePatterns(args: {
         const results = await Promise.all(searchPromises);
         const uniqueIds = new Set<string>();
 
-        for (const rows of results) {
+        for (let i = 0; i < results.length; i++) {
+            const filePath = filePatterns[i];
+            const filename = filePath.split(/[\\/]/).pop() || filePath;
+            const rows = results[i];
+
             for (const r of rows) {
                 if (r.primarySector === "procedural" && !uniqueIds.has(r.id)) {
-                    // Double check strict path match if needed, but heuristic is usually good enough for "relevant patterns"
                     // We parse to be sure it's actually an ideFilePath match
                     const meta = parseJSON<Record<string, unknown>>(r.metadata || "{}");
-                    if (typeof meta?.ideFilePath === 'string' && meta.ideFilePath.includes(filenameFromPath(meta.ideFilePath))) {
-                        // actually we just want to ensure it relates to *any* active file.
-                        // The query matched the filename.
+                    if (typeof meta?.ideFilePath === 'string' && meta.ideFilePath.toLowerCase().includes(filename.toLowerCase())) {
                         uniqueIds.add(r.id);
                         procedural.push(r);
                     }

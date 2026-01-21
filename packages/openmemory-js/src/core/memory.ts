@@ -1,7 +1,10 @@
 /**
  * Memory Facade for OpenMemory.
  * Provides a high-level API for managing memories, temporal graphs, and source ingestion.
+ * 
+ * @audited 2026-01-19
  */
+import * as crypto from "crypto";
 import {
     addHsgMemory,
     hsgQuery,
@@ -15,16 +18,20 @@ import * as t_query from "../temporal_graph/query";
 import * as t_store from "../temporal_graph/store";
 import * as t_timeline from "../temporal_graph/timeline";
 import { normalizeUserId, parseJSON, toBase64 } from "../utils";
+import { SimpleCache } from "../utils/cache";
 import { logger } from "../utils/logger";
 import { env } from "./cfg";
-import { q, vectorStore } from "./db";
+import { q, transaction, vectorStore } from "./db";
 import { eventBus } from "./events";
+import { getContext } from "./context";
 import { getEncryption } from "./security";
 import {
     IngestRequest,
     IngestUrlRequest,
+    IngestionConfig,
     MemoryItem,
     MemoryRow,
+    TemporalAccess,
 } from "./types";
 
 /**
@@ -46,16 +53,26 @@ export const parseMemory = async (row: MemoryRow): Promise<MemoryItem> => {
     const enc = getEncryption();
     // Destructure to exclude binary fields from the result
     const { meanVec: _mv, compressedVec: _cv, ...rest } = row;
+
     return {
         ...rest,
         content: await enc.decrypt(row.content),
-        tags: row.tags ? parseJSON(row.tags) : [],
-        metadata: row.metadata ? parseJSON(row.metadata) : {},
+        tags: Array.isArray(row.tags) ? row.tags : (typeof row.tags === 'string' ? (() => { try { return JSON.parse(row.tags || '[]'); } catch { return []; } })() : []),
+        metadata: (typeof row.metadata === "object" && row.metadata !== null) ? row.metadata : (typeof row.metadata === 'string' ? (() => { try { return JSON.parse(row.metadata || '{}'); } catch { return {}; } })() : {}),
         compressedVecStr: row.compressedVec
-            ? toBase64(row.compressedVec)
+            ? toBase64(new Uint8Array(row.compressedVec))
             : undefined,
     };
 };
+
+/**
+ * Module-level cache for Memory items.
+ * Key: Memory ID, Value: MemoryItem
+ */
+const memCache = new SimpleCache<string, MemoryItem>({
+    maxSize: 2000,
+    ttlMs: 5 * 60 * 1000, // 5 minutes
+});
 
 /**
  * Main facade for Memory operations in the OpenMemory SDK.
@@ -88,6 +105,10 @@ export class Memory {
                 `Memory content too large (${(content.length / 1024 / 1024).toFixed(2)}MB). Limit is ${(env.maxPayloadSize / 1024 / 1024).toFixed(2)}MB. Use 'ingest' for larger documents.`,
             );
         }
+        if (opts?.tags && (!Array.isArray(opts.tags) || !opts.tags.every(t => typeof t === 'string'))) {
+            throw new Error("Tags must be an array of strings.");
+        }
+
         const { userId, tags = [], id, createdAt, ...extra } = opts || {};
         const normalizedUserId = getUid(userId, this.defaultUserId);
 
@@ -96,16 +117,33 @@ export class Memory {
 
         const tagsStr = JSON.stringify(tags);
 
-        // addHsgMemory handles internal logic and returns a simplified result
-        const res = await addHsgMemory(
+        // addHsgMemory now returns a full MemoryItem
+        const item = await addHsgMemory(
             content,
             tagsStr,
             metadata,
-            normalizedUserId ?? undefined,
+            normalizedUserId,
             { id: id as string, createdAt: createdAt as number },
         );
-        const item = (await this.get(res.id, normalizedUserId))!;
+
         eventBus.emit("memory_added", item);
+
+        // Audit Log
+        try {
+            const ctx = getContext();
+            q.auditLog.run({
+                id: crypto.randomUUID(),
+                userId: normalizedUserId || null,
+                action: "memory.create",
+                resourceType: "memory",
+                resourceId: item.id,
+                ipAddress: ctx?.ip || null,
+                userAgent: ctx?.userAgent || null,
+                metadata: { primarySector: item.primarySector },
+                timestamp: Date.now()
+            }).catch((e: unknown) => logger.error("[Audit] Log failed", { error: e }));
+        } catch { }
+
         return item;
     }
 
@@ -114,18 +152,59 @@ export class Memory {
      * Currently iterates sequentially, but poised for batch optimization.
      * @param items List of memory contents and options.
      */
-    async addBatch(items: Array<{ content: string; tags?: string[]; metadata?: Record<string, unknown> }>, opts?: { userId?: string | null }) {
-        const results = [];
+    async addBatch(items: Array<{ content: string; tags?: string[]; metadata?: Record<string, unknown> }>, opts?: { userId?: string | null; concurrency?: number }): Promise<Array<MemoryItem | { error: string }>> {
+        const concurrency = opts?.concurrency || 5;
+        const results: Array<Promise<MemoryItem | { error: string }>> = new Array(items.length);
+        const pool = new Set<Promise<MemoryItem | { error: string }>>();
+
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            const promise = (async () => {
+                try {
+                    return await this.add(item.content, {
+                        ...item.metadata,
+                        userId: opts?.userId,
+                        tags: item.tags
+                    });
+                } catch (error) {
+                    return { error: error instanceof Error ? error.message : String(error) };
+                }
+            })();
+
+            results[i] = promise;
+            if (concurrency > 1) {
+                pool.add(promise);
+                promise.finally(() => pool.delete(promise));
+                if (pool.size >= concurrency) {
+                    await Promise.race(pool);
+                }
+            } else {
+                await promise;
+            }
+        }
+
+        return await Promise.all(results);
+    }
+
+    /**
+     * Batch update multiple memories with distinct values.
+     * @param items List of updates (id + changes).
+     */
+    async updateBatchItems(items: Array<{ id: string; content?: string; tags?: string[]; metadata?: Record<string, unknown> }>, userId?: string | null): Promise<Array<{ id: string; success: boolean; error?: string }>> {
+        const uid = getUid(userId, this.defaultUserId);
+        const results: Array<{ id: string; success: boolean; error?: string }> = [];
+
         for (const item of items) {
             try {
-                const result = await this.add(item.content, {
-                    ...item.metadata,
-                    userId: opts?.userId,
-                    tags: item.tags
+                const res = await this.update(item.id, {
+                    content: item.content,
+                    tags: item.tags,
+                    metadata: item.metadata,
+                    userId: uid
                 });
-                results.push(result);
-            } catch (error) {
-                results.push({ error: error instanceof Error ? error.message : String(error) });
+                results.push({ id: item.id, success: res.ok });
+            } catch (e: any) {
+                results.push({ id: item.id, success: false, error: e.message });
             }
         }
         return results;
@@ -140,12 +219,9 @@ export class Memory {
      * @param opts.config Ingestion configuration (chunk size, etc).
      * @returns IngestionResult containing root ID and stats.
      */
-    async ingest(opts: Omit<IngestRequest, "source"> & { source?: string; id?: string; createdAt?: number }) {
+    async ingest(opts: IngestRequest & { id?: string; createdAt?: number }) {
         const userId = getUid(opts.userId, this.defaultUserId);
-        const data =
-            opts.data instanceof Uint8Array && !Buffer.isBuffer(opts.data)
-                ? Buffer.from(opts.data)
-                : (opts.data as string | Buffer);
+        const data = opts.data;
         const metadata = { ...opts.metadata };
         if (opts.source) {
             metadata.source = opts.source;
@@ -154,11 +230,26 @@ export class Memory {
         return await ingestDocument(
             opts.contentType,
             data,
-            metadata,
-            opts.config,
-            userId ?? undefined,
-            { id: opts.id, createdAt: opts.createdAt },
+            {
+                metadata,
+                tags: opts.tags,
+                config: opts.config,
+                userId: userId ?? undefined,
+                id: opts.id,
+                createdAt: opts.createdAt,
+            },
         );
+    }
+
+    /**
+     * Alias for ingest() for better naming.
+     */
+    async ingestDocument(contentType: string, content: string | Buffer, opts?: { tags?: string[]; metadata?: Record<string, unknown>; config?: IngestionConfig; userId?: string | null }) {
+        return await this.ingest({
+            contentType,
+            data: content,
+            ...opts,
+        } as IngestRequest);
     }
 
     /**
@@ -172,10 +263,14 @@ export class Memory {
         const userId = getUid(opts?.userId, this.defaultUserId);
         return await ingestUrl(
             url,
-            opts?.metadata,
-            opts?.config,
-            userId ?? undefined,
-            { id: opts?.id, createdAt: opts?.createdAt },
+            {
+                metadata: opts?.metadata,
+                tags: opts?.tags,
+                config: opts?.config,
+                userId: userId ?? undefined,
+                id: opts?.id,
+                createdAt: opts?.createdAt,
+            },
         );
     }
 
@@ -188,32 +283,52 @@ export class Memory {
      */
     async reinforce(id: string, boost?: number, userId?: string | null) {
         const uid = getUid(userId, this.defaultUserId);
-        await reinforceMemory(id, boost, uid ?? undefined);
-        return { ok: true };
+        await reinforceMemory(id, boost, uid);
+        this.invalidateCache(id);
+        return { success: true };
     }
 
     /**
-     * Update an existing memory.
+     * Update a memory by ID.
      * @param id The ID of the memory to update.
-     * @param content New content (optional).
-     * @param tags New tags (optional).
-     * @param metadata New metadata (optional).
-     * @param userId Optional user ID override.
+     * @param updates Object containing fields to update.
      */
     async update(
         id: string,
-        content?: string,
-        tags?: string[],
-        metadata?: Record<string, unknown>,
-        userId?: string | null,
-    ) {
-        const uid = getUid(userId, this.defaultUserId);
-        const res = await updateMemory(id, content, tags, metadata, uid ?? undefined);
-        if (res.ok) {
-            const item = await this.get(id, uid);
-            if (item) eventBus.emit("memory_updated", item);
+        updates: {
+            content?: string;
+            tags?: string[];
+            metadata?: Record<string, any>;
+            userId?: string | null;
+        },
+    ): Promise<{ id: string; ok: boolean }> {
+        const uid = getUid(updates.userId, this.defaultUserId);
+        const res = await updateMemory(id, { ...updates, userId: uid });
+
+        if (!res) {
+            throw new Error(`Memory not found: ${id}`);
         }
-        return res;
+
+        // Audit Log
+        const ctx = getContext();
+        try {
+            q.auditLog.run({
+                id: crypto.randomUUID(),
+                userId: uid || null,
+                action: "memory.update",
+                resourceType: "memory",
+                resourceId: id,
+                ipAddress: ctx?.ip || null,
+                userAgent: ctx?.userAgent || null,
+                metadata: { update: updates.content ? "content" : "meta" },
+                timestamp: Date.now(),
+            }).catch((e: unknown) => logger.error("[Audit] Log failed", { error: e }));
+        } catch {
+            // Context might not always be available in all runners
+        }
+
+        this.invalidateCache(id);
+        return { id: res.id, ok: true };
     }
 
     /**
@@ -224,8 +339,59 @@ export class Memory {
         userId?: string | null,
     ): Promise<MemoryItem | undefined> {
         const uid = getUid(userId, this.defaultUserId);
+
+        const cached = memCache.get(id);
+        if (cached) {
+            // Integrity: Ensure cached item belongs to the requested user context
+            // Strict check: if uid is null (public), cached item MUST be public (userId===null)
+            // if uid is "user", cached item MUST match "user"
+            // The previous check (!uid) allowed access if uid was undefined (global), which is now prevented by new getUid, but we should be strict.
+            if (cached.userId === uid) {
+                return cached;
+            }
+        }
+
         const row = await q.getMem.get(id, uid);
-        return row ? await parseMemory(row) : undefined;
+        if (row) {
+            const item = await parseMemory(row);
+            memCache.set(id, item);
+            return item;
+        }
+        return undefined;
+    }
+
+    /**
+     * Delete multiple memories by ID.
+     * @param ids - Array of memory IDs to delete.
+     * @param userId - Optional user ID override.
+     */
+    async deleteBatch(ids: string[], userId?: string | null) {
+        if (!ids || ids.length === 0) return 0;
+        const uid = getUid(userId, this.defaultUserId);
+        const res = await q.delMems.run(ids, uid);
+        if (res > 0) {
+            for (const id of ids) this.invalidateCache(id);
+            // We skip individual event emission for large batches to avoid event loop pressure,
+            // but we could emit a 'bulk_deleted' event if needed.
+            // For now, keep it simple.
+        }
+        return res;
+    }
+
+    /**
+     * Update multiple memories with the same content, tags, or metadata.
+     * @param ids - Array of memory IDs to update.
+     * @param updates - Object containing content, tags, or metadata to set.
+     * @param userId - Optional user ID override.
+     */
+    async updateBatch(ids: string[], updates: { content?: string; tags?: string[]; metadata?: Record<string, unknown> }, userId?: string | null) {
+        if (!ids || ids.length === 0) return 0;
+        const uid = getUid(userId, this.defaultUserId);
+        const res = await q.updMems.run(ids, updates, uid);
+        if (res > 0) {
+            for (const id of ids) this.invalidateCache(id);
+        }
+        return res;
     }
 
     /**
@@ -236,9 +402,26 @@ export class Memory {
     async delete(id: string, userId?: string | null) {
         const uid = getUid(userId, this.defaultUserId);
         const item = await this.get(id, uid);
-        const res = await q.delMem.run(id, uid ?? undefined);
-        if (res > 0 && item) {
-            eventBus.emit("memory_deleted", item);
+        const res = await q.delMem.run(id, uid);
+        if (res > 0) {
+            this.invalidateCache(id);
+            if (item) eventBus.emit("memory_deleted", item);
+
+            // Audit Log
+            try {
+                const ctx = getContext();
+                q.auditLog.run({
+                    id: crypto.randomUUID(),
+                    userId: uid || null,
+                    action: "memory.delete",
+                    resourceType: "memory",
+                    resourceId: id,
+                    ipAddress: ctx?.ip || null,
+                    userAgent: ctx?.userAgent || null,
+                    metadata: null,
+                    timestamp: Date.now()
+                }).catch((e: unknown) => logger.error("[Audit] Log failed", { error: e }));
+            } catch { }
         }
         return res;
     }
@@ -299,16 +482,55 @@ export class Memory {
     ) {
         const limit = opts?.limit || 10;
         const userId = getUid(opts?.userId, this.defaultUserId);
-        const filter: {
-            userId?: string;
-            sectors?: string[];
-            minSalience?: number;
-        } = {};
-        if (userId) filter.userId = userId;
-        if (opts?.sectors) filter.sectors = opts.sectors;
-        if (opts?.minSalience) filter.minSalience = opts.minSalience;
+
+        // Simplified filter construction to avoid syntax ambiguity
+        const filter: { userId?: string; sectors?: string[]; minSalience?: number } = {};
+
+        if (userId !== undefined) {
+            filter.userId = userId as string;
+        }
+        if (opts?.sectors) {
+            filter.sectors = opts.sectors;
+        }
+        if (opts?.minSalience) {
+            filter.minSalience = opts.minSalience;
+        }
 
         return await hsgQuery(query, limit, filter);
+    }
+
+    /**
+     * Updates memory statistics (lastSeen, salience) directly.
+     * Useful for reflection and maintenance tasks where content doesn't change.
+     */
+    async updateStats(
+        id: string,
+        lastSeen?: number,
+        salience?: number,
+        timestamp?: number,
+        userId?: string,
+    ): Promise<boolean> {
+        const uid = getUid(userId, this.defaultUserId);
+        const ts = timestamp || Date.now();
+
+        // Integrity: Fetch existing item to support partial updates without overwriting with null/0
+        const item = await this.get(id, uid);
+        if (!item) return false;
+
+        const effectiveLastSeen = lastSeen !== undefined ? lastSeen : (item.lastSeenAt || ts);
+        const effectiveSalience = salience !== undefined ? salience : (item.salience || 0.5);
+
+        const success = await q.updSeen.run(
+            id,
+            effectiveLastSeen,
+            effectiveSalience,
+            ts,
+            uid,
+        );
+        if (success) {
+            this.invalidateCache(id);
+        }
+        return !!success;
     }
 
     /**
@@ -318,13 +540,11 @@ export class Memory {
      * @returns Number of memories deleted.
      */
     async deleteUser(userId: string) {
-        const count = await this.wipeUserContent(userId);
-        await q.delUser.run(userId);
-        return count;
+        return await q.delUserCascade.run(userId);
     }
 
     /**
-     * Wipes all content (memories, vectors, graph, models) for a user
+     * Wipes all content (memories, vectors, graph, models, webhooks) for a user
      * but preserves the user identity/profile.
      * 
      * **Integrity**: Ensures no orphaned data remains (Cascade Delete).
@@ -333,7 +553,7 @@ export class Memory {
      * Process:
      * 1. Batched deletion of memories and associated vectors.
      * 2. Parallel deletion of Temporal Graph data (Facts, Edges).
-     * 3. Deletion of learned models and configs.
+     * 3. Deletion of learned models, configs, and webhooks.
      * 
      * @param userId The ID of the user to wipe content for.
      * @returns Promise resolving to the count of deleted memories.
@@ -341,35 +561,52 @@ export class Memory {
     async wipeUserContent(userId: string): Promise<number> {
         if (!userId) return 0;
 
-        // 1. Batch delete vectors
-        try {
+        return await transaction.run(async () => {
+            // 1. Batch delete vectors
+            // Fail-Closed: If vector deletion fails, abort the wipe to prevent orphaned PII vectors.
             await vectorStore.deleteVectorsByUser(userId);
-        } catch (e) {
-            logger.error(
-                `[Vector] Wipe error for user ${userId}:`,
-                { error: e },
+
+            // 2. Batch delete memories
+            const deleted = await q.delMemByUser.run(userId);
+
+            // 3. Cascade delete other user data
+
+            // Delete webhooks and logs via efficient query
+            await q.delWebhooksByUser.run(userId);
+
+            await Promise.all([
+                q.delFactsByUser.run(userId),
+                q.delEdgesByUser.run(userId),
+                q.delLearnedModel.run(userId),
+                q.delSourceConfigsByUser.run(userId),
+                q.delWaypointsByUser.run(userId),
+                q.delEmbedLogsByUser.run(userId),
+                q.delMaintLogsByUser.run(userId),
+                q.delStatsByUser.run(userId),
+            ]);
+
+            logger.info(
+                `[GDPR] Wiped content for user ${userId} (${deleted} memories)`,
             );
-        }
 
-        // 2. Batch delete memories
-        const deleted = await q.delMemByUser.run(userId);
+            // Audit
+            try {
+                const ctx = getContext();
+                q.auditLog.run({
+                    id: crypto.randomUUID(),
+                    userId: userId,
+                    action: "user.wipe",
+                    resourceType: "user",
+                    resourceId: userId,
+                    ipAddress: ctx?.ip || null,
+                    userAgent: ctx?.userAgent || null,
+                    metadata: { deletedMemories: deleted },
+                    timestamp: Date.now()
+                }).catch((e: unknown) => logger.error("[Audit] Log failed", { error: e }));
+            } catch { }
 
-        // 3. Cascade delete other user data
-        await Promise.all([
-            q.delFactsByUser.run(userId),
-            q.delEdgesByUser.run(userId),
-            q.delLearnedModel.run(userId),
-            q.delSourceConfigsByUser.run(userId),
-            q.delWaypointsByUser.run(userId),
-            q.delEmbedLogsByUser.run(userId),
-            q.delMaintLogsByUser.run(userId),
-            q.delStatsByUser.run(userId),
-        ]);
-
-        logger.info(
-            `[GDPR] Wiped content for user ${userId} (${deleted} memories)`,
-        );
-        return deleted;
+            return deleted;
+        });
     }
 
     /**
@@ -397,9 +634,20 @@ export class Memory {
     /**
      * List all unique user IDs.
      */
+    /**
+     * Lists all active user IDs in the system.
+     * @returns Array of user ID strings.
+     */
     async listUsers() {
         const res = await q.getActiveUsers.all();
-        return res.map((u) => u.userId);
+        return res.map((u: { userId: string }) => u.userId);
+    }
+
+    /**
+     * Invalidates the cache for a specific memory ID.
+     */
+    private invalidateCache(id: string) {
+        memCache.delete(id);
     }
 
 
@@ -426,33 +674,17 @@ export class Memory {
         };
     }
 
-    private _temporal?: any;
+    private _temporal?: TemporalAccess;
 
     /**
      * Temporal Graph features.
      */
-    get temporal() {
+    get temporal(): TemporalAccess {
         if (!this._temporal) {
             this._temporal = {
-                add: async (
-                    subject: string,
-                    predicate: string,
-                    object: string,
-                    opts?: {
-                        validFrom?: Date;
-                        confidence?: number;
-                        metadata?: Record<string, unknown>;
-                    },
-                ) => {
-                    return await t_store.insertFact(
-                        subject,
-                        predicate,
-                        object,
-                        opts?.validFrom,
-                        opts?.confidence,
-                        opts?.metadata,
-                        this.defaultUserId ?? undefined,
-                    );
+                add: async (s: string, p: string, o: string, opts?: { confidence?: number; metadata?: Record<string, unknown> }) => {
+                    const id = await t_store.insertFact(s, p, o, undefined, opts?.confidence, opts?.metadata, this.defaultUserId ?? undefined);
+                    return id;
                 },
                 get: async (subject: string, predicate: string) => {
                     return await t_query.getCurrentFact(
@@ -482,26 +714,32 @@ export class Memory {
                     confidence?: number,
                     metadata?: Record<string, unknown>,
                 ) => {
-                    return await t_store.updateFact(
+                    await t_store.updateFact(
                         id,
                         this.defaultUserId ?? undefined,
                         confidence,
                         metadata,
                     );
+                    return true;
                 },
                 invalidateFact: async (id: string, validTo?: Date) => {
-                    return await t_store.invalidateFact(
-                        id,
-                        this.defaultUserId ?? undefined,
-                        validTo,
-                    );
+                    await t_store.invalidateFact(id, this.defaultUserId ?? undefined, validTo);
+                    return true;
+                },
+                invalidateEdge: async (id: string, validTo?: Date) => {
+                    await t_store.invalidateEdge(id, this.defaultUserId ?? undefined, validTo);
+                    return true;
+                },
+                updateEdge: async (id: string, weight?: number, metadata?: Record<string, unknown>) => {
+                    await t_store.updateEdge(id, { weight, metadata }, this.defaultUserId ?? undefined);
+                    return true;
                 },
                 queryFacts: async (
                     subject?: string,
                     predicate?: string,
                     object?: string,
                     at?: Date,
-                    minConfidence?: number,
+                    minConfidence = 0.5,
                 ) => {
                     return await t_query.queryFactsAtTime(
                         subject,
@@ -538,6 +776,17 @@ export class Memory {
                         this.defaultUserId ?? undefined,
                     );
                 },
+                timeline: async (
+                    subject: string,
+                    predicate?: string,
+                    includeHistorical = true,
+                ) => {
+                    return await t_timeline.getSubjectTimeline(
+                        subject,
+                        predicate,
+                        this.defaultUserId ?? undefined,
+                    );
+                },
                 history: async (
                     subject: string,
                     predicate?: string,
@@ -569,21 +818,10 @@ export class Memory {
                         this.defaultUserId ?? undefined,
                     );
                 },
-                updateEdge: async (
-                    id: string,
-                    weight?: number,
-                    metadata?: Record<string, unknown>,
-                ) => {
-                    return await t_store.updateEdge(
-                        id,
-                        { weight, metadata },
-                        this.defaultUserId ?? undefined,
-                    );
-                },
                 getEdges: async (
                     sourceId?: string,
                     targetId?: string,
-                    relation?: string,
+                    relationType?: string,
                     at?: Date,
                     limit = 100,
                     offset = 0,
@@ -591,27 +829,39 @@ export class Memory {
                     return await t_query.queryEdges(
                         sourceId,
                         targetId,
-                        relation,
+                        relationType,
                         at,
                         this.defaultUserId ?? undefined,
                         limit,
                         offset,
                     );
                 },
-                invalidateEdge: async (id: string, validTo?: Date) => {
-                    return await t_store.invalidateEdge(
-                        id,
-                        this.defaultUserId ?? undefined,
-                        validTo,
-                    );
-                },
                 compare: async (subject: string, t1: Date, t2: Date) => {
-                    return await t_timeline.compareTimePoints(
+                    const res = await t_timeline.compareTimePoints(
                         subject,
                         t1,
                         t2,
                         this.defaultUserId ?? undefined,
                     );
+                    return {
+                        subject,
+                        time1: t1.toISOString(),
+                        time2: t2.toISOString(),
+                        added: res.added,
+                        removed: res.removed,
+                        unchanged: res.unchanged,
+                        changed: res.changed.map(c => ({
+                            predicate: c.before.predicate,
+                            old: c.before,
+                            new: c.after
+                        })),
+                        summary: {
+                            added: res.added.length,
+                            removed: res.removed.length,
+                            changed: res.changed.length,
+                            unchanged: res.unchanged.length
+                        }
+                    };
                 },
                 stats: async () => {
                     const userId = this.defaultUserId ?? undefined;
@@ -635,26 +885,30 @@ export class Memory {
                 },
                 getGraphContext: async (
                     factId: string,
-                    relationType?: string,
-                    at?: Date,
+                    opts?: { relationType?: string; at?: Date },
                 ) => {
                     return await t_query.getRelatedFacts(
                         factId,
-                        relationType,
-                        at,
+                        opts?.relationType,
+                        opts?.at,
                         this.defaultUserId ?? undefined,
                     );
                 },
                 volatile: async (subject?: string, limit = 10) => {
-                    return await t_timeline.getVolatileFacts(
+                    const res = await t_timeline.getVolatileFacts(
                         subject,
                         limit,
                         this.defaultUserId ?? undefined,
                     );
+                    return {
+                        limit,
+                        volatileFacts: res,
+                        count: res.length
+                    };
                 },
             };
         }
-        return this._temporal;
+        return this._temporal!;
     }
 
     /**
@@ -691,49 +945,14 @@ export class Memory {
      * Load a source connector by name.
      */
     async source(name: string): Promise<BaseSource<unknown, unknown>> {
-        const sources: Record<
-            string,
-            () => Promise<BaseSource<unknown, unknown>>
-        > = {
-            github: () =>
-                import("../sources/github").then(
-                    (m) => new m.GithubSource(this.defaultUserId ?? undefined),
-                ),
-            notion: () =>
-                import("../sources/notion").then(
-                    (m) => new m.NotionSource(this.defaultUserId ?? undefined),
-                ),
-            google_drive: () =>
-                import("../sources/google_drive").then(
-                    (m) =>
-                        new m.GoogleDriveSource(
-                            this.defaultUserId ?? undefined,
-                        ),
-                ),
-            google_sheets: () =>
-                import("../sources/google_sheets").then(
-                    (m) =>
-                        new m.GoogleSheetsSource(
-                            this.defaultUserId ?? undefined,
-                        ),
-                ),
-            google_slides: () =>
-                import("../sources/google_slides").then(
-                    (m) =>
-                        new m.GoogleSlidesSource(
-                            this.defaultUserId ?? undefined,
-                        ),
-                ),
-            onedrive: () =>
-                import("../sources/onedrive").then(
-                    (m) =>
-                        new m.OneDriveSource(this.defaultUserId ?? undefined),
-                ),
-            web_crawler: () =>
-                import("../sources/web_crawler").then(
-                    (m) =>
-                        new m.WebCrawlerSource(this.defaultUserId ?? undefined),
-                ),
+        const sources: Record<string, () => Promise<BaseSource<unknown, unknown>>> = {
+            github: () => import("../sources/github").then((m) => new m.GithubSource(this.defaultUserId ?? undefined)),
+            notion: () => import("../sources/notion").then((m) => new m.NotionSource(this.defaultUserId ?? undefined)),
+            google_drive: () => import("../sources/google_drive").then((m) => new m.GoogleDriveSource(this.defaultUserId ?? undefined)),
+            google_sheets: () => import("../sources/google_sheets").then((m) => new m.GoogleSheetsSource(this.defaultUserId ?? undefined)),
+            google_slides: () => import("../sources/google_slides").then((m) => new m.GoogleSlidesSource(this.defaultUserId ?? undefined)),
+            onedrive: () => import("../sources/onedrive").then((m) => new m.OneDriveSource(this.defaultUserId ?? undefined)),
+            web_crawler: () => import("../sources/web_crawler").then((m) => new m.WebCrawlerSource(this.defaultUserId ?? undefined)),
         };
 
         if (!(name in sources)) {
@@ -747,6 +966,16 @@ export class Memory {
 /**
  * Normalizes userId for the current context.
  */
-const getUid = (userId: string | null | undefined, defaultId: string | null | undefined) => {
-    return normalizeUserId(userId) || defaultId;
+const getUid = (userId: string | null | undefined, defaultId: string | null | undefined): string | null => {
+    // 1. If userId is provided as a string, normalize it. If it's undefined, it's NOT provided.
+    // normalizeUserId returns null for "anonymous" etc., and undefined for "system"
+    const normalizedIn = userId !== undefined ? normalizeUserId(userId) : undefined;
+
+    // 2. If it wasn't provided (undefined), use the normalized defaultId.
+    const defaultNormalized = normalizeUserId(defaultId);
+
+    // 3. Priorities: Explicit > Default > null (anonymous)
+    const final = normalizedIn !== undefined ? normalizedIn : defaultNormalized;
+
+    return final === undefined ? null : final;
 };

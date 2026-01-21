@@ -39,7 +39,7 @@ async def test_evolutionary_stability():
 
     mem = Memory()
     uid = "evolution_user"
-    # await mem.delete_all(user_id=uid)  # TODO: delete_all not implemented in MemoryClient
+    await mem.delete_all(user_id=uid)
 
     print("\n[Phase 1] Evolutionary Stability (10 Generations)")
 
@@ -47,14 +47,14 @@ async def test_evolutionary_stability():
     res_pop = await mem.add("I am the Popular Memory", user_id=uid)
     res_unpop = await mem.add("I am the Unpopular Memory", user_id=uid)
 
-    pid = res_pop["id"]
-    uid_mem = res_unpop["id"]
+    pid = res_pop.id
+    uid_mem = res_unpop.id
 
     # Record initial saliences for comparison
     initial_pop = await mem.get(pid)
     initial_unpop = await mem.get(uid_mem)
-    s_pop_initial = float(initial_pop["salience"]) if initial_pop else 0.4
-    s_unpop_initial = float(initial_unpop["salience"]) if initial_unpop else 0.4
+    s_pop_initial = float(initial_pop.salience) if initial_pop else 0.4
+    s_unpop_initial = float(initial_unpop.salience) if initial_unpop else 0.4
 
     # 2. Evolution Loop
     for gen in range(10):
@@ -90,8 +90,8 @@ async def test_evolutionary_stability():
             assert pop_final is not None and unpop_final is not None
 
             # Check Salience
-            s_pop = float(pop_final["salience"])
-            s_unpop = float(unpop_final["salience"])
+            s_pop = float(pop_final.salience)
+            s_unpop = float(unpop_final.salience)
 
             print(f" -> Generation 10 Results:")
             print(f"    Popular Salience: {s_pop:.4f} (initial: {s_pop_initial:.4f})")
@@ -117,7 +117,7 @@ async def test_boolean_metadata_logic():
     """
     mem = Memory()
     uid = "filter_user"
-    # await mem.delete_all(user_id=uid)  # TODO: delete_all not implemented in MemoryClient
+    await mem.delete_all(user_id=uid)
 
     print("\n[Phase 2] Boolean Metadata Logic")
 
@@ -181,7 +181,7 @@ async def test_content_robustness():
             hits = await mem.search(content[:10], user_id=uid, limit=1)
             if not hits:
                 pytest.fail(f"{fmt} retrieval failed: no hits found")
-            retrieved = hits[0]["content"]
+            retrieved = hits[0].content
 
             if content in retrieved:
                 print(f" -> {fmt}: Verified (Exact Match)")
@@ -205,7 +205,7 @@ if __name__ == "__main__":
 # Consolitated Encryption & Compression Tests
 class TestEncryptionCompression(unittest.TestCase):
     def setUp(self):
-        env.db_path = ":memory:"
+        env.database_url = "sqlite:///:memory:"
         db.connect(force=True)
         # Enable encryption for this test
         # 32-byte key for AES-256
@@ -246,7 +246,7 @@ class TestEncryptionCompression(unittest.TestCase):
         content = "My super secret memory"
         async def run():
             res = await self.mem.add(content)
-            mid = res["id"]
+            mid = res.id
 
             # Direct DB check
             row = db.fetchone("SELECT content FROM memories WHERE id=?", (mid,))
@@ -256,9 +256,9 @@ class TestEncryptionCompression(unittest.TestCase):
             self.assertTrue(raw_content.startswith("v1:"))
 
             # API Retrieval check
-            m = await self.mem.get(mid)
+            m = await self.mem.get(mid, user_id="test_enc_user")
             assert m is not None
-            self.assertEqual(m["content"], content)
+            self.assertEqual(m.content, content)
 
         import asyncio
         asyncio.run(run())

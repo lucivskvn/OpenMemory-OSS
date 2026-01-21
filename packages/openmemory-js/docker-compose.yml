@@ -1,4 +1,4 @@
-  version: '3.8'
+version: '3.8'
 
 services:
   openmemory:
@@ -17,12 +17,12 @@ services:
       # Connection to Ollama (host.docker.internal works for Desktop, for Linux use the service name 'ollama' if enabled below)
       - OLLAMA_URL=http://ollama:11434
       # - OM_OPENAI_API_KEY=sk-... # Optional: Set keys here or in Dashboard
-      
+
     depends_on:
       - ollama
       - init-ollama
       # - redis # Uncomment if using Redis
-      
+
     networks:
       - om-net
 
@@ -46,7 +46,7 @@ services:
     #           count: 1
     #           capabilities: [gpu]
 
-  # Helper to auto-pull models on startup
+    # Helper to auto-pull models on startup
   init-ollama:
     image: curlimages/curl
     container_name: om-init-ollama
@@ -60,13 +60,13 @@ services:
         echo 'Ollama is up. Pulling models...';
         curl -X POST http://ollama:11434/api/pull -d '{\"name\": \"llama3.2\"}';
         curl -X POST http://ollama:11434/api/pull -d '{\"name\": \"snowflake-arctic-embed\"}';
+        curl -X POST http://ollama:11434/api/pull -d '{\"name\": \"nomic-embed-text\"}';
         echo 'Models pulled!';
       "
     depends_on:
       - ollama
     networks:
       - om-net
-
   # Optional: Redis for High Performance Vector Cache / Locks
   # redis:
   #   image: redis:alpine

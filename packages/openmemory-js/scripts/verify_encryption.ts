@@ -4,8 +4,8 @@ import { addHsgMemory, hsgQuery } from "../src/memory/hsg";
 import { q } from "../src/core/db";
 
 // Mock env
-process.env.OM_ENCRYPTION_ENABLED = "true";
-process.env.OM_ENCRYPTION_KEY = "test_key_12345678901234567890123456789012";
+Bun.env.OM_ENCRYPTION_ENABLED = "true";
+Bun.env.OM_ENCRYPTION_KEY = "test_key_12345678901234567890123456789012";
 
 async function run() {
     try {

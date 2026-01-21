@@ -9,19 +9,22 @@ import { normalizeUserId, now } from "../utils";
 import { DistributedLock } from "../utils/lock";
 import { logger } from "../utils/logger";
 import { bufferToVector } from "../utils/vectors";
-import { applyDecay } from "../memory/decay";
+import { applyDecay as consolidateMemories } from "../memory/consolidation";
+import { pruneWeakWaypoints } from "../memory/hsg";
+import { pruneOrphanedVectors } from "./cleanup";
+import { applyDualPhaseDecayToPruneMemories } from "./dynamics";
 
 /**
  * Helper to log maintenance operation statistics.
  */
 const logStat = async (op: string, count: number, userId?: string | null) => {
-    return q.logMaintOp.run(
+    return q.logMaintOp.run({
         op,
-        "success",
-        `Affected: ${count}`,
-        now(),
-        normalizeUserId(userId),
-    );
+        status: "success",
+        details: `Affected: ${count}`,
+        ts: now(),
+        userId: normalizeUserId(userId),
+    });
 };
 
 /**
@@ -83,7 +86,7 @@ export async function trainUserClassifier(userId: string, epochs = 20, signal?: 
     }
 
     // 2. Format data for training
-    const trainingSamples = data.map((d) => ({
+    const trainingSamples = data.map((d: { meanVec: Buffer; primarySector: string }) => ({
         vector: bufferToVector(d.meanVec),
         label: d.primarySector,
     }));
@@ -164,7 +167,9 @@ export async function maintenanceRetrainAll(signal?: AbortSignal) {
         logger.info(`[Maintenance] Starting routine retraining (paginated)...`);
     }
 
-    const CONCURRENCY = 3; // Process 3 users at a time within the batch
+    // Concurrency: Reduced to 1 to prevent OOM on memory-constrained systems
+    // Each training job can consume ~100MB+ for 10k vectors (dim=1536)
+    const CONCURRENCY = 1;
 
     while (true) {
         if (signal?.aborted) break;
@@ -177,7 +182,7 @@ export async function maintenanceRetrainAll(signal?: AbortSignal) {
             if (signal?.aborted) break;
             const batch = users.slice(i, i + CONCURRENCY);
             await Promise.all(
-                batch.map(async ({ userId }) => {
+                batch.map(async ({ userId }: { userId: string }) => {
                     if (!userId || signal?.aborted) return;
                     await safeJob(`retrain:${userId}`, (s) => trainUserClassifier(userId, 20, s), userId, signal);
                 }),
@@ -200,89 +205,6 @@ export async function maintenanceRetrainAll(signal?: AbortSignal) {
 
     if (env.verbose) {
         logger.info(`[Maintenance] Retraining complete. Total users: ${totalProcessed}`);
-    }
-}
-
-/**
- * Prunes memories with salience below a certain threshold.
- * Helps maintain performance by removing "forgotten" data.
- * Ensures vectors are also cleaned up.
- * 
- * @param threshold Salience threshold (default 0.05)
- * @param userId Optional user scoping
- */
-export async function pruneLowSalienceMemories(
-    threshold = 0.05,
-    userId?: string | null,
-    signal?: AbortSignal,
-) {
-    const uid = normalizeUserId(userId);
-    if (env.verbose) {
-        logger.info(
-            `[Maintenance] Pruning memories with salience < ${threshold} for ${uid || "system"}`,
-        );
-    }
-    // Granular lock to prevent overlapping prunes
-    const lock = new DistributedLock(`prune:${uid || "system"}`);
-    if (!(await lock.acquire(60000))) {
-        if (env.verbose) logger.warn(`[Maintenance] Skipping prune for ${uid || "system"}: lock held.`);
-        return 0;
-    }
-
-    try {
-        let total = 0;
-
-        // Process in batches to avoid OOM
-        let iterations = 0;
-        const MAX_ITERATIONS = 100; // Safety cap to prevent infinite loops
-
-        while (iterations < MAX_ITERATIONS) {
-            if (signal?.aborted) break;
-            iterations++;
-            // 1. Get candidate IDs
-            const items = await q.getLowSalienceMemories.all(
-                threshold,
-                500,
-                uid,
-            );
-            if (items.length === 0) break;
-
-            const ids = items.map((i) => i.id);
-
-            if (signal?.aborted) break;
-
-            // 2. Delete from Vector Store (Valkey/PG)
-            try {
-                await getVectorStore().deleteVectors(ids, uid);
-            } catch (e) {
-                logger.warn("[Maintenance] Failed to delete vectors during prune", {
-                    error: e,
-                });
-                // Continue to delete from DB anyway to avoid inconsistencies
-            }
-
-            if (signal?.aborted) break;
-
-            // 3. Delete from DB
-            await q.delMems.run(ids, uid);
-
-            total += ids.length;
-            if (env.verbose) {
-                logger.info(
-                    `[Maintenance] Pruned batch of ${ids.length}, total: ${total} (iteration: ${iterations})`,
-                );
-            }
-        }
-
-        if (iterations >= MAX_ITERATIONS) {
-            logger.warn(
-                `[Maintenance] Pruning reached MAX_ITERATIONS (${MAX_ITERATIONS}) for ${uid || "system"}. Some data may remain.`,
-            );
-        }
-
-        return total;
-    } finally {
-        await lock.release();
     }
 }
 
@@ -341,26 +263,18 @@ export async function runMaintenanceRoutine(userId?: string | null, signal?: Abo
     logger.info(`[Maintenance] Starting routine for ${uid || "system"}...`);
 
     try {
-        // 1. Decay (Strictly scoped to user if provided)
-        const decayCount = await applyDecay(uid);
-        await logStat("decay", decayCount, uid);
+        // 1. Structural Consolidation (Compression/Summarization)
+        const consolidateCount = await consolidateMemories(uid);
+        await logStat("decay", consolidateCount.decayed, uid);
 
         if (signal?.aborted) return;
 
-        // 2. GC (Strictly scoped to user if provided)
-        const gcCount = await pruneLowSalienceMemories(0.05, uid, signal);
+        // 2. Garbage Collection (Deletion of forgotten memories)
+        const gcCount = await applyDualPhaseDecayToPruneMemories(uid, 0.05);
         await logStat("consolidate", gcCount, uid);
 
         if (signal?.aborted) return;
 
-        // 3. Cleanup Orphans (System-wide only)
-        if (!uid) {
-            await cleanupOrphans();
-        }
-
-        if (signal?.aborted) return;
-
-        // 3. Retrain (If uid provided, train only that user; else retrain all)
         if (uid) {
             await trainUserClassifier(uid, 20, signal);
             await logStat("reflect", 1, uid);
@@ -369,25 +283,31 @@ export async function runMaintenanceRoutine(userId?: string | null, signal?: Abo
             await maintenanceRetrainAll(signal);
             const userCount = (await q.getActiveUsers.all()).length;
             await logStat("reflect", userCount, undefined);
+
+            // 4. Global Cleanups
+            await cleanupOrphans();
+            await pruneOrphanedVectors();
+            await q.cleanupRateLimits.run(now() - 24 * 3600 * 1000); // Clean older than 24h
+            await pruneWeakWaypoints(0.1);
         }
 
         const duration = now() - start;
         logger.info(`[Maintenance] Maintenance completed in ${duration}ms`);
 
-        await q.insMaintLog.run(
-            uid,
-            "success",
-            `Duration: ${duration}ms`,
-            start,
-        );
+        await q.insMaintLog.run({
+            userId: uid,
+            status: "success",
+            details: `Duration: ${duration}ms`,
+            ts: start,
+        });
     } catch (e) {
         logger.error(`[Maintenance] Routine failed:`, { error: e });
-        await q.insMaintLog.run(
-            uid,
-            "error",
-            e instanceof Error ? e.message : String(e),
-            start,
-        );
+        await q.insMaintLog.run({
+            userId: uid,
+            status: "error",
+            details: e instanceof Error ? e.message : String(e),
+            ts: start,
+        });
         throw e;
     } finally {
         await lock.release();

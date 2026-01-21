@@ -20,11 +20,13 @@ async def ingest_source(source: str, req: Dict[str, Any] = Body(...), memory: Me
     return {"success": True, "count": 0}
 
 # Config Router methods
-@config_router.get("")
+from ...core.types import SourceRegistryEntry
+
+@config_router.get("", response_model=Dict[str, List[SourceRegistryEntry]])
 async def get_configs():
     """Get source configurations."""
     rows = await db.async_fetchall("SELECT * FROM source_configs")
-    return {"configs": rows} # rows is already a list of dicts from async_fetchall
+    return {"configs": [SourceRegistryEntry(**r) for r in rows]}
 
 @config_router.post("/{type}")
 async def set_config(type: str, body: Dict[str, Any] = Body(...)):

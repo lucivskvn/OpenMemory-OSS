@@ -14,6 +14,7 @@ async def query_facts_at_time(
     at: Optional[int] = None,
     min_confidence: float = 0.1,
     user_id: Optional[str] = None,
+    limit: int = 1000,
 ) -> List[Dict[str, Any]]:
     """
     Query facts that were active at a specific point in time.
@@ -25,6 +26,7 @@ async def query_facts_at_time(
         at: Timestamp (ms). Default: now.
         min_confidence: Minimum confidence score.
         user_id: Owner user ID.
+        limit: Max results (default 1000).
 
     Returns:
         List of matching TemporalFact dicts.
@@ -49,11 +51,13 @@ async def query_facts_at_time(
         conds.append("user_id = ?")
         params.append(user_id)  # type: ignore[arg-type]
 
+    params.append(limit)
     sql = f"""
         SELECT id, user_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
         FROM temporal_facts
         WHERE {' AND '.join(conds)}
         ORDER BY confidence DESC, valid_from DESC
+        LIMIT ?
     """
     rows = await db.async_fetchall(sql, tuple(params))
     return [format_fact(r) for r in rows]
@@ -95,6 +99,7 @@ async def query_facts_in_range(
     end: Optional[int] = None,
     min_confidence: float = 0.1,
     user_id: Optional[str] = None,
+    limit: int = 1000,
 ) -> List[Dict[str, Any]]:
     """
     Query facts that were active at any point within a time range.
@@ -106,6 +111,7 @@ async def query_facts_in_range(
         end: End timestamp (ms).
         min_confidence: Minimum confidence score.
         user_id: Owner user ID.
+        limit: Max results (default 1000).
 
     Returns:
         List of matching TemporalFact dicts.
@@ -139,11 +145,14 @@ async def query_facts_in_range(
         params.append(user_id)
 
     where = f"WHERE {' AND '.join(conds)}" if conds else ""
+    # Push LIMIT
+    params.append(limit)
     sql = f"""
         SELECT id, user_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
         FROM temporal_facts
         {where}
         ORDER BY valid_from DESC
+        LIMIT ?
     """
     rows = await db.async_fetchall(sql, tuple(params))
     return [format_fact(r) for r in rows]

@@ -6,7 +6,7 @@
  */
 
 import type { Octokit } from "@octokit/rest";
-import { createHmac, timingSafeEqual } from "crypto";
+
 
 import { env } from "../core/cfg";
 import { normalizeUserId } from "../utils";
@@ -18,6 +18,27 @@ import {
     SourceFetchError,
     SourceItem,
 } from "./base";
+
+// Helper for timing-safe string comparison
+function timingSafeEqual(a: string, b: string): boolean {
+    if (a.length !== b.length) return false;
+    let mismatch = 0;
+    for (let i = 0; i < a.length; i++) {
+        mismatch |= (a.charCodeAt(i) ^ b.charCodeAt(i));
+    }
+    return mismatch === 0;
+}
+
+// Helper for hex conversion if needed, but we used manual map above.
+// Keep it simple.
+
+function hexToBytes(hex: string): Uint8Array {
+    const bytes = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < bytes.length; i++) {
+        bytes[i] = parseInt(hex.substring(i * 2, (i * 2) + 2), 16);
+    }
+    return bytes;
+}
 
 export interface GithubCreds {
     token?: string;
@@ -80,20 +101,40 @@ export class GithubSource extends BaseSource<GithubCreds, GithubFilters> {
      * @param body The raw request body
      * @param secret The webhook secret
      */
-    static verifySignature(
+    static async verifySignature(
         signature: string,
-        body: string | Buffer,
+        body: string | Uint8Array,
         secret: string,
-    ): boolean {
+    ): Promise<boolean> {
         if (!signature || !secret) return false;
-        const hmac = createHmac("sha256", secret);
-        const digest = Buffer.from(
-            "sha256=" + hmac.update(body).digest("hex"),
-            "utf8",
+
+        const enc = new TextEncoder();
+        const algorithm = { name: "HMAC", hash: "SHA-256" };
+        const key = await globalThis.crypto.subtle.importKey(
+            "raw",
+            enc.encode(secret) as unknown as BufferSource,
+            algorithm,
+            false,
+            ["sign", "verify"],
         );
-        const checksum = Buffer.from(signature, "utf8");
-        if (checksum.length !== digest.length) return false;
-        return timingSafeEqual(digest, checksum);
+
+        const bodyBytes = typeof body === "string" ? enc.encode(body) : body;
+        const signatureBytes = hexToBytes(signature.replace("sha256=", "")); // Helper needed? Or just compare hex.
+
+        // Actually better to just verify directly using the API if we parse the signature hex to bytes.
+        // But subtle.verify expects raw bytes. GitHub sends hex.
+
+        // Let's compute the signature locally and compare hex strings to avoid hex parsing issues,
+        // but timing safe comparison is needed.
+        const signed = await globalThis.crypto.subtle.sign(
+            algorithm,
+            key,
+            bodyBytes as any
+        );
+
+        const digest = "sha256=" + Array.from(new Uint8Array(signed)).map(b => b.toString(16).padStart(2, '0')).join('');
+
+        return timingSafeEqual(digest, signature);
     }
 
     async _listItems(filters: GithubFilters): Promise<SourceItem[]> {
@@ -167,7 +208,8 @@ export class GithubSource extends BaseSource<GithubCreds, GithubFilters> {
 
         const IGNORE_EXTS = [
             ".exe", ".bin", ".zip", ".tar", ".gz", ".lock", ".pyc",
-            ".pdf", ".jpg", ".png", ".gif", ".mp4", ".mov", ".db", ".sqlite"
+            ".pdf", ".jpg", ".png", ".gif", ".mp4", ".mov", ".db", ".sqlite",
+            ".env", ".pem", ".key", ".cert", ".ds_store", ".crt"
         ];
 
         return tree.data.tree
@@ -214,10 +256,11 @@ export class GithubSource extends BaseSource<GithubCreds, GithubFilters> {
 
         const allIssues: SourceItem[] = [];
         let page = 1;
+        let retryCount = 0;
 
         while (true) {
             try {
-                const resp = await this.octokit.issues.listForRepo({
+                const resp = await (this.octokit as Octokit).issues.listForRepo({
                     owner,
                     repo,
                     state: "all",
@@ -239,6 +282,7 @@ export class GithubSource extends BaseSource<GithubCreds, GithubFilters> {
                 }));
 
                 allIssues.push(...batched);
+                retryCount = 0; // Reset on success
 
                 if (allIssues.length >= 1000) {
                     logger.warn(
@@ -250,26 +294,44 @@ export class GithubSource extends BaseSource<GithubCreds, GithubFilters> {
                 if (resp.data.length < 100) break;
                 page++;
 
-                // Respect rate limits gently (Centralized + Small extra buffer)
                 await this.rateLimiter.acquire();
-                await new Promise((r) => setTimeout(r, 100));
-            } catch (e: unknown) {
-                const msg = e instanceof Error ? e.message : String(e);
-                // Simple retry logic for rate limits could go here, but for now just break to avoid infinite loops
-                if (msg.includes("429") || msg.includes("403")) {
-                    logger.warn(
-                        `[github] Rate limit hit on page ${page}: ${msg}`,
-                    );
-                    break;
+            } catch (e: any) {
+                const msg = e.message || String(e);
+                const isRateLimit = e.status === 403 || e.status === 429 || msg.includes("rate limit");
+
+                if (isRateLimit && retryCount < 3) {
+                    retryCount++;
+                    const wait = Math.pow(2, retryCount) * 1000;
+                    logger.warn(`[github] Rate limit hit, retrying in ${wait}ms...`);
+                    await new Promise(r => setTimeout(r, wait));
+                    continue;
                 }
-                logger.warn(
-                    `[github] Issue retrieval failed on page ${page}: ${msg}`,
-                );
+
+                logger.warn(`[github] Issue retrieval failed: ${msg}`);
                 break;
             }
         }
 
         return allIssues;
+    }
+
+    private redactSecrets(text: string): string {
+        // Simple regexes for common secrets - to be expanded
+        const patterns = [
+            /([a-z0-9_-])*(key|secret|token|password|passwd|auth)=['"]?([a-z0-9_-]){4,}['"]?/gi,
+            /AIza[0-9A-Za-z-_]{35}/g, // Google API Key
+            /sk-[a-zA-Z0-9]{48}/g,    // OpenAI Key
+            /sq0csp-[ a-zA-Z0-9-_]{43}/g, // Square secret
+            /ghp_[a-zA-Z0-9]{36}/g,    // GitHub Personal Access Token
+        ];
+
+        let redacted = text;
+        for (const pattern of patterns) {
+            redacted = redacted.replace(pattern, (match) => {
+                return match.split("=")[0] + "=[REDACTED]";
+            });
+        }
+        return redacted;
     }
 
     async _fetchItem(itemId: string): Promise<SourceContent> {
@@ -322,7 +384,7 @@ export class GithubSource extends BaseSource<GithubCreds, GithubFilters> {
                 commentPage++;
             }
 
-            const text = textParts.join("\n");
+            const text = this.redactSecrets(textParts.join("\n"));
 
             return {
                 id: itemId,
@@ -374,7 +436,7 @@ export class GithubSource extends BaseSource<GithubCreds, GithubFilters> {
         if (content.content) {
             data = Buffer.from(content.content, "base64");
             try {
-                text = data.toString("utf-8");
+                text = this.redactSecrets(data.toString("utf-8"));
             } catch {
                 // ignore
             }

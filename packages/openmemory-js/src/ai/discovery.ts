@@ -4,6 +4,11 @@
  */
 import { env } from "../core/cfg";
 import { getPersistedConfig, setPersistedConfig } from "../core/persisted_cfg";
+/**
+ * @file discovery.ts
+ * @description Automated discovery and indexing of knowledge domains.
+ * @audited 2026-01-19
+ */
 import { logger } from "../utils/logger";
 
 const OLLAMA_DEFAULT_URL = "http://localhost:11434";

@@ -24,20 +24,34 @@ COPY --from=install /temp/prod/node_modules node_modules
 COPY --from=builder /usr/src/app/dist dist
 COPY --from=builder /usr/src/app/package.json .
 
-# Create data directory
-RUN mkdir -p /usr/src/app/data
+
+# Security: Run as non-root user
+RUN addgroup -S -g 1001 openmemory && \
+  adduser -S -u 1001 -G openmemory openmemory
+
+# Create data directory and set permissions
+RUN mkdir -p /data && chown -R openmemory:openmemory /data && chown -R openmemory:openmemory /usr/src/app
+
+USER openmemory
 
 # Environment Defaults
 ENV NODE_ENV=production
-ENV OM_PORT=8080
-ENV OM_DB_PATH=/usr/src/app/data/openmemory.sqlite
+ENV OM_PORT=3000
+ENV OM_DB_PATH=/data/openmemory.sqlite
+ENV OM_MODE=production
 
-# Security: Run as non-root user
-RUN chown -R bun:bun /usr/src/app
-USER bun
+# Validation logic for OM_MODE can be added here or handled at runtime.
+# Running as non-root user for security.
 
 # Expose port
-EXPOSE 8080
+EXPOSE 3000
+
+# Volume for persistent data
+VOLUME ["/data"]
+
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:${OM_PORT:-3000}/health || exit 1
 
 # Start command
 CMD ["bun", "dist/server/start.js"]

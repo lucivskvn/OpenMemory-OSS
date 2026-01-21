@@ -42,3 +42,14 @@ export interface ApiErrorResponse {
         details?: Record<string, unknown>;
     };
 }
+
+/**
+ * Local type for display purposes, avoiding full MemoryItem mocking.
+ */
+export interface DisplayMemory {
+    id: string;
+    content: string;
+    salience?: number;
+    primarySector?: string;
+    metadata?: Record<string, unknown>;
+}

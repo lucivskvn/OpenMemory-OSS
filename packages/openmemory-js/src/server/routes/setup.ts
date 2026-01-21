@@ -1,113 +1,84 @@
+import { Elysia } from "elysia";
+import { z } from "zod";
 import { logger } from "../../utils/logger";
-import { AppError, sendError } from "../errors";
-import { AdvancedRequest, AdvancedResponse, ServerApp } from "../server";
+import { AppError } from "../errors";
+import { toHex } from "../../utils";
 import { setupTokenManager } from "../setup_token";
+
+const VerifySetupSchema = z.object({
+    userId: z.string().min(3),
+    token: z.string().min(1),
+});
 
 /**
  * Registers Setup routes for initial system bootstrapping.
- * @param app Server app instance
  */
-export const setupRoutes = (app: ServerApp) => {
-    /**
-     * GET /setup/status
-     */
-    app.get(
-        "/setup/status",
-        async (_req: AdvancedRequest, res: AdvancedResponse) => {
-            try {
-                const token = setupTokenManager.get();
-                res.json({
-                    setupMode: !!token,
-                    message: token
-                        ? "Setup Mode Active. Check console logs for token."
-                        : "System Initialized.",
-                });
-            } catch (err: unknown) {
-                sendError(res, err);
-            }
-        },
-    );
+export const setupRoutes = (app: Elysia) => app.group("/setup", (app) => {
+    return app
+        /**
+         * GET /setup/status
+         */
+        .get("/status", () => {
+            const token = setupTokenManager.get();
+            return {
+                setupMode: !!token,
+                message: token
+                    ? "Setup Mode Active. Check console logs for token."
+                    : "System Initialized.",
+            };
+        })
 
-    /**
-     * POST /setup/verify
-     * Body: { userId, token }
-     */
-    app.post(
-        "/setup/verify",
-        async (req: AdvancedRequest, res: AdvancedResponse) => {
-            try {
-                const { userId, token } = (req.body || {}) as {
-                    userId?: string;
-                    token?: string;
-                };
+        /**
+         * POST /setup/verify
+         * Body: { userId, token }
+         */
+        .post("/verify", async ({ body, request }) => {
+            const { userId, token } = VerifySetupSchema.parse(body);
 
-                if (!token || !setupTokenManager.verifyAndConsume(token)) {
-                    logger.warn(
-                        `[SETUP] Verification failed. IP: ${req.ip} provided token: '${token ? "***" : "null"}'`,
-                    );
-                    // If invalid token, return 403.
-                    // Note: consume happens on match. If mismatch, we don't consume?
-                    // `verifyAndConsume` implementation: check match -> consume.
-                    return sendError(
-                        res,
-                        new AppError(
-                            403,
-                            "INVALID_TOKEN",
-                            "Invalid or expired setup token.",
-                        ),
-                    );
-                }
+            // TODO: Implement strict rate limiting for setup if needed (5 attempts/15m)
+            // Currently relying on global rate limit.
 
-                if (
-                    !userId ||
-                    typeof userId !== "string" ||
-                    userId.length < 3
-                ) {
-                    return sendError(
-                        res,
-                        new AppError(
-                            400,
-                            "INVALID_USER_ID",
-                            "UserId required.",
-                        ),
-                    );
-                }
-
-                // Token Valid! Create Admin.
-                const apiKeyBytes = new Uint8Array(32);
-                globalThis.crypto.getRandomValues(apiKeyBytes);
-                const apiKey = "om_" + Buffer.from(apiKeyBytes).toString("hex");
-
-                const hashBuffer = await globalThis.crypto.subtle.digest(
-                    "SHA-256",
-                    Buffer.from(apiKey),
+            if (!token || !setupTokenManager.verifyAndConsume(token)) {
+                // Get IP from headers or standard request prop
+                const ipInfo = app.server?.requestIP(request);
+                const ip = ipInfo?.address || request.headers.get("x-forwarded-for") || "unknown";
+                logger.warn(
+                    `[SETUP] Verification failed. IP: ${ip} provided token: '${token ? "***" : "null"}'`,
                 );
-                const hash = Buffer.from(hashBuffer).toString("hex");
-
-                const { q } = await import("../../core/db");
-                const now = Date.now();
-
-                await q.insApiKey.run(
-                    hash,
-                    userId,
-                    "admin",
-                    "Root Admin created via Console Token",
-                    now,
-                    now,
-                    0,
-                );
-
-                logger.info(`[SETUP] Admin created: ${userId}`);
-
-                res.json({
-                    success: true,
-                    apiKey,
-                    userId,
-                    role: "admin",
-                });
-            } catch (err: unknown) {
-                sendError(res, err);
+                throw new AppError(403, "INVALID_TOKEN", "Invalid or expired setup token.");
             }
-        },
-    );
-};
+
+            // Token Valid! Create Admin.
+            const apiKeyBytes = new Uint8Array(32);
+            crypto.getRandomValues(apiKeyBytes);
+            const apiKey = "om_" + toHex(apiKeyBytes);
+
+            const hashBuffer = await crypto.subtle.digest(
+                "SHA-256",
+                new TextEncoder().encode(apiKey),
+            );
+            const hash = toHex(hashBuffer);
+
+            const { q } = await import("../../core/db");
+            const now = Date.now();
+
+            await q.insApiKey.run(
+                hash,
+                userId,
+                "admin",
+                "Root Admin created via Console Token",
+                now,
+                now,
+                0,
+            );
+
+            logger.info(`[SETUP] Admin created: ${userId}`);
+
+            return {
+                success: true,
+                apiKey,
+                userId,
+                role: "admin",
+            };
+        });
+});

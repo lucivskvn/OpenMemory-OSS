@@ -81,14 +81,21 @@ async def extract_html(html: str) -> Dict[str, Any]:
         }
     }
 
-async def extract_url(url: str, user_id: Optional[str] = None) -> Dict[str, Any]:
+async def extract_url(url: str, user_id: Optional[str] = None, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     from ..utils.security import validate_url
     is_valid, err = await validate_url(url)
     if not is_valid:
         raise ValueError(err)
 
+    headers = {}
+    if config and config.get("userAgent"):
+        headers["User-Agent"] = config["userAgent"]
+    # Fallback/Default is handled by httpx default or we can set one if needed, 
+    # but JS side relies on env or default. Let's mimic that if we had access to env here easily for defaults.
+    # For now, just respecting the config overrides.
+
     async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.get(url, follow_redirects=True)
+        resp = await client.get(url, headers=headers if headers else None, follow_redirects=True)
         resp.raise_for_status()
         html = resp.text
 

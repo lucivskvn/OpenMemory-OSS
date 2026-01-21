@@ -1,72 +1,74 @@
+import { Elysia } from "elysia";
 import { cache } from "../../core/cache";
 import { env } from "../../core/cfg";
 import { logger } from "../../utils/logger";
-import { AppError, sendError } from "../errors";
-import { AdvancedRequest, AdvancedResponse, NextFunction } from "../server";
+import { AppError } from "../errors";
 
-/**
- * Rate Limiting Middleware.
- * Uses the unified CacheManager (Redis or Memory) to track request counts.
- * Prevents abuse by limiting requests per IP within a time window.
- */
-export async function rateLimitMiddleware(
-    req: AdvancedRequest,
-    res: AdvancedResponse,
-    next: NextFunction
-) {
-    if (!env.rateLimitEnabled) {
-        return next();
-    }
+import { getUser } from "./auth";
 
-    // Smart Identification: User ID > IP
-    // This allows authenticated users behind a shared proxy (e.g. corporate VPN) to have individual limits.
-    let clientId = req.ip || "unknown";
-    let keyPrefix = "rl:ip";
+interface RateLimitOptions {
+    windowMs?: number;
+    max?: number;
+    keyPrefix?: string;
+    message?: string;
+}
 
-    if (req.user?.id) {
-        clientId = req.user.id;
-        keyPrefix = "rl:user";
-    }
+export const rateLimitPlugin = (options: RateLimitOptions = {}) => (app: Elysia) => app.derive(async (ctx) => {
+    if (!env.rateLimitEnabled) return {};
 
-    const key = `${keyPrefix}:${clientId}`;
+    const { request, set, server } = ctx;
 
-    // Configuration
-    const windowMs = env.rateLimitWindowMs || 60000;
-    const max = env.rateLimitMaxRequests || 100;
+    const windowMs = options.windowMs || env.rateLimitWindowMs || 60000;
+    const max = options.max || env.rateLimitMaxRequests || 100;
+    const prefix = options.keyPrefix || "rl";
+    const msg = options.message || "Too many requests. Please try again later.";
     const windowSecs = Math.ceil(windowMs / 1000);
 
-    try {
-        // Atomic increment
-        const count = await cache.incr(key, windowSecs);
+    // Try to get user from context (Auth plugin should run before this)
+    const user = getUser(ctx);
 
-        // Calculate reset time (Approximate based on window)
-        // Ideally we'd get TTL, but fixed window is sufficient for now.
+    // Use User ID if authenticated, otherwise fallback to IP
+    let clientId = "unknown";
+    let type = "ip";
+
+    if (user?.id) {
+        clientId = user.id;
+        type = "user";
+    } else {
+        // Elysia's `server.requestIP` is robust.
+        clientId = server?.requestIP(request)?.address || "unknown";
+    }
+
+    let fullKeyPrefix = `${prefix}:${type}`;
+    const key = `${fullKeyPrefix}:${clientId}`;
+
+    try {
+        const count = await cache.incr(key, windowSecs);
         const resetTime = Date.now() + windowMs;
 
-        res.setHeader("X-RateLimit-Limit", max.toString());
-        res.setHeader("X-RateLimit-Remaining", Math.max(0, max - count).toString());
-        res.setHeader("X-RateLimit-Reset", Math.ceil(resetTime / 1000).toString());
+        set.headers["X-RateLimit-Limit"] = max.toString();
+        set.headers["X-RateLimit-Remaining"] = Math.max(0, max - count).toString();
+        set.headers["X-RateLimit-Reset"] = Math.ceil(resetTime / 1000).toString();
 
         if (count > max) {
-            logger.warn(`[RateLimit] ${keyPrefix} ${clientId} exceeded limit (${max} reqs/${windowMs}ms)`);
-            const retryAfter = windowSecs.toString();
-            res.setHeader("Retry-After", retryAfter);
-
-            return sendError(
-                res,
-                new AppError(
-                    429,
-                    "RATE_LIMIT_EXCEEDED",
-                    "Too many requests. Please try again later.",
-                    { retry_after: parseInt(retryAfter) }
-                )
-            );
+            logger.warn(`[RateLimit] ${fullKeyPrefix} ${clientId} exceeded limit (${max} reqs/${windowMs}ms)`);
+            set.status = 429;
+            set.headers["Retry-After"] = windowSecs.toString();
+            throw new AppError(429, "RATE_LIMIT", msg);
         }
-
-        next();
     } catch (e) {
-        // Fail open: If redis/cache fails, allow request but log error
-        logger.error("[RateLimit] Error checking limit:", { error: e });
-        next();
+        if (e instanceof AppError) throw e;
+        if (e instanceof Error && e.message === msg) throw new AppError(429, "RATE_LIMIT", msg);
+
+        // Fail-Closed in Prod
+        if (env.isProd) {
+            logger.error("[RateLimit] CRITICAL: Cache store unreachable.", { error: e });
+            set.status = 503;
+            set.status = 503;
+            throw new AppError(503, "SERVICE_UNAVAILABLE", "Service Unavailable");
+        }
+        logger.warn("[RateLimit] Cache store unreachable (Fail-Open).");
     }
-}
+
+    return {};
+});

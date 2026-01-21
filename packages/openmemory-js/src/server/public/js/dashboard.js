@@ -1,245 +1,144 @@
-// --- State ---
-/** @type {string} */
+/**
+ * OpenMemory Dashboard Client
+ * Handles API interactions, state management, and UI rendering.
+ */
+"use strict";
+
+const API_BASE = ''; // Relative path because dashboard is served by same server
 let API_KEY = localStorage.getItem('om_api_key') || '';
-/** @type {string|null} */
-let CURRENT_USER_ID = null;
-/** @type {boolean} */
-let IS_ADMIN = false;
 
-// Temporal State
-/** @type {'facts'|'edges'} */
-let TEMP_MODE = 'facts';
-let TEMP_PAGE = 1;
-let TEMP_LIMIT = 20;
+// State
+const state = {
+    stats: {
+        totalMemories: 0,
+        totalVectors: 0,
+        vectorStore: 'loading...',
+        dbSize: '0 MB'
+    },
+    recentMemories: [],
+    searchResults: [],
+    graph: {
+        nodes: [],
+        links: []
+    },
+    config: {},
+    activeSection: 'tab-overview',
+    isLoading: false,
+    temporalMode: 'facts',
+    temporalPage: 1
+};
 
-// --- Init ---
-const authModal = document.getElementById('authModal');
-const authForm = document.getElementById('authForm');
-const apiKeyInput = /** @type {HTMLInputElement} */ (document.getElementById('apiKeyInput'));
-const authError = document.getElementById('authError');
+// --- API Client ---
 
-if (API_KEY) { checkAuth(); }
+async function apiCall(endpoint, options = {}) {
+    const defaultHeaders = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${API_KEY}`
+    };
 
-if (authForm) {
-    authForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const key = apiKeyInput.value.trim();
-        if (!key) return;
-        API_KEY = key;
-        if (await checkAuth()) {
-            localStorage.setItem('om_api_key', key);
-            authModal.classList.remove('active');
-        } else {
-            authError.innerText = "Connection failed. Please check your key.";
-            authError.style.display = 'block';
-            API_KEY = '';
-        }
-    });
-}
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
 
-/**
- * Universal fetch wrapper with RFC 7807 error handling.
- * @param {string} endpoint 
- * @param {string} [method='GET'] 
- * @param {any} [body=null] 
- * @returns {Promise<any>}
- */
-async function fetchAPI(endpoint, method = 'GET', body = null) {
-    const opts = { headers: { 'Authorization': `Bearer ${API_KEY}`, 'Content-Type': 'application/json' } };
-    if (method !== 'GET') { opts.method = method; if (body) opts.body = JSON.stringify(body); }
-
-    const res = await fetch(endpoint, opts);
-
-    // Handle Auth Failures Globally
-    if (res.status === 401 || res.status === 403) {
-        if (authModal) authModal.classList.add('active');
-        throw new Error("Unauthorized: Please log in.");
-    }
-
-    // Try parsing JSON response
-    let data;
-    const text = await res.text();
     try {
-        data = text ? JSON.parse(text) : {};
-    } catch {
-        data = { title: text || res.statusText };
-    }
+        const res = await fetch(`${API_BASE}${endpoint}`, {
+            ...options,
+            signal: controller.signal,
+            headers: {
+                ...defaultHeaders,
+                ...options.headers
+            }
+        });
+        clearTimeout(timeoutId);
 
-    if (!res.ok) {
-        // RFC 7807 Error Handling
-        const msg = data.title || data.message || data.error || `Request failed with status ${res.status}`;
-        throw new Error(msg);
-    }
-
-    return data;
-}
-
-/**
- * Validates the current API key and determines admin status.
- * @returns {Promise<boolean>}
- */
-async function checkAuth() {
-    try {
-        await fetchAPI('/dashboard/stats');
-
-        try {
-            await fetchAPI('/admin/users'); // Will fail if not admin
-            IS_ADMIN = true;
-            const adminNav = document.getElementById('adminNav');
-            if (adminNav) adminNav.style.display = 'block';
-        } catch {
-            IS_ADMIN = false;
+        if (res.status === 401) {
+            showAuthModal();
+            throw new Error('Unauthorized');
         }
 
-        startPolling();
-        if (authModal) authModal.classList.remove('active');
-        return true;
-    } catch (e) {
-        console.warn("Auth check failed:", e);
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || err.message || `Request failed: ${res.status}`);
+        }
+
+        return await res.json();
+    } catch (error) {
+        clearTimeout(timeoutId);
+        if (error.name === 'AbortError') {
+            showToast('Request timed out', 'error');
+        } else if (error.message !== 'Unauthorized') {
+            showToast(error.message, 'error');
+        }
+        console.error('API Error:', error);
+        throw error;
+    }
+}
+
+// --- Auth ---
+
+function checkAuth() {
+    if (!API_KEY) {
+        showAuthModal();
         return false;
     }
+    return true;
 }
 
-function startPolling() {
-    updateOverview();
-    setInterval(updateOverview, 3000);
+function showAuthModal() {
+    document.getElementById('authModal').classList.add('active');
 }
 
-// --- Navigation ---
-document.addEventListener('DOMContentLoaded', () => {
-    const links = document.querySelectorAll('.nav-link');
-    const sections = document.querySelectorAll('.section');
-
-    links.forEach(l => {
-        l.addEventListener('click', (e) => {
+function bindAuth() {
+    const form = document.getElementById('authForm');
+    if (form) {
+        form.addEventListener('submit', (e) => {
             e.preventDefault();
-            links.forEach(x => x.classList.remove('active'));
-            l.classList.add('active');
-            const tab = l.getAttribute('data-tab');
-
-            sections.forEach(s => s.classList.remove('active'));
-            const target = document.getElementById(tab);
-            if (target) target.classList.add('active');
-
-            // Load Data on switch
-            if (tab === 'tab-sources') loadSources();
-            if (tab === 'tab-admin-users') fetchAllUsers();
-            if (tab === 'tab-temporal') loadTemporal();
-            if (tab === 'tab-config') updateOverview();
+            const key = document.getElementById('apiKeyInput').value.trim();
+            if (key) {
+                API_KEY = key;
+                localStorage.setItem('om_api_key', key);
+                document.getElementById('authModal').classList.remove('active');
+                initDashboard();
+            }
         });
-    });
-});
-
-// --- Config Listeners ---
-const modelSelect = document.getElementById('modelSelect');
-if (modelSelect) {
-    modelSelect.addEventListener('change', (e) => {
-        const custom = document.getElementById('customModelInput');
-        if (e.target.value === 'custom') custom.style.display = 'block';
-        else custom.style.display = 'none';
-    });
+    }
 }
 
-const modelConfigForm = document.getElementById('modelConfigForm');
-if (modelConfigForm) {
-    modelConfigForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const sel = document.getElementById('modelSelect').value;
-        const custom = document.getElementById('customModelInput').value;
-        const model = sel === 'custom' ? custom : sel;
+// --- UI Rendering ---
 
-        if (!model) return alert("Please select a model");
+function renderStats() {
+    safeSetText('statTotal', state.stats.totalMemories?.toLocaleString() || '0');
+    safeSetText('statHistorical', state.stats.historicalFacts?.toLocaleString() || '0');
+    safeSetText('statQPS', state.stats.qps?.toFixed(1) || '0.0');
 
-        try {
-            await fetchAPI('/dashboard/settings', 'POST', {
-                type: 'ollama',
-                config: { model: model }
-            });
+    // System metrics if available
+    if (state.stats.metrics) {
+        const m = state.stats.metrics;
+        safeSetText('sysRam', `${m.memory.rss} MB`);
+        safeSetText('sysUptime', `${(m.uptime / 3600).toFixed(1)} hrs`);
+        safeSetText('sysJobs', m.jobs.active);
+    }
 
-            alert(`Configuration saved for ${model}. \nNote: You may need to restart the server or wait.`);
-            updateOverview();
-        } catch (e) {
-            alert("Failed to save config: " + e.message);
+    // Model info
+    if (state.stats.model) {
+        safeSetText('currentModel', state.stats.model);
+        const badge = document.getElementById('modelBadge');
+        if (badge) {
+            badge.innerText = state.stats.model;
+            badge.style.display = 'inline-flex';
         }
-    });
-}
-
-// --- Overview ---
-async function updateOverview() {
-    if (document.hidden) return;
-    try {
-        const [sys, temp, metricsRes] = await Promise.all([
-            fetchAPI('/dashboard/stats'),
-            fetchAPI('/api/temporal/stats'),
-            fetchAPI('/system/metrics').catch(() => ({ metrics: null }))
-        ]);
-
-        const setTxt = (id, txt) => {
-            const el = document.getElementById(id);
-            if (el) el.innerText = txt;
-        };
-
-        setTxt('statTotal', sys.totalMemories?.toLocaleString() || '0');
-        setTxt('statHistorical', temp.historicalFacts?.toLocaleString() || '0');
-        setTxt('statQPS', sys.qps?.toFixed(1) || '0.0');
-
-        if (metricsRes && metricsRes.metrics) {
-            const m = metricsRes.metrics;
-            setTxt('sysRam', `${m.memory.rss} MB`);
-            const upH = (m.uptime / 3600).toFixed(1);
-            setTxt('sysUptime', `${upH} hrs`);
-            setTxt('sysJobs', m.jobs.active);
-            setTxt('sysCpu', "Active");
-        }
-
-        if (sys.model) {
-            const modelBadge = document.getElementById('modelBadge');
-            if (modelBadge) {
-                modelBadge.innerText = sys.model;
-                modelBadge.style.display = 'inline-flex';
-            }
-            setTxt('currentModel', sys.model);
-
-            // Preselect
-            const sel = document.getElementById('modelSelect');
-            if (sel) {
-                if (Array.from(sel.options).some(o => o.value === sys.model)) sel.value = sys.model;
-                else sel.value = 'custom';
-                // Trigger change to update input visibility
-                sel.dispatchEvent(new Event('change'));
-            }
-        }
-
-        if (sys.gpu !== undefined) {
-            const gpuEl = document.getElementById('gpuBadge');
-            const accEl = document.getElementById('currentAccel');
-            if (gpuEl && accEl) {
-                if (sys.gpu) {
-                    gpuEl.innerText = "GPU Active";
-                    gpuEl.style.background = "var(--success-bg)";
-                    gpuEl.style.color = "var(--success)";
-                    accEl.innerText = "Nvidia GPU";
-                    accEl.style.color = "var(--success)";
-                } else {
-                    gpuEl.innerText = "CPU Only";
-                    gpuEl.style.background = "#333";
-                    gpuEl.style.color = "#aaa";
-                    accEl.innerText = "CPU (Standard)";
-                    accEl.style.color = "var(--text-secondary)";
-                }
-                gpuEl.style.display = 'inline-flex';
-            }
-        }
-
-        const tl = await fetchAPI('/dashboard/sectors/timeline?hours=24');
-        renderTimeline(tl.timeline);
-    } catch { }
+    }
 }
 
 function renderTimeline(data) {
     const c = document.getElementById('timelineChart');
     if (!c) return;
     c.innerHTML = '';
+
+    if (!data || data.length === 0) {
+        c.innerHTML = '<div class="text-muted text-xs text-center w-full">No activity data</div>';
+        return;
+    }
+
     const max = Math.max(...data.map(d => d.count), 1);
     data.forEach(d => {
         const el = document.createElement('div');
@@ -251,639 +150,1011 @@ function renderTimeline(data) {
     });
 }
 
-// --- Sources ---
-async function loadSources() {
-    try {
-        const res = await fetchAPI('/source-configs');
-        const tbody = document.getElementById('sourcesTable');
-        if (!tbody) return;
-        tbody.innerHTML = '';
-
-        (res.configs || []).forEach(s => {
-            const tr = document.createElement('tr');
-            tr.innerHTML = `
-                <td style="font-weight:600; text-transform:capitalize;">${s.type}</td>
-                <td><span class="badge ${s.status === 'enabled' ? 'badge-success' : 'badge-error'}">${s.status}</span></td>
-                <td class="text-secondary">${new Date(s.updatedAt).toLocaleDateString()}</td>
-                <td><button class="btn btn-danger btn-sm" onclick="this.parentElement.innerHTML='Deleted...'; deleteSource('${s.type}')">Del</button></td>
-            `;
-            tbody.appendChild(tr);
-        });
-    } catch (e) { console.error(e); }
-}
-
-async function deleteSource(type) {
-    await fetchAPI(`/source-configs/${type}`, 'DELETE');
-    loadSources();
-}
-
-function showAddSourceModal() {
-    document.getElementById('addSourcePanel').style.display = 'block';
-}
-
-const addSourceForm = document.getElementById('addSourceForm');
-if (addSourceForm) {
-    addSourceForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const type = document.getElementById('sourceType').value;
-        try {
-            const confStr = document.getElementById('sourceConfig').value;
-            const config = JSON.parse(confStr); // Validate JSON
-            await fetchAPI(`/source-configs/${type}`, 'POST', { config, status: 'enabled' });
-            document.getElementById('addSourcePanel').style.display = 'none';
-            loadSources();
-        } catch (err) {
-            alert("Invalid JSON or Save Failed: " + err.message);
-        }
-    });
-}
-
-// --- Admin ---
-async function fetchAllUsers() {
-    if (!IS_ADMIN) return;
-    try {
-        const data = await fetchAPI('/admin/users');
-        const tbody = document.getElementById('usersTable');
-        if (!tbody) return;
-        tbody.innerHTML = '';
-
-        (data.users || []).forEach(u => {
-            const tr = document.createElement('tr');
-            tr.innerHTML = `
-                <td class="mono">${u.id}</td>
-                <td>${(u.scopes || []).join(', ')}</td>
-                <td>Active</td>
-                <td>
-                    <button class="btn btn-danger btn-sm" onclick="deleteUser('${u.id}')">Delete</button>
-                </td>
-            `;
-            tbody.appendChild(tr);
-        });
-    } catch (e) { console.error(e); }
-}
-
-async function deleteUser(id) {
-    if (!confirm(`Delete User ${id} and ALL data?`)) return;
-    await fetchAPI(`/admin/users/${id}`, 'DELETE');
-    fetchAllUsers();
-}
-
-const regUserForm = document.getElementById('regUserForm');
-if (regUserForm) {
-    regUserForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const uid = document.getElementById('regUserId').value;
-        const scope = document.getElementById('regScope').value;
-        const resDiv = document.getElementById('regResult');
-
-        try {
-            await fetchAPI('/admin/users', 'POST', { id: uid, scopes: [scope === 'admin' ? 'admin:all' : 'memory:read'] });
-            const keyRes = await fetchAPI(`/admin/users/${uid}/keys`, 'POST', { name: 'Initial Key' });
-
-            resDiv.innerHTML = `<div style="padding:10px; background:var(--success-bg); border-radius:6px; color:var(--success); margin-top:8px;">
-                User Created!<br>API Key: <b class="mono">${keyRes.apiKey}</b><br>(Copy now, cannot view later)
-            </div>`;
-            fetchAllUsers();
-        } catch (err) {
-            resDiv.innerHTML = `<div style="color:var(--error); margin-top:8px;">Failed: ${err.message}</div>`;
-        }
-    });
-}
-
-// --- Explorer ---
-async function searchMemories() {
-    const q = document.getElementById('searchQuery').value;
-    const res = await fetchAPI('/memory/query', 'POST', { query: q, k: 25 });
-    const tbody = document.getElementById('explorerTable');
+function renderMemoryTable(memories, containerId) {
+    const tbody = document.getElementById(containerId);
     if (!tbody) return;
-    tbody.innerHTML = '';
-    (res.matches || []).forEach(m => {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-            <td class="mono text-muted text-xs">${m.id.substring(0, 8)}</td>
-            <td style="max-width: 400px;">
-                <div style="font-weight:500; margin-bottom:4px;">${escapeHtml(m.content || '')}</div>
-                <div class="text-xs text-muted">tags: ${(m.metadata?.tags || []).join(', ')}</div>
-            </td>
-            <td><span class="badge badge-success">${m.primarySector || 'raw'}</span></td>
-            <td class="mono">${(m.salience || 0).toFixed(2)}</td>
+
+    if (!memories || memories.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="4" class="text-center text-muted py-8">
+                    No memories found matching your criteria.
+                </td>
+            </tr>
         `;
-        tbody.appendChild(tr);
+        return;
+    }
+
+    tbody.innerHTML = memories.map(m => `
+        <tr onclick="viewMemoryDetail('${m.id}')" class="cursor-pointer">
+            <td class="font-mono text-xs text-muted">${m.id.substring(0, 8)}...</td>
+            <td>
+                <div class="truncate" style="max-width: 400px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                    <div style="font-weight:500; margin-bottom:4px;">${escapeHtml(m.content || '')}</div>
+                    <div class="text-xs text-muted">tags: ${(m.tags || []).join(', ')}</div>
+                </div>
+            </td>
+            <td>
+                <span class="badge badge-success">
+                    ${m.primarySector || 'general'}
+                </span>
+            </td>
+            <td class="text-sm font-mono text-muted">
+                ${(m.salience || 0).toFixed(2)}
+            </td>
+        </tr>
+    `).join('');
+}
+
+// --- Interactions ---
+
+function switchSection(sectionId) {
+    state.activeSection = sectionId;
+
+    document.querySelectorAll('.nav-link').forEach(el => {
+        el.classList.toggle('active', el.dataset.tab === sectionId);
+    });
+
+    document.querySelectorAll('.section').forEach(el => {
+        el.classList.remove('active');
+        if (el.id === sectionId) {
+            el.classList.add('active');
+            refreshCurrentSection();
+        }
     });
 }
 
-function updateStats() {
-    updateOverview();
+function refreshCurrentSection() {
+    const id = state.activeSection;
+    if (id === 'tab-overview') loadOverview();
+    if (id === 'tab-explorer') searchMemories(); // Load default view
+    if (id === 'tab-temporal') loadTemporal();
+    if (id === 'tab-sources') loadSources();
+    if (id === 'tab-admin-users') fetchAllUsers();
+    if (id === 'tab-dynamics') loadDynamics();
+    if (id === 'tab-security') {
+        loadAuditLogs();
+        loadWebhooks();
+    }
 }
 
-// --- Temporal Graph Manager ---
+function showToast(message, type = 'info') {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+
+    let icon = 'i';
+    if (type === 'success') icon = '✓';
+    if (type === 'error') icon = '!';
+
+    toast.innerHTML = `
+        <div class="toast-icon">${icon}</div>
+        <div class="toast-content">
+            <div class="toast-title">${type.charAt(0).toUpperCase() + type.slice(1)}</div>
+            <div class="toast-message">${escapeHtml(message)}</div>
+        </div>
+    `;
+
+    container.appendChild(toast);
+
+    // Animation
+    requestAnimationFrame(() => {
+        toast.style.opacity = '1';
+        toast.style.transform = 'translateY(0)';
+    });
+
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(10px) translateX(10px)';
+        setTimeout(() => toast.remove(), 300);
+    }, 4000);
+}
+
+// --- Data Loading ---
+
+async function loadOverview() {
+    try {
+        const [statsData, timelineData, metricsData] = await Promise.all([
+            apiCall('/dashboard/stats'),
+            apiCall('/dashboard/sectors/timeline?hours=24').catch(() => ({ timeline: [] })),
+            apiCall('/system/metrics').catch(() => ({ metrics: null }))
+        ]);
+
+        state.stats = { ...statsData, metrics: metricsData.metrics };
+        renderStats();
+        renderTimeline(timelineData.timeline);
+    } catch (e) {
+        // Silent fail for polling
+    }
+}
+
+async function searchMemories() {
+    const queryInput = document.getElementById('searchQuery');
+    const query = queryInput ? queryInput.value : '';
+
+    const btn = document.getElementById('btnSearch');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = 'Searching...';
+    }
+
+    try {
+        const res = await apiCall('/memory/query', {
+            method: 'POST',
+            body: JSON.stringify({
+                query: query,
+                k: 25
+            })
+        });
+        state.searchResults = res.matches || [];
+        renderMemoryTable(state.searchResults, 'explorerTable');
+    } catch (e) {
+        console.error("Search failed", e);
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerText = 'Search';
+        }
+    }
+}
+
+// --- Temporal Logic ---
+
 function setTemporalMode(mode) {
-    TEMP_MODE = mode;
-    const btnGraph = document.getElementById('btnModeGraph');
-    if (btnFacts) btnFacts.className = mode === 'facts' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
-    if (btnEdges) btnEdges.className = mode === 'edges' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
-    if (btnGraph) btnGraph.className = mode === 'graph' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
+    state.temporalMode = mode;
+    state.temporalPage = 1;
 
-    const pFacts = document.getElementById('panelFacts');
-    const pEdges = document.getElementById('panelEdges');
-    const pGraph = document.getElementById('panelGraph');
-    if (pFacts) pFacts.style.display = mode === 'facts' ? 'block' : 'none';
-    if (pEdges) pEdges.style.display = mode === 'edges' ? 'block' : 'none';
-    if (pGraph) pGraph.style.display = mode === 'graph' ? 'block' : 'none';
+    // UI Updates
+    document.getElementById('btnModeFacts').className = mode === 'facts' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
+    document.getElementById('btnModeEdges').className = mode === 'edges' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
+    document.getElementById('btnModeGraph').className = mode === 'graph' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-ghost';
 
-    TEMP_PAGE = 1;
+    document.getElementById('panelFacts').style.display = mode === 'facts' ? 'block' : 'none';
+    document.getElementById('panelEdges').style.display = mode === 'edges' ? 'block' : 'none';
+    document.getElementById('panelGraph').style.display = mode === 'graph' ? 'block' : 'none';
+
     loadTemporal();
 }
 
 async function loadTemporal() {
-    const el = document.getElementById('temporalSearch');
-    if (!el) return;
-    const query = el.value;
-    if (TEMP_MODE === 'facts') return loadFacts(query);
-    if (TEMP_MODE === 'edges') return loadEdges(query);
-    if (TEMP_MODE === 'graph') return loadGraph(query);
+    const mode = state.temporalMode;
+    const searchVal = document.getElementById('temporalSearch').value;
+
+    if (mode === 'facts') {
+        const endpoint = searchVal
+            ? `/temporal/search?pattern=${encodeURIComponent(searchVal)}&type=all`
+            : `/temporal/fact?limit=20&offset=${(state.temporalPage - 1) * 20}`;
+
+        const res = await apiCall(endpoint);
+        renderFactsTable(res.facts || []);
+    } else if (mode === 'edges') {
+        const endpoint = `/temporal/edge?limit=20&offset=${(state.temporalPage - 1) * 20}${searchVal ? '&sourceId=' + encodeURIComponent(searchVal) : ''}`;
+        const res = await apiCall(endpoint);
+        renderEdgesTable(res.edges || []);
+    } else if (mode === 'graph') {
+        loadGraphData();
+    }
 }
 
-// --- Graph Visualization (Vanilla JS Force Layout) ---
-let simulation = null;
+function renderFactsTable(facts) {
+    const tbody = document.getElementById('factsTable');
+    if (!tbody) return;
 
-async function loadGraph(query) {
+    if (facts.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center p-4 text-muted">No facts found</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = facts.map(f => `
+        <tr>
+            <td class="mono text-xs text-muted" title="${f.id}">${f.id.substring(0, 8)}...</td>
+            <td>${escapeHtml(f.subject)}</td>
+            <td><span class="badge" style="background: var(--accent-glow); color: var(--accent-primary);">${escapeHtml(f.predicate)}</span></td>
+            <td>${escapeHtml(f.object)}</td>
+            <td>${(f.confidence || 0).toFixed(2)}</td>
+            <td><span class="text-xs text-muted">${new Date(f.validFrom).toLocaleDateString()}</span></td>
+            <td class="text-xs text-muted">${new Date(f.lastUpdated || Date.now()).toLocaleDateString()}</td>
+            <td>
+                <button class="btn btn-danger btn-sm" onclick="deleteFact('${f.id}')">&times;</button>
+            </td>
+        </tr>
+    `).join('');
+
+    safeSetText('temporalPageNum', `Page ${state.temporalPage}`);
+}
+
+function renderEdgesTable(edges) {
+    const tbody = document.getElementById('edgesTable');
+    if (!tbody) return;
+
+    if (edges.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center p-4 text-muted">No edges found</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = edges.map(e => `
+        <tr>
+            <td class="mono text-xs text-muted" title="${e.id}">${e.id.substring(0, 8)}...</td>
+            <td class="mono text-xs" title="${e.sourceId}">${e.sourceId.substring(0, 10)}...</td>
+            <td class="mono text-xs" title="${e.targetId}">${e.targetId.substring(0, 10)}...</td>
+            <td><span class="badge badge-success">${escapeHtml(e.relationType)}</span></td>
+            <td>${(e.weight || 0).toFixed(2)}</td>
+             <td><span class="text-xs text-muted">${new Date(e.validFrom).toLocaleDateString()}</span></td>
+            <td class="text-xs text-muted">${new Date(e.lastUpdated || Date.now()).toLocaleDateString()}</td>
+            <td>
+                 <button class="btn btn-danger btn-sm" onclick="deleteEdge('${e.id}')">&times;</button>
+            </td>
+        </tr>
+    `).join('');
+
+    safeSetText('edgePageNum', `Page ${state.temporalPage}`);
+}
+
+async function loadGraphData() {
     const svg = document.getElementById('graphSvg');
     if (!svg) return;
 
-    // Clear previous simulation to prevent memory leak
-    if (simulation !== null) {
+    // Clear previous simulation if any
+    if (simulation) {
         clearInterval(simulation);
         simulation = null;
     }
 
-    svg.innerHTML = '<text x="50%" y="50%" fill="#777" text-anchor="middle" dominant-baseline="middle">Loading Graph...</text>';
+    svg.innerHTML = '<text x="50%" y="50%" fill="#777" text-anchor="middle" font-family="sans-serif">Loading graph data...</text>';
 
     try {
-        // Fetch snapshot of facts and edges for visualization
-        // Limit to prevent browser lag, maybe 100 facts + related edges
         const [fRes, eRes] = await Promise.all([
-            fetchAPI('/temporal/fact?limit=100'),
-            fetchAPI('/temporal/edge?limit=200')
+            apiCall('/temporal/fact?limit=50'),
+            apiCall('/temporal/edge?limit=100')
         ]);
 
-        const facts = fRes.facts || [];
-        const edges = eRes.edges || [];
-
-        if (facts.length === 0) {
-            svg.innerHTML = '<text x="50%" y="50%" fill="#777" text-anchor="middle" dominant-baseline="middle">No Data to Visualize</text>';
+        if (!fRes.facts?.length) {
+            svg.innerHTML = '<text x="50%" y="50%" fill="#777" text-anchor="middle" font-family="sans-serif">No temporal facts found</text>';
             return;
         }
 
-        renderForceGraph(svg, facts, edges);
-        // Note: simulation is stored in global variable for cleanup on reload
+        renderForceGraph(svg, fRes.facts, eRes.edges || []);
     } catch (e) {
-        const errorMsg = escapeHtml((e instanceof Error ? e.message : String(e)) || 'Unknown error');
-        svg.innerHTML = `<text x="50%" y="50%" fill="red" text-anchor="middle" dominant-baseline="middle">Error: ${errorMsg}</text>`;
+        svg.innerHTML = `<text x="50%" y="50%" fill="#ef4444" text-anchor="middle" font-family="sans-serif">Error: ${escapeHtml(e.message)}</text>`;
     }
 }
 
+// --- Config / Admin ---
+
+async function fetchAllUsers() {
+    try {
+        const data = await apiCall('/admin/users');
+        const tbody = document.getElementById('usersTable');
+        if (!tbody) return;
+
+        tbody.innerHTML = (data.users || []).map(u => `
+            <tr>
+                <td class="mono">${u.id}</td>
+                <td><span class="badge badge-neutral">${u.scopes?.join(', ') || 'user'}</span></td>
+                <td><span class="badge badge-success">Active</span></td>
+                <td>
+                    <button class="btn btn-danger btn-sm" onclick="deleteUser('${u.id}')">Delete</button>
+                </td>
+            </tr>
+        `).join('');
+    } catch (e) {
+        console.error(e);
+    }
+}
+
+async function loadSources() {
+    try {
+        const res = await apiCall('/source-configs');
+        const tbody = document.getElementById('sourcesTable');
+        if (!tbody) return;
+
+        tbody.innerHTML = (res.configs || []).map(s => `
+            <tr>
+                <td style="font-weight:600; text-transform:capitalize;">${s.type}</td>
+                <td><span class="badge ${s.status === 'enabled' ? 'badge-success' : 'badge-error'}">${s.status}</span></td>
+                <td class="text-secondary">${new Date(s.updatedAt).toLocaleDateString()}</td>
+                <td><button class="btn btn-danger btn-sm" onclick="deleteSource('${s.type}')">Del</button></td>
+            </tr>
+        `).join('');
+    } catch (e) {
+        console.error(e);
+    }
+}
+
+async function deleteSource(type) {
+    if (confirm(`Delete source config for ${type}?`)) {
+        await apiCall(`/source-configs/${type}`, { method: 'DELETE' });
+        refreshCurrentSection();
+        showToast('Source deleted', 'success');
+    }
+}
+
+async function deleteUser(id) {
+    if (confirm(`Delete user ${id} and ALL their data?`)) {
+        await apiCall(`/admin/users/${id}`, { method: 'DELETE' });
+        refreshCurrentSection();
+        showToast('User deleted', 'success');
+    }
+}
+
+async function deleteFact(id) {
+    if (confirm('Delete this fact?')) {
+        await apiCall(`/temporal/fact/${id}`, { method: 'DELETE' });
+        refreshCurrentSection();
+        showToast('Fact deleted', 'success');
+    }
+}
+
+async function deleteEdge(id) {
+    if (confirm('Delete this edge?')) {
+        await apiCall(`/temporal/edge/${id}`, { method: 'DELETE' });
+        refreshCurrentSection();
+        showToast('Edge deleted', 'success');
+    }
+}
+
+// --- Audit Logs ---
+
+async function loadAuditLogs() {
+    try {
+        const actionFilter = document.getElementById('auditFilterAction')?.value || '';
+        const limit = 50;
+        const res = await apiCall(`/audit-logs?limit=${limit}${actionFilter ? '&action=' + actionFilter : ''}`);
+
+        const tbody = document.getElementById('auditLogsTable');
+        if (!tbody) return;
+
+        if (!res.logs || res.logs.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">No audit logs found</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = res.logs.map(log => `
+            <tr>
+                <td class="text-xs text-muted font-mono">${new Date(log.timestamp).toLocaleString()}</td>
+                <td><span class="badge badge-neutral">${escapeHtml(log.userId)}</span></td>
+                <td><span class="badge badge-primary">${escapeHtml(log.action)}</span></td>
+                <td class="text-xs font-mono">${escapeHtml(log.resourceType || '-')}</td>
+                <td class="text-xs text-muted truncate" style="max-width: 200px;" title="${escapeHtml(JSON.stringify(log.details))}">${escapeHtml(JSON.stringify(log.details))}</td>
+            </tr>
+        `).join('');
+    } catch (e) {
+        console.error("Audit load failed", e);
+        showToast("Failed to load audit logs", "error");
+    }
+}
+
+// --- Webhooks ---
+
+async function loadWebhooks() {
+    try {
+        const res = await apiCall('/webhooks');
+        const tbody = document.getElementById('webhooksTable');
+        if (!tbody) return;
+
+        if (!res.hooks || res.hooks.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">No webhooks configured</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = res.hooks.map(hook => `
+            <tr>
+                <td class="font-mono text-xs">${hook.id}</td>
+                <td><div class="truncate" style="max-width:300px">${escapeHtml(hook.url)}</div></td>
+                <td>${(hook.events || []).map(e => `<span class="badge badge-xs">${e}</span>`).join(' ')}</td>
+                <td>${hook.active ? '<span class="text-success">Active</span>' : '<span class="text-error">Inactive</span>'}</td>
+                <td>
+                    <button class="btn btn-sm btn-ghost" onclick="testWebhook('${hook.id}')">Test</button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteWebhook('${hook.id}')">&times;</button>
+                </td>
+            </tr>
+        `).join('');
+    } catch (e) {
+        console.error("Webhook load failed", e);
+    }
+}
+
+function openWebhookModal() {
+    document.getElementById('webhookUrl').value = '';
+    document.getElementById('webhookEvents').value = '';
+    document.getElementById('webhookModal').classList.add('active');
+}
+
+async function saveWebhook() {
+    const url = document.getElementById('webhookUrl').value;
+    if (!url) return showToast("URL required", "error");
+
+    const eventsInput = document.getElementById('webhookEvents').value;
+    const events = eventsInput.split(',').map(s => s.trim()).filter(Boolean);
+
+    if (events.length === 0) return showToast("At least one event required", "error");
+
+    try {
+        await apiCall('/webhooks', {
+            method: 'POST',
+            body: JSON.stringify({ url, events })
+        });
+        showToast("Webhook created", "success");
+        closeModal('webhookModal');
+        loadWebhooks();
+    } catch (e) {
+        showToast(e.message, "error");
+    }
+}
+
+async function deleteWebhook(id) {
+    if (!confirm("Delete this webhook?")) return;
+    try {
+        await apiCall(`/webhooks/${id}`, { method: 'DELETE' });
+        loadWebhooks();
+        showToast("Webhook deleted", "success");
+    } catch (e) {
+        showToast(e.message, "error");
+    }
+}
+
+async function testWebhook(id) {
+    try {
+        showToast("Sending test event...", "info");
+        const res = await apiCall(`/webhooks/${id}/test`, { method: 'POST' });
+        if (res.result.success) {
+            showToast(`Delivery Success: ${res.result.status}`, "success");
+        } else {
+            showToast(`Delivery Failed: ${res.result.status} ${res.result.error}`, "error");
+        }
+    } catch (e) {
+        showToast(e.message, "error");
+    }
+}
+
+// --- Portability ---
+
+async function exportData() {
+    try {
+        showToast('Starting export...', 'info');
+        const btn = document.getElementById('btnExport');
+        const originalText = btn ? btn.innerHTML : 'Export';
+        if (btn) {
+            btn.disabled = true;
+            btn.innerText = 'Exporting...';
+        }
+
+        const res = await fetch(`${API_BASE}/admin/export`, {
+            headers: { 'Authorization': `Bearer ${API_KEY}` }
+        });
+
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || err.message || `Export failed: ${res.status}`);
+        }
+
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `openmemory-backup-${new Date().toISOString().split('T')[0]}.jsonl`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        a.remove();
+        showToast('Export complete', 'success');
+    } catch (e) {
+        console.error(e);
+        showToast('Export failed: ' + e.message, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+        }
+    }
+}
+
+async function importData() {
+    const input = document.getElementById('importFile');
+    const file = input.files?.[0];
+    if (!file) {
+        showToast('Please select a file first', 'error');
+        return;
+    }
+
+    if (!confirm(`Importing "${file.name}" will update system data. Continue?`)) {
+        return;
+    }
+
+    const btn = document.getElementById('btnConfirmImport');
+    const originalText = btn ? btn.innerHTML : 'Confirm Import';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerText = 'Importing...';
+    }
+
+    try {
+        showToast('Streaming import data...', 'info');
+
+        // Use FileReader to handle large text files for NDJSON
+        const reader = new FileReader();
+        reader.onload = async function (e) {
+            try {
+                const text = e.target.result;
+                const res = await apiCall('/admin/import', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-ndjson' },
+                    body: text
+                });
+
+                if (res.success) {
+                    showToast(`Import Success: ${res.stats.imported} records imported.`, 'success');
+                    setTimeout(() => refreshCurrentSection(), 1500);
+                } else {
+                    showToast("Import finished with issues.", "warning");
+                }
+            } catch (err) {
+                showToast("Import process failed: " + err.message, "error");
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = originalText;
+                }
+            }
+        };
+        reader.onerror = () => {
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = originalText;
+            }
+            showToast("Error reading file", 'error');
+        };
+        reader.readAsText(file);
+    } catch (e) {
+        console.error(e);
+        showToast('Import failed: ' + e.message, 'error');
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+        }
+    } finally {
+        input.value = '';
+    }
+}
+
+// --- Graph Viz Helper ---
+let simulation = null;
 function renderForceGraph(svg, facts, edges) {
+    // D3.js Force Directed Graph
+    if (!window.d3) {
+        svg.innerHTML = '<text x="50%" y="50%" fill="red" text-anchor="middle">D3.js Library Missing</text>';
+        return;
+    }
+
     svg.innerHTML = ''; // Clear
-    const width = svg.clientWidth;
-    const height = svg.clientHeight;
+    const width = svg.clientWidth || 800;
+    const height = svg.clientHeight || 600;
 
-    // Prepared Nodes & Links
-    // Nodes: Subjects and Objects
-    const nodes = new Map();
-    const addNode = (id, type) => {
-        if (!nodes.has(id)) nodes.set(id, { id, type, x: Math.random() * width, y: Math.random() * height, vx: 0, vy: 0 });
-    };
-
+    // Prepare Data
+    const nodeMap = new Map();
     facts.forEach(f => {
-        addNode(f.subject, 'subject');
-        addNode(f.object, 'object');
+        if (!nodeMap.has(f.subject)) nodeMap.set(f.subject, { id: f.subject, group: 'subject' });
+        if (!nodeMap.has(f.object)) nodeMap.set(f.object, { id: f.object, group: 'object' });
     });
+    const nodes = Array.from(nodeMap.values());
 
-    // Links: Predicates (Fact inner link) + Temporal Edges
     const links = [];
+    // Fact links
     facts.forEach(f => {
-        links.push({ source: f.subject, target: f.object, label: f.predicate, type: 'fact' });
+        links.push({ source: f.subject, target: f.object, type: 'fact', label: f.predicate });
     });
+    // Edge links
     edges.forEach(e => {
-        if (nodes.has(e.sourceId) && nodes.has(e.targetId)) {
-            links.push({ source: e.sourceId, target: e.targetId, label: e.relationType, type: 'edge' });
+        if (nodeMap.has(e.sourceId) && nodeMap.has(e.targetId)) {
+            links.push({ source: e.sourceId, target: e.targetId, type: 'edge', label: e.relationType });
         }
     });
 
-    const nodeList = Array.from(nodes.values());
+    // Color scale
+    const color = d3.scaleOrdinal(d3.schemeCategory10);
 
-    // Basic Simulation Loop
-    if (simulation) clearInterval(simulation);
+    // Simulation
+    if (simulation) simulation.stop();
 
-    // SVG Elements
-    // Create Arrows
-    const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
-    defs.innerHTML = `
-    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="28" refY="3.5" orient="auto">
-      <polygon points="0 0, 10 3.5, 0 7" fill="#555" />
-    </marker>
-  `;
-    svg.appendChild(defs);
+    simulation = d3.forceSimulation(nodes)
+        .force("link", d3.forceLink(links).id(d => d.id).distance(100))
+        .force("charge", d3.forceManyBody().strength(-300))
+        .force("center", d3.forceCenter(width / 2, height / 2))
+        .force("collide", d3.forceCollide(30));
 
-    const linkG = document.createElementNS("http://www.w3.org/2000/svg", "g");
-    svg.appendChild(linkG);
-    const nodeG = document.createElementNS("http://www.w3.org/2000/svg", "g");
-    svg.appendChild(nodeG);
-    const labelG = document.createElementNS("http://www.w3.org/2000/svg", "g");
-    svg.appendChild(labelG);
+    const svgSel = d3.select(svg);
 
-    // Render
-    const linkEls = links.map(l => {
-        const el = document.createElementNS("http://www.w3.org/2000/svg", "line");
-        el.setAttribute("stroke", l.type === 'fact' ? "#3b82f6" : "#10b981");
-        el.setAttribute("stroke-opacity", "0.6");
-        el.setAttribute("stroke-width", "1.5");
-        el.setAttribute("marker-end", "url(#arrowhead)");
-        linkG.appendChild(el);
-        return { ...l, el };
+    // Markers
+    const defs = svgSel.append("defs");
+    defs.append("marker")
+        .attr("id", "arrowhead")
+        .attr("viewBox", "0 -5 10 10")
+        .attr("refX", 18) // Offset for node radius
+        .attr("refY", 0)
+        .attr("markerWidth", 6)
+        .attr("markerHeight", 6)
+        .attr("orient", "auto")
+        .append("path")
+        .attr("d", "M0,-5L10,0L0,5")
+        .attr("fill", "#666");
+
+    // Links
+    const link = svgSel.append("g")
+        .attr("stroke", "#999")
+        .attr("stroke-opacity", 0.6)
+        .selectAll("line")
+        .data(links)
+        .join("line")
+        .attr("stroke-width", d => Math.sqrt(d.value || 1) + 1)
+        .attr("marker-end", "url(#arrowhead)");
+
+    // Nodes
+    // SVG Helper
+    const node = svgSel.append("g")
+        .attr("stroke", "#fff")
+        .attr("stroke-width", 1.5)
+        .selectAll("circle")
+        .data(nodes)
+        .join("circle")
+        .attr("r", 8)
+        .attr("fill", d => color(d.group))
+        .call(d3.drag()
+            .on("start", dragstarted)
+            .on("drag", dragged)
+            .on("end", dragended));
+
+    node.append("title")
+        .text(d => d.id);
+
+    // Labels
+    const label = svgSel.append("g")
+        .attr("class", "labels")
+        .selectAll("text")
+        .data(nodes)
+        .join("text")
+        .attr("dx", 12)
+        .attr("dy", ".35em")
+        .attr("fill", "#ccc")
+        .text(d => d.id)
+        .style("font-size", "10px")
+        .style("pointer-events", "none");
+
+    // Ticks
+    simulation.on("tick", () => {
+        link
+            .attr("x1", d => d.source.x)
+            .attr("y1", d => d.source.y)
+            .attr("x2", d => d.target.x)
+            .attr("y2", d => d.target.y);
+
+        node
+            .attr("cx", d => d.x)
+            .attr("cy", d => d.y);
+
+        label
+            .attr("x", d => d.x)
+            .attr("y", d => d.y);
     });
 
-    const nodeEls = nodeList.map(n => {
-        const el = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-        el.setAttribute("r", "15"); // Bigger nodes
-        el.setAttribute("fill", n.type === 'subject' ? "#6366f1" : "#a855f7");
-        el.setAttribute("stroke", "#fff");
-        el.setAttribute("stroke-width", "2");
-        // Simple drag
-        el.addEventListener('mousedown', (e) => startDrag(e, n));
-        nodeG.appendChild(el);
-
-        const txt = document.createElementNS("http://www.w3.org/2000/svg", "text");
-        txt.setAttribute("fill", "#ccc");
-        txt.setAttribute("font-size", "10px");
-        txt.setAttribute("text-anchor", "middle");
-        txt.setAttribute("dy", "25");
-        txt.textContent = n.id.length > 15 ? n.id.substring(0, 12) + "..." : n.id;
-        labelG.appendChild(txt);
-
-        return { ...n, el, txt };
-    });
-
-    // Physics Constants
-    const k = 100; // Repulsion constant
-    const c = 0.05; // Spring constant
-    const damping = 0.85;
-
-    let dragNode = null;
-
-    function startDrag(e, node) {
-        dragNode = node;
-        svg.addEventListener('mousemove', onDrag);
-        svg.addEventListener('mouseup', stopDrag);
-    }
-    function onDrag(e) {
-        if (!dragNode) return;
-        const rect = svg.getBoundingClientRect();
-        dragNode.x = e.clientX - rect.left;
-        dragNode.y = e.clientY - rect.top;
-        dragNode.vx = 0; dragNode.vy = 0;
-    }
-    function stopDrag() {
-        dragNode = null;
-        svg.removeEventListener('mousemove', onDrag);
-        svg.removeEventListener('mouseup', stopDrag);
+    function dragstarted(event) {
+        if (!event.active) simulation.alphaTarget(0.3).restart();
+        event.subject.fx = event.subject.x;
+        event.subject.fy = event.subject.y;
     }
 
-    simulation = setInterval(() => {
-        // Repulsion
-        for (let i = 0; i < nodeList.length; i++) {
-            for (let j = i + 1; j < nodeList.length; j++) {
-                const a = nodeList[i];
-                const b = nodeList[j];
-                const dx = a.x - b.x;
-                const dy = a.y - b.y;
-                const distSq = dx * dx + dy * dy + 0.1;
-                const dist = Math.sqrt(distSq);
-                const force = k * k / distSq;
-                const fx = (dx / dist) * force;
-                const fy = (dy / dist) * force;
-                a.vx += fx; a.vy += fy;
-                b.vx -= fx; b.vy -= fy;
-            }
-        }
+    function dragged(event) {
+        event.subject.fx = event.x;
+        event.subject.fy = event.y;
+    }
 
-        // Spring
-        linkEls.forEach(l => {
-            const s = nodeList.find(n => n.id === l.source);
-            const t = nodeList.find(n => n.id === l.target);
-            if (!s || !t) return;
-            const dx = t.x - s.x;
-            const dy = t.y - s.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist === 0) return; // Guard against division by zero
-            const force = (dist - 100) * c; // Rest length 100
-            const fx = (dx / dist) * force;
-            const fy = (dy / dist) * force;
-            s.vx += fx; s.vy += fy;
-            t.vx -= fx; t.vy -= fy;
-        });
-
-        // Center Gravity
-        nodeList.forEach(n => {
-            n.vx += (width / 2 - n.x) * 0.01;
-            n.vy += (height / 2 - n.y) * 0.01;
-        });
-
-        // Update
-        nodeList.forEach(n => {
-            if (n !== dragNode) {
-                n.vx *= damping;
-                n.vy *= damping;
-                n.x += n.vx;
-                n.y += n.vy;
-            }
-            // Bounds
-            n.x = Math.max(20, Math.min(width - 20, n.x));
-            n.y = Math.max(20, Math.min(height - 20, n.y));
-
-            n.el.setAttribute("cx", n.x);
-            n.el.setAttribute("cy", n.y);
-            n.txt.setAttribute("x", n.x);
-            n.txt.setAttribute("y", n.y + 15); // Offset label
-        });
-
-        linkEls.forEach(l => {
-            const s = nodeList.find(n => n.id === l.source);
-            const t = nodeList.find(n => n.id === l.target);
-            if (s && t) {
-                l.el.setAttribute("x1", s.x);
-                l.el.setAttribute("y1", s.y);
-                l.el.setAttribute("x2", t.x);
-                l.el.setAttribute("y2", t.y);
-            }
-        });
-
-    }, 1000 / 30); // 30 FPS
+    function dragended(event) {
+        if (!event.active) simulation.alphaTarget(0);
+        event.subject.fx = null;
+        event.subject.fy = null;
+    }
 }
 
-function changeTemporalPage(delta) {
-    TEMP_PAGE = Math.max(1, TEMP_PAGE + delta);
-    loadTemporal();
+// --- Skeleton Helpers ---
+function getSkeletonRows(cols = 4, rows = 5) {
+    return Array(rows).fill(0).map(() => `
+        <tr class="skeleton-row">
+            ${Array(cols).fill(0).map(() => `
+                <td><div class="skeleton skeleton-text" style="width: ${Math.random() * 50 + 40}%"></div></td>
+            `).join('')}
+        </tr>
+    `).join('');
+}
+
+function safeSetText(id, text) {
+    const el = document.getElementById(id);
+    if (el) el.innerText = text;
 }
 
 function escapeHtml(text) {
     if (!text) return '';
-    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
-}
-
-function formatValidity(from, to) {
-    const f = new Date(from).toLocaleDateString();
-    const t = to ? new Date(to).toLocaleDateString() : 'Present';
-    return `<span style="font-size:0.85em">${f} <br>→ ${t}</span>`;
-}
-
-async function loadFacts(query) {
-    const tbody = document.getElementById('factsTable');
-    if (!tbody) return;
-    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; padding: 20px;">Loading...</td></tr>';
-
-    try {
-        let endpoint = '/temporal/fact';
-        const params = { limit: TEMP_LIMIT, offset: (TEMP_PAGE - 1) * TEMP_LIMIT };
-
-        if (query) {
-            endpoint = '/temporal/search';
-            params.pattern = query;
-            params.type = 'all';
-        }
-
-        const qs = new URLSearchParams(params).toString();
-        const res = await fetchAPI(endpoint + '?' + qs);
-        const list = res.facts || [];
-        tbody.innerHTML = '';
-
-        if (list.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; padding: 20px; color: var(--text-tertiary);">No facts found</td></tr>';
-            return;
-        }
-
-        list.forEach(f => {
-            const tr = document.createElement('tr');
-            tr.innerHTML = `
-                <td class="mono text-xs text-muted" title="${f.id}">${f.id.substring(0, 8)}...</td>
-                <td>${escapeHtml(f.subject)}</td>
-                <td><span class="badge" style="background: var(--accent-glow); color: var(--accent-primary);">${escapeHtml(f.predicate)}</span></td>
-                <td>${escapeHtml(f.object)}</td>
-                <td>${(f.confidence || 0).toFixed(2)}</td>
-                <td>${formatValidity(f.validFrom, f.validTo)}</td>
-                <td class="text-xs text-muted">${new Date(f.lastUpdated || Date.now()).toLocaleDateString()}</td>
-                <td>
-                    <button class="btn btn-ghost btn-sm" onclick='editFact(${JSON.stringify(f).replace(/'/g, "&#39;")})'>Edit</button>
-                    <button class="btn btn-danger btn-sm" style="padding: 2px 6px;" onclick="killFact('${f.id}')">&times;</button>
-                </td>
-            `;
-            tbody.appendChild(tr);
-        });
-
-        const pgNum = document.getElementById('temporalPageNum');
-        if (pgNum) pgNum.innerText = `Page ${TEMP_PAGE}`;
-    } catch (e) {
-        tbody.innerHTML = `<tr><td colspan="7" style="color:var(--error); text-align:center;">Error: ${e.message}</td></tr>`;
-    }
-}
-
-async function loadEdges(query) {
-    const tbody = document.getElementById('edgesTable');
-    if (!tbody) return;
-    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; padding: 20px;">Loading...</td></tr>';
-
-    try {
-        const params = { limit: TEMP_LIMIT, offset: (TEMP_PAGE - 1) * TEMP_LIMIT };
-        if (query) {
-            params.sourceId = query;
-        }
-
-        const qs = new URLSearchParams(params).toString();
-        const res = await fetchAPI('/temporal/edge?' + qs);
-        const list = res.edges || [];
-        tbody.innerHTML = '';
-
-        if (list.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; padding: 20px; color: var(--text-tertiary);">No edges found</td></tr>';
-            return;
-        }
-
-        list.forEach(e => {
-            const tr = document.createElement('tr');
-            tr.innerHTML = `
-                <td class="mono text-xs text-muted" title="${e.id}">${e.id.substring(0, 8)}...</td>
-                <td class="mono text-xs">${escapeHtml(e.sourceId.substring(0, 12))}...</td>
-                <td class="mono text-xs">${escapeHtml(e.targetId.substring(0, 12))}...</td>
-                <td><span class="badge" style="background: var(--success-bg); color: var(--success);">${escapeHtml(e.relationType)}</span></td>
-                <td>${(e.weight || 0).toFixed(2)}</td>
-                <td>${formatValidity(e.validFrom, e.validTo)}</td>
-                <td class="text-xs text-muted">${new Date(e.lastUpdated || Date.now()).toLocaleDateString()}</td>
-                <td>
-                    <button class="btn btn-ghost btn-sm" onclick='editEdge(${JSON.stringify(e).replace(/'/g, "&#39;")})'>Edit</button>
-                    <button class="btn btn-danger btn-sm" style="padding: 2px 6px;" onclick="killEdge('${e.id}')">&times;</button>
-                </td>
-            `;
-            tbody.appendChild(tr);
-        });
-        const pgNum = document.getElementById('edgePageNum');
-        if (pgNum) pgNum.innerText = `Page ${TEMP_PAGE}`;
-    } catch (e) {
-        tbody.innerHTML = `<tr><td colspan="7" style="color:var(--error); text-align:center;">Error: ${e.message}</td></tr>`;
-    }
-}
-
-// --- Modals & CRUD ---
-function openTemporalModal() {
-    if (TEMP_MODE === 'facts') openFactModal();
-    else openEdgeModal();
+    if (typeof text !== 'string') text = String(text);
+    return text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
 }
 
 function closeModal(id) {
     document.getElementById(id).classList.remove('active');
 }
 
-function openFactModal(fact = null) {
-    const m = document.getElementById('factModal');
-    if (!m) return;
-    m.classList.add('active');
-    if (fact) {
-        document.getElementById('factModalTitle').innerText = "Edit Temporal Fact";
-        document.getElementById('factId').value = fact.id;
-        document.getElementById('factSubject').value = fact.subject;
-        document.getElementById('factSubject').disabled = true;
-        document.getElementById('factPredicate').value = fact.predicate;
-        document.getElementById('factPredicate').disabled = true;
-        document.getElementById('factObject').value = fact.object;
-        document.getElementById('factObject').disabled = true;
-        document.getElementById('factConfidence').value = fact.confidence;
-        document.getElementById('factMetadata').value = fact.metadata ? JSON.stringify(fact.metadata, null, 2) : '';
-    } else {
-        document.getElementById('factModalTitle').innerText = "New Temporal Fact";
-        document.getElementById('factId').value = '';
-        document.getElementById('factSubject').value = '';
-        document.getElementById('factSubject').disabled = false;
-        document.getElementById('factPredicate').value = '';
-        document.getElementById('factPredicate').disabled = false;
-        document.getElementById('factObject').value = '';
-        document.getElementById('factObject').disabled = false;
-        document.getElementById('factConfidence').value = '1.0';
-        document.getElementById('factMetadata').value = '';
-    }
-}
+// --- Initialization ---
 
-const factForm = document.getElementById('factForm');
-if (factForm) {
-    factForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const id = document.getElementById('factId').value;
-        const body = {
-            subject: document.getElementById('factSubject').value,
-            predicate: document.getElementById('factPredicate').value,
-            object: document.getElementById('factObject').value,
-            confidence: parseFloat(document.getElementById('factConfidence').value),
-            metadata: document.getElementById('factMetadata').value ? JSON.parse(document.getElementById('factMetadata').value) : undefined
-        };
+async function initDashboard() {
+    if (!checkAuth()) return;
 
-        try {
-            if (id) {
-                await fetchAPI(`/temporal/fact/${id}`, 'PATCH', { confidence: body.confidence, metadata: body.metadata });
-            } else {
-                await fetchAPI('/temporal/fact', 'POST', body);
-            }
-            closeModal('factModal');
-            loadFacts();
-        } catch (err) {
-            alert("Operation failed: " + err.message);
-        }
+    // Initial Render
+    // Show skeletons on metrics
+    safeSetText('statTotal', '...');
+    safeSetText('statHistorical', '...');
+
+    // Bind UI
+    document.querySelectorAll('.nav-link').forEach(link => {
+        link.addEventListener('click', (e) => {
+            e.preventDefault();
+            const sectionId = link.dataset.tab;
+            if (sectionId) switchSection(sectionId);
+        });
     });
-}
 
-function editFact(fact) {
-    openFactModal(fact);
-}
+    const menuToggle = document.getElementById('menuToggle');
+    const aside = document.querySelector('aside');
+    const overlay = document.getElementById('mobileOverlay');
 
-async function killFact(id) {
-    if (!confirm("Invalidate this fact? It will be marked as historical.")) return;
-    await fetchAPI(`/temporal/fact/${id}`, 'DELETE', { validTo: new Date().toISOString() });
-    loadFacts();
-}
-
-function openEdgeModal(edge = null) {
-    const m = document.getElementById('edgeModal');
-    if (!m) return;
-    m.classList.add('active');
-    if (edge) {
-        document.getElementById('edgeModalTitle').innerText = "Edit Temporal Edge";
-        document.getElementById('edgeId').value = edge.id;
-        document.getElementById('edgeSource').value = edge.sourceId;
-        document.getElementById('edgeTarget').value = edge.targetId;
-        document.getElementById('edgeRelation').value = edge.relationType;
-        document.getElementById('edgeSource').disabled = true;
-        document.getElementById('edgeTarget').disabled = true;
-        document.getElementById('edgeRelation').disabled = true;
-        document.getElementById('edgeWeight').value = edge.weight;
-    } else {
-        document.getElementById('edgeModalTitle').innerText = "New Temporal Edge";
-        document.getElementById('edgeId').value = '';
-        document.getElementById('edgeSource').value = '';
-        document.getElementById('edgeTarget').value = '';
-        document.getElementById('edgeRelation').value = '';
-        document.getElementById('edgeSource').disabled = false;
-        document.getElementById('edgeTarget').disabled = false;
-        document.getElementById('edgeRelation').disabled = false;
-        document.getElementById('edgeWeight').value = '1.0';
+    if (menuToggle) {
+        menuToggle.addEventListener('click', () => {
+            aside.classList.toggle('active');
+            overlay.classList.toggle('active');
+        });
     }
-}
 
-const edgeForm = document.getElementById('edgeForm');
-if (edgeForm) {
-    edgeForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const id = document.getElementById('edgeId').value;
-        const body = {
-            sourceId: document.getElementById('edgeSource').value,
-            targetId: document.getElementById('edgeTarget').value,
-            relationType: document.getElementById('edgeRelation').value,
-            weight: parseFloat(document.getElementById('edgeWeight').value)
-        };
-        try {
-            if (id) {
-                await fetchAPI(`/temporal/edge/${id}`, 'PATCH', { weight: body.weight });
-            } else {
-                await fetchAPI('/temporal/edge', 'POST', body);
-            }
-            closeModal('edgeModal');
-            loadEdges();
-        } catch (err) {
-            alert("Operation failed: " + err.message);
+    if (overlay) {
+        overlay.addEventListener('click', () => {
+            aside.classList.remove('active');
+            overlay.classList.remove('active');
+        });
+    }
+
+    bindAuth();
+    loadOverview();
+
+    // Poll for stats every 5s if on overview
+    setInterval(() => {
+        if (state.activeSection === 'tab-overview' && API_KEY) {
+            loadOverview();
         }
-    });
+    }, 5000);
+
+    // Check admin status for nav
+    checkAdminStatus();
 }
 
-function editEdge(edge) {
-    openEdgeModal(edge);
-}
-
-async function killEdge(id) {
-    if (!confirm("Invalidate this edge? It will be marked as historical.")) return;
-    await fetchAPI(`/temporal/edge/${id}`, 'DELETE', { validTo: new Date().toISOString() });
-    loadEdges();
-}
-
-// Window Exports
-window.editFact = editFact;
-window.editEdge = editEdge;
-window.killFact = killFact;
-window.killEdge = killEdge;
-window.deleteSource = deleteSource;
-window.deleteUser = deleteUser;
-window.searchMemories = searchMemories;
-window.updateStats = updateStats;
-window.showAddSourceModal = showAddSourceModal;
-window.loadTemporal = loadTemporal;
+// Global scope
 window.setTemporalMode = setTemporalMode;
-window.changeTemporalPage = changeTemporalPage;
-window.closeModal = closeModal;
-window.openTemporalModal = openTemporalModal;
-window.fetchAllUsers = fetchAllUsers;
+window.changeTemporalPage = (delta) => {
+    state.temporalPage = Math.max(1, state.temporalPage + delta);
+    loadTemporal();
+};
+window.viewMemoryDetail = async (id) => {
+    try {
+        const res = await apiCall(`/memory/${id}`);
+        // Populate modal
+        safeSetText('memModalTitle', `Memory ${id.substring(0, 8)}`);
+        safeSetText('memContent', res.content || '');
+        safeSetText('memSector', res.primarySector || 'unknown');
+        safeSetText('memSalience', (res.salience || 0).toFixed(2));
+        safeSetText('memCreated', new Date(res.createdAt).toLocaleString());
+        safeSetText('memUpdated', new Date(res.lastAccessed).toLocaleString());
+
+        const tags = document.getElementById('memTags');
+        tags.innerHTML = (res.tags || []).map(t => `<span class="badge badge-neutral">#${t}</span>`).join('');
+
+        // Delete button
+        const btnDel = document.getElementById('btnDeleteMemory');
+        if (btnDel) {
+            btnDel.onclick = () => deleteMemory(id);
+        }
+
+        document.getElementById('memoryModal').classList.add('active');
+    } catch (e) {
+        showToast("Failed to load memory details", "error");
+    }
+};
+
+window.onload = initDashboard;
+
+
+
+/**
+ * Deletes a memory permanently.
+ * Common entry point for both table and detail view.
+ */
+async function deleteMemory(id) {
+    if (confirm("Are you sure you want to delete this memory? This cannot be undone.")) {
+        try {
+            await apiCall(`/memory/${id}`, { method: 'DELETE' });
+            showToast("Memory deleted", "success");
+            closeModal('memoryModal');
+            refreshCurrentSection();
+        } catch (e) {
+            showToast("Failed to delete memory: " + e.message, "error");
+        }
+    }
+}
+
+function closeModal(id) {
+    document.getElementById(id).classList.remove('active');
+}
+
+function changeTemporalPage(delta) {
+    if (state.temporalPage + delta > 0) {
+        state.temporalPage += delta;
+        loadTemporal();
+    }
+}
+
+
+// --- Dynamics Visualization ---
+
+async function loadDynamics() {
+    try {
+        const [constants, graphData] = await Promise.all([
+            apiCall('/dynamics/constants'),
+            apiCall('/dynamics/waypoints/graph?limit=500')
+        ]);
+
+        if (constants && constants.success) {
+            const c = constants.constants;
+            safeSetText('dynEntropy', (c.lambdaOneFastDecay || 0).toFixed(4)); // Placeholder for entropy
+            safeSetText('dynResonance', (c.thetaConsolidationCoefficient || 0).toFixed(4));
+        }
+
+        if (graphData && graphData.success) {
+            safeSetText('dynWaypoints', graphData.stats.totalNodes);
+            renderDynamicsGraph(graphData.nodes);
+        }
+    } catch (e) {
+        console.error("Dynamics Load Error", e);
+        showToast("Failed to load dynamics", "error");
+    }
+}
+
+function renderDynamicsGraph(nodesData) {
+    const container = document.getElementById('dynamicsGraphBox');
+    container.innerHTML = '';
+    const w = container.offsetWidth;
+    const h = container.offsetHeight;
+
+    const svg = d3.select(container).append("svg")
+        .attr("width", w)
+        .attr("height", h)
+        .call(d3.zoom().on("zoom", (event) => g.attr("transform", event.transform)))
+        .append("g");
+
+    const g = svg.append("g");
+
+    // Process Data
+    const nodes = nodesData.map(n => ({ id: n.memoryId, ...n }));
+    const links = [];
+    nodes.forEach(n => {
+        if (n.connections) {
+            n.connections.forEach(c => {
+                links.push({ source: n.id, target: c.targetId, weight: c.weight });
+            });
+        }
+    });
+
+    const simulation = d3.forceSimulation(nodes)
+        .force("link", d3.forceLink(links).id(d => d.id).distance(100))
+        .force("charge", d3.forceManyBody().strength(-200))
+        .force("center", d3.forceCenter(w / 2, h / 2));
+
+    const link = g.append("g")
+        .attr("stroke", "rgba(255,255,255,0.1)")
+        .selectAll("line")
+        .data(links)
+        .join("line")
+        .attr("stroke-width", d => Math.max(1, d.weight * 5));
+
+    const node = g.append("g")
+        .attr("fill", "var(--accent-secondary)")
+        .selectAll("circle")
+        .data(nodes)
+        .join("circle")
+        .attr("r", 6)
+        .call(drag(simulation));
+
+    node.append("title")
+        .text(d => d.id);
+
+    simulation.on("tick", () => {
+        link
+            .attr("x1", d => d.source.x)
+            .attr("y1", d => d.source.y)
+            .attr("x2", d => d.target.x)
+            .attr("y2", d => d.target.y);
+
+        node
+            .attr("cx", d => d.x)
+            .attr("cy", d => d.y);
+    });
+
+    function drag(sim) {
+        function dragstarted(event) {
+            if (!event.active) sim.alphaTarget(0.3).restart();
+            event.subject.fx = event.subject.x;
+            event.subject.fy = event.subject.y;
+        }
+
+        function dragged(event) {
+            event.subject.fx = event.x;
+            event.subject.fy = event.y;
+        }
+
+        function dragended(event) {
+            if (!event.active) sim.alphaTarget(0);
+            event.subject.fx = null;
+            event.subject.fy = null;
+        }
+
+        return d3.drag()
+            .on("start", dragstarted)
+            .on("drag", dragged)
+            .on("end", dragended);
+    }
+}
+
+// --- Offline Mode Handling ---
+
+window.addEventListener('offline', () => {
+    showToast('Network connection lost. Offline mode active.', 'error');
+    document.body.classList.add('offline-mode');
+    const badge = document.querySelector('.status-text span');
+    if (badge) {
+        badge.innerText = 'Offline';
+        badge.style.color = 'var(--error)';
+        badge.parentElement.innerHTML = 'Status: <span style="color: var(--error);">Offline</span>';
+    }
+});
+
+window.addEventListener('online', () => {
+    showToast('Network connection restored.', 'success');
+    document.body.classList.remove('offline-mode');
+    // Refresh data to ensure sync
+    const badge = document.querySelector('.status-text span');
+    if (badge) {
+        badge.innerText = 'Online';
+        badge.style.color = 'var(--success)';
+        badge.parentElement.innerHTML = 'Status: <span style="color: var(--success);">Online</span> <span id="connTime" class="mono" style="margin-left: 8px; opacity: 0.5;">0ms</span>';
+    }
+    if (state.activeSection) refreshCurrentSection();
+});
+
+// --- Init ---
+
+
+
+async function checkAdminStatus() {
+    try {
+        const res = await apiCall('/admin/users?l=1');
+        if (res && res.users) {
+            const adminNav = document.getElementById('adminNav');
+            if (adminNav) adminNav.style.display = 'block';
+        }
+    } catch {
+        // Not admin or auth failed
+    }
+}
+
+// Ensure global exposure
+window.loadDynamics = loadDynamics;
+

@@ -7,6 +7,8 @@ export interface SecurityContext {
     scopes?: string[];
     isAdmin?: boolean;
     requestId?: string;
+    ip?: string;
+    userAgent?: string;
 }
 
 export const contextStorage = new AsyncLocalStorage<SecurityContext>();
@@ -54,10 +56,11 @@ export const verifyContext = (
     }
 
     // Context exists but has no userId (e.g., anonymous request or partially initialized)
-    // We allow the arg but log it for auditing if it's a specific user request
-    if (normalizedArg) {
-        // This is a candidate for security alerts in a real system
-        // console.warn(`[SECURITY] [req:${rid}] Anonymous context accessing data for user: ${normalizedArg}`);
+    // If requester tries to access a SPECIFIC user without having one themselves, DENY unless admin.
+    if (normalizedArg && !ctx.isAdmin) {
+        throw new Error(
+            `Unauthorized [req:${rid}]: Anonymous context cannot access data for specific user ${argUserId}`,
+        );
     }
 
     return normalizedArg;

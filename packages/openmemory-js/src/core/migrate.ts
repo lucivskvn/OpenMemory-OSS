@@ -2,6 +2,8 @@
  * @file Database Migration Engine for OpenMemory.
  * Handles schema evolution across SQLite and Postgres backends with semver tracking.
  */
+
+import * as path from "node:path";
 import { Database } from "bun:sqlite";
 import { Pool } from "pg";
 
@@ -9,10 +11,12 @@ import { now } from "../utils";
 import { logger } from "../utils/logger";
 import { env } from "./cfg";
 import { DistributedLock } from "../utils/lock";
+import { v1_11_0 } from "./migrations/v1.11.0";
 
 const getIsPg = () => env.metadataBackend === "postgres";
 
 const log = (msg: string) => logger.info(`[Migrate] ${msg}`);
+const start = Date.now();
 
 interface Migration {
     version: string;
@@ -22,7 +26,7 @@ interface Migration {
 }
 
 // Use placeholders {m}, {v}, {w}, {u}, {tf}, {te} for tables to ensure consistency with core/db.ts
-const migrations: Migration[] = [
+export const migrations: Migration[] = [
     {
         version: "1.0.0",
         desc: "Initial Schema (Parity with openmemory-py 001)",
@@ -232,6 +236,216 @@ const migrations: Migration[] = [
             `ALTER TABLE {te} ADD CONSTRAINT check_te_valid_range CHECK (valid_to IS NULL OR valid_to >= valid_from)`,
         ],
     },
+    {
+        version: "1.11.0",
+        desc: "v2.4.0 Production Readiness Schema",
+        sqlite: [
+            /* 1.1 Encryption Key Rotation Support */
+            `ALTER TABLE {m} ADD COLUMN encryption_key_version INTEGER DEFAULT 1`,
+            `CREATE INDEX IF NOT EXISTS idx_memories_key_version ON {m}(encryption_key_version)`,
+            `CREATE TABLE IF NOT EXISTS {ekr} (
+                id TEXT PRIMARY KEY,
+                old_version INTEGER NOT NULL,
+                new_version INTEGER NOT NULL,
+                status TEXT DEFAULT 'pending',
+                started_at INTEGER,
+                completed_at INTEGER,
+                error TEXT
+            )`,
+            `ALTER TABLE {s} ADD COLUMN user_id TEXT`,
+
+            /* 1.2 Audit Logging Tables */
+            `CREATE TABLE IF NOT EXISTS {al} (
+                id TEXT PRIMARY KEY,
+                user_id TEXT,
+                action TEXT NOT NULL,
+                resource_type TEXT NOT NULL,
+                resource_id TEXT,
+                ip_address TEXT,
+                user_agent TEXT,
+                metadata TEXT,
+                timestamp INTEGER NOT NULL
+            )`,
+            `CREATE INDEX IF NOT EXISTS idx_audit_user ON {al}(user_id, timestamp DESC)`,
+            `CREATE INDEX IF NOT EXISTS idx_audit_action ON {al}(action, timestamp DESC)`,
+            `CREATE INDEX IF NOT EXISTS idx_audit_resource ON {al}(resource_type, resource_id)`,
+
+            /* 1.3 Webhook System Tables */
+            `CREATE TABLE IF NOT EXISTS {wh} (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                url TEXT NOT NULL,
+                events TEXT NOT NULL,
+                secret TEXT NOT NULL,
+                status TEXT DEFAULT 'active',
+                retry_count INTEGER DEFAULT 0,
+                last_triggered INTEGER,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )`,
+            `CREATE INDEX IF NOT EXISTS idx_webhooks_user ON {wh}(user_id)`,
+            `CREATE INDEX IF NOT EXISTS idx_webhooks_status ON {wh}(status)`,
+
+            `CREATE TABLE IF NOT EXISTS {whl} (
+                id TEXT PRIMARY KEY,
+                webhook_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                status TEXT NOT NULL,
+                response_code INTEGER,
+                response_body TEXT,
+                attempt_count INTEGER DEFAULT 1,
+                next_retry INTEGER,
+                created_at INTEGER NOT NULL,
+                completed_at INTEGER,
+                FOREIGN KEY(webhook_id) REFERENCES {wh}(id) ON DELETE CASCADE
+            )`,
+            `CREATE INDEX IF NOT EXISTS idx_webhook_log_webhook ON {whl}(webhook_id, created_at DESC)`,
+            `CREATE INDEX IF NOT EXISTS idx_webhook_log_status ON {whl}(status, next_retry)`,
+
+            /* 1.4 Performance Optimization Indexes */
+            `CREATE INDEX IF NOT EXISTS idx_temporal_facts_subject_time ON {tf}(subject, valid_from, valid_to) WHERE valid_to IS NULL`,
+            `CREATE INDEX IF NOT EXISTS idx_temporal_facts_predicate_time ON {tf}(predicate, valid_from DESC)`,
+            `CREATE INDEX IF NOT EXISTS idx_waypoints_user_weight ON {w}(user_id, weight DESC)`,
+
+            /* 1.5 Rate Limiting Tables */
+            `CREATE TABLE IF NOT EXISTS {rl} (
+                key TEXT PRIMARY KEY,
+                window_start INTEGER NOT NULL,
+                request_count INTEGER DEFAULT 0,
+                cost_units INTEGER DEFAULT 0,
+                last_request INTEGER NOT NULL
+            )`,
+            `CREATE INDEX IF NOT EXISTS idx_rate_limit_window ON {rl}(window_start)`,
+
+            /* 1.6 Configuration Tables */
+            `ALTER TABLE {m} ADD COLUMN generated_summary TEXT`,
+            `ALTER TABLE {v} ADD COLUMN metadata TEXT`,
+            `CREATE TABLE IF NOT EXISTS {cfg} (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                type TEXT NOT NULL,
+                description TEXT,
+                updated_at INTEGER NOT NULL,
+                updated_by TEXT
+            )`,
+            `CREATE TABLE IF NOT EXISTS {ff} (
+                name TEXT PRIMARY KEY,
+                enabled INTEGER DEFAULT 0,
+                rollout_percentage INTEGER DEFAULT 0,
+                conditions TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            )`,
+
+            /* 1.7 Missing Core Tables (Parity) */
+            `CREATE TABLE IF NOT EXISTS {el} (id TEXT PRIMARY KEY, user_id TEXT, model TEXT, status TEXT, ts INTEGER, err TEXT)`,
+            `CREATE TABLE IF NOT EXISTS {ml} (id INTEGER PRIMARY KEY AUTOINCREMENT, op TEXT NOT NULL, status TEXT NOT NULL, details TEXT, ts INTEGER NOT NULL, user_id TEXT)`,
+            `CREATE TABLE IF NOT EXISTS {ak} (key_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'user', note TEXT, created_at INTEGER, updated_at INTEGER, expires_at INTEGER)`,
+            `CREATE TABLE IF NOT EXISTS {lm} (user_id TEXT PRIMARY KEY, weights TEXT, biases TEXT, version INTEGER DEFAULT 1, updated_at INTEGER)`,
+            `CREATE TABLE IF NOT EXISTS {src} (user_id TEXT, type TEXT, config TEXT NOT NULL, status TEXT DEFAULT 'enabled', created_at INTEGER, updated_at INTEGER, PRIMARY KEY(user_id, type))`,
+        ],
+        postgres: [
+            /* 1.1 Encryption Key Rotation Support */
+            `ALTER TABLE {m} ADD COLUMN IF NOT EXISTS generated_summary TEXT`,
+            `ALTER TABLE {v} ADD COLUMN IF NOT EXISTS metadata TEXT`,
+            `ALTER TABLE { m } ADD COLUMN IF NOT EXISTS encryption_key_version INTEGER DEFAULT 1`,
+            `CREATE INDEX IF NOT EXISTS idx_memories_key_version ON { m } (encryption_key_version)`,
+            `CREATE TABLE IF NOT EXISTS { ekr } (
+    id TEXT PRIMARY KEY,
+        old_version INTEGER NOT NULL,
+            new_version INTEGER NOT NULL,
+                status TEXT DEFAULT 'pending',
+                    start_at BIGINT,
+                        completed_at BIGINT,
+                            error TEXT
+            )`,
+
+            /* 1.2 Audit Logging Tables */
+            `CREATE TABLE IF NOT EXISTS { al } (
+    id TEXT PRIMARY KEY,
+        user_id TEXT,
+            action TEXT NOT NULL,
+                resource_type TEXT NOT NULL,
+                    resource_id TEXT,
+                        ip_address TEXT,
+                            user_agent TEXT,
+                                metadata TEXT,
+                                    timestamp BIGINT NOT NULL
+            )`,
+            `CREATE INDEX IF NOT EXISTS idx_audit_user ON { al } (user_id, timestamp DESC)`,
+            `CREATE INDEX IF NOT EXISTS idx_audit_action ON { al } (action, timestamp DESC)`,
+            `CREATE INDEX IF NOT EXISTS idx_audit_resource ON { al } (resource_type, resource_id)`,
+
+            /* 1.3 Webhook System Tables */
+            `CREATE TABLE IF NOT EXISTS { wh } (
+    id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+            url TEXT NOT NULL,
+                events TEXT NOT NULL,
+                    secret TEXT NOT NULL,
+                        status TEXT DEFAULT 'active',
+                            retry_count INTEGER DEFAULT 0,
+                                last_triggered BIGINT,
+                                    created_at BIGINT NOT NULL,
+                                        updated_at BIGINT NOT NULL
+            )`,
+            `CREATE INDEX IF NOT EXISTS idx_webhooks_user ON { wh } (user_id)`,
+            `CREATE INDEX IF NOT EXISTS idx_webhooks_status ON { wh } (status)`,
+
+            `CREATE TABLE IF NOT EXISTS { whl } (
+    id TEXT PRIMARY KEY,
+        webhook_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                        response_code INTEGER,
+                            response_body TEXT,
+                                attempt_count INTEGER DEFAULT 1,
+                                    next_retry BIGINT,
+                                        created_at BIGINT NOT NULL,
+                                            completed_at BIGINT,
+                                                FOREIGN KEY(webhook_id) REFERENCES { wh } (id) ON DELETE CASCADE
+            )`,
+            `CREATE INDEX IF NOT EXISTS idx_webhook_log_webhook ON { whl } (webhook_id, created_at DESC)`,
+            `CREATE INDEX IF NOT EXISTS idx_webhook_log_status ON { whl } (status, next_retry)`,
+
+            /* 1.4 Performance Optimization Indexes */
+            `CREATE INDEX IF NOT EXISTS idx_temporal_facts_subject_time ON { tf } (subject, valid_from, valid_to) WHERE valid_to IS NULL`,
+            `CREATE INDEX IF NOT EXISTS idx_temporal_facts_predicate_time ON { tf } (predicate, valid_from DESC)`,
+            `CREATE INDEX IF NOT EXISTS idx_waypoints_user_weight ON { w } (user_id, weight DESC)`,
+            `CREATE INDEX IF NOT EXISTS idx_memories_metadata ON { m } USING GIN(metadata) WHERE metadata IS NOT NULL`,
+
+            /* 1.5 Rate Limiting Tables */
+            `CREATE TABLE IF NOT EXISTS { rl } (
+    key TEXT PRIMARY KEY,
+        window_start BIGINT NOT NULL,
+            request_count INTEGER DEFAULT 0,
+                cost_units INTEGER DEFAULT 0,
+                    last_request BIGINT NOT NULL
+            )`,
+            `CREATE INDEX IF NOT EXISTS idx_rate_limit_window ON { rl } (window_start)`,
+
+            /* 1.6 Configuration Tables */
+            `CREATE TABLE IF NOT EXISTS { cfg } (
+    key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+            type TEXT NOT NULL,
+                description TEXT,
+                    updated_at BIGINT NOT NULL,
+                        updated_by TEXT
+            )`,
+            `CREATE TABLE IF NOT EXISTS { ff } (
+    name TEXT PRIMARY KEY,
+        enabled BOOLEAN DEFAULT FALSE,
+            rollout_percentage INTEGER DEFAULT 0,
+                conditions TEXT,
+                    created_at BIGINT NOT NULL,
+                        updated_at BIGINT NOT NULL
+            )`,
+        ],
+    },
+    v1_11_0,
 ];
 
 interface SchemaVersionRow {
@@ -251,17 +465,25 @@ function compareVersions(a: string, b: string): number {
     return 0;
 }
 
-function getTableReplacements(isPg: boolean): Record<string, string> {
+export function getTableReplacements(isPg: boolean): Record<string, string> {
     if (isPg) {
         const sc = env.pgSchema || "public";
         // Aligned with db.ts logic for PG
         const mt = env.pgTable || "openmemory_memories";
-        const vt = `${mt}_vectors`;
-        const wt = `${mt}_waypoints`;
+        const vt = `${mt} _vectors`;
+        const wt = `${mt} _waypoints`;
         const ut = env.usersTable || "openmemory_users";
-        const st = `${mt}_stats`;
-        const tft = `${mt}_temporal_facts`;
-        const tet = `${mt}_temporal_edges`;
+        const st = `${mt} _stats`;
+        const tft = `${mt} _temporal_facts`;
+        const tet = `${mt} _temporal_edges`;
+        // v1.11.0 tables
+        const ekrt = `${mt} _encryption_keys`;
+        const alt = `${mt} _audit_logs`;
+        const wht = `${mt} _webhooks`;
+        const whlt = `${mt} _webhook_logs`;
+        const rlt = `${mt} _rate_limits`;
+        const cfgt = `${mt} _config`;
+        const fft = `${mt} _feature_flags`;
 
         return {
             "{m}": `"${sc}"."${mt}"`,
@@ -272,6 +494,19 @@ function getTableReplacements(isPg: boolean): Record<string, string> {
             "{tf}": `"${sc}"."${tft}"`,
             "{te}": `"${sc}"."${tet}"`,
             "{sc}": `"${sc}"`,
+            // v1.11.0 & Extras
+            "{el}": `"${sc}"."${mt}_embed_logs"`,
+            "{ml}": `"${sc}"."${mt}_maint_logs"`,
+            "{ak}": `"${sc}"."${mt}_api_keys"`,
+            "{lm}": `"${sc}"."${mt}_learned_models"`,
+            "{src}": `"${sc}"."${mt}_source_configs"`,
+            "{ekr}": `"${sc}"."${ekrt}"`,
+            "{al}": `"${sc}"."${alt}"`,
+            "{wh}": `"${sc}"."${wht}"`,
+            "{whl}": `"${sc}"."${whlt}"`,
+            "{rl}": `"${sc}"."${rlt}"`,
+            "{cfg}": `"${sc}"."${cfgt}"`,
+            "{ff}": `"${sc}"."${fft}"`,
         };
     } else {
         // SQLite replacements - consistent with db.ts
@@ -284,6 +519,19 @@ function getTableReplacements(isPg: boolean): Record<string, string> {
             "{tf}": "temporal_facts",
             "{te}": "temporal_edges",
             "{sc}": "",
+            // v1.11.0 & Extras
+            "{el}": "embed_logs",
+            "{ml}": "maint_logs",
+            "{ak}": "api_keys",
+            "{lm}": "learned_models",
+            "{src}": "source_configs",
+            "{ekr}": "encryption_keys",
+            "{al}": "audit_logs",
+            "{wh}": "webhooks",
+            "{whl}": "webhook_logs",
+            "{rl}": "rate_limits",
+            "{cfg}": "config",
+            "{ff}": "feature_flags",
         };
     }
 }
@@ -305,7 +553,7 @@ function getDbVersionSqlite(db: Database): string | null {
     try {
         const row = db
             .prepare(
-                `SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'`,
+                `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_version'`,
             )
             .get() as { name: string } | null;
         if (!row) return null;
@@ -321,10 +569,10 @@ function getDbVersionSqlite(db: Database): string | null {
 }
 
 function setDbVersionSqlite(db: Database, version: string): void {
-    db.run(`CREATE TABLE IF NOT EXISTS schema_version (
-        version TEXT PRIMARY KEY, applied_at INTEGER
-    )`);
-    db.prepare(`INSERT OR REPLACE INTO schema_version VALUES (?, ?)`).run(
+    db.run(`CREATE TABLE IF NOT EXISTS schema_version(
+                            version TEXT PRIMARY KEY, applied_at INTEGER
+                        )`);
+    db.prepare(`INSERT OR REPLACE INTO schema_version VALUES(?, ?)`).run(
         version,
         now(),
     );
@@ -345,20 +593,17 @@ function checkColumnExistsSqlite(
     return rows.some((r) => r.name === column);
 }
 
-async function runSqliteMigration(db: Database, m: Migration): Promise<void> {
-    log(`Running migration: ${m.version} - ${m.desc}`);
+export async function runSqliteMigration(db: Database, m: Migration): Promise<void> {
+    log(`Running migration: ${m.version} - ${m.desc} `);
     const replacements = getTableReplacements(false);
 
     if (m.version === "1.5.0") {
         const tableName = replacements["{m}"];
         const hasMeta = checkColumnExistsSqlite(db, tableName, "metadata");
-        if (!hasMeta) {
-            const hasOldMeta = checkColumnExistsSqlite(db, tableName, "meta");
-            if (!hasOldMeta && hasMeta) {
-                log(`Migration ${m.version} already handled, skipping`);
-                setDbVersionSqlite(db, m.version);
-                return;
-            }
+        if (hasMeta) {
+            log(`Migration ${m.version} already handled(metadata column exists), skipping`);
+            setDbVersionSqlite(db, m.version);
+            return;
         }
     }
 
@@ -370,7 +615,7 @@ async function runSqliteMigration(db: Database, m: Migration): Promise<void> {
             } catch (err: unknown) {
                 const msg = err instanceof Error ? err.message : String(err);
                 if (!msg.includes("duplicate column")) {
-                    log(`ERROR: ${msg} in SQL: ${sql}`);
+                    log(`ERROR: ${msg} in SQL: ${sql} `);
                     throw err;
                 }
             }
@@ -387,10 +632,10 @@ async function getDbVersionPg(pool: Pool): Promise<string | null> {
     try {
         const sc = env.pgSchema || "public";
         const check = await pool.query(
-            `SELECT EXISTS (
-        SELECT FROM information_schema.tables 
+            `SELECT EXISTS(
+                            SELECT FROM information_schema.tables 
         WHERE table_schema = $1 AND table_name = 'schema_version'
-      )`,
+                        )`,
             [sc],
         );
         if (!check.rows[0].exists) return null;
@@ -407,13 +652,13 @@ async function getDbVersionPg(pool: Pool): Promise<string | null> {
 async function setDbVersionPg(pool: Pool, version: string): Promise<void> {
     const sc = env.pgSchema || "public";
     await pool.query(
-        `CREATE TABLE IF NOT EXISTS "${sc}"."schema_version" (
-      version TEXT PRIMARY KEY, applied_at BIGINT
-    )`,
+        `CREATE TABLE IF NOT EXISTS "${sc}"."schema_version"(
+                            version TEXT PRIMARY KEY, applied_at BIGINT
+                        )`,
     );
     await pool.query(
-        `INSERT INTO "${sc}"."schema_version" VALUES ($1, $2) 
-     ON CONFLICT (version) DO UPDATE SET applied_at = EXCLUDED.applied_at`,
+        `INSERT INTO "${sc}"."schema_version" VALUES($1, $2) 
+     ON CONFLICT(version) DO UPDATE SET applied_at = EXCLUDED.applied_at`,
         [version, now()],
     );
 }
@@ -427,17 +672,17 @@ async function checkColumnExistsPg(
     const tbl = table.replace(/"/g, "").split(".").pop() || table;
 
     const res = await pool.query(
-        `SELECT EXISTS (
-       SELECT FROM information_schema.columns 
+        `SELECT EXISTS(
+                            SELECT FROM information_schema.columns 
        WHERE table_schema = $1 AND table_name = $2 AND column_name = $3
-     )`,
+                        )`,
         [sc, tbl, column],
     );
     return res.rows[0].exists;
 }
 
 async function runPgMigration(pool: Pool, m: Migration): Promise<void> {
-    log(`Running migration: ${m.version} - ${m.desc}`);
+    log(`Running migration: ${m.version} - ${m.desc} `);
     const client = await pool.connect();
     const replacements = getTableReplacements(true);
 
@@ -500,8 +745,9 @@ export async function runMigrations() {
 
     // Integrity: Ensure only one node runs migrations in multi-node clusters
     const lock = new DistributedLock("system:migrations");
-    // Wait up to 2 minutes for other nodes to finish migrations
-    const acquired = await lock.acquire(120000);
+
+    // REDUCED TIMEOUT: Wait up to 30 seconds (was 2 mins) to avoid deployment hangs
+    const acquired = await lock.acquire(30000);
     if (!acquired) {
         log("Could not acquire migration lock. Skipping to avoid contention (another node might be running them).");
         return;
@@ -523,11 +769,12 @@ export async function runMigrations() {
                 user: env.pgUser,
                 password: env.pgPassword,
                 ssl,
+                connectionTimeoutMillis: 5000, // Fail fast
             });
 
             try {
                 const current = await getDbVersionPg(pool);
-                log(`Current database version: ${current || "none"}`);
+                log(`Current database version: ${current || "none"} `);
 
                 for (const m of migrations) {
                     if (!current || compareVersions(m.version, current) > 0) {
@@ -538,11 +785,44 @@ export async function runMigrations() {
                 await pool.end();
             }
         } else {
-            const dbPath = env.dbPath;
+            const dbPath = env.dbPath || ":memory:";
+
+            // Backup SQLite DB before migration if it exists and is a file
+            if (dbPath !== ":memory:" && await Bun.file(dbPath).exists() && Bun.env.NODE_ENV !== "test") {
+                try {
+                    const backupPath = `${dbPath}.bak.${Date.now()}`;
+                    await Bun.write(backupPath, Bun.file(dbPath));
+                    log(`Created database backup at ${backupPath}`);
+
+                    // Cleanup old backups (keep last 5)
+                    const dir = path.dirname(dbPath);
+                    // Use fs/promises for readdir as it's the standard async way compatible with Bun
+                    const { readdir, unlink } = await import("node:fs/promises");
+                    const files = (await readdir(dir))
+                        .filter(f => f.startsWith(path.basename(dbPath) + ".bak."))
+                        .sort()
+                        .reverse();
+
+                    if (files.length > 5) {
+                        for (const f of files.slice(5)) {
+                            try {
+                                await unlink(path.join(dir, f));
+                            } catch (e) {
+                                logger.warn(`[Migrate] Failed to delete old backup ${f}`, { error: e });
+                            }
+                        }
+                    }
+                } catch (err) {
+                    logger.error(`[Migrate] Failed to create database backup`, { error: err });
+                    throw new Error("Migration aborted: Failed to create critical backup.");
+                }
+            }
+
             const db = new Database(dbPath);
             try {
+                db.exec("PRAGMA journal_mode = WAL;");
                 const current = getDbVersionSqlite(db);
-                log(`Current database version: ${current || "none"}`);
+                log(`Current database version(SQLite): ${current || "none"} `);
 
                 for (const m of migrations) {
                     if (!current || compareVersions(m.version, current) > 0) {
@@ -553,9 +833,11 @@ export async function runMigrations() {
                 db.close();
             }
         }
+    } catch (err) {
+        logger.error(`[Migrate] Fatal error during migrations`, { error: err });
+        throw err;
     } finally {
         await lock.release();
     }
-
-    log("All migrations completed");
 }
+

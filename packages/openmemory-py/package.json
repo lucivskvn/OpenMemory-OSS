@@ -4,6 +4,6 @@
     "private": true,
     "scripts": {
         "test": "pytest",
-        "lint": "echo 'Skipping lint for python in bun for now'"
+        "lint": "ruff check . --fix"
     }
 }

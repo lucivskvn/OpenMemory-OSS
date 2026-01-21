@@ -20,6 +20,31 @@ export function normalize(v: number[]): number[] {
 }
 
 /**
+ * Resizes a vector to a target dimensionality using interpolation/averaging.
+ * Ensures the output vector is normalized.
+ */
+export function resizeVector(v: number[], targetDim: number): number[] {
+    if (v.length <= targetDim) return v;
+    const resized = new Float32Array(targetDim);
+    const blockSize = v.length / targetDim;
+
+    for (let i = 0; i < targetDim; i++) {
+        const start = Math.floor(i * blockSize);
+        const end = Math.floor((i + 1) * blockSize);
+        let sum = 0;
+        let count = 0;
+        for (let j = start; j < end && j < v.length; j++) {
+            sum += v[j];
+            count++;
+        }
+        resized[i] = count > 0 ? sum / count : 0;
+    }
+
+    // Convert to number array and normalize
+    return normalize(Array.from(resized));
+}
+
+/**
  * Calculate cosine similarity between two vectors (Array or Float32Array).
  */
 export const cosineSimilarity = (a: number[] | Float32Array, b: number[] | Float32Array) => {
@@ -34,22 +59,24 @@ export const cosineSimilarity = (a: number[] | Float32Array, b: number[] | Float
         na += a[i] * a[i];
         nb += b[i] * b[i];
     }
-    return na && nb ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0;
+    if (!na || !nb) return 0;
+    const res = dot / (Math.sqrt(na) * Math.sqrt(nb));
+    return Math.max(-1, Math.min(1, res));
 };
 
 /**
- * Convert a numeric vector to a Buffer (Float32LE).
+ * Convert a numeric vector to a Uint8Array (Float32LE).
  */
-export const vectorToBuffer = (v: number[]) => {
+export const vectorToUint8Array = (v: number[]) => {
     const f32 = new Float32Array(v);
-    return Buffer.from(f32.buffer);
+    return new Uint8Array(f32.buffer);
 };
+export const vectorToBuffer = vectorToUint8Array;
 
 /**
- * Convert a Buffer (Float32LE) back to a numeric vector.
- * Optimized to use TypedArray view instead of loop-based readFloatLE.
+ * Convert a Uint8Array/string back to a numeric vector.
  */
-export const bufferToVector = (b: Buffer | Uint8Array | string): number[] => {
+export const bufferToVector = (b: Uint8Array | string): number[] => {
     // Handle Postgres vector string format "[1,2,3]"
     if (typeof b === "string") {
         try {
@@ -60,7 +87,11 @@ export const bufferToVector = (b: Buffer | Uint8Array | string): number[] => {
         }
     }
 
-    const buf = Buffer.isBuffer(b) ? b : Buffer.from(b);
+    const buf = b instanceof Uint8Array
+        ? b
+        : typeof b === "string"
+            ? new TextEncoder().encode(b)
+            : new Uint8Array(b as ArrayBuffer);
 
     // Fast path: use Float32Array view if aligned
     if (buf.byteLength % 4 === 0) {
@@ -73,33 +104,35 @@ export const bufferToVector = (b: Buffer | Uint8Array | string): number[] => {
             return Array.from(f32);
         }
         // Copy if misaligned
-        return Array.from(new Float32Array(new Uint8Array(buf).buffer));
+        const aligned = new Uint8Array(buf.byteLength);
+        aligned.set(buf);
+        return Array.from(new Float32Array(aligned.buffer));
     }
 
-    // Fallback for misaligned buffers (rare)
+    // Fallback for misaligned or strange lengths
     const v: number[] = [];
-    for (let i = 0; i < buf.length - 3; i += 4) {
-        v.push(buf.readFloatLE(i));
+    const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    for (let i = 0; i < buf.byteLength - 3; i += 4) {
+        v.push(view.getFloat32(i, true));
     }
     return v;
 };
 
 /**
- * Convert a Buffer/Uint8Array to Float32Array without copying to a standard Array.
+ * Convert a Uint8Array to Float32Array without copying to a standard Array.
  * Zero-copy where possible.
  */
-export const bufferToFloat32Array = (b: Buffer | Uint8Array): Float32Array => {
-    const buf = Buffer.isBuffer(b) ? b : Buffer.from(b);
-    if (buf.byteLength % 4 !== 0) {
-        throw new Error(`Invalid buffer length for Float32Array: ${buf.byteLength}`);
+export const bufferToFloat32Array = (b: Uint8Array): Float32Array => {
+    if (b.byteLength % 4 !== 0) {
+        throw new Error(`Invalid buffer length for Float32Array: ${b.byteLength}`);
     }
-    if (buf.byteOffset % 4 !== 0) {
+    if (b.byteOffset % 4 !== 0) {
         // Copy to ensure alignment
-        const copy = new Uint8Array(buf.byteLength);
-        copy.set(new Uint8Array(buf));
+        const copy = new Uint8Array(b.byteLength);
+        copy.set(b);
         return new Float32Array(copy.buffer);
     }
-    return new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4);
+    return new Float32Array(b.buffer, b.byteOffset, b.byteLength / 4);
 };
 
 /**
@@ -135,15 +168,13 @@ export const aggregateVectors = (vecs: number[][]): number[] => {
 /**
  * Format a vector for Postgres usage (string representation "[1,2,3]").
  */
-export const toVectorString = (v: number[] | Float32Array | Buffer | null | undefined): string | null => {
+export const toVectorString = (v: number[] | Float32Array | Uint8Array | null | undefined): string | null => {
     if (!v) return null;
-    if (Buffer.isBuffer(v)) {
-        // Assume it's a binary float32 array we need to convert to numbers first? 
-        // Or if it's already a string buffer?
-        // Usually we pass pre-calculated meanVec which is number[] or Float32Array. 
-        // If it's a Buffer, we convert to vector first.
+    if (v instanceof Uint8Array) {
         return `[${bufferToVector(v).join(",")}]`;
     }
-    if (Array.isArray(v)) return `[${v.join(",")}]`;
-    return `[${Array.from(v).join(",")}]`;
+    if (v instanceof Float32Array) {
+        return `[${Array.prototype.join.call(v, ",")}]`;
+    }
+    return `[${(v as number[]).join(",")}]`;
 };

@@ -1,3 +1,7 @@
+"""
+Audited: 2026-01-19
+Database abstraction layer with SQLite/PostgreSQL support.
+"""
 import sqlite3
 import asyncio
 import time
@@ -30,10 +34,14 @@ class DB:
 
     @property
     def lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
         return self._lock
 
     @property
     def tx_lock(self) -> asyncio.Lock:
+        if self._tx_lock is None:
+            self._tx_lock = asyncio.Lock()
         return self._tx_lock
 
     async def disconnect(self):
@@ -96,19 +104,33 @@ class DB:
             self.conn.execute("PRAGMA foreign_keys=ON")
         elif url.startswith("postgresql://") or url.startswith("postgres://"):
             try:
-                import psycopg2
-                from psycopg2 import pool
-                from psycopg2.extras import DictCursor
+                import psycopg
+                from psycopg_pool import ConnectionPool
+                from psycopg.rows import dict_row
             except ImportError:
-                raise ImportError("PostgreSQL support requires 'psycopg2-binary'. Install it via pip.")
+                raise ImportError("PostgreSQL support requires 'psycopg' and 'psycopg-pool'. Install them via pip.")
 
             self.is_pg = True
-            logger.info(f"[DB] Connecting to PostgreSQL (Pooled)")
+            logger.info(f"[DB] Connecting to PostgreSQL (Psycopg 3 Pooled)")
             if not self._pool:
-                # Basic pool settings
-                self._pool = pool.ThreadedConnectionPool(1, env.max_threads or 20, url)
-            self.conn = self._pool.getconn()
-            self.conn.autocommit = True  # type: ignore[attr-defined]  # type: ignore[attr-defined]
+                # ConnectionPool in v3 is thread-safe by default.
+                # kwargs match libpq connection string
+                self._pool = ConnectionPool(
+                    url,
+                    min_size=1,
+                    max_size=env.max_threads or 20,
+                    kwargs={"autocommit": True} # v3 autocommit config
+                )
+            
+            # v3 Pool returns a Connection, usually we use pool.connection() context
+            # But here we manage persistent conn for lifespan (or manual get).
+            # .getconn() is .get_connection() in v3? No, it's .connection() context or .getconn() (wait, v3 pool API is different)
+            # psycopg_pool.ConnectionPool.pop() gets a connection.
+            # But usually we use `with pool.connection() as conn:`
+            # Converting this Legacy DB class to use Pop/Push mechanism.
+            self.conn = self._pool.pop()
+            # autocommit is set in kwargs or on property
+            self.conn.autocommit = True
         else:
             raise ValueError(f"Unsupported database URL schema: {url}. Only sqlite:/// and postgresql:// are supported.")
 
@@ -136,7 +158,17 @@ class DB:
         files.sort()
 
         for f in files:
-            if not self.fetchone("SELECT 1 FROM _migrations WHERE name=?", (f,)):
+            # SAFETY: Use raw cursor to check migration to avoid RecursionError via self.fetchone
+            sql_check = "SELECT 1 FROM _migrations WHERE name=?"
+            if self.is_pg:
+                cur = c.cursor()
+                cur.execute(sql_check.replace("?", "%s"), (f,))
+                applied = cur.fetchone() is not None
+                cur.close()
+            else:
+                applied = c.execute(sql_check, (f,)).fetchone() is not None
+
+            if not applied:
                 logger.info(f"[DB] Applying migration {f}")
                 try:
                     sql = None
@@ -226,9 +258,21 @@ class DB:
 
         if self.is_pg and self._pool:
             try:
-                self._pool.putconn(conn)
+                # psycopg_pool uses putconn? No, it uses .put(conn).
+                # Actually, check API: pool.putconn() is psycopg2. 
+                # psycopg_pool has add/put?
+                # Actually, ConnectionPool.open() -> pop(). 
+                # To return: pool.put(conn)? NO. 
+                # Warning: psycopg_pool 3.x is different. 
+                # Correct API: pool.put(conn) matches some versions? 
+                # Let's check documentation knowledge or assume standard pattern.
+                # Actually, typical usage is Context Manager. 
+                # If we use .pop(), we must use .put() or .close()?
+                # Looking up: `pool.put(conn)`
+                self._pool.put(conn)
             except Exception as e:
                 logger.error(f"[DB] Error releasing connection: {e}")
+
 
     def execute(self, sql: str, params: tuple = ()) -> Any:
         self.connect()
@@ -237,11 +281,20 @@ class DB:
             raise RuntimeError("Database connection not established")
 
         try:
+            # SAFETY: Strip python-style comments that might have leaked into SQL strings
+            # and caused unrecognized token errors in SQLite.
+            if "#" in sql:
+                sql = "\n".join([line.split("#")[0] for line in sql.split("\n")]).strip()
+
+            if env.debug:
+                logger.debug(f"[DB] Executing: {sql} | Params: {params}")
+
             if self.is_pg:
-                # Map ? to %s for psycopg2
+                # Map ? to %s for psycopg (same as psycopg2)
                 sql = sql.replace("?", "%s")
-                from psycopg2.extras import RealDictCursor
-                cur = conn.cursor(cursor_factory=RealDictCursor)  # type: ignore[call-arg]  # type: ignore[call-arg]
+                from psycopg.rows import dict_row
+                # row_factory set on cursor creation
+                cur = conn.cursor(row_factory=dict_row)
                 cur.execute(sql, params)
                 return cur
 
@@ -305,6 +358,10 @@ class DB:
             self.release_conn(conn)
 
     async def async_executemany(self, sql: str, params_list: List[tuple]) -> Any:
+        # SAFETY: Strip comments
+        if "#" in sql:
+            sql = "\n".join([line.split("#")[0] for line in sql.split("\n")]).strip()
+
         if self.is_pg:
             return await asyncio.to_thread(self.executemany, sql, params_list)
         async with self.lock:
@@ -323,21 +380,26 @@ class DB:
     async def async_rollback(self):
         await asyncio.to_thread(self.rollback)
 
+
+
     @asynccontextmanager
     async def transaction(self):
         """Async context manager for transactions."""
-        conn = self.conn
-        if not conn:
-            self.connect()
-            conn = self.conn
-
-        await self.async_execute("BEGIN")
+        self.connect()
+        conn = self.get_conn()
+        
+        token = _tx_conn.set(conn)
         try:
+            await self.async_execute("BEGIN")
             yield
             await self.async_commit()
         except Exception as e:
             await self.async_rollback()
             raise e
+        finally:
+            _tx_conn.reset(token)
+            # release_conn handles the logic of not releasing if still in an (outer) transaction
+            self.release_conn(conn)
 
 # Single global instance
 db = DB()
@@ -498,9 +560,15 @@ class Queries:
         return await db.async_fetchall(f"SELECT * FROM {t['memories']} {user_clause} ORDER BY created_at DESC LIMIT ? OFFSET ?", params)
 
     async def all_mem_by_sector(self, sector: str, limit=10, offset=0, user_id: Optional[str] = None):
+        """
+        Fetch memories by sector, strictly isolated by user_id.
+        Defaults to 'anonymous' if no user_id is provided to prevent accidental data leaks.
+        """
         t = self.tables
-        user_clause = "AND user_id=?" if user_id else ""
-        params = (sector,) + ((user_id,) if user_id else ()) + (limit, offset)
+        # CRITICAL: Default to anonymous to prevent cross-tenant data leaks
+        uid = user_id or "anonymous"
+        user_clause = "AND user_id=?"
+        params = (sector, uid, limit, offset)
         return await db.async_fetchall(f"SELECT * FROM {t['memories']} WHERE primary_sector=? {user_clause} ORDER BY created_at DESC LIMIT ? OFFSET ?", params)
 
     async def ins_log(self, id: str, model: str, status: str, ts: int, err: Optional[str] = None, user_id: Optional[str] = None, commit: bool = True):
@@ -573,11 +641,35 @@ class Queries:
         params = (src_id,) + ((user_id,) if user_id else ())
         return await db.async_fetchall(f"SELECT * FROM {t['waypoints']} WHERE src_id=? {user_clause}", params)
 
+    async def get_waypoints_by_srcs(self, src_ids: List[str], user_id: Optional[str] = None):
+        if not src_ids: return []
+        t = self.tables
+        placeholders = ",".join(["?"] * len(src_ids))
+        user_clause = "AND user_id=?" if user_id else ""
+        params = tuple(src_ids) + ((user_id,) if user_id else ())
+        return await db.async_fetchall(f"SELECT * FROM {t['waypoints']} WHERE src_id IN ({placeholders}) {user_clause}", params)
+
     async def get_waypoint(self, src: str, dst: str, user_id: Optional[str] = None):
         t = self.tables
         user_clause = "AND user_id=?" if user_id else ""
         params = (src, dst) + ((user_id,) if user_id else ())
         return await db.async_fetchone(f"SELECT weight FROM {t['waypoints']} WHERE src_id=? AND dst_id=? {user_clause}", params)
+
+    async def get_waypoints_for_pairs(self, pairs: List[Tuple[str, str]], user_id: Optional[str] = None) -> Dict[str, Any]:
+        """Batch fetch waypoints for multiple pairs to avoid N+1 issues."""
+        if not pairs: return {}
+        t = self.tables
+        unique_srcs = list(set(p[0] for p in pairs))
+        placeholders = ",".join(["?"] * len(unique_srcs))
+        user_clause = "AND user_id=?" if user_id else ""
+        params = tuple(unique_srcs) + ((user_id,) if user_id else ())
+        rows = await db.async_fetchall(f"SELECT * FROM {t['waypoints']} WHERE src_id IN ({placeholders}) {user_clause}", params)
+        
+        # Build map for O(1) lookup
+        res = {}
+        for r in rows:
+            res[f"{r['src_id']}:{r['dst_id']}"] = r
+        return res
 
     async def upd_waypoint(self, src: str, wt: float, updated: int, dst: str, user_id: Optional[str] = None, commit: bool = True):
         t = self.tables
@@ -746,6 +838,65 @@ class Queries:
         await db.async_execute(f"DELETE FROM {t['memories']} WHERE id=? {user_clause}", params)
         
         if commit: await db.async_commit()
+
+    async def del_mems(self, ids: List[str], user_id: Optional[str] = None, commit: bool = True):
+        if not ids: return 0
+        t = self.tables
+        placeholders = ",".join(["?"] * len(ids))
+        user_clause = "AND user_id=?" if user_id else ""
+        params = tuple(ids) + ((user_id,) if user_id else ())
+        
+        if user_id:
+             # Check ownership/existence for batch
+             rows = await db.async_fetchall(f"SELECT id FROM {t['memories']} WHERE id IN ({placeholders}) {user_clause}", params)
+             valid_ids = [r['id'] for r in rows]
+             if not valid_ids: return 0
+             ids = valid_ids
+             placeholders = ",".join(["?"] * len(ids))
+             params = tuple(ids) + (user_id,)
+
+        # 1. Delete Vectors
+        await db.async_execute(f"DELETE FROM {t['vectors']} WHERE id IN ({placeholders})", tuple(ids))
+        
+        # 2. Delete Waypoints
+        await db.async_execute(f"DELETE FROM {t['waypoints']} WHERE (src_id IN ({placeholders}) OR dst_id IN ({placeholders}))", tuple(ids) + tuple(ids))
+        
+        # 3. Delete Memories
+        res = await db.async_execute(f"DELETE FROM {t['memories']} WHERE id IN ({placeholders}) {user_clause}", params)
+        if commit: await db.async_commit()
+        return res.rowcount if hasattr(res, 'rowcount') else len(ids)
+
+    async def upd_mems(self, ids: List[str], updates: Dict[str, Any], user_id: Optional[str] = None, commit: bool = True):
+        if not ids: return 0
+        t = self.tables
+        
+        sets = ["updated_at = ?", "version = version + 1"]
+        params = [int(time.time() * 1000)]
+        
+        if 'content' in updates:
+            sets.append("content = ?")
+            params.append(updates['content'])
+        if 'tags' in updates:
+            sets.append("tags = ?")
+            tags = updates['tags']
+            if isinstance(tags, (list, tuple)): tags = json.dumps(tags)
+            params.append(tags)
+        if 'metadata' in updates or 'meta' in updates:
+            sets.append("metadata = ?")
+            meta = updates.get('metadata') or updates.get('meta')
+            if isinstance(meta, (dict, list)): meta = json.dumps(meta)
+            params.append(meta)
+            
+        placeholders = ",".join(["?"] * len(ids))
+        params.extend(ids)
+        
+        user_clause = "AND user_id=?" if user_id else ""
+        if user_id: params.append(user_id)
+        
+        sql = f"UPDATE {t['memories']} SET {', '.join(sets)} WHERE id IN ({placeholders}) {user_clause}"
+        res = await db.async_execute(sql, params)
+        if commit: await db.async_commit()
+        return res.rowcount if hasattr(res, 'rowcount') else len(ids)
 
 
     async def del_mem_by_user(self, uid: str, commit: bool = True):

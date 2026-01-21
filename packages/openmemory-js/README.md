@@ -27,17 +27,19 @@ your model stays stateless. **your app stops being amnesiac.**
 ## Usage Patterns
 
 OpenMemory can be used in two ways:
+
 1. **Embedded / Local**: Import directly into your Node/Bun app. No server required.
 2. **Client / Remote**: Connect to a running OpenMemory server via HTTP.
 
 ### 1. Embedded (Local)
+
 Best for CLIs, local tools, or single-instance backends.
 
 ```typescript
 import { Memory } from "openmemory-js";
 
 // Initialize local engine (uses SQLite by default)
-const mem = new Memory({ user_id: "u1" });
+const mem = new Memory("user_123");
 
 // Add a memory
 await mem.add("user prefers dark mode", {
@@ -51,6 +53,7 @@ console.log(results[0].content);
 ```
 
 ### 2. Client SDK (Remote)
+
 Best for distributed apps, web frontends, or microservices connecting to a shared OpenMemory server.
 
 ```typescript
@@ -71,6 +74,16 @@ client.listen((event) => {
 
 // Add Memory via API
 await client.add("project deadline is friday");
+
+// Cancel long-running requests
+const controller = new AbortController();
+await client.add("project deadline is friday", { signal: controller.signal });
+// controller.abort(); // Cancel if needed
+
+// Get System Stats (Dashboard Data)
+const stats = await client.getStats();
+console.log(`Total Memories: ${stats.totalMemories}`);
+
 ```
 
 ---
@@ -126,7 +139,7 @@ ingest data from external sources directly into memory:
 ```typescript
 const github = await mem.source("github")
 await github.connect({ token: "ghp_..." })
-await github.ingest_all({ repo: "owner/repo" })
+await github.ingestAll({ repo: "owner/repo" })
 ```
 
 available sources: `github`, `notion`, `google_drive`, `google_sheets`, `google_slides`, `onedrive`, `web_crawler`
@@ -292,7 +305,8 @@ available mcp tools:
 - `openmemory_ide_patterns` - get detected coding patterns
 
 ### ⚡ Real-time Stream (SSE)
-Connect to the real-time event stream to receive live updates (new memories, suggested patterns). 
+
+Connect to the real-time event stream to receive live updates (new memories, suggested patterns).
 The `MemoryClient` provides a strictly typed `listen()` method.
 
 ```typescript
@@ -317,6 +331,7 @@ client.listen((event) => {
 ```
 
 **Event Types:**
+
 - `memory_added`: Triggered when new content is stored.
 - `memory_updated`: Triggered when content matches an existing memory and updates it.
 - `ide_suggestion`: Triggered when the AI detects a relevant pattern for the current context.
@@ -361,6 +376,7 @@ create a new memory instance with optional default user_id.
 store a new memory.
 
 **parameters:**
+
 - `content` - text content to store
 - `options` - optional object:
   - `user_id` - override default user
@@ -372,6 +388,7 @@ store a new memory.
 search for relevant memories.
 
 **parameters:**
+
 - `query` - search text
 - `options`:
   - `user_id` - filter by user
@@ -403,7 +420,7 @@ reinforce a memory's salience (importance) manually.
 
 delete a specific memory.
 
-### `async delete_all(user_id?: string)`
+#### `mem.deleteAll(userId?: string)`
 
 **danger**: delete all memories for a specific user. required for privacy/cleanup.
 
@@ -414,20 +431,23 @@ delete a specific memory.
 ### `get temporal`
 
 Access temporal graph features:
-- `add(subject, predicate, object, opts)`
-- `get(subject, predicate)`
-- `search(pattern, opts)`
-- `history(subject)`
-- `updateFact(id, updates)`: modify confidence or metadata
-- `updateEdge(id, updates)`: modify weight or metadata
-- `invalidateFact(id)`: close a fact's validity period
-- `invalidateEdge(id)`: close an edge's validity period
-- `compare(subject, time1, time2)`: see specific changes between timestamps
-- `timeline(subject)`: full chronological event list
-427: 
+
+- `add(subject, predicate, object, opts)`: Add a fact with optional validity period.
+- `get(subject, predicate)`: Get the current valid fact.
+- `search(pattern, opts)`: Search facts by pattern (e.g. `subject:*`).
+- `history(subject)`: Get full timeline for a subject.
+- `updateFact(id, updates)`: Modify confidence or metadata of an existing fact.
+- `updateEdge(id, updates)`: Modify weight or metadata of an existing edge.
+- `invalidateFact(id, validTo?)`: End the validity period of a fact.
+- `invalidateEdge(id, validTo?)`: End the validity period of an edge.
+- `compare(subject, time1, time2)`: Diff state between two points in time.
+- `timeline(subject)`: Get a chronological list of events for a subject.
+427:
+
 ### `get compression`
 
 Access optimization features:
+
 - `compress(text, algo)`: "semantic" (default), "syntactic", or "aggressive"
 - `batch(texts, algo)`: compress multiple strings
 - `analyze(text)`: compare all compression algorithms
@@ -483,14 +503,15 @@ Integrate with code editors/IDEs.
 
 ```typescript
 // Start an IDE session
-await client.startIdeSession({
+const session = await client.startIdeSession({
     projectName: "my-project", 
     ideName: "vscode"
 });
+console.log(`Session started: ${session.sessionId}`);
 
 // Send an event (e.g., file save, compile)
 await client.sendIdeEvent({
-    sessionId: "session-123",
+    sessionId: session.sessionId,
     eventType: "save",
     filePath: "/path/to/script.ts",
     metadata: { project: "my-project" }

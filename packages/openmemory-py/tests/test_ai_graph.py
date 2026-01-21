@@ -26,7 +26,7 @@ async def test_store_node_mem_basic():
         req = LgmStoreReq(
             node="observe",
             content="Test content",
-            user_id="u1"
+            userId="u1"
         )
 
         # Execute
@@ -34,7 +34,7 @@ async def test_store_node_mem_basic():
 
         # Verify
         assert res.success
-        assert res.memory_id == "mem1"
+        assert res.memoryId == "mem1"
         assert res.node == "observe"
         assert res.memory is not None and res.memory.id == "mem1"
         assert res.memory is not None and res.memory.node == "observe"
@@ -56,14 +56,16 @@ async def test_retrieve_node_mems_query():
                 "primary_sector": "semantic",
                 "sectors": ["semantic"],
                 "created_at": 1000,
-                "metadata": {"lgm": {"namespace": "default"}},
+                "updated_at": 1000,
+                "last_seen_at": 1000,
+                "metadata": {"lgm": {"namespace": "default", "node": "plan"}},
                 "score": 0.9,
                 "user_id": "u1",
                 "tags": [],
             }
         ]
 
-        req = LgmRetrieveReq(node="plan", query="foo", user_id="u1")
+        req = LgmRetrieveReq(node="plan", query="foo", userId="u1")
         res = await retrieve_node_mems(req)
 
         assert res.success
@@ -110,7 +112,7 @@ async def test_retrieve_node_mems_tag_search():
             }
         ]
 
-        req = LgmRetrieveReq(node="plan", user_id="u1")
+        req = LgmRetrieveReq(node="plan", userId="u1")
         res = await retrieve_node_mems(req)
 
         assert res.success
@@ -142,7 +144,7 @@ async def test_get_graph_ctx_aggregation():
             )
         mock_retr.side_effect = side_effect
 
-        req = LgmContextReq(user_id="u1", limit=100)
+        req = LgmContextReq(userId="u1", limit=100)
         res = await get_graph_ctx(req)
 
         assert res.success

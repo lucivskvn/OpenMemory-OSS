@@ -5,6 +5,10 @@
 import { now, fromBase64, toBase64 } from "../utils";
 import { logger } from "../utils/logger";
 import { env, reloadConfig } from "./cfg";
+import { getContext } from "./context";
+
+// Use global crypto (Web Crypto API), supported natively by Bun and modern Node.js
+const webCrypto = globalThis.crypto;
 
 /**
  * Custom error class for security-related failures.
@@ -26,6 +30,7 @@ export class SecurityError extends Error {
 export interface EncryptionProvider {
     encrypt(plaintext: string): Promise<string>;
     decrypt(ciphertext: string): Promise<string>;
+    verifyKey(): Promise<boolean>;
 }
 
 /**
@@ -38,24 +43,52 @@ export class NoopProvider implements EncryptionProvider {
     async decrypt(ciphertext: string): Promise<string> {
         return ciphertext;
     }
+    async verifyKey(): Promise<boolean> {
+        return true;
+    }
 }
 
 /**
- * AES-256-GCM implementation using SubtleCrypto.
- * Keys are stretched from secrets using PBKDF2 with 100k iterations.
+ * Validates a table name to prevent SQL injection.
+ * STRICT: Only allows alphanumeric characters and underscores [a-zA-Z0-9_].
+ *
+ * @param name - The table name to validate.
+ * @returns The validated table name.
+ * @throws {SecurityError} If the name contains invalid characters.
  */
+export function validateTableName(name: string): string {
+    if (!name) return name;
+    // Strict validation: [a-zA-Z0-9_]
+    if (!/^[a-zA-Z0-9_]+$/.test(name)) {
+        throw new SecurityError(`Invalid table name: "${name}". Only alphanumeric and underscore allowed.`);
+    }
+    return name;
+}
+
+
+/**
+ * AES-256-GCM implementation using SubtleCrypto.
+ * Keys are stretched from secrets using PBKDF2 with 600k iterations.
+ * Includes key caching with TTL for performance.
+ */
+interface CachedKey {
+    key: CryptoKey;
+    createdAt: number;
+}
+
 export class AesGcmProvider implements EncryptionProvider {
-    private keyCache = new Map<string, CryptoKey>();
+    private keyCache = new Map<string, CachedKey>();
     private readonly ALGO = "AES-GCM";
     private readonly IV_LEN = 12; // 96 bits
+    private readonly CACHE_TTL = 60 * 60 * 1000; // 1 Hour
 
     constructor(
         private primarySecret: string,
         private secondarySecrets: string[] = [],
     ) {
-        if (!primarySecret || primarySecret.length < 16) {
+        if (!primarySecret || primarySecret.length < 32) {
             throw new Error(
-                "Primary encryption secret must be at least 16 characters.",
+                "Primary encryption secret must be at least 32 characters for AES-256 security.",
             );
         }
     }
@@ -66,10 +99,15 @@ export class AesGcmProvider implements EncryptionProvider {
      * @returns A Promise resolving to the CryptoKey.
      */
     private async getKey(secret: string): Promise<CryptoKey> {
-        if (this.keyCache.has(secret)) return this.keyCache.get(secret)!;
+        const nowMs = Date.now();
+        const cached = this.keyCache.get(secret);
+
+        if (cached && (nowMs - cached.createdAt < this.CACHE_TTL)) {
+            return cached.key;
+        }
 
         const enc = new TextEncoder();
-        const keyMaterial = await crypto.subtle.importKey(
+        const keyMaterial = await webCrypto.subtle.importKey(
             "raw",
             enc.encode(secret),
             { name: "PBKDF2" },
@@ -77,10 +115,14 @@ export class AesGcmProvider implements EncryptionProvider {
             ["deriveKey"],
         );
 
-        const key = await crypto.subtle.deriveKey(
+        const saltVal = env.encryptionSalt || "openmemory-default-salt";
+        // Warn if using default salt in production? 
+        // cfg.ts validates against "openmemory-salt-v1" but we fallback here just in case.
+
+        const key = await webCrypto.subtle.deriveKey(
             {
                 name: "PBKDF2",
-                salt: enc.encode(env.encryptionSalt),
+                salt: enc.encode(saltVal),
                 iterations: 600000,
                 hash: "SHA-256",
             },
@@ -89,7 +131,17 @@ export class AesGcmProvider implements EncryptionProvider {
             false,
             ["encrypt", "decrypt"],
         );
-        this.keyCache.set(secret, key);
+
+        // Cache with timestamp
+        this.keyCache.set(secret, { key, createdAt: nowMs });
+
+        // Cleanup old entries
+        for (const [k, v] of this.keyCache.entries()) {
+            if ((nowMs - v.createdAt) > this.CACHE_TTL) {
+                this.keyCache.delete(k);
+            }
+        }
+
         return key;
     }
 
@@ -102,10 +154,10 @@ export class AesGcmProvider implements EncryptionProvider {
     async encrypt(plaintext: string): Promise<string> {
         try {
             const key = await this.getKey(this.primarySecret);
-            const iv = crypto.getRandomValues(new Uint8Array(this.IV_LEN));
+            const iv = webCrypto.getRandomValues(new Uint8Array(this.IV_LEN));
             const enc = new TextEncoder();
 
-            const encrypted = await crypto.subtle.encrypt(
+            const encrypted = await webCrypto.subtle.encrypt(
                 { name: this.ALGO, iv },
                 key,
                 enc.encode(plaintext),
@@ -113,10 +165,10 @@ export class AesGcmProvider implements EncryptionProvider {
 
             // Serialization: v1:iv:ciphertext in base64
             const ivB64 = toBase64(iv);
-            const contentB64 = toBase64(encrypted);
+            // ArrayBuffer to Uint8Array cast required for strict TS with helper
+            const contentB64 = toBase64(new Uint8Array(encrypted));
             return `v1:${ivB64}:${contentB64}`;
         } catch (e) {
-            const { getContext } = await import("./context");
             const ctx = getContext();
             logger.error("[Security] Encryption failed:", { error: e, rid: ctx?.requestId });
             throw new SecurityError("Encryption failed", e);
@@ -148,10 +200,10 @@ export class AesGcmProvider implements EncryptionProvider {
         for (const secret of allSecrets) {
             try {
                 const key = await this.getKey(secret);
-                const decent = await crypto.subtle.decrypt(
-                    { name: this.ALGO, iv: iv as unknown as BufferSource },
+                const decent = await webCrypto.subtle.decrypt(
+                    { name: this.ALGO, iv: iv as any },
                     key,
-                    content as unknown as BufferSource,
+                    content as any,
                 );
                 return new TextDecoder().decode(decent);
             } catch {
@@ -160,7 +212,6 @@ export class AesGcmProvider implements EncryptionProvider {
             }
         }
 
-        const { getContext } = await import("./context");
         const ctx = getContext();
         logger.error("[Security] Decryption failed with all available keys.", { rid: ctx?.requestId });
         throw new SecurityError("Decryption failed. No valid keys found.");
@@ -190,7 +241,7 @@ let providerInstance: EncryptionProvider | null = null;
 export const getEncryption = (): EncryptionProvider => {
     if (providerInstance) return providerInstance;
 
-    const secret = env.encryptionKey || env.apiKey;
+    const secret = env.encryptionKey || env.apiKey; // Fallback to API Key only for NON-PROD convenience if explicit key missing
     const secondarySecrets = env.encryptionSecondaryKeys || [];
     const enabled = env.encryptionEnabled;
 
@@ -205,12 +256,18 @@ export const getEncryption = (): EncryptionProvider => {
     } else {
         providerInstance = new NoopProvider();
         if (enabled && !secret) {
+            // CRITICAL: In production, do not allow silent fallback to plaintext if encryption was requested
+            if (env.isProd) {
+                logger.error("[Security] 🚨 FATAL: Encryption enabled (OM_ENCRYPTION_ENABLED=true) but no keys found!");
+                logger.error("[Security] You must set OM_ENCRYPTION_KEY.");
+                throw new Error("Security Misconfiguration: Encryption enabled but no keys provided in Production.");
+            }
             logger.warn(
-                "[Security] ⚠️ Encryption enabled but no key found. Falling back to plaintext.",
+                "[Security] ⚠️ Encryption enabled but no key found. Falling back to plaintext (Non-Prod Mode).",
             );
         }
     }
-    return providerInstance;
+    return providerInstance!;
 };
 
 /**
@@ -219,4 +276,13 @@ export const getEncryption = (): EncryptionProvider => {
 export const resetSecurity = () => {
     reloadConfig();
     providerInstance = null;
+};
+
+/**
+ * Service object for Security operations.
+ * Use this for better testability (mocking).
+ */
+export const Security = {
+    getEncryption,
+    resetSecurity,
 };

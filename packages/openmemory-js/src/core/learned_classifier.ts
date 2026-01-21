@@ -97,8 +97,8 @@ export class LearnedClassifier {
 
         const primary = normalized[0];
         const additional = normalized
-            .slice(1, 3)
-            .filter((x) => x.prob > 0.2)
+            .slice(1, 6) // Up to 5 additional sectors
+            .filter((x) => x.prob > 0.1 && x.prob > primary.prob * 0.4) // At least 10% and 40% of primary
             .map((x) => x.sector);
 
         return {
@@ -153,8 +153,17 @@ export class LearnedClassifier {
             const s = finalSectors[i];
             if (!weights[s]) {
                 weights[s] = new Array(dim);
-                for (let j = 0; j < dim; j++) {
-                    weights[s][j] = (Math.random() - 0.5) * 0.01;
+                const randomValues = new Uint32Array(dim);
+                if (globalThis.crypto) {
+                    globalThis.crypto.getRandomValues(randomValues);
+                    for (let j = 0; j < dim; j++) {
+                        // Normalize to [-0.005, 0.005]
+                        weights[s][j] = ((randomValues[j] / 4294967295) - 0.5) * 0.01;
+                    }
+                } else {
+                    for (let j = 0; j < dim; j++) {
+                        weights[s][j] = (Math.random() - 0.5) * 0.01;
+                    }
                 }
                 biases[s] = 0;
             }

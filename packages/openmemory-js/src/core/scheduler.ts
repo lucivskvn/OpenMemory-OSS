@@ -1,10 +1,12 @@
 /**
 * @file Background Task Scheduler for OpenMemory.
-* Manages periodic maintenance jobs, handles execution locks, and tracks task health.
+* @description Manages periodic maintenance jobs, handles execution locks, and tracks task health.
+* @audited 2026-01-19
 */
 import { DistributedLock } from "../utils/lock";
 import { now } from "../utils";
 import { logger } from "../utils/logger";
+import { env } from "./cfg";
 
 /**
  * Registry for background intervals to ensure they can be cleared centrally.
@@ -60,22 +62,29 @@ export function registerInterval(
     });
 
     // Initial Delay Jitter: Spread the start of tasks within +/- 10%
-    // to prevent thundering herds on startup
+    // to prevent thundering herds on startup.
+    // In test mode or if ms is very small, we skip delay for speed.
+    const skipJitter = env.isTest || ms < 1000;
     const jitter = ms * 0.1;
-    const initialDelay = Math.random() * jitter;
+    const initialDelay = skipJitter ? 0 : Math.random() * jitter;
 
-    setTimeout(() => {
-        // Internal wrapper for consistent intervals
+    const startInterval = () => {
         const timer = setInterval(() => {
             void executeTask(id);
         }, ms);
-
         intervals.set(id, timer);
-        // Run once immediately after initial jittered delay
-        void executeTask(id);
-    }, initialDelay);
+    };
 
-    logger.info(`[Scheduler] Registered task '${id}' (interval: ${ms}ms, jitter: ~${Math.round(initialDelay)}ms)`);
+    if (initialDelay > 0) {
+        setTimeout(() => {
+            void executeTask(id).then(startInterval);
+        }, initialDelay);
+    } else {
+        // Run once immediately, then start interval
+        void executeTask(id).then(startInterval);
+    }
+
+    logger.info(`[Scheduler] Registered task '${id}' (interval: ${ms}ms, jitter: ${skipJitter ? 'skipped' : `~${Math.round(initialDelay)}ms`})`);
     return id;
 }
 
@@ -124,12 +133,14 @@ async function executeTask(id: string) {
         stats.consecutiveFailures = 0;
     } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : String(e);
-        // Don't log as error if it was just an abort/timeout we triggered? 
-        // Actually timeout IS an error for us.
         logger.error(`[Scheduler] Task '${id}' failed:`, { error: msg });
         stats.failures++;
         stats.consecutiveFailures++;
         stats.lastError = msg;
+
+        if (stats.consecutiveFailures >= 5 && stats.consecutiveFailures % 5 === 0) {
+            logger.warn(`[Scheduler] Task '${id}' has failed ${stats.consecutiveFailures} times in a row.`);
+        }
     } finally {
         if (stats) stats.running = false;
         // Always release the lock
@@ -160,6 +171,9 @@ export function unregisterInterval(id: string) {
     if (intervals.has(id)) {
         clearInterval(intervals.get(id));
         intervals.delete(id);
+    }
+    // Always clean up stats/callbacks if they exist
+    if (intervalStats.has(id)) {
         intervalStats.delete(id);
         callbacks.delete(id);
         logger.info(`[Scheduler] Unregistered task '${id}'`);
@@ -170,7 +184,7 @@ export function unregisterInterval(id: string) {
  * Returns a list of currently active maintenance interval IDs.
  */
 export function getRunningIntervals(): string[] {
-    return Array.from(intervals.keys());
+    return Array.from(intervalStats.keys());
 }
 
 /**

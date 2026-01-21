@@ -4,7 +4,7 @@ import React, { useEffect, useState, useRef, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { api } from "@/lib/api";
 import Link from "next/link";
-import { ArrowLeft, Loader2, RefreshCw, Layers, Database, Activity } from "lucide-react";
+import { ArrowLeft, Loader2, RefreshCw, Layers, Database, Activity, X, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GraphNode, GraphLink } from "@/lib/types";
 
@@ -30,15 +30,18 @@ export function GraphView() {
     const [data, setData] = useState<{ nodes: GraphNode[], links: GraphLink[] }>({ nodes: [], links: [] });
     const [loading, setLoading] = useState(true);
     const [selectedNode, setSelectedNode] = useState<string | null>(null);
+    const [error, setError] = useState<string | null>(null);
     const graphRef = useRef<any>(null); // Use existing any for library ref
 
     const fetchData = useCallback(async () => {
         setLoading(true);
+        setError(null);
         try {
             const graphData = await api.getGraphData();
             setData(graphData);
-        } catch (err) {
+        } catch (err: unknown) {
             console.error(err);
+            setError(err instanceof Error ? err.message : "Failed to load graph data");
         } finally {
             setLoading(false);
         }
@@ -48,7 +51,7 @@ export function GraphView() {
         fetchData();
     }, [fetchData]);
 
-    const handleNodeClick = useCallback((node: any) => {
+    const handleNodeClick = useCallback((node: object) => {
         // node is VisualNode
         const n = node as VisualNode;
         setSelectedNode(n.id);
@@ -59,7 +62,7 @@ export function GraphView() {
     }, []);
 
     const selectedLinks = data.links.filter(
-        (l: any) => {
+        (l: GraphLink) => {
             const link = l as VisualLink;
             const sId = typeof link.source === 'object' ? (link.source as VisualNode).id : link.source;
             const tId = typeof link.target === 'object' ? (link.target as VisualNode).id : link.target;
@@ -98,48 +101,84 @@ export function GraphView() {
             </div>
 
             {/* Main Graph Area */}
-            <div className="flex-1 h-full w-full cursor-crosshair">
-                <ForceGraph2D
-                    ref={graphRef}
-                    graphData={data}
-                    nodeLabel="label"
-                    nodeColor={() => "#6366f1"}
-                    nodeRelSize={6}
-                    linkColor={() => "rgba(255, 255, 255, 0.1)"}
-                    linkWidth={(link: any) => ((link as GraphLink).confidence || 0.5) * 3}
-                    linkDirectionalArrowLength={4}
-                    linkDirectionalArrowRelPos={1}
-                    onNodeClick={handleNodeClick}
-                    backgroundColor="#050505"
-                    nodeCanvasObject={(node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
-                        const n = node as VisualNode;
-                        const label = n.label;
-                        const fontSize = 12 / globalScale;
-                        ctx.font = `${fontSize}px Inter, system-ui, sans-serif`;
+            <div className="flex-1 h-full w-full cursor-crosshair relative">
+                {error ? (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center text-red-400 gap-4 pointer-events-none">
+                        <XCircle size={48} className="opacity-50" />
+                        <div className="text-center">
+                            <h3 className="text-sm font-bold text-red-400">Connection Failed</h3>
+                            <p className="text-xs mt-1 max-w-xs mx-auto text-red-400/70">
+                                {error}
+                            </p>
+                            <button
+                                onClick={fetchData}
+                                className="mt-4 px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-bold rounded-lg transition-colors pointer-events-auto border border-red-500/20"
+                            >
+                                Retry Connection
+                            </button>
+                        </div>
+                    </div>
+                ) : !loading && data.nodes.length === 0 ? (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center text-zinc-500 gap-4 pointer-events-none">
+                        <Database size={48} className="opacity-20" />
+                        <div className="text-center">
+                            <h3 className="text-sm font-bold text-zinc-400">No Graph Data Found</h3>
+                            <p className="text-xs mt-1 max-w-xs mx-auto">
+                                The knowledge graph is empty. Add memories or configure a source to generate the graph.
+                            </p>
+                            <button
+                                onClick={fetchData}
+                                className="mt-4 px-4 py-2 bg-white/5 hover:bg-white/10 text-xs font-bold rounded-lg transition-colors pointer-events-auto border border-white/5"
+                            >
+                                Refresh Data
+                            </button>
+                        </div>
+                    </div>
+                ) : (
+                    <ForceGraph2D
+                        ref={graphRef}
+                        graphData={data}
+                        nodeLabel="label"
+                        nodeColor={(node: any) => (node as GraphNode).group === "fact" ? "#6366f1" : "#f43f5e"}
+                        nodeRelSize={6}
+                        nodeVal={(node: any) => (node as GraphNode).val || 1}
+                        linkColor={() => "rgba(255, 255, 255, 0.1)"}
+                        linkWidth={(link: any) => ((link as GraphLink).weight || 0.5) * 3}
+                        linkDirectionalArrowLength={4}
+                        linkDirectionalArrowRelPos={1}
+                        onNodeClick={handleNodeClick}
+                        backgroundColor="#050505"
+                        nodeCanvasObject={(node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
+                            const n = node as VisualNode;
+                            const label = n.label;
+                            const fontSize = 12 / globalScale;
+                            ctx.font = `${fontSize}px Inter, system-ui, sans-serif`;
 
-                        // Draw shadow/glow
-                        ctx.shadowColor = "rgba(99, 102, 241, 0.4)";
-                        ctx.shadowBlur = 15;
+                            // Draw shadow/glow
+                            ctx.shadowColor = "rgba(99, 102, 241, 0.4)";
+                            ctx.shadowBlur = 15;
 
-                        // Draw node circle
-                        ctx.fillStyle = n.id === selectedNode ? "#818cf8" : "#6366f1";
-                        ctx.beginPath();
-                        if (n.x !== undefined && n.y !== undefined) {
-                            ctx.arc(n.x, n.y, 4, 0, 2 * Math.PI, false);
-                            ctx.fill();
+                            // Draw node circle
+                            const baseColor = n.group === "fact" ? "#6366f1" : "#f43f5e";
+                            ctx.fillStyle = n.id === selectedNode ? "#818cf8" : baseColor;
+                            ctx.beginPath();
+                            if (n.x !== undefined && n.y !== undefined) {
+                                ctx.arc(n.x, n.y, 4, 0, 2 * Math.PI, false);
+                                ctx.fill();
 
-                            // Reset shadow
-                            ctx.shadowBlur = 0;
+                                // Reset shadow
+                                ctx.shadowBlur = 0;
 
-                            if (globalScale > 1.5) {
-                                ctx.textAlign = "center";
-                                ctx.textBaseline = "middle";
-                                ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
-                                ctx.fillText(label, n.x, n.y + 10);
+                                if (globalScale > 1.5) {
+                                    ctx.textAlign = "center";
+                                    ctx.textBaseline = "middle";
+                                    ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
+                                    ctx.fillText(label, n.x, n.y + 10);
+                                }
                             }
-                        }
-                    }}
-                />
+                        }}
+                    />
+                )}
             </div>
 
             {/* Sidebar Details (Slide-over) */}
@@ -155,16 +194,17 @@ export function GraphView() {
                     <button
                         onClick={() => setSelectedNode(null)}
                         className="p-2 text-zinc-500 hover:text-white bg-white/5 rounded-xl transition-all"
+                        aria-label="Close sidebar"
                     >
-                        ✕
+                        <X size={16} />
                     </button>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                     <div className="p-4 bg-white/5 rounded-2xl border border-white/5">
                         <div className="text-zinc-500 mb-2"><Layers size={16} /></div>
-                        <h3 className="text-[9px] uppercase tracking-widest text-zinc-500 font-bold mb-1">Entity Type</h3>
-                        <p className="text-xs font-bold text-zinc-300">Semantic Node</p>
+                        <h3 className="text-[9px] uppercase tracking-widest text-zinc-500 font-bold mb-1">Node Type</h3>
+                        <p className="text-xs font-bold text-zinc-300">{(data.nodes.find(n => n.id === selectedNode)?.group === "fact") ? "Semantic Fact" : "Conceptual Entity"}</p>
                     </div>
                     <div className="p-4 bg-white/5 rounded-2xl border border-white/5">
                         <div className="text-zinc-500 mb-2"><Database size={16} /></div>

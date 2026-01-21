@@ -78,7 +78,7 @@ export const TemporalGraph = ({ data, onNodeClick }: TemporalGraphProps) => {
                     }}
                     linkWidth={(link: object) => {
                         const l = link as GraphLink;
-                        return (l.label === "subject" || l.label === "object") ? 1 : 2;
+                        return (l.label === "subject" || l.label === "object") ? 1 : (l.weight || 2);
                     }}
                     linkDirectionalParticles={(link: object) => ((link as GraphLink).label === "subject" || (link as GraphLink).label === "object") ? 0 : 4}
                     linkDirectionalParticleSpeed={0.005}

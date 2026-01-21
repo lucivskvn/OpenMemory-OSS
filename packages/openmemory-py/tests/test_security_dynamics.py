@@ -14,6 +14,7 @@ def test_re_encrypt_rotation():
     with patch("openmemory.core.config.env") as mock_env:
         mock_env.encryption_key = "primary_secret_key_must_be_long_enough" # 32+ chars
         mock_env.encryption_secondary_keys = ["old_secret_key_must_be_long_enough"]
+        mock_env.encryption_salt = "test_salt"
         mock_env.encryption_enabled = True
         
         provider = EncryptionProvider()

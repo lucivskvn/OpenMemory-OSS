@@ -1,68 +1,38 @@
+/**
+ * @file mcp.ts
+ * @description Model Context Protocol (MCP) server implementation for OpenMemory.
+ * @audited 2026-01-19
+ */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { IncomingMessage, ServerResponse } from "http";
 import { z } from "zod";
 
-import { env } from "../core/cfg";
-import { runInContext, SecurityContext, verifyContext } from "../core/context";
-import { vectorStore } from "../core/db";
-import { sectorConfigs } from "../core/hsg_config";
+import { env, VERSION } from "../core/cfg";
 import { Memory } from "../core/memory";
-import {
-    type HsgQueryResult,
-    type RpcErrorCode,
-    type SectorType,
-} from "../core/types";
+import { sectorConfigs } from "../core/hsg_config";
+import { type RpcErrorCode } from "../core/types";
 import { getEmbeddingInfo } from "../memory/embed";
 import { AppError } from "../server/errors";
-import type { AdvancedRequest, ServerApp } from "../server/server";
-import { queryFactsAtTime } from "../temporal_graph/query";
 import { logger } from "../utils/logger";
-import { storeNodeMem } from "./graph";
-import { getIdeContext, getIdePatterns } from "./ide";
 import {
-    SearchSchema,
-    sectorEnum,
-    StoreSchema,
-    TemporalCompareSchema,
-    TemporalDecaySchema,
-    TemporalFactSchema,
-    TemporalQuerySchema,
-    TemporalSearchSchema,
-} from "./schemas";
+    registerCoreMemoryTools,
+    registerIngestTools,
+} from "./mcp_tools_core";
+import { registerTemporalGraphTools } from "./mcp_tools_temporal";
+import { registerLangGraphTools, registerIdeTools } from "./mcp_tools_graph";
+import { registerAdminTools } from "./mcp_tools_admin";
 
 /**
- * MCP Server version - synchronized with package.json version.
- * Update this when releasing new versions.
+ * MCP Server version - synchronized with package.json version via core/cfg.
  */
-const MCP_VERSION = "2.3.0";
+const MCP_VERSION = VERSION;
 
 /**
  * MCP Protocol date - indicates the protocol specification version.
- * @see https://modelcontextprotocol.io/specification/versioning
  */
 const MCP_PROTOCOL_DATE = "2025-11-25";
-
-/* sectorEnum exported from schemas.ts */
-
-const truncate = (val: string, max = 200) =>
-    val.length <= max ? val : `${val.slice(0, max).trimEnd()}...`;
-
-/**
- * Format query results into a human-readable list for LLM consumption.
- * @param matches Array of HSG query results.
- */
-const formatMatches = (matches: HsgQueryResult[]): string =>
-    matches
-        .map((m, idx) => {
-            const preview = truncate(
-                m.content.replace(/\s+/g, " ").trim(),
-                200,
-            );
-            return `${idx + 1}. [${m.primarySector}] score=${(m.score || 0).toFixed(3)} salience=${(m.salience || 0).toFixed(3)} id=${m.id}\n${preview}`;
-        })
-        .join("\n\n");
 
 const setHeaders = (res: ServerResponse) => {
     res.setHeader("Content-Type", "application/json");
@@ -111,16 +81,18 @@ const handleToolError = (
             400,
         );
     } else {
-        const msg = error instanceof Error ? error.message : String(error);
+        let msg = error instanceof Error ? error.message : String(error);
+        // Redact potential file paths
+        msg = msg.replace(/[a-zA-Z]:\\[\w\\.\-]+/g, "[PATH_REDACTED]")
+            .replace(/\/[a-zA-Z0-9_\-\/.]+/g, "[PATH_REDACTED]");
         sendMcpError(res, -32603, `Internal Error: ${msg}`, id, 500);
     }
 };
 
 /**
- * Creates and configures a Model Context Protocol (MCP) server instance.
- * Exposes tools for memory querying, storage, reinforcement, and temporal graph operations.
+ * Creates and configures the OpenMemory MCP server.
  */
-export const createMcpServer = () => {
+export const createMcpServer = (): McpServer => {
     const mem = new Memory();
     const srv = new McpServer(
         {
@@ -136,1093 +108,25 @@ export const createMcpServer = () => {
         },
     );
 
-
-
-    // Helper to wrap tool implementation with error handling
-    const wrapTool = <T extends Record<string, any>, R extends { content: { type: "text"; text: string }[] }>(
-        impl: (args: T) => Promise<R>
-    ) => async (args: T) => {
-        try {
-            return await impl(args);
-        } catch (error) {
-            logger.error(`[MCP] Tool Execution Error`, { error });
-            const msg = error instanceof Error ? error.message : String(error);
-            return {
-                isError: true,
-                content: [{ type: "text" as const, text: `Error: ${msg}` }]
-            };
-        }
-    };
-
-    /**
-     * Tool: openmemory_query
-     * Semantic search over the memory store using hybrid retrieval (Vector + BM25).
-     */
-    srv.tool(
-        "openmemory_query",
-        "Semantic search over the memory store",
-        {
-            query: SearchSchema.shape.query,
-            limit: SearchSchema.shape.limit
-                .optional()
-                .describe("Maximum number of results to return"),
-            k: SearchSchema.shape.limit
-                .optional()
-                .describe("Legacy alias for limit"),
-            sector: sectorEnum
-                .optional()
-                .describe("Restrict search to a specific cognitive sector"),
-            minSalience: SearchSchema.shape.minSalience,
-            userId: SearchSchema.shape.userId,
-        },
-        wrapTool(async (args: {
-            query: string;
-            k?: number;
-            limit?: number;
-            sector?: SectorType;
-            minSalience?: number;
-            userId?: string;
-        }) => {
-            const {
-                query,
-                k,
-                limit,
-                sector,
-                minSalience,
-                userId: argUserId,
-            } = args;
-            const finalLimit = limit || k || 5;
-
-            const userId = verifyContext(argUserId);
-
-            const matches = await mem.search(query, {
-                userId,
-                limit: finalLimit,
-                sectors: sector ? [sector] : undefined,
-                minSalience, // Pass directly to hsgQuery via Memory.search
-            });
-
-            const summaryText = matches.length
-                ? formatMatches(matches)
-                : "No memories matched the supplied query.";
-
-            const payload = matches.map((m: HsgQueryResult) => ({
-                id: m.id,
-                score: Number((m.score || 0).toFixed(4)),
-                primarySector: m.primarySector,
-                salience: Number((m.salience || 0).toFixed(4)),
-                content: truncate(m.content, 300), // TRUNCATE for MCP to save context window
-            }));
-            return {
-                content: [
-                    { type: "text" as const, text: summaryText },
-                    {
-                        type: "text" as const,
-                        text: JSON.stringify(
-                            { query, count: matches.length, matches: payload },
-                            null,
-                            2,
-                        ),
-                    },
-                ],
-            };
-        }),
-    );
-
-    /**
-     * Tool: openmemory_store
-     * Store a new memory fragment into the system.
-     * Automatically handles embedding generation and vector storage.
-     */
-    srv.tool(
-        "openmemory_store",
-        "Store a new memory fragment",
-        {
-            content: StoreSchema.shape.content,
-            tags: StoreSchema.shape.tags,
-            metadata: StoreSchema.shape.metadata,
-            userId: StoreSchema.shape.userId,
-        },
-        wrapTool(async (args: {
-            content: string;
-            tags?: string[];
-            metadata?: Record<string, unknown>;
-            userId?: string;
-        }) => {
-            const { content, tags, metadata, userId: argUserId } = args;
-            const userId = verifyContext(argUserId);
-            const res = await mem.add(content, { userId, tags, ...metadata });
-
-            const statusText = `Stored memory ${res.id} (primary=${res.primarySector})${userId ? ` [user=${userId}]` : ""}`;
-            const payload = {
-                id: res.id,
-                primarySector: res.primarySector,
-                userId: userId ?? null,
-            };
-            return {
-                content: [
-                    { type: "text" as const, text: statusText },
-                    {
-                        type: "text" as const,
-                        text: JSON.stringify(payload, null, 2),
-                    },
-                ],
-            };
-        }),
-    );
-
-    /**
-     * Tool: openmemory_ingest_url
-     * Ingest content from a given URL (webpage, PDF, etc.).
-     */
-    srv.tool(
-        "openmemory_ingest_url",
-        "Ingest content from a URL",
-        {
-            url: z.string().url().refine(u => u.startsWith("http://") || u.startsWith("https://"), { message: "Only HTTP/HTTPS URLs are allowed" }).describe("URL to ingest content from (HTTP/HTTPS only)"),
-            tags: z
-                .array(z.string())
-                .optional()
-                .describe("Tags to apply to ingested memory"),
-            userId: z.string().optional().describe("User context"),
-        },
-        wrapTool(async (args: { url: string; tags?: string[]; userId?: string }) => {
-            const { url, tags, userId: argUserId } = args;
-            const userId = verifyContext(argUserId);
-
-            // Lazy import to handle potential circular deps or load time
-            const { ingestUrl } = await import("../ops/ingest");
-
-            const result = await ingestUrl(
-                url,
-                { source: "mcp_url", tags },
-                {},
-                userId ?? undefined,
-            );
-
-            return {
-                content: [
-                    { type: "text" as const, text: `Ingested URL: ${url}` },
-                    {
-                        type: "text" as const,
-                        text: JSON.stringify(result, null, 2),
-                    },
-                ],
-            };
-        }),
-    );
-
-    /**
-     * Tool: openmemory_reinforce
-     * Increase the salience (importance) of a specific memory.
-     */
-    srv.tool(
-        "openmemory_reinforce",
-        "Reinforce a memory's salience",
-        {
-            id: z.string().min(1).describe("Memory identifier to reinforce"),
-            boost: z
-                .number()
-                .min(0.01)
-                .max(1)
-                .default(0.1)
-                .describe("Salience boost amount (default 0.1)"),
-            userId: z
-                .string()
-                .optional()
-                .describe("Optional user context for authorization"),
-        },
-        wrapTool(async (args: { id: string; boost: number; userId?: string }) => {
-            const { id, boost, userId: argUserId } = args;
-            const userId = verifyContext(argUserId);
-            const m = userId ? new Memory(userId) : mem;
-            await m.reinforce(id, boost);
-            return {
-                content: [
-                    {
-                        type: "text" as const,
-                        text: `Reinforced memory ${id} by ${boost}`,
-                    },
-                ],
-            };
-        }),
-    );
-
-    /**
-     * Tool: openmemory_ingest_content
-     * Ingest raw text content directly with optional metadata and config.
-     */
-    srv.tool(
-        "openmemory_ingest_content",
-        "Ingest raw content with processing",
-        {
-            content: z.string().min(1).describe("Text content to ingest"),
-            contentType: z.string().min(1).default("text/plain").describe("MIME type"),
-            tags: z.array(z.string()).optional(),
-            metadata: z.record(z.string(), z.any()).optional(),
-            config: z.record(z.string(), z.any()).optional(),
-            userId: z.string().optional(),
-        },
-        wrapTool(async (args: {
-            content: string;
-            contentType: string;
-            tags?: string[];
-            metadata?: Record<string, unknown>;
-            config?: Record<string, unknown>;
-            userId?: string;
-        }) => {
-            const { content, contentType, tags, metadata, config, userId: argUserId } = args;
-            const userId = verifyContext(argUserId);
-
-            // Lazy import
-            const { ingestDocument } = await import("../ops/ingest");
-
-            const result = await ingestDocument(
-                contentType,
-                content,
-                { ...metadata, tags }, // Tags are merged into metadata in ingest pipeline
-                config,
-                userId ?? undefined
-            );
-
-            return {
-                content: [
-                    { type: "text" as const, text: `Ingested content (${result.totalTokens} tokens)` },
-                    {
-                        type: "text" as const,
-                        text: JSON.stringify({
-                            rootId: result.rootMemoryId,
-                            childCount: result.childCount,
-                            strategy: result.strategy
-                        }, null, 2),
-                    },
-                ],
-            };
-        })
-    );
-
-    /**
-     * Tool: openmemory_list
-     * List recent memories with optional sector or user filtering.
-     */
-    srv.tool(
-        "openmemory_list",
-        "List recent memories",
-        {
-            limit: z
-                .number()
-                .int()
-                .min(1)
-                .max(50)
-                .default(10)
-                .describe("Number of memories to return"),
-            sector: sectorEnum
-                .optional()
-                .describe("Optionally limit to a sector"),
-            userId: z
-                .string()
-                .trim()
-                .min(1)
-                .optional()
-                .describe("Restrict results to a specific user identifier"),
-        },
-        wrapTool(async (args: {
-            limit: number;
-            sector?: SectorType;
-            userId?: string;
-        }) => {
-            const { limit, sector, userId: argUserId } = args;
-            const userId = verifyContext(argUserId);
-            const m = userId ? new Memory(userId) : mem;
-
-            // Use hostList which supports sector filtering at the database level
-            const items = await m.hostList(limit, 0, sector, userId);
-
-            const lines = items.map(
-                (item, idx) =>
-                    `${idx + 1}. [${item.primarySector}] salience=${(item.salience || 0).toFixed(3)} id=${item.id}${item.tags.length ? ` tags=${item.tags.join(", ")}` : ""}${item.userId ? ` user=${item.userId}` : ""}\n${truncate(item.content, 200)}`,
-            );
-            return {
-                content: [
-                    {
-                        type: "text" as const,
-                        text: lines.join("\n\n") || "No memories stored yet.",
-                    },
-                    {
-                        type: "text" as const,
-                        text: JSON.stringify({ items }, null, 2),
-                    },
-                ],
-            };
-        }),
-    );
-
-    srv.tool(
-        "openmemory_get",
-        "Retrieve a specific memory by ID",
-        {
-            id: z.string().min(1).describe("Memory identifier to load"),
-            includeVectors: z
-                .boolean()
-                .default(false)
-                .describe("Include sector vector metadata"),
-            userId: z
-                .string()
-                .trim()
-                .min(1)
-                .optional()
-                .describe(
-                    "Validate ownership against a specific user identifier",
-                ),
-        },
-        wrapTool(async (args: {
-            id: string;
-            includeVectors: boolean;
-            userId?: string;
-        }) => {
-            const { id, includeVectors, userId: argUserId } = args;
-            const userId = verifyContext(argUserId);
-            const m = userId ? new Memory(userId) : mem;
-            const item = await m.get(id);
-            if (!item)
-                return {
-                    content: [
-                        {
-                            type: "text" as const,
-                            text: `Memory ${id} not found.`,
-                        },
-                    ],
-                };
-
-            const result: Record<string, unknown> = { ...item };
-
-            // Fetch vectors if requested
-            if (includeVectors) {
-                const vectors = await vectorStore.getVectorsByIds([id], userId);
-                result.vectors = vectors.map((v) => ({
-                    sector: v.sector,
-                    dim: v.dim,
-                    // Include first 8 elements as preview to avoid large payloads
-                    vectorPreview: v.vector.slice(0, 8),
-                    vectorLength: v.vector.length,
-                }));
-            }
-
-            return {
-                content: [
-                    {
-                        type: "text" as const,
-                        text: JSON.stringify(result, null, 2),
-                    },
-                ],
-            };
-        }),
-    );
-
-    srv.tool(
-        "openmemory_update",
-        "Update an existing memory",
-        {
-            id: z.string().min(1).describe("Memory identifier to update"),
-            content: z.string().optional().describe("New content text"),
-            tags: z.array(z.string()).optional().describe("New tags"),
-            metadata: z.record(z.string(), z.any()).optional().describe("Metadata updates"),
-            userId: z.string().optional().describe("User context for ownership validation"),
-        },
-        wrapTool(async (args: {
-            id: string;
-            content?: string;
-            tags?: string[];
-            metadata?: Record<string, unknown>;
-            userId?: string;
-        }) => {
-            const { id, content, tags, metadata, userId: argUserId } = args;
-            const userId = verifyContext(argUserId);
-            const m = userId ? new Memory(userId) : mem;
-
-            const updated = await m.update(id, content, tags, metadata);
-            if (!updated) {
-                return {
-                    isError: true,
-                    content: [{ type: "text" as const, text: `Failed to update memory ${id}. It may not exist or belongs to another user.` }],
-                };
-            }
-
-            return {
-                content: [
-                    {
-                        type: "text" as const,
-                        text: `Updated memory ${id} successfully.`,
-                    },
-                    {
-                        type: "text" as const,
-                        text: JSON.stringify(updated, null, 2),
-                    },
-                ],
-            };
-        }),
-    );
-
-    srv.tool(
-        "openmemory_delete",
-        "Delete a memory",
-        {
-            id: z.string().min(1).describe("Memory identifier to delete"),
-            userId: z.string().optional().describe("User context for ownership validation"),
-        },
-        wrapTool(async (args: { id: string; userId?: string }) => {
-            const { id, userId: argUserId } = args;
-            const userId = verifyContext(argUserId);
-            const m = userId ? new Memory(userId) : mem;
-
-            await m.delete(id);
-
-            return {
-                content: [
-                    {
-                        type: "text" as const,
-                        text: `Deleted memory ${id}`,
-                    },
-                ],
-            };
-        }),
-    );
-
-    srv.tool(
-        "openmemory_temporal_fact_create",
-        "Create a temporal fact (triplet). High-level knowledge storage.",
-        {
-            subject: TemporalFactSchema.shape.subject,
-            predicate: TemporalFactSchema.shape.predicate,
-            object: TemporalFactSchema.shape.object,
-            validFrom: TemporalFactSchema.shape.validFrom,
-            confidence: TemporalFactSchema.shape.confidence,
-            userId: TemporalFactSchema.shape.userId,
-            metadata: TemporalFactSchema.shape.metadata,
-        },
-        wrapTool(async (args: {
-            subject: string;
-            predicate: string;
-            object: string;
-            validFrom?: string;
-            confidence: number;
-            userId?: string;
-            metadata?: Record<string, unknown>;
-        }) => {
-            const {
-                subject,
-                predicate,
-                object,
-                validFrom,
-                confidence,
-                userId: argUserId,
-                metadata,
-            } = args;
-            const userId = verifyContext(argUserId);
-            const m = userId ? new Memory(userId) : mem;
-            let from: Date | undefined;
-            if (validFrom) {
-                const parsed = new Date(validFrom);
-                if (!isNaN(parsed.getTime())) from = parsed;
-            }
-            const id = await m.temporal.add(subject, predicate, object, {
-                validFrom: from,
-                confidence,
-                metadata,
-            });
-            return {
-                content: [
-                    {
-                        type: "text" as const,
-                        text: `Created temporal fact ${id}: ${subject} ${predicate} ${object} (confidence: ${confidence})`,
-                    },
-                ],
-            };
-        }),
-    );
-
-    srv.tool(
-        "openmemory_temporal_fact_query",
-        "Query temporal facts at a specific point in time (Time Travel).",
-        {
-            subject: TemporalQuerySchema.shape.subject,
-            predicate: TemporalQuerySchema.shape.predicate,
-            object: TemporalQuerySchema.shape.object,
-            at: TemporalQuerySchema.shape.at,
-            userId: TemporalQuerySchema.shape.userId,
-        },
-        wrapTool(async (args: {
-            subject?: string;
-            predicate?: string;
-            object?: string;
-            at?: string;
-            userId?: string;
-        }) => {
-            const { subject, predicate, object, at, userId: argUserId } = args;
-            const userId = verifyContext(argUserId);
-            const atDate = at ? new Date(at) : new Date();
-
-            // Use queryFactsAtTime for precise filtering by subject/predicate/object
-            const facts = await queryFactsAtTime(
-                subject || undefined,
-                predicate || undefined,
-                object || undefined,
-                atDate,
-                0.0, // minConfidence
-                userId,
-            );
-
-            return {
-                content: [
-                    {
-                        type: "text" as const,
-                        text: facts.length
-                            ? `Found ${facts.length} facts:`
-                            : "No facts found matching criteria.",
-                    },
-                    {
-                        type: "text" as const,
-                        text: JSON.stringify(facts, null, 2),
-                    },
-                ],
-            };
-        }),
-    );
-
-    srv.tool(
-        "openmemory_temporal_fact_update",
-        "Update an existing temporal fact",
-        {
-            factId: z.string().min(1).describe("Fact ID to update"),
-            confidence: z.number().optional().describe("New confidence score (0-1)"),
-            metadata: z.record(z.string(), z.any()).optional().describe("Metadata updates"),
-            userId: z.string().optional(),
-        },
-        wrapTool(async (args: {
-            factId: string;
-            confidence?: number;
-            metadata?: Record<string, unknown>;
-            userId?: string;
-        }) => {
-            const { factId, confidence, metadata, userId: argUserId } = args;
-            const userId = verifyContext(argUserId);
-            const m = userId ? new Memory(userId) : mem;
-
-            await m.temporal.updateFact(factId, confidence, metadata);
-
-            return {
-                content: [
-                    {
-                        type: "text" as const,
-                        text: `Updated fact ${factId}`,
-                    },
-                ],
-            };
-        }),
-    );
-
-    srv.tool(
-        "openmemory_temporal_timeline",
-        "Get timeline for a subject",
-        {
-            subject: z.string().min(1).describe("Subject to get timeline for"),
-            userId: z.string().optional(),
-        },
-        wrapTool(async (args: { subject: string; userId?: string }) => {
-            const { subject, userId: argUserId } = args;
-            const userId = verifyContext(argUserId);
-            const m = userId ? new Memory(userId) : mem;
-            const timeline = await m.temporal.history(subject);
-            return {
-                content: [
-                    { type: "text" as const, text: `Timeline for ${subject}:` },
-                    {
-                        type: "text" as const,
-                        text: JSON.stringify(timeline, null, 2),
-                    },
-                ],
-            };
-        }),
-    );
-
-    srv.tool(
-        "openmemory_temporal_edge_create",
-        "Create a relationship edge",
-        {
-            sourceId: z.string().describe("ID of the source temporal fact"),
-            targetId: z.string().describe("ID of the target temporal fact"),
-            relationType: z
-                .string()
-                .describe(
-                    "Type of relation (e.g., 'causal', 'temporal_before)",
-                ),
-            weight: z.number().min(0).max(1).default(1.0),
-            userId: z.string().optional(),
-        },
-        wrapTool(async (args: {
-            sourceId: string;
-            targetId: string;
-            relationType: string;
-            weight: number;
-            userId?: string;
-        }) => {
-            const {
-                sourceId,
-                targetId,
-                relationType,
-                weight,
-                userId: argUserId,
-            } = args;
-            const userId = verifyContext(argUserId);
-            const m = userId ? new Memory(userId) : mem;
-            const id = await m.temporal.addEdge(
-                sourceId,
-                targetId,
-                relationType,
-                { weight },
-            );
-            return {
-                content: [
-                    {
-                        type: "text" as const,
-                        text: `Created temporal edge ${id}: ${sourceId} --[${relationType}]--> ${targetId} (weight: ${weight})`,
-                    },
-                ],
-            };
-        }),
-    );
-
-    srv.tool(
-        "openmemory_temporal_edge_query",
-        "Query relationship edges",
-        {
-            sourceId: z.string().optional(),
-            targetId: z.string().optional(),
-            relationType: z.string().optional(),
-            userId: z.string().optional(),
-        },
-        wrapTool(async (args: {
-            sourceId?: string;
-            targetId?: string;
-            relationType?: string;
-            userId?: string;
-        }) => {
-            const {
-                sourceId,
-                targetId,
-                relationType,
-                userId: argUserId,
-            } = args;
-            const userId = verifyContext(argUserId);
-            const m = userId ? new Memory(userId) : mem;
-            const edges = await m.temporal.getEdges(
-                sourceId,
-                targetId,
-                relationType,
-            );
-            return {
-                content: [
-                    {
-                        type: "text" as const,
-                        text: `Found ${edges.length} edges:`,
-                    },
-                    {
-                        type: "text" as const,
-                        text: JSON.stringify(edges, null, 2),
-                    },
-                ],
-            };
-        }),
-    );
-
-    srv.tool(
-        "openmemory_temporal_edge_update",
-        "Update an existing temporal edge",
-        {
-            edgeId: z.string().min(1).describe("Edge ID to update"),
-            weight: z.number().optional().describe("New weight"),
-            metadata: z.record(z.string(), z.any()).optional().describe("Metadata updates"),
-            userId: z.string().optional(),
-        },
-        wrapTool(async (args: {
-            edgeId: string;
-            weight?: number;
-            metadata?: Record<string, unknown>;
-            userId?: string;
-        }) => {
-            const { edgeId, weight, metadata, userId: argUserId } = args;
-            const userId = verifyContext(argUserId);
-            const m = userId ? new Memory(userId) : mem;
-
-            await m.temporal.updateEdge(edgeId, weight, metadata);
-
-            return {
-                content: [
-                    {
-                        type: "text" as const,
-                        text: `Updated edge ${edgeId}`,
-                    },
-                ],
-            };
-        }),
-    );
-
-    srv.tool(
-        "openmemory_temporal_fact_compare",
-        "Compare factual state of a subject between two points in time",
-        {
-            subject: TemporalCompareSchema.shape.subject,
-            time1: TemporalCompareSchema.shape.time1,
-            time2: TemporalCompareSchema.shape.time2,
-            userId: TemporalCompareSchema.shape.userId,
-        },
-        wrapTool(async (args: {
-            subject: string;
-            time1?: string;
-            time2?: string;
-            userId?: string;
-        }) => {
-            const { subject, time1, time2, userId: argUserId } = args;
-            const userId = verifyContext(argUserId);
-            const m = userId ? new Memory(userId) : mem;
-
-            const t2 = time2 ? new Date(time2) : new Date();
-            const t1 = time1 ? new Date(time1) : new Date(Date.now() - 86400000);
-
-            const comparison = await m.temporal.compare(subject, t1, t2);
-
-            return {
-                content: [
-                    {
-                        type: "text" as const,
-                        text: `Comparison for ${subject} between ${t1.toISOString()} and ${t2.toISOString()}:`,
-                    },
-                    {
-                        type: "text" as const,
-                        text: JSON.stringify(comparison, null, 2),
-                    },
-                ],
-            };
-        })
-    );
-
-    srv.tool(
-        "openmemory_temporal_stats",
-        "Get global statistics for temporal facts and edges",
-        {
-            userId: z.string().optional().describe("User context"),
-        },
-        wrapTool(async (args: { userId?: string }) => {
-            const userId = verifyContext(args.userId);
-            const m = userId ? new Memory(userId) : mem;
-            const stats = await m.temporal.stats();
-
-            return {
-                content: [
-                    {
-                        type: "text" as const,
-                        text: JSON.stringify(stats, null, 2),
-                    },
-                ],
-            };
-        })
-    );
-
-    srv.tool(
-        "openmemory_temporal_decay",
-        "Apply confidence decay to active facts",
-        {
-            decayRate: TemporalDecaySchema.shape.decayRate,
-            userId: TemporalDecaySchema.shape.userId,
-        },
-        wrapTool(async (args: { decayRate?: number; userId?: string }) => {
-            const userId = verifyContext(args.userId);
-            const m = userId ? new Memory(userId) : mem;
-            const changes = await m.temporal.decay(args.decayRate);
-
-            return {
-                content: [
-                    {
-                        type: "text" as const,
-                        text: `Confidence decay applied. ${changes} facts affected.`,
-                    },
-                ],
-            };
-        })
-    );
-
-    srv.tool(
-        "openmemory_get_graph_context",
-        "Retrieve related facts and entities for a specific fact (subgraph traversal)",
-        {
-            factId: z.string().min(1).describe("Centric fact ID"),
-            relation: z.string().optional().describe("Filter by relation type"),
-            at: z.string().optional().describe("Point in time (ISO)"),
-            userId: z.string().optional(),
-        },
-        wrapTool(async (args: { factId: string; relation?: string; at?: string; userId?: string }) => {
-            const userId = verifyContext(args.userId);
-            const m = userId ? new Memory(userId) : mem;
-            const atDate = args.at ? new Date(args.at) : new Date();
-
-            const context = await m.temporal.getGraphContext(args.factId, {
-                relationType: args.relation,
-                at: atDate,
-            });
-
-            return {
-                content: [
-                    {
-                        type: "text" as const,
-                        text: `Retrieved graph context for fact ${args.factId}:`,
-                    },
-                    {
-                        type: "text" as const,
-                        text: JSON.stringify(context, null, 2),
-                    },
-                ],
-            };
-        })
-    );
-
-    srv.tool(
-        "openmemory_get_volatile_facts",
-        "Retrieve facts that change frequently or have low stability (volatility analysis)",
-        {
-            subject: z.string().optional().describe("Filter by subject entity"),
-            limit: z.number().int().min(1).max(100).default(10),
-            userId: z.string().optional(),
-        },
-        wrapTool(async (args: { subject?: string; limit: number; userId?: string }) => {
-            const userId = verifyContext(args.userId);
-            const m = userId ? new Memory(userId) : mem;
-
-            const volatile = await m.temporal.volatile(args.subject, args.limit);
-
-            return {
-                content: [
-                    {
-                        type: "text" as const,
-                        text: args.subject
-                            ? `Most volatile facts for subject "${args.subject}":`
-                            : "Most volatile facts in the system:",
-                    },
-                    {
-                        type: "text" as const,
-                        text: JSON.stringify(volatile, null, 2),
-                    },
-                ],
-            };
-        })
-    );
-
-    srv.tool(
-        "openmemory_temporal_fact_search",
-        "Search temporal facts using keyword matching across S, P, O components.",
-        {
-            query: TemporalSearchSchema.shape.query,
-            limit: TemporalSearchSchema.shape.limit,
-            userId: TemporalSearchSchema.shape.userId,
-        },
-        wrapTool(async (args: { query: string; limit: number; userId?: string }) => {
-            const { query, limit, userId: argUserId } = args;
-            const userId = verifyContext(argUserId);
-            const m = userId ? new Memory(userId) : mem;
-            const facts = await m.temporal.search(query, { limit });
-            return {
-                content: [
-                    {
-                        type: "text" as const,
-                        text: `Found ${facts.length} facts matching "${query}":`,
-                    },
-                    {
-                        type: "text" as const,
-                        text: JSON.stringify(facts, null, 2),
-                    },
-                ],
-            };
-        }),
-    );
-
-    srv.tool(
-        "openmemory_store_node_mem",
-        "Store memory for a specific LangGraph node",
-        {
-            node: z.string().min(1).describe("The LangGraph node name"),
-            memoryId: z.string().optional().describe("ID of an existing memory to link"),
-            content: z.string().optional().describe("New content to store"),
-            userId: z.string().optional(),
-        },
-        wrapTool(async (args: {
-            node: string;
-            memoryId?: string;
-            content?: string;
-            userId?: string;
-        }) => {
-            const { node, memoryId, content, userId: argUserId } = args;
-            const userId = verifyContext(argUserId);
-
-            // If new content is provided and we have an ID, update the memory first
-            // (Note: storeNodeMem now handles memoryId directly too, but we keep this for legacy update logic if needed,
-            // or we could let storeNodeMem handle it all).
-            // Let's let storeNodeMem handle it for cleaner code.
-
-            const res = await storeNodeMem({
-                memoryId,
-                content,
-                node,
-                userId: userId ?? undefined,
-            });
-            return {
-                content: [
-                    {
-                        type: "text" as const,
-                        text: memoryId
-                            ? `Stored memory ${memoryId} for node '${node}'`
-                            : `Stored new memory for node '${node}'`,
-                    },
-                    {
-                        type: "text" as const,
-                        text: JSON.stringify(res, null, 2),
-                    },
-                ],
-            };
-        }),
-    );
-
-    /**
-     * Tool: openmemory_retrieve_node_mems
-     * Retrieve memories associated with a specific LangGraph node.
-     */
-    srv.tool(
-        "openmemory_retrieve_node_mems",
-        "Retrieve memories for a LangGraph node",
-        {
-            node: z.string().min(1).describe("Node identifier"),
-            limit: z.number().optional().default(10),
-            userId: z.string().optional(),
-        },
-        wrapTool(async (args: { node: string; limit: number; userId?: string }) => {
-            // Lazy import to avoid circular dependency
-            const { retrieveNodeMems } = await import("./graph");
-            const { node, limit, userId: argUserId } = args;
-            const userId = verifyContext(argUserId);
-
-            const memories = await retrieveNodeMems({
-                node,
-                limit,
-                userId: userId ?? undefined,
-            });
-            return {
-                content: [
-                    {
-                        type: "text" as const,
-                        text: `Retrieved ${memories.items.length} memories for node '${node}'`,
-                    },
-                    {
-                        type: "text" as const,
-                        text: JSON.stringify(memories, null, 2),
-                    },
-                ],
-            };
-        }),
-    );
-
-    /**
-     * Tool: openmemory_get_ide_context
-     * Retrieve relevant context for IDE suggestions based on file content/cursor.
-     */
-    srv.tool(
-        "openmemory_get_ide_context",
-        "Get context for IDE based on current file/cursor",
-        {
-            fileContent: z.string().describe("Current file content"),
-            cursorPosition: z.number().describe("Cursor offset"),
-            filePath: z.string().describe("Absolute file path"),
-            userId: z.string().optional(),
-        },
-        wrapTool(async (args: {
-            fileContent: string;
-            cursorPosition: number;
-            filePath: string;
-            userId?: string;
-        }) => {
-            const { fileContent, cursorPosition, filePath, userId: argUserId } =
-                args;
-            const userId = verifyContext(argUserId);
-
-            const context = await getIdeContext({
-                content: fileContent,
-                line: cursorPosition, // Using cursorPosition as line for now or we could refine this in ide.ts
-                file: filePath,
-                userId: userId ?? undefined,
-            });
-            return {
-                content: [
-                    {
-                        type: "text" as const,
-                        text: context.success
-                            ? `Found ${context.context.length} relevant context items`
-                            : "No context found",
-                    },
-                    {
-                        type: "text" as const,
-                        text: JSON.stringify(context, null, 2),
-                    },
-                ],
-            };
-        }),
-    );
-
-    /**
-     * Tool: openmemory_get_ide_patterns
-     * Retrieve coding patterns detected for the current session.
-     */
-    srv.tool(
-        "openmemory_get_ide_patterns",
-        "Get active coding patterns for the session",
-        {
-            sessionId: z.string().describe("IDE Session ID"),
-            userId: z.string().optional(),
-        },
-        wrapTool(async (args: { sessionId: string; userId?: string }) => {
-            const { sessionId, userId: argUserId } = args;
-            const userId = verifyContext(argUserId);
-
-            const result = await getIdePatterns({ sessionId, userId: userId ?? undefined });
-            return {
-                content: [
-                    {
-                        type: "text" as const,
-                        text: result.success
-                            ? `Found ${result.patternCount} active patterns`
-                            : "No active patterns",
-                    },
-                    {
-                        type: "text" as const,
-                        text: JSON.stringify(result, null, 2),
-                    },
-                ],
-            };
-        }),
-    );
+    // Register modular toolsets
+    registerCoreMemoryTools(srv, mem);
+    registerIngestTools(srv, mem);
+    registerTemporalGraphTools(srv, mem);
+    registerLangGraphTools(srv, mem);
+    registerIdeTools(srv, mem);
+    registerAdminTools(srv, mem);
 
     srv.resource(
         "openmemory-config",
         "openmemory://config",
         {
             mimeType: "application/json",
-            description:
-                "Runtime configuration snapshot for the OpenMemory MCP server",
+            description: "Runtime configuration snapshot for the OpenMemory MCP server",
         },
         async () => {
-            // Security: specific user stats are not available in this static resource context
-            // and global aggregation would violate tenant isolation.
-            const stats: unknown[] = [];
             const snapshot = {
                 mode: env.mode,
                 sectors: sectorConfigs,
-                stats,
                 embeddings: getEmbeddingInfo(),
                 server: { version: MCP_VERSION, protocol: MCP_PROTOCOL_DATE },
                 server_time: new Date().toISOString(),
@@ -1235,6 +139,7 @@ export const createMcpServer = () => {
                     "openmemory_update",
                     "openmemory_delete",
                     "openmemory_ingest_url",
+                    "openmemory_ingest_content",
                     "openmemory_temporal_fact_create",
                     "openmemory_temporal_fact_update",
                     "openmemory_temporal_fact_query",
@@ -1251,24 +156,28 @@ export const createMcpServer = () => {
                     "openmemory_get_graph_context",
                     "openmemory_get_ide_context",
                     "openmemory_get_ide_patterns",
+                    "openmemory_admin_audit_query",
+                    "openmemory_admin_webhook_create",
+                    "openmemory_admin_webhook_list",
+                    "openmemory_admin_webhook_delete",
+                    "openmemory_admin_webhook_test",
+                    "openmemory_admin_metrics",
+                    "openmemory_admin_bulk_delete",
+                    "openmemory_admin_bulk_update",
+                    "openmemory_health_check",
                 ],
             };
 
-            // Inspect active generator for IDE display
             try {
-                // Determine what model is currently active (system default)
-                // We import dynamically to avoid circular issues if any, though mcp -> adapters is safe
                 const { get_generator } = await import("./adapters");
                 const gen = await get_generator();
                 if (gen) {
-                    (snapshot as Record<string, unknown>).active_model = {
+                    (snapshot as any).active_model = {
                         provider: gen.constructor.name.replace("Generator", ""),
                         model: gen.model,
                     };
                 }
-            } catch {
-                /* ignore */
-            }
+            } catch { /* ignore */ }
 
             return {
                 contents: [
@@ -1289,19 +198,18 @@ export const createMcpServer = () => {
     return srv;
 };
 
-const MAX_PAYLOAD_SIZE = env.maxPayloadSize; // Use configured limit
+const MAX_PAYLOAD_SIZE = env.maxPayloadSize;
 
-const extractPayload = async (
-    req: IncomingMessage & { body?: unknown },
-): Promise<unknown> => {
-    if (req.body !== undefined) {
-        if (typeof req.body === "string") {
-            if (!req.body.trim()) return undefined;
-            if (req.body.length > MAX_PAYLOAD_SIZE)
-                throw new Error("Payload too large");
-            return JSON.parse(req.body);
+const extractPayload = async (req: IncomingMessage): Promise<unknown> => {
+    const body = (req as any).body;
+    if (body !== undefined) {
+        if (typeof body === "string") {
+            if (!body.trim()) return undefined;
+            if (body.length > MAX_PAYLOAD_SIZE)
+                throw new AppError(400, "BAD_REQUEST", "Payload too large");
+            return JSON.parse(body);
         }
-        if (typeof req.body === "object" && req.body !== null) return req.body;
+        if (typeof body === "object" && body !== null) return body;
         return undefined;
     }
     const raw = await new Promise<string>((resolve, reject) => {
@@ -1325,89 +233,128 @@ const extractPayload = async (
 };
 
 /**
- * Configures the MCP server to run as part of an Express/HTTP application.
+ * Adapts Elysia/Web Request to Node IncomingMessage for MCP SDK.
  */
-export const mcp = (app: ServerApp) => {
+class WebToNodeRequest extends ((typeof globalThis.EventTarget) ? globalThis.EventTarget : Object) {
+    method: string;
+    headers: Record<string, string>;
+    url: string;
+    body: any;
+
+    constructor(req: Request, body?: any) {
+        super();
+        this.method = req.method;
+        this.headers = {};
+        req.headers.forEach((v, k) => { this.headers[k] = v; });
+        this.url = new URL(req.url).pathname + new URL(req.url).search;
+        this.body = body;
+    }
+}
+
+/**
+ * mcpRoutes: Elysia plugin for MCP Server.
+ */
+import { Elysia } from "elysia";
+
+export const mcpRoutes = (app: Elysia) => {
+    // Singleton MCP Server & Transport instance per app
     const srv = createMcpServer();
     const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => crypto.randomUUID(),
         enableJsonResponse: true,
     });
-    const serverReady = srv
-        .connect(transport)
-        .then(() => {
-            logger.info("[MCP] Server started and transport connected");
-        })
-        .catch((error) => {
-            logger.error("[MCP] Failed to initialize transport:", { error });
-            throw error;
+
+    const serverReady = srv.connect(transport)
+        .then(() => logger.info("[MCP] Server started and transport connected"))
+        .catch(err => {
+            logger.error("[MCP] Transport init failed", { error: err });
+            throw err;
         });
 
-    const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
-        let payload: unknown = null;
-        try {
+    return app.group("/mcp", (app) => app
+        .all("/", async ({ request, body, set }) => {
             await serverReady;
 
-            // Only extract payload for POST/PUT requests
-            if (req.method !== "GET" && req.method !== "HEAD") {
-                payload = await extractPayload(req);
-                if (!payload || typeof payload !== "object") {
-                    sendMcpError(
-                        res,
-                        -32600,
-                        "Request body must be a JSON object",
-                    );
-                    return;
+            // Bridgeless Stream: We create a ReadableStream that transport allows writing to via Mock Response
+            const stream = new TransformStream();
+            const writer = stream.writable.getWriter();
+            const encoder = new TextEncoder();
+
+            // Mock ServerResponse
+            const mockRes: any = {
+                headers: {} as Record<string, string>,
+                statusCode: 200,
+                headersSent: false,
+                setHeader(k: string, v: string) { this.headers[k] = v; },
+                writeHead(code: number, headers?: any) {
+                    this.statusCode = code;
+                    if (headers) Object.assign(this.headers, headers);
+                    this.headersSent = true;
+                },
+                write(chunk: any) {
+                    // Send chunk to stream
+                    if (chunk instanceof Uint8Array) writer.write(chunk);
+                    else if (typeof chunk === 'string') writer.write(encoder.encode(chunk));
+                    else writer.write(encoder.encode(JSON.stringify(chunk)));
+                    return true;
+                },
+                end(chunk: any) {
+                    if (chunk) this.write(chunk);
+                    writer.close();
+                    this.finished = true;
+                    return this;
+                },
+                once() { },
+                emit() { },
+                on() { }
+            };
+
+            // Mock IncomingMessage
+            const mockReq = new WebToNodeRequest(request, body) as unknown as IncomingMessage;
+
+            // Handle
+            try {
+                // If GET, transport might need query params.
+                // If POST, transport expects payload.
+                let msg = body;
+                if (request.method === 'GET' || request.method === 'HEAD') {
+                    // transport.handleRequest handles GET for SSE usually
+                    msg = undefined;
+                } else {
+                    if (!msg || typeof msg !== 'object') msg = {}; // Empty object generic
                 }
-                if (env.verbose)
-                    logger.info(
-                        `[MCP] Incoming request: ${JSON.stringify(payload)}`,
-                    );
+
+                // Execute Transport Logic
+                // We don't await strictly if it streams? 
+                // handleRequest usually awaits the processing but writing to res might be async.
+                // However, for SSE, it keeps connection open.
+                // We must return the Response immediately with the readable stream.
+
+                transport.handleRequest(mockReq, mockRes, msg as any).catch(err => {
+                    logger.error("[MCP] Handler Error", { error: err });
+                    try { writer.close(); } catch { }
+                });
+
+            } catch (err) {
+                logger.error("[MCP] Request Error", { error: err });
+                writer.close();
             }
 
-            setHeaders(res);
-
-            // Handle request - context already established by authenticateApiRequest middleware
-            await transport.handleRequest(
-                req,
-                res,
-                payload as import("@modelcontextprotocol/sdk/types.js").JSONRPCRequest,
-            );
-        } catch (error) {
-            const id = (payload as { id?: number | string })?.id ?? null;
-            handleToolError(res, error, id);
-        }
-    };
-
-    app.post("/mcp", (req: any, res: any) => {
-        void handleRequest(req, res);
-    });
-    app.options("/mcp", (_req: any, res: any) => {
-        res.statusCode = 204;
-        setHeaders(res);
-        res.end();
-    });
-
-    const method_not_allowed = (_req: any, res: any) => {
-        sendMcpError(
-            res,
-            -32600,
-            "Method not supported. Use POST  /mcp with JSON payload.",
-            null,
-            405,
-        );
-    };
-    app.get("/mcp", (req: any, res: any) => {
-        void handleRequest(req, res);
-    });
-    app.delete("/mcp", method_not_allowed);
-    app.put("/mcp", method_not_allowed);
+            return new Response(stream.readable, {
+                status: mockRes.statusCode,
+                headers: {
+                    ...mockRes.headers,
+                    "Content-Type": mockRes.headers["Content-Type"] || "application/json"
+                }
+            });
+        })
+    );
 };
 
 /**
  * Starts the MCP server using standard I/O (stdio) transport.
  */
-export const startMcpStdio = async () => {
+export const startMcpStdio = async (): Promise<void> => {
     const srv = createMcpServer();
     const transport = new StdioServerTransport();
     await srv.connect(transport);

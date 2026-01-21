@@ -7,11 +7,10 @@ from ..core.constants import SECTOR_CONFIGS, COGNITIVE_PARAMS
 
 from ..core.config import env
 
-# Port from backend/src/ops/dynamics.ts
-# Only porting unused functions if needed, but focusing on core ones used by HSG.
+import logging
+logger = logging.getLogger("openmemory.ops.dynamics")
 
-# Cognitive Dynamics Constants
-# Shared between hsg.py, decay.py and maintenance functions
+# Port from backend/src/ops/dynamics.ts
 
 SCORING_WEIGHTS = {
     "similarity": env.scoring_similarity,
@@ -133,3 +132,80 @@ async def propagateAssociativeReinforcementToLinkedNodes(sid: str, ssal: float, 
              ups.append({"node_id": tid, "new_salience": new_sal, "current_salience": curr})
              
     return ups
+async def perform_spreading_activation_retrieval(init_ids: List[str], max_iterations: int, user_id: Optional[str] = None) -> Dict[str, float]:
+    """
+    Performs iterative spreading activation retrieval across the associative waypoint graph.
+    Simulates cognitive priming by activating neighbors of query candidates.
+    """
+    activation = {mid: 1.0 for mid in init_ids}
+    MAX_ACTIVATED_NODES = 2000
+    traversal_budget = 10000
+
+    for i in range(max_iterations):
+        # Filter and sort by energy
+        current_batch = sorted(
+            [(mid, en) for mid, en in activation.items() if en >= 0.05],
+            key=lambda x: x[1], 
+            reverse=True
+        )
+        if not current_batch: break
+
+        # Safety cap: top 500 energy sources
+        processing_batch = current_batch[:500]
+        batch_ids = [cid for cid, _ in processing_batch]
+
+        if traversal_budget <= 0:
+            logger.warning("[Dynamics] Spreading activation halted: Traversal budget exceeded.")
+            break
+
+        all_neighbors = []
+        CHUNK_SIZE = 500
+        for j in range(0, len(batch_ids), CHUNK_SIZE):
+            if traversal_budget <= 0: break
+            chunk = batch_ids[j:j + CHUNK_SIZE]
+            chunk_neighbors = await q.get_waypoints_by_srcs(chunk, user_id)
+            all_neighbors.extend(chunk_neighbors)
+            traversal_budget -= len(chunk_neighbors)
+
+        # Group by src_id
+        neighbor_map = {}
+        for n in all_neighbors:
+            src = n["src_id"]
+            if src not in neighbor_map: neighbor_map[src] = []
+            neighbor_map[src].append({"dst_id": n["dst_id"], "weight": n["weight"]})
+
+        updates = {}
+        attenuation = math.exp(-GAMMA_ATTENUATION_CONSTANT_FOR_GRAPH_DISTANCE * (i + 1))
+
+        for node_id, current_energy in processing_batch:
+            neighbors = neighbor_map.get(node_id, [])
+            for nb in neighbors:
+                propagated = nb["weight"] * current_energy * attenuation
+                updates[nb["dst_id"]] = updates.get(nb["dst_id"], 0.0) + propagated
+
+        changed = False
+        for target_id, new_act in updates.items():
+            current = activation.get(target_id, 0.0)
+            if new_act > current:
+                activation[target_id] = new_act
+                changed = True
+
+        if not changed: break
+
+        # Capping
+        if len(activation) > MAX_ACTIVATED_NODES:
+            sorted_nodes = sorted(activation.items(), key=lambda x: x[1], reverse=True)
+            activation = dict(sorted_nodes[:MAX_ACTIVATED_NODES])
+
+    return activation
+
+def sigmoid(x: float) -> float:
+    if math.isnan(x): return 0.5
+    if x < -40: return 0.0
+    if x > 40: return 1.0
+    return 1.0 / (1.0 + math.exp(-x))
+
+def calculate_recency_score(last_seen_at: int, tau: float = 0.5, max_days: int = 60) -> float:
+    ms_now = int(time.time() * 1000)
+    days_since = (ms_now - last_seen_at) / 86400000.0
+    return max(0.0, math.exp(-days_since / tau) * (1.0 - days_since / max_days))

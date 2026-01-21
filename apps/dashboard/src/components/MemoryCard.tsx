@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
 import { Zap, Lock, Minimize2, Brain, Check, Copy } from "lucide-react";
-import { Memory } from "@/lib/api";
+import { MemoryItem } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
 
@@ -31,7 +31,7 @@ const CopyButton = ({ content }: { content: string }) => {
 };
 
 interface MemoryCardProps {
-    memory: Memory;
+    memory: MemoryItem;
     onReinforce: (id: string) => void;
 }
 
@@ -88,7 +88,7 @@ export const MemoryCard = ({ memory, onReinforce }: MemoryCardProps) => {
 
                 {/* Volatile Badge (High Decay) */}
                 {(memory.decayLambda > 0.05) && (
-                    <div className="text-orange-400 flex items-center gap-1 bg-orange-400/10 px-2 py-1 rounded-md text-[9px] font-bold border border-orange-400/20" title="High Decay Rate (Volatile)">
+                    <div className="text-orange-400 flex items-center gap-1 bg-orange-400/10 px-2 py-1 rounded-md text-[9px] font-bold border border-orange-400/20" title={`High Decay Rate (${(memory.decayLambda * 100).toFixed(1)}%/cycle)`}>
                         <Zap size={10} />
                         <span>VOLATILE</span>
                     </div>
@@ -102,7 +102,7 @@ export const MemoryCard = ({ memory, onReinforce }: MemoryCardProps) => {
             </div>
 
             <div className="flex items-start justify-between gap-4 flex-1">
-                <p className="text-sm text-zinc-300 font-medium leading-relaxed group-hover:text-white transition-colors duration-300">
+                <p className="text-sm text-zinc-300 font-medium leading-relaxed group-hover:text-white transition-colors duration-300 line-clamp-4">
                     {memory.content}
                 </p>
                 <div className="flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity translate-x-2 group-hover:translate-x-0 duration-300">

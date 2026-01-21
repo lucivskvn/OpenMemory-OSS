@@ -2,28 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] - 2026-01-12
+## [Unreleased] - 2026-01-15
 
 ### Added
-- **Vector Store**: Hybrid HNSW/IVF tuning for Valkey and HNSW for Postgres (pgvector).
-- **Temporal Graph**: Full temporal fact and edge management with validtime support.
-- **CLI**: New `opm setup` and hybrid mode (local/remote).
-- **Performance**: Optimized `ValkeyVectorStore` with explicit index parameters (`M=16`, `EF=200`).
-- **Database**: Compound indexes for `memories` (salience, simhash) and `temporal_facts`.
-- **SDK**: `MemoryClient` and `AdminClient` standardization.
-
-### Changed
-- Refactored `src/core/db.ts` to support strictly typed `getMem` and robust `insMems`.
-- Unified `failed_logs` and `embed_logs` into `embed_logs` table.
-- Hardened `maintenance.ts` with `DistributedLock` for concurrent safety.
-- Updated `dashboard.css` with premium design tokens.
+- **Database**: 
+    - Full transaction nesting support using SAVEPOINTs for both SQLite and Postgres.
+    - Transaction timeout (30s) to prevent deadlocks and connection leaks.
+    - LRU eviction for statement cache (Max 100 statements).
+    - Composite indices for performance optimization (`user_id + created_at`, `user_id + last_seen_at`, etc.).
+    - Foreign key constraints for `vectors` and `waypoints` with `ON DELETE CASCADE`.
+    - Automated query performance monitoring with slow query logging (>1s).
+    - Database initialization idempotent with serialized concurrency control.
+    - Automatic SQLite backups before migration execution.
+- **Documentation**: New database guides for [Transaction Handling](docs/database/transaction-handling.md), [Migration Guide](docs/database/migration-guide.md), and [Performance Tuning](docs/database/performance-tuning.md).
 
 ### Fixed
-- Fixed `getMem` missing in `db.ts` causing integration test failures.
-- Resolved `AdminClient` vs `MemoryClient` type signature mismatch.
-- Fixed `SystemStats` type definition parity.
-- Resolved vector store metadata inconsistency in SQLite fallback.
+- **Database**:
+    - Fixed memory leak in `readyPromises` and database initialization locks.
+    - Resolved SQL injection risk in dynamic table name logic via strict validation.
+    - Fixed connection pool resource exhaustion with proper limits (`PG_MAX_CONNECTIONS`, `PG_IDLE_TIMEOUT`).
+    - Resolved race condition in concurrent `getVectorStore` initialization.
+    - Fixed placeholder conversion bug for queries with `?` in strings or `??`.
+    - Corrected row mapping for `NULL` values in complex select queries.
+    - Fixed migration version comparison bug to support multi-digit semver.
+    - Improved database closure reliability during CLI exit and errors.
+- **Migrations**: Reduced migration lock timeout from 120s to 30s to prevent deployment hangs.
 
-### Security
-- Implemented `Secure by Default` mode requiring API keys.
-- Added RBAC checks for User and Admin routes.
+## [0.1.0] - 2026-01-12

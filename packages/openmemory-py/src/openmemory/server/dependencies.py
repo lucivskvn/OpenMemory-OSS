@@ -33,10 +33,15 @@ async def get_current_user_id(
          return "anonymous"
 
     # 2. Master Key Check
-    if env.server_api_key and token == env.server_api_key:
-        request.state.user_id = "default-user"
-        request.state.role = "admin"
-        return "default-user"
+    if env.server_api_key:
+        import hmac
+        # DEBUG PRINT
+        # print(f"DEBUG AUTH: token={token!r}, env_key={env.server_api_key!r}")
+        # Use timing-safe comparison for the master key
+        if hmac.compare_digest(token, env.server_api_key):
+            request.state.user_id = "default-user"
+            request.state.role = "admin"
+            return "default-user"
 
     # 3. Database Lookup
     h = hashlib.sha256(token.encode()).hexdigest()
@@ -59,12 +64,9 @@ async def get_current_user_id(
         logger = getattr(request.app.state, "logger", None)
         if logger: logger.error(f"Auth DB lookup failed: {e}")
 
-    # 4. Multi-tenant Dev Mode (Accept any key if no master key and not in DB)
-    if not env.server_api_key:
-         uid = h[:16]
-         request.state.user_id = uid
-         request.state.role = "user"
-         return uid
+    # 4. Fail Closed (If not master key and not in DB, reject)
+    # Previous dev mode fallback removed for security parity with JS SDK.
+    pass
 
     raise HTTPException(
         status_code=HTTP_403_FORBIDDEN, detail="Invalid API Key"

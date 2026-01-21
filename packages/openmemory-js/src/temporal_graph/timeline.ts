@@ -1,8 +1,11 @@
 /**
- * Temporal Knowledge Graph Timeline Analytics for OpenMemory.
- * Provides tools for chronological event streams, state comparison, and volatility tracking.
+ * @file timeline.ts
+ * @description Temporal Knowledge Graph Timeline Analytics for OpenMemory.
+ * @audited 2026-01-19
  */
-import { q, transaction } from "../core/db";
+import { q, transaction, allAsync, TABLES } from "../core/db";
+import { env } from "../core/cfg";
+import { logger } from "../utils/logger";
 import { normalizeUserId } from "../utils";
 import { rowToFact } from "./query";
 import { TemporalFact, TemporalFactRow, TimelineEntry } from "./types";
@@ -10,35 +13,37 @@ import { TemporalFact, TemporalFactRow, TimelineEntry } from "./types";
 /**
  * Helper to convert fact rows into a sorted chronological timeline of events.
  */
-function rowsToTimelineEntries(rows: TemporalFactRow[]): TimelineEntry[] {
+async function rowsToTimelineEntries(rows: TemporalFactRow[]): Promise<TimelineEntry[]> {
     const timeline: TimelineEntry[] = [];
 
     for (const row of rows) {
+        // Hydrate row to TemporalFact to handle decryption and normalization
+        const fact = await rowToFact(row);
+
         // Creation event
         timeline.push({
-            timestamp: Number(row.validFrom),
-            subject: row.subject,
-            predicate: row.predicate,
-            object: row.object,
-            confidence: row.confidence,
+            timestamp: Number(fact.validFrom),
+            subject: fact.subject,
+            predicate: fact.predicate,
+            object: fact.object,
+            confidence: fact.confidence,
             changeType: "created",
         });
 
         // Invalidation event (if applicable)
-        if (row.validTo) {
+        if (fact.validTo) {
             timeline.push({
-                timestamp: Number(row.validTo),
-                subject: row.subject,
-                predicate: row.predicate,
-                object: row.object,
-                confidence: row.confidence,
+                timestamp: Number(fact.validTo),
+                subject: fact.subject,
+                predicate: fact.predicate,
+                object: fact.object,
+                confidence: fact.confidence,
                 changeType: "invalidated",
             });
         }
     }
 
-    // Sorting is necessary because different predicates for the same subject can overlap, 
-    // even though a single predicate timeline is naturally sorted by the SQL order.
+    // Sorting is necessary because different predicates for the same subject can overlap
     return timeline.sort((a, b) => a.timestamp - b.timestamp);
 }
 
@@ -51,21 +56,18 @@ export const getSubjectTimeline = async (
     userId?: string | null,
 ): Promise<TimelineEntry[]> => {
     const uid = normalizeUserId(userId);
+    let rows: TemporalFactRow[];
 
-    // Use existing query function which allows filtering by subject (and optional predicate logic if we added it, but getFactsBySubject only takes subject)
-    // Actually repo `getFactsBySubject` takes `subject` and `includeHistorical`.
-    // It doesn't allow filtering by predicate in the SQL.
-    // So we fetch all for subject and filter in memory if predicate is provided.
-
-    // Efficient approach: fetch all history for subject
-    const rows = await q.getFactsBySubject.all(subject, 0, true, 10000, uid) as TemporalFactRow[];
-
-    let filtered = rows;
     if (predicate) {
-        filtered = rows.filter(r => r.predicate === predicate);
+        if (env.verbose) logger.debug(`[TEMPORAL] Fetching optimized timeline for ${subject} / ${predicate}`);
+        // Use optimized query from repository
+        rows = await q.getFactsBySubjectAndPredicate.all(subject, predicate, uid) as TemporalFactRow[];
+    } else {
+        // Fallback to existing broad query
+        rows = await q.getFactsBySubject.all(subject, 0, true, 10000, uid) as TemporalFactRow[];
     }
 
-    return rowsToTimelineEntries(filtered);
+    return await rowsToTimelineEntries(rows);
 };
 
 export const getPredicateTimeline = async (
@@ -79,7 +81,7 @@ export const getPredicateTimeline = async (
     const toTs = to?.getTime();
 
     const rows = await q.getFactsByPredicate.all(predicate, fromTs, toTs, uid) as TemporalFactRow[];
-    return rowsToTimelineEntries(rows);
+    return await rowsToTimelineEntries(rows);
 };
 
 /**
@@ -256,12 +258,12 @@ export const getVolatileFacts = async (
     }>
 > => {
     const uid = normalizeUserId(userId);
-    const rows = await q.getVolatileFacts.all(subject, limit, uid) as { subject: string, predicate: string, change_count: number, avg_confidence: number }[];
+    const rows = await q.getVolatileFacts.all(subject, limit, uid) as { subject: string, predicate: string, changeCount: number, avgConfidence: number }[];
 
     return rows.map((row) => ({
         subject: row.subject,
         predicate: row.predicate,
-        changeCount: row.change_count,
-        avgConfidence: row.avg_confidence,
+        changeCount: row.changeCount,
+        avgConfidence: row.avgConfidence,
     }));
 };

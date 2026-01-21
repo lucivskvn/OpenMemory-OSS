@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { api, SystemStats, Memory, ActivityItem, MaintLogEntry, GraphData } from "../api";
+import { api, SystemStats, MemoryItem, ActivityItem, MaintLogEntry, GraphData, MaintenanceStatus } from "../api";
 import { useMemoryStream } from "./use-stream";
 import { SystemTimelineBucket } from "openmemory-js/client";
 
 export function useDashboardData() {
     const [stats, setStats] = useState<SystemStats | null>(null);
-    const [recent, setRecent] = useState<Memory[]>([]);
+    const [status, setStatus] = useState<MaintenanceStatus | null>(null);
+    const [recent, setRecent] = useState<MemoryItem[]>([]);
     const [activity, setActivity] = useState<ActivityItem[]>([]);
     const [logs, setLogs] = useState<MaintLogEntry[]>([]);
     const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] });
@@ -18,16 +19,18 @@ export function useDashboardData() {
         if (!silent) setLoading(true);
         try {
             // Parallel fetch for dashboard widgets
-            const [s, m, a, l, g, t] = await Promise.all([
+            const [s, st, m, a, l, g, t] = await Promise.all([
                 api.getStats(),
+                api.getMaintenanceStatus(),
                 api.getMemories(6),
                 api.getActivity(20),
                 api.getMaintenanceLogs(20),
                 api.getGraphData(),
                 api.getTimeline(24) // Last 24 hours
-            ]);
+            ]) as [SystemStats, MaintenanceStatus, MemoryItem[], ActivityItem[], MaintLogEntry[], GraphData, SystemTimelineBucket[]];
 
             setStats(s);
+            setStatus(st);
             setRecent(m);
             setActivity(a);
             setLogs(l);
@@ -71,6 +74,7 @@ export function useDashboardData() {
 
     return {
         stats,
+        status,
         recent,
         activity,
         logs,

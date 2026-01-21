@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS {te} (
     valid_from INTEGER NOT NULL,
     valid_to INTEGER,
     weight REAL NOT NULL,
+    last_updated INTEGER NOT NULL,
     metadata TEXT,
     user_id TEXT,
     FOREIGN KEY(source_id) REFERENCES {tf}(id),

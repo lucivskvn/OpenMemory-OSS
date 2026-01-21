@@ -11,8 +11,8 @@ export * from "./temporal_graph/store";
 export * from "./temporal_graph/timeline";
 // Do NOT export * from "./temporal_graph/types" as they conflict with core/types
 export * from "./ai/adapters";
-export * from "./ai/graph";
 export * from "./ai/ide";
-export * from "./ai/mcp";
+export * from "./ai/graph";
+// export * from "./ai/mcp";
 export * from "./client";
 export * from "./core/types";

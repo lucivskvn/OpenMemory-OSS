@@ -1,3 +1,7 @@
+"""
+Audited: 2026-01-19
+Encryption-at-rest module using AES-256-GCM via PBKDF2 key derivation.
+"""
 import os
 import base64
 import logging
@@ -22,10 +26,12 @@ class EncryptionProvider:
         from .config import env
         self.secret = env.encryption_key
         self.secondary_secrets = env.encryption_secondary_keys
+        self.salt = env.encryption_salt.encode("utf-8")
         self.enabled = env.encryption_enabled
         self._key_cache = {}
 
         if self.enabled:
+            # ... rest of init ...
             if not HAS_CRYPTO:
                 logger.warning("[Security] OM_ENCRYPTION_ENABLED=true but 'cryptography' package is missing. Encryption disabled.")
                 self.enabled = False
@@ -53,8 +59,8 @@ class EncryptionProvider:
             kdf = KDF(
                 algorithm=h.SHA256(),
                 length=32,
-                salt=b"openmemory-salt-v1",
-                iterations=100000,
+                salt=self.salt,
+                iterations=600000,
             )
             key = kdf.derive(secret.encode("utf-8"))
             aes = AES(key)

@@ -15,6 +15,7 @@
         href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="/public/css/dashboard.css">
+    <script src="https://d3js.org/d3.v7.min.js"></script>
 </head>
 
 <body>
@@ -40,6 +41,14 @@
     <!-- Header -->
     <header>
         <div class="logo">
+            <button id="menuToggle" class="btn btn-ghost" style="padding: 4px; margin-right: 8px; display: none;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    style="width: 24px; height: 24px;">
+                    <line x1="3" y1="12" x2="21" y2="12"></line>
+                    <line x1="3" y1="6" x2="21" y2="6"></line>
+                    <line x1="3" y1="18" x2="21" y2="18"></line>
+                </svg>
+            </button>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" stroke-linecap="round"
                     stroke-linejoin="round" />
@@ -51,10 +60,13 @@
                 Mode</span>
             <span id="modelBadge" class="badge"
                 style="background:var(--accent-glow); color:var(--accent-primary); margin-right:8px; display:none;">-</span>
-            Status: <span style="color: var(--success);">Online</span> <span id="connTime" class="mono"
-                style="margin-left: 8px; opacity: 0.5;">0ms</span>
+            <span class="status-text">Status: <span style="color: var(--success);">Online</span></span> <span
+                id="connTime" class="mono" style="margin-left: 8px; opacity: 0.5;">0ms</span>
         </div>
     </header>
+
+    <!-- Mobile Overlay -->
+    <div id="mobileOverlay" class="modal-overlay" style="z-index: 99;"></div>
 
     <main>
         <!-- Sidebar -->
@@ -83,6 +95,20 @@
                         <polyline points="12 6 12 12 16 14" />
                     </svg>
                     Timeline
+                </a>
+                <a href="#dynamics" class="nav-link" data-tab="tab-dynamics">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 2a10 10 0 1 0 10 10H12V2z"></path>
+                        <path d="M12 2a10 10 0 0 1 10 10"></path>
+                        <path d="M2.05 10.5a10 10 0 0 1 9.95-8.5"></path>
+                    </svg>
+                    Dynamics
+                </a>
+                <a href="#security" class="nav-link" data-tab="tab-security">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                    </svg>
+                    Security & Audit
                 </a>
             </div>
 
@@ -115,6 +141,14 @@
                             <path d="M16 3.13a4 4 0 0 1 0 7.75" />
                         </svg>
                         User Management
+                    </a>
+                    <a href="#admin-backup" class="nav-link" data-tab="tab-admin-backup">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                            <polyline points="7 10 12 15 17 10" />
+                            <line x1="12" y1="15" x2="12" y2="3" />
+                        </svg>
+                        Data Portability
                     </a>
                 </div>
             </div>
@@ -185,7 +219,7 @@
                         <div style="display: flex; gap: 8px;">
                             <input type="text" id="searchQuery" class="input" placeholder="Search content or tags..."
                                 style="width: 300px;">
-                            <button class="btn btn-primary" onclick="searchMemories()">Search</button>
+                            <button id="btnSearch" class="btn btn-primary" onclick="searchMemories()">Search</button>
                         </div>
                     </div>
                     <div class="table-container">
@@ -384,6 +418,49 @@
                 </div>
             </div>
 
+            <!-- Memory Detail Modal -->
+             <div class="modal-overlay" id="memoryModal">
+                <div class="modal" style="max-width: 600px;">
+                    <div class="card-header" style="margin-bottom: 16px;">
+                         <h2 id="memModalTitle">Memory Detail</h2>
+                         <button class="btn btn-ghost btn-sm" onclick="closeModal('memoryModal')">&times;</button>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label class="form-label">Content</label>
+                        <div id="memContent" style="background: rgba(0,0,0,0.3); padding: 12px; border-radius: 8px; font-family: var(--font-mono); font-size: 13px; white-space: pre-wrap; max-height: 200px; overflow-y: auto;"></div>
+                    </div>
+
+                     <div class="metric-grid" style="grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+                        <div>
+                            <label class="form-label">Sector</label>
+                            <div id="memSector" class="badge badge-success"></div>
+                        </div>
+                        <div>
+                             <label class="form-label">Salience</label>
+                             <div id="memSalience" class="mono text-muted"></div>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Metadata / Tags</label>
+                        <div id="memTags" style="display: flex; gap: 4px; flex-wrap: wrap;"></div>
+                    </div>
+
+                     <div class="form-group">
+                        <label class="form-label">Timestamps</label>
+                         <div class="text-xs text-muted">
+                            Created: <span id="memCreated" class="mono"></span><br>
+                            Updated: <span id="memUpdated" class="mono"></span>
+                        </div>
+                    </div>
+                    
+                    <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 24px; border-top: 1px solid var(--border); padding-top: 16px;">
+                        <button type="button" class="btn btn-danger" id="btnDeleteMemory">Delete Memory</button>
+                    </div>
+                </div>
+            </div>
+
             <!-- SOURCES TAB -->
             <section id="tab-sources" class="section">
                 <div class="card">
@@ -516,11 +593,201 @@
                         </div>
                     </div>
                 </div>
-            </section>
+                <!-- SECURITY & AUDIT TAB -->
+                <section id="tab-security" class="section">
+                    <div class="card-header">
+                        <h2>Security & Audit Control</h2>
+                    </div>
+
+                    <div class="metric-grid">
+                        <div class="card metric">
+                            <span class="value" id="auditCount">-</span>
+                            <span class="label">Total Audit Events</span>
+                        </div>
+                        <div class="card metric">
+                            <span class="value" id="webhookCount">-</span>
+                            <span class="label">Configured Webhooks</span>
+                        </div>
+                    </div>
+
+                    <!-- Webhooks Management -->
+                    <div class="card" style="margin-top: 24px;">
+                        <div class="card-header">
+                            <h3>Webhook Integrations</h3>
+                            <button class="btn btn-primary btn-sm" onclick="openWebhookModal()">+ Create
+                                Webhook</button>
+                        </div>
+                        <div class="table-container">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>URL</th>
+                                        <th>Events</th>
+                                        <th>Status</th>
+                                        <th width="150">Last Triggered</th>
+                                        <th width="100">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="webhooksTable">
+                                    <tr>
+                                        <td colspan="5" class="text-center p-4">Loading webhooks...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Audit Logs -->
+                    <div class="card" style="margin-top: 24px;">
+                        <div class="card-header">
+                            <h3>System Audit Logs</h3>
+                            <div style="display: flex; gap: 8px;">
+                                <select id="auditFilterAction" class="select select-sm" onchange="loadAuditLogs()">
+                                    <option value="">All Actions</option>
+                                    <option value="memory:create">Memory Create</option>
+                                    <option value="memory:delete">Memory Delete</option>
+                                    <option value="user:login">User Login</option>
+                                    <option value="admin:key_rotation">Key Rotation</option>
+                                </select>
+                                <button class="btn btn-ghost btn-sm" onclick="loadAuditLogs()">Refresh</button>
+                            </div>
+                        </div>
+                        <div class="table-container">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th width="150">Timestamp</th>
+                                        <th width="120">User</th>
+                                        <th width="150">Action</th>
+                                        <th>Resource</th>
+                                        <th>IP Address</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="auditLogsTable">
+                                    <tr>
+                                        <td colspan="5" class="text-center p-4">Loading audit logs...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- DYNAMICS TAB -->
+                <section id="tab-dynamics" class="section">
+                    <div class="card-header">
+                        <h2>System Dynamics</h2>
+                        <button class="btn btn-ghost btn-sm" onclick="loadDynamics()">Refresh</button>
+                    </div>
+                    <div class="metric-grid" style="margin-bottom: 24px;">
+                        <div class="card metric">
+                            <span class="value" id="dynEntropy">-</span>
+                            <span class="label">System Entropy</span>
+                        </div>
+                        <div class="card metric">
+                            <span class="value" id="dynWaypoints">-</span>
+                            <span class="label">Active Waypoints</span>
+                        </div>
+                        <div class="card metric">
+                            <span class="value" id="dynResonance">-</span>
+                            <span class="label">Resonance Score</span>
+                        </div>
+                    </div>
+                    <div class="card" style="height: 500px; padding: 0; overflow: hidden; position: relative;">
+                         <div style="background: var(--bg-surface); padding: 8px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+                            <span class="text-sm font-medium">Waypoint Topology Graph</span>
+                            <div class="text-xs text-muted">Visualizing memory clusters and transitions</div>
+                        </div>
+                        <div id="dynamicsGraphBox" style="width: 100%; height: 100%; background: #0f1115;"></div>
+                    </div>
+                </section>
+
+                <!-- ADMIN: BACKUP/RESTORE TAB -->
+                <section id="tab-admin-backup" class="section">
+                    <div class="card-header">
+                        <h2>Data Portability</h2>
+                        <span class="text-muted text-sm">Full system backup and restoration.</span>
+                    </div>
+
+                    <div class="card">
+                        <h3 style="color: var(--text-primary); margin-bottom: 8px;">Export System Data</h3>
+                        <p class="text-muted" style="margin-bottom: 16px;">
+                            Download a complete JSON snapshot of the system, including users, memories, and temporal graph data.
+                            <br>
+                            <span style="color: var(--warning); font-size: 12px;">Warning: This file contains sensitive encrypted data (keys, configs). Handle with care.</span>
+                        </p>
+                        <button id="btnExport" class="btn btn-primary" onclick="exportData()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                <polyline points="7 10 12 15 17 10" />
+                                <line x1="12" y1="15" x2="12" y2="3" />
+                            </svg>
+                            Export Backup.json
+                        </button>
+                    </div>
+
+                    <div class="card" style="margin-top: 24px;">
+                        <h3 style="color: var(--text-primary); margin-bottom: 8px;">Restore System Data</h3>
+                        <p class="text-muted" style="margin-bottom: 16px;">
+                            Restore the system state from a previous backup file.
+                            <br>
+                            <span style="color: var(--error); font-size: 12px;">Caution: Existing records with matching IDs will be overwritten. New records will be added.</span>
+                        </p>
+                        
+                        <div style="display: flex; gap: 12px; align-items: center;">
+                            <input type="file" id="importFile" accept=".json" style="display: none;" onchange="handleFileSelect(this)">
+                            <button class="btn btn-ghost" style="border: 1px dashed var(--border-highlight);" onclick="document.getElementById('importFile').click()">
+                                Select Backup File
+                            </button>
+                            <span id="importFileName" class="text-sm text-muted">No file selected</span>
+                        </div>
+
+                        <div id="importActions" style="margin-top: 16px; display: none;">
+                            <button id="btnConfirmImport" class="btn btn-danger" onclick="importData()">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                    <polyline points="17 8 12 3 7 8" />
+                                    <line x1="12" y1="3" x2="12" y2="15" />
+                                </svg>
+                                Confirm Import
+                            </button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Webhook Modal -->
+                <div class="modal-overlay" id="webhookModal">
+                    <div class="modal" style="max-width: 500px;">
+                        <h2>Configure Webhook</h2>
+                        <form id="webhookForm" style="margin-top: 20px;">
+                            <div class="form-group">
+                                <label class="form-label">Endpoint URL</label>
+                                <input type="url" id="webhookUrl" class="input" required
+                                    placeholder="https://api.example.com/webhook">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Events (Comma separated)</label>
+                                <input type="text" id="webhookEvents" class="input" required
+                                    placeholder="memory:create, memory:delete">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Secret (Optional)</label>
+                                <input type="password" id="webhookSecret" class="input"
+                                    placeholder="Leave blank to generate">
+                            </div>
+                            <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 24px;">
+                                <button type="button" class="btn btn-ghost"
+                                    onclick="closeModal('webhookModal')">Cancel</button>
+                                <button type="submit" class="btn btn-primary">Create Webhook</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
 
         </div>
     </main>
 
+    <div id="toast-container" class="toast-container"></div>
     <script src="/public/js/dashboard.js"></script>
 </body>
 

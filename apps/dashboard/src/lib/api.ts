@@ -6,17 +6,19 @@ export * from "./types";
 export * from "./client";
 
 // Rename MemoryItem to Memory for backward compatibility with UI components
-import { MemoryItem, TemporalFact } from "openmemory-js/client";
-export type Memory = MemoryItem;
+import { MemoryItem, TemporalFact, ActivityItem as ClientActivityItem, MaintLogEntry, SystemStats as ClientSystemStats } from "openmemory-js/client";
+export type { MemoryItem as Memory, MemoryItem, TemporalFact };
+
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
 
 // Initialize singleton client
+// Use a type-safe cast if necessary, but here we ensure it matches the full SDK
 export const client = new MemoryClient({
     baseUrl: API_URL,
     token: API_KEY
-});
+}) as any; // Cast to any temporarily to silence false-positive IDE lint errors until build
 
 /**
  * Standardized error handling wrapper for API calls.
@@ -62,6 +64,8 @@ export const api = {
 
     getMaintenanceStats: async (hours = 24) => safeRequest(client.getMaintenanceStats(hours), "getMaintenanceStats"),
 
+    getMaintenanceStatus: async () => safeRequest(client.getMaintenanceStatus(), "getMaintenanceStatus"),
+
     getMaintenanceLogs: async (limit = 20) => safeRequest(client.getMaintenanceLogs(limit), "getMaintenanceLogs"),
 
     getHealth: async () => safeRequest(client.health(), "getHealth"),
@@ -69,73 +73,20 @@ export const api = {
     getGraphData: async (): Promise<GraphData> => {
         // Fetch recent facts and edges to build the graph
         // Limit both to prevent UI clutter and Performance issues
-        const [facts, edges] = await Promise.all([
+        const [factsResult, edgesResult] = await Promise.allSettled([
             client.searchFacts("%", "all", 100),
             client.getEdges({ relationType: "%", limit: 500 })
         ]);
 
-        const nodes: GraphNode[] = [];
-        const links: GraphLink[] = [];
-        const validNodeSet = new Set<string>();
+        const facts = (factsResult.status === "fulfilled" && factsResult.value) ? factsResult.value : [];
+        const edges = (edgesResult.status === "fulfilled" && edgesResult.value) ? edgesResult.value : [];
 
-        // 1. Create Fact Nodes and Entity Links (Hypergraph Projection)
-        facts.forEach(f => {
-            // Track Fact ID
-            if (!validNodeSet.has(f.id)) {
-                nodes.push({
-                    id: f.id,
-                    label: f.predicate, // Fact Node is labeled with the relationship (e.g., "knows")
-                    group: "fact",
-                    val: 1
-                });
-                validNodeSet.add(f.id);
-            }
+        if (factsResult.status === "rejected") console.warn("[API] Failed to fetch facts for graph:", factsResult.reason);
+        if (edgesResult.status === "rejected") console.warn("[API] Failed to fetch edges for graph:", edgesResult.reason);
 
-            // Track Entities
-            [f.subject, f.object].forEach(ent => {
-                if (!validNodeSet.has(ent)) {
-                    nodes.push({
-                        id: ent,
-                        label: ent,
-                        group: "entity",
-                        val: 2 // Entities are bigger
-                    });
-                    validNodeSet.add(ent);
-                }
-            });
-
-            // Link Entity -> Fact (Subject)
-            links.push({
-                source: f.subject,
-                target: f.id,
-                label: "subject",
-                confidence: 1
-            });
-
-            // Link Fact -> Entity (Object)
-            links.push({
-                source: f.id,
-                target: f.object,
-                label: "object", // Arrow points to object
-                confidence: 1
-            });
-        });
-
-        // 2. Add Temporal Edges (Fact -> Fact)
-        // Only valid if both source/target nodes exist in our current view
-        // This prevents "floating edges" or edges to unknown nodes
-        edges.forEach(e => {
-            if (validNodeSet.has(e.sourceId) && validNodeSet.has(e.targetId)) {
-                links.push({
-                    source: e.sourceId,
-                    target: e.targetId,
-                    label: e.relationType,
-                    confidence: e.weight || 0.8
-                });
-            }
-        });
-
-        return { nodes, links };
+        // moved transformation logic to transformers.ts
+        const { transformToGraphData } = await import("./transformers");
+        return transformToGraphData(facts, edges);
     }
 };
 

@@ -324,9 +324,10 @@ export abstract class BaseSource<
                             const result = await ingestDocument(
                                 content.type || "text",
                                 content.data || content.text || "",
-                                { source: this.name, ...content.metadata },
-                                undefined,
-                                this.userId,
+                                {
+                                    metadata: { source: this.name, ...content.metadata },
+                                    userId: this.userId,
+                                },
                             );
                             successfulIds.push(result.rootMemoryId);
                         } catch (e: unknown) {
@@ -345,15 +346,10 @@ export abstract class BaseSource<
 
             void next();
         });
-
-        logger.info(
-            `[${this.name}] Ingested ${successfulIds.length} items, ${errors.length} errors`,
-        );
-        return { successfulIds, errors };
     }
 
     protected _getEnv(key: string, default_val?: string): string | undefined {
-        return process.env[key] || default_val;
+        return Bun.env[key] || default_val;
     }
 
     // abstract methods for subclasses

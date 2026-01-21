@@ -36,22 +36,22 @@ async def test_graph_storage_retrieval():
         node="plan",
         content="We must attack at dawn.",
         namespace=ns,
-        graph_id=gid,
-        user_id=uid,
+        graphId=gid,
+        userId=uid,
         tags=["strategy"],
         metadata={"priority": "high"}
     )
     res = await store_node_mem(req)
     assert res.success
-    assert res.memory_id
+    assert res.memoryId
     assert res.node == "plan"
     
     # 2. Retrieve
     ret_req = LgmRetrieveReq(
         node="plan",
         namespace=ns,
-        graph_id=gid,
-        user_id=uid
+        graphId=gid,
+        userId=uid
     )
     ret_res = await retrieve_node_mems(ret_req)
     assert ret_res.success
@@ -62,7 +62,7 @@ async def test_graph_storage_retrieval():
     # Check parity fields
     assert "lgm:node:plan" in m.tags
     assert "lgm:namespace:test_ns" in m.tags
-    assert m.primary_sector == "semantic" # "plan" maps to semantic
+    assert m.primarySector == "semantic" # "plan" maps to semantic
 
 @pytest.mark.asyncio
 async def test_graph_history_parity():
@@ -77,18 +77,18 @@ async def test_graph_history_parity():
     # In synthetic test, timestamps might be identical if fast.
     
     # 1. Observe
-    await store_node_mem(LgmStoreReq(node="observe", content="Enemy spotted.", namespace=ns, graph_id=gid, user_id=uid))
+    await store_node_mem(LgmStoreReq(node="observe", content="Enemy spotted.", namespace=ns, graphId=gid, userId=uid))
     await asyncio.sleep(0.01) # Ensure timestamp diff
     
     # 2. Plan
-    await store_node_mem(LgmStoreReq(node="plan", content="Prepare defenses.", namespace=ns, graph_id=gid, user_id=uid))
+    await store_node_mem(LgmStoreReq(node="plan", content="Prepare defenses.", namespace=ns, graphId=gid, userId=uid))
     await asyncio.sleep(0.01)
     
     # 3. Act
-    await store_node_mem(LgmStoreReq(node="act", content="Fire cannons.", namespace=ns, graph_id=gid, user_id=uid))
+    await store_node_mem(LgmStoreReq(node="act", content="Fire cannons.", namespace=ns, graphId=gid, userId=uid))
     
     # 4. Get History
-    hist = await get_thread_history(LgmRetrieveReq(node="any", namespace=ns, graph_id=gid, user_id=uid))
+    hist = await get_thread_history(LgmRetrieveReq(node="any", namespace=ns, graphId=gid, userId=uid))
     
     assert hist["namespace"] == ns
     assert hist["graphId"] == gid
@@ -120,14 +120,14 @@ async def test_additional_sectors_persistence():
     req = LgmStoreReq(
         node="emotion", # Maps to "emotional"
         content=content,
-        user_id=uid,
+        userId=uid,
         namespace="sec_test"
     )
     
     res = await store_node_mem(req)
     
     # Verify retrieval has sectors
-    ret_req = LgmRetrieveReq(node="emotion", namespace="sec_test", user_id=uid)
+    ret_req = LgmRetrieveReq(node="emotion", namespace="sec_test", userId=uid)
     ret = await retrieve_node_mems(ret_req)
     m = ret.memories[0]
     
@@ -138,7 +138,7 @@ async def test_additional_sectors_persistence():
     # "semantic" should be in additional if score is high enough.
     
     # Check metadata directly via DB to ensure it was saved
-    row = await db.async_fetchone("SELECT metadata FROM memories WHERE id=$1", (res.memory_id,))
+    row = await db.async_fetchone("SELECT metadata FROM memories WHERE id=?", (res.memoryId,))
     meta = json.loads(row["metadata"])
     # hsg.py: if cls["additional"]: final_meta["additional_sectors"] = ...
     # We assert it's there IF there were additional sectors.

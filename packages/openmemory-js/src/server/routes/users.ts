@@ -1,245 +1,180 @@
+import { Elysia } from "elysia";
 import { z } from "zod";
 
 import { q } from "../../core/db";
 import { Memory } from "../../core/memory";
-// MemoryRow unused after refactor to Memory Facade
 import {
     autoUpdateUserSummaries,
     updateUserSummary,
 } from "../../memory/user_summary";
 import { normalizeUserId } from "../../utils";
-import { AppError, sendError } from "../errors";
-import { verifyUserAccess } from "../middleware/auth";
-import {
-    validateParams,
-    validateQuery,
-} from "../middleware/validate";
+import { AppError } from "../errors";
+import { verifyUserAccess, getUser } from "../middleware/auth";
+
+// --- Schemas ---
 
 const UserIdSchema = z.object({
     userId: z.string().min(1),
 });
 
 const ListMemoriesQuerySchema = z.object({
-    l: z.coerce.number().default(100), // limit
+    l: z.coerce.number().max(1000).default(100), // limit
     u: z.coerce.number().default(0), // offset
 });
 
-import type { AdvancedRequest, AdvancedResponse, ServerApp } from "../server";
-
-export const userRoutes = (app: ServerApp) => {
-    /**
-     * GET /users
-     * Lists all active users in the system.
-     */
-    app.get("/users", async (req: AdvancedRequest, res: AdvancedResponse) => {
-        try {
-            const isAdmin = (req.user?.scopes || []).includes("admin:all");
-            if (!isAdmin) {
-                return sendError(
-                    res,
-                    new AppError(403, "FORBIDDEN", "Admin access required"),
-                );
+/**
+ * User API Routes
+ * Handles user profiles, summaries, and memory lists.
+ */
+export const userRoutes = (app: Elysia) => app.group("/users", (app) => {
+    return app
+        /**
+         * GET /users
+         * Lists all active users (Admin Only).
+         */
+        .get("/", async (ctx) => {
+            const user = getUser(ctx);
+            if (!user || (!user.scopes.includes("admin:all"))) {
+                throw new AppError(403, "FORBIDDEN", "Admin access required");
             }
 
-            const users = await q.getActiveUsers.all();
-            res.json({ users: users.map((u) => u.userId) });
-        } catch (err: unknown) {
-            sendError(res, err);
-        }
-    });
+            const users = await q.getActiveUsers.all() as { userId: string }[];
+            return { success: true, users: users.map((u) => u.userId) };
+        })
 
-    /**
-     * GET /users/:userId
-     * Retrieves the profile and metadata for a specific user.
-     */
-    app.get(
-        "/users/:userId",
-        validateParams(UserIdSchema),
-        async (req: AdvancedRequest, res: AdvancedResponse) => {
-            try {
-                const userId = normalizeUserId(req.params.userId);
-                // Security: Users can only see their own profile, unless they are admin
-                verifyUserAccess(req, userId);
-
-                if (userId === null)
-                    return sendError(
-                        res,
-                        new AppError(400, "INVALID_ID", "Invalid user ID"),
-                    );
-
-                const user = await q.getUser.get(userId);
-                if (!user)
-                    return sendError(
-                        res,
-                        new AppError(404, "NOT_FOUND", "user not found"),
-                    );
-                res.json(user);
-            } catch (err: unknown) {
-                sendError(res, err);
+        /**
+         * POST /users/summaries/regenerate-all
+         * Admin Only.
+         */
+        .post("/summaries/regenerate-all", async (ctx) => {
+            const user = getUser(ctx);
+            if (!user || !user.scopes.includes("admin:all")) {
+                throw new AppError(403, "FORBIDDEN", "Admin access required");
             }
-        },
-    );
 
-    /**
-     * GET /users/:userId/summary
-     * Retrieves the AI-generated personality/activity summary for a user.
-     */
-    app.get(
-        "/users/:userId/summary",
-        validateParams(UserIdSchema),
-        async (req: AdvancedRequest, res: AdvancedResponse) => {
-            try {
-                const userId = normalizeUserId(req.params.userId);
-                verifyUserAccess(req, userId);
+            const result = await autoUpdateUserSummaries();
+            return { success: true, updated: result.updated };
+        })
 
-                if (userId === null)
-                    return sendError(
-                        res,
-                        new AppError(400, "INVALID_ID", "Invalid user ID"),
-                    );
+        /**
+         * GET /users/:userId
+         */
+        .get("/:userId", async ({ params, ...ctx }) => {
+            const user = getUser(ctx);
+            const p = UserIdSchema.parse(params);
+            const rawUserId = normalizeUserId(p.userId);
 
-                const user = await q.getUser.get(userId);
-                if (!user)
-                    return sendError(
-                        res,
-                        new AppError(404, "NOT_FOUND", "User not found"),
-                    );
+            // Verify Access
+            const targetUserId = verifyUserAccess(user, rawUserId);
+            if (!targetUserId) throw new AppError(400, "INVALID_ID", "Invalid user ID or Access Denied");
 
-                res.json({
-                    userId: user.userId,
-                    summary: user.summary,
-                    reflectionCount: user.reflectionCount,
-                    updatedAt: user.updatedAt,
-                });
-            } catch (err: unknown) {
-                sendError(res, err);
-            }
-        },
-    );
+            const userData = await q.getUser.get(targetUserId);
+            if (!userData) throw new AppError(404, "NOT_FOUND", "User not found");
 
-    /**
-     * POST /users/:userId/summary/regenerate
-     * Manually triggers a regeneration of the user summary.
-     */
-    app.post(
-        "/users/:userId/summary/regenerate",
-        validateParams(UserIdSchema),
-        async (req: AdvancedRequest, res: AdvancedResponse) => {
-            try {
-                const userId = normalizeUserId(req.params.userId);
+            return userData;
+        })
 
-                verifyUserAccess(req, userId);
+        /**
+         * GET /users/:userId/summary
+         */
+        .get("/:userId/summary", async ({ params, ...ctx }) => {
+            const user = getUser(ctx);
+            const p = UserIdSchema.parse(params);
+            const rawUserId = normalizeUserId(p.userId);
 
-                if (userId === null || userId === undefined)
-                    return sendError(
-                        res,
-                        new AppError(400, "INVALID_ID", "Invalid user ID"),
-                    );
+            const targetUserId = verifyUserAccess(user, rawUserId);
+            if (!targetUserId) throw new AppError(400, "INVALID_ID", "Invalid user ID or Access Denied");
 
-                await updateUserSummary(userId);
-                const user = await q.getUser.get(userId);
+            const userData = await q.getUser.get(targetUserId);
+            if (!userData) throw new AppError(404, "NOT_FOUND", "User not found");
 
-                res.json({
-                    ok: true,
-                    userId,
-                    summary: user?.summary,
-                    reflectionCount: user?.reflectionCount,
-                });
-            } catch (err: unknown) {
-                sendError(res, err);
-            }
-        },
-    );
+            return {
+                success: true,
+                userId: userData.userId,
+                summary: userData.summary,
+                reflectionCount: userData.reflectionCount,
+                updatedAt: userData.updatedAt,
+            };
+        })
 
-    /**
-     * POST /users/summaries/regenerate-all
-     * Triggers summary regeneration for all active users (Admin only recommended).
-     */
-    app.post(
-        "/users/summaries/regenerate-all",
-        async (req: AdvancedRequest, res: AdvancedResponse) => {
-            try {
-                const isAdmin = (req.user?.scopes || []).includes("admin:all");
-                if (!isAdmin) {
-                    return sendError(
-                        res,
-                        new AppError(403, "FORBIDDEN", "Admin access required"),
-                    );
-                }
+        /**
+         * POST /users/:userId/summary/regenerate
+         */
+        .post("/:userId/summary/regenerate", async ({ params, ...ctx }) => {
+            const user = getUser(ctx);
+            const p = UserIdSchema.parse(params);
+            const rawUserId = normalizeUserId(p.userId);
 
-                const result = await autoUpdateUserSummaries();
-                res.json({ ok: true, updated: result.updated });
-            } catch (err: unknown) {
-                sendError(res, err);
-            }
-        },
-    );
+            const targetUserId = verifyUserAccess(user, rawUserId);
+            if (!targetUserId) throw new AppError(400, "INVALID_ID", "Invalid user ID or Access Denied");
 
-    /**
-     * GET /users/:userId/memories
-     * Lists memories owned by a specific user.
-     */
-    app.get(
-        "/users/:userId/memories",
-        validateParams(UserIdSchema),
-        validateQuery(ListMemoriesQuerySchema),
-        async (req: AdvancedRequest, res: AdvancedResponse) => {
-            try {
-                const userId = normalizeUserId(req.params.userId);
+            await updateUserSummary(targetUserId);
+            const userData = await q.getUser.get(targetUserId);
 
-                verifyUserAccess(req, userId);
+            return {
+                success: true,
+                userId: targetUserId,
+                summary: userData?.summary,
+                reflectionCount: userData?.reflectionCount,
+            };
+        })
 
-                if (userId === null)
-                    return sendError(
-                        res,
-                        new AppError(400, "INVALID_ID", "Invalid user ID"),
-                    );
+        /**
+         * GET /users/:userId/memories
+         */
+        .get("/:userId/memories", async ({ params, query, ...ctx }) => {
+            const user = getUser(ctx);
+            const p = UserIdSchema.parse(params);
+            const qParams = ListMemoriesQuerySchema.parse(query);
+            const rawUserId = normalizeUserId(p.userId);
 
-                const { l, u } = req.query as unknown as z.infer<
-                    typeof ListMemoriesQuerySchema
-                >;
+            const targetUserId = verifyUserAccess(user, rawUserId);
+            if (!targetUserId) throw new AppError(400, "INVALID_ID", "Invalid user ID or Access Denied");
 
-                const m = new Memory(userId);
-                const items = await m.list(l, u);
+            const m = new Memory(targetUserId);
+            const items = await m.list(qParams.l, qParams.u);
 
-                res.json({ userId, items });
-            } catch (err: unknown) {
-                sendError(res, err);
-            }
-        },
-    );
+            return { userId: targetUserId, items };
+        })
 
-    /**
-     * DELETE /users/:userId/memories
-     * Wipes all memories and associated vectors for a specific user.
-     */
-    app.delete(
-        "/users/:userId/memories",
-        validateParams(UserIdSchema),
-        async (req: AdvancedRequest, res: AdvancedResponse) => {
-            try {
-                const userId = normalizeUserId(req.params.userId);
-                verifyUserAccess(req, userId);
+        /**
+         * DELETE /users/:userId/memories
+         * Wipe memories.
+         */
+        .delete("/:userId/memories", async ({ params, ...ctx }) => {
+            const user = getUser(ctx);
+            const p = UserIdSchema.parse(params);
+            const rawUserId = normalizeUserId(p.userId);
 
-                if (userId === null)
-                    return sendError(
-                        res,
-                        new AppError(400, "INVALID_ID", "Invalid user ID"),
-                    );
+            const targetUserId = verifyUserAccess(user, rawUserId);
+            if (!targetUserId) throw new AppError(400, "INVALID_ID", "Invalid user ID or Access Denied");
 
-                // Use Core Memory logic
-                const m = new Memory(userId);
-                const deleted = await m.wipeUserContent(userId!);
+            const m = new Memory(targetUserId);
+            const deleted = await m.wipeUserContent(targetUserId);
 
-                res.json({ ok: true, deleted });
-            } catch (err: unknown) {
-                sendError(res, err);
-            }
-        },
-    );
+            return { success: true, deleted };
+        })
 
-    /*
-     * Deprecated routes (register, keys) have been removed.
-     * Please use /admin/users and /admin/keys routes instead.
-     */
-};
+        /**
+         * DELETE /users/:userId
+         * GDPR delete.
+         */
+        .delete("/:userId", async ({ params, ...ctx }) => {
+            const user = getUser(ctx);
+            const p = UserIdSchema.parse(params);
+            const rawUserId = normalizeUserId(p.userId);
+
+            // verifyUserAccess returns targetUserId if allowed.
+            // But for DELETING a user, should a normal user be able to delete themselves?
+            // Yes, GDPR. 'verifyUserAccess' allows self or admin.
+            const targetUserId = verifyUserAccess(user, rawUserId);
+            if (!targetUserId) throw new AppError(400, "INVALID_ID", "Invalid user ID or Access Denied");
+
+            await q.delUserCascade.run(targetUserId);
+
+            return {
+                success: true,
+                message: `User ${targetUserId} and all data deleted.`,
+            };
+        });
+});

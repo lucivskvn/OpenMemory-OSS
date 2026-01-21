@@ -1,342 +1,216 @@
 /**
  * @file Hierarchical Storage Graph (HSG) Implementation.
  * Core cognitive logic for OpenMemory, including classifying, decaying, and retrieving memories.
+ * 
+ * @audited 2026-01-19
  */
 import { env } from "../core/cfg";
 import { q, transaction, vectorStore } from "../core/db";
 import { eventBus, EVENTS } from "../core/events";
-import { sectorConfigs } from "../core/hsg_config";
+import { hybridParams, sectorConfigs } from "../core/hsg_config";
 import { registerInterval, unregisterInterval } from "../core/scheduler";
-import { getEncryption } from "../core/security";
+import { Security } from "../core/security";
+import { LearnedClassifier } from "../core/learned_classifier";
 import {
     EmbeddingResult,
     HsgQueryResult,
+    MemoryItem,
     MemoryRow,
     MultiVecFusionWeights,
     SectorClassification,
+    Waypoint,
 } from "../core/types";
 import {
     calculateCrossSectorResonance,
     calculateDualPhaseDecayMemoryRetention,
-    calculateSpreadingActivationEnergy,
-    calculateRecencyScore,
-    performSpreadingActivationRetrieval,
-    sigmoid
+    calculateRecencyScore
 } from "../ops/dynamics";
-import { normalizeUserId } from "../utils";
+import { normalizeUserId, parseJSON } from "../utils";
 import { SimpleCache } from "../utils/cache";
 import { logger } from "../utils/logger";
-import { canonicalTokenSet } from "../utils/text";
-import { applyDecay, incQ, onQueryHit } from "./decay";
+import { canonicalTokenSet, computeSimhash, extractEssence } from "../utils/text";
+export { computeSimhash, extractEssence };
+import { applyDecay, incQ, decQ, onQueryHit } from "./consolidation";
+
 import {
+    aggregateVectors,
     cosineSimilarity,
-    embedMultiSector,
-    embedQueryForAllSectors,
-} from "./embed";
+    vectorToUint8Array
+} from "../utils/vectors";
+import { Embedder } from "./embed";
+import {
+    calcMeanVec,
+    classifyContent,
+    computeHybridScore,
+    computeTagMatchScore,
+    computeTokenOverlap,
+    getSectorWeights,
+} from "./utils";
+
+const COACTIVATION_FLUSH_INTERVAL = 60000; // 1 minute
+let lastFlushTime = Date.now();
+
+// generateSimhash replaced by computeSimhash from utils/text.ts
 
 const sectors = Object.keys(sectorConfigs);
-
-const hybridParams = {
-    alphaReinforce: 0.1,
-    beta: 2.0,
-    epsilon: 1e-6,
-    tau: 0.5,
-    tauHours: env.graphTemporalWindow / 3600000, // convert back if needed, but lets use it directly
-    eta: 0.2,
-};
 
 const reinforcement = {
     maxWaypointWeight: 1.0,
     waypointBoost: 0.1,
 };
 
-const scoringWeights = {
-    similarity: env.scoringSimilarity || 0.5,
-    overlap: env.scoringOverlap || 0.2,
-    waypoint: env.scoringWaypoint || 0.15,
-    recency: env.scoringRecency || 0.1,
-    tagMatch: env.scoringTagMatch || 0.05,
-};
-
-async function computeTagMatchScore(
-    mem: MemoryRow,
-    queryTokens: Set<string>,
-): Promise<number> {
-    if (!mem || !mem.tags) return 0;
-    try {
-        let tags: string[] = [];
-        if (typeof mem.tags === "string") {
-            try {
-                tags = JSON.parse(mem.tags);
-            } catch {
-                tags = [];
-            }
-        } else if (Array.isArray(mem.tags)) {
-            tags = mem.tags;
+// Safe decay lambda calculation
+function calculateDecayLambda(content: string, sectors: string[]): number {
+    const baseDecay = env.decayLambda || 0.001;
+    // Validate sector decay logic or usage of config
+    let lambda = baseDecay;
+    for (const sector of sectors) {
+        if (sectorConfigs[sector]?.decayLambda) {
+            lambda = Math.min(lambda, sectorConfigs[sector].decayLambda);
         }
-        if (!tags || !Array.isArray(tags)) return 0;
-
-        let matches = 0;
-        for (const tag of tags) {
-            const tagLower = String(tag).toLowerCase();
-            if (queryTokens.has(tagLower)) {
-                matches += 2;
-            } else {
-                for (const token of queryTokens) {
-                    if (tagLower.includes(token) || token.includes(tagLower)) {
-                        matches += 1;
-                    }
-                }
-            }
-        }
-        return Math.min(1.0, matches / Math.max(1, tags.length * 2));
-    } catch (err) {
-        logger.debug(`[HSG] Tag match calculation failed for ${mem.id}:`, {
-            error: err,
-        });
-        return 0;
     }
+
+    if (isNaN(lambda) || lambda < 0) {
+        logger.warn('[HSG] Invalid decay lambda calculated, using default', { lambda });
+        return baseDecay;
+    }
+
+    return lambda;
 }
-
-export function classifyContent(
-    content: string,
-    metadata?: Record<string, unknown>,
-): SectorClassification {
-    if (
-        metadata &&
-        typeof metadata.sector === "string" &&
-        sectors.includes(metadata.sector)
-    ) {
-        return { primary: metadata.sector, additional: [], confidence: 1.0 };
-    }
-    const scores: Record<string, number> = {};
-    for (const [sector, config] of Object.entries(sectorConfigs)) {
-        let score = 0;
-        for (const pattern of config.patterns) {
-            const matches = content.match(pattern);
-            if (matches) score += matches.length * config.weight;
-        }
-        scores[sector] = score;
-    }
-    const sortedScores = Object.entries(scores).sort(([, a], [, b]) => b - a);
-    const primary = sortedScores[0][0];
-    const primaryScore = sortedScores[0][1];
-    const threshold = Math.max(1, primaryScore * 0.3);
-    const additional = sortedScores
-        .slice(1)
-        .filter(([, score]) => score > 0 && score >= threshold)
-        .map(([sector]) => sector);
-    const confidence =
-        primaryScore > 0
-            ? Math.min(
-                1.0,
-                primaryScore /
-                (primaryScore + (sortedScores[1]?.[1] || 0) + 1),
-            )
-            : 0.2;
-    return {
-        primary: primaryScore > 0 ? primary : "semantic",
-        additional,
-        confidence,
-    };
-}
-
 
 export function calcDecay(
     sec: string,
     initSal: number,
     daysSince: number,
+    manualLambda?: number,
 ): number {
-    return calculateDualPhaseDecayMemoryRetention(initSal, daysSince, sectorConfigs[sec]?.decayLambda || 0.05);
+    // Force usage of safe lambda, with optional override
+    const lambda = (typeof manualLambda === 'number' && manualLambda > 0) ? manualLambda : calculateDecayLambda("", [sec]);
+    return calculateDualPhaseDecayMemoryRetention(initSal, daysSince, lambda);
 }
 
+// computeSimhash moved to utils/text.ts
 export function boostedSim(s: number): number {
-    return 1 - Math.exp(-hybridParams.tau * s);
+    // Cap result
+    return Math.min(1.0, 1 - Math.exp(-hybridParams.tau * s));
 }
+// extractEssence moved to utils/text.ts
 
-export function computeSimhash(text: string): string {
-    const tokens = (text || "").toLowerCase().match(/[a-z0-9]+/g) || [];
-    if (tokens.length === 0) return new Array(64).fill("0").join("");
-
-    const hashes = tokens.map((t) => {
-        let h = 0x811c9dc5;
-        for (let i = 0; i < t.length; i++) {
-            h ^= t.charCodeAt(i);
-            h = Math.imul(h, 0x01000193);
-        }
-        return h >>> 0;
-    });
-    const v = new Array(64).fill(0);
-    for (const h of hashes) {
-        for (let i = 0; i < 64; i++) {
-            if ((h >> (i % 32)) & 1) v[i] += 1;
-            else v[i] -= 1;
-        }
-    }
-    let sh = "";
-    for (let i = 0; i < 64; i++) sh += v[i] > 0 ? "1" : "0";
-    return sh;
-}
-
-export function extractEssence(raw: string, maxLen: number): string {
-    if (raw.length <= maxLen) return raw;
-    const sents = raw
-        .split(/(?<=[.!?])\s+/)
-        .map((s) => s.trim())
-        .filter((s) => s.length > 10);
-    if (sents.length === 0) return raw.slice(0, maxLen);
-    const scoreSent = (s: string, idx: number): number => {
-        let sc = 0;
-        if (idx === 0) sc += 10;
-        if (idx === 1) sc += 5;
-        if (/^#+\s/.test(s) || /^[A-Z][A-Z\s]+:/.test(s)) sc += 8;
-        if (/^[A-Z][a-z]+:/i.test(s)) sc += 6;
-        if (/\d{4}-\d{2}-\d{2}/.test(s)) sc += 7;
-        if (
-            /\b(bought|visited|went|learned|discovered|found|saw|met)\b/i.test(
-                s,
-            )
-        )
-            sc += 4;
-        if (s.length < 80) sc += 2;
-        return sc;
-    };
-    const scored = sents.map((s, idx) => ({
-        text: s,
-        score: scoreSent(s, idx),
-        idx,
-    }));
-    scored.sort((a, b) => b.score - a.score);
-    const selected: typeof scored = [];
-    let currentLen = 0;
-    for (const item of scored) {
-        if (currentLen + item.text.length + 2 <= maxLen) {
-            selected.push(item);
-            currentLen += item.text.length + 2;
-        }
-    }
-    selected.sort((a, b) => a.idx - b.idx);
-    return selected.map((s) => s.text).join(" ");
-}
-
-export function computeTokenOverlap(
-    qToks: Set<string>,
-    memToks: Set<string>,
-): number {
-    if (qToks.size === 0) return 0;
-    let ov = 0;
-    for (const t of qToks) if (memToks.has(t)) ov++;
-    return ov / qToks.size;
-}
-
-export function computeHybridScore(
-    sim: number,
-    tokOv: number,
-    wpWt: number,
-    recSc: number,
-    keywordScore: number = 0,
-    tagMatch: number = 0,
-): number {
-    const sP = boostedSim(sim);
-    const raw =
-        scoringWeights.similarity * sP +
-        scoringWeights.overlap * tokOv +
-        scoringWeights.waypoint * wpWt +
-        scoringWeights.recency * recSc +
-        scoringWeights.tagMatch * tagMatch +
-        keywordScore;
-    return sigmoid(raw);
-}
-
+// Fix 1: Wrap createCrossSectorWaypoints in transaction
 export async function createCrossSectorWaypoints(
     primId: string,
     _primSec: string,
     addSecs: string[],
     userId?: string | null,
 ): Promise<void> {
+    const uid = normalizeUserId(userId) ?? null;
+    if (addSecs.length === 0) return;
     const now = Date.now(),
         wt = 0.5;
-    const uid = userId === undefined ? undefined : normalizeUserId(userId);
-    for (const sec of addSecs) {
-        await q.insWaypoint.run(primId, `${primId}:${sec}`, uid, wt, now, now);
-        await q.insWaypoint.run(`${primId}:${sec}`, primId, uid, wt, now, now);
-    }
+
+    await q.transaction.run(async () => {
+        for (const sec of addSecs) {
+            await q.insWaypoint.run(primId, `${primId}:${sec}`, uid, wt, now, now);
+            await q.insWaypoint.run(`${primId}:${sec}`, primId, uid, wt, now, now);
+        }
+    });
 }
 
-export function calcMeanVec(
-    embRes: EmbeddingResult[],
-    _secs: string[],
-): number[] {
-    const dim = embRes[0].vector.length;
-    const wsum = new Array(dim).fill(0);
-    const secScores = embRes.map((r) => ({
-        vector: r.vector,
-        confidence: sectorConfigs[r.sector]?.weight || 1.0,
-    }));
-    const beta = hybridParams.beta;
-    const expSum = secScores.reduce(
-        (sum, s) => sum + Math.exp(beta * s.confidence),
-        0,
-    );
-    for (const result of embRes) {
-        const smWt =
-            Math.exp(beta * (sectorConfigs[result.sector]?.weight || 1.0)) /
-            expSum;
-        for (let i = 0; i < dim; i++) wsum[i] += result.vector[i] * smWt;
-    }
-    const norm =
-        Math.sqrt(wsum.reduce((sum, v) => sum + v * v, 0)) +
-        hybridParams.epsilon;
-    return wsum.map((v) => v / norm);
-}
+
 
 export async function spreadingActivation(
-    initRes: string[],
+    seedIds: string | string[],
     maxExp = 50,
     userId?: string | null,
 ): Promise<Array<{ id: string; weight: number; path: string[] }>> {
-    const activationMap = await performSpreadingActivationRetrieval(
-        initRes,
-        Math.min(maxExp, 3), // Max hops/iterations
-        userId ?? undefined,
-    );
+    const uid = normalizeUserId(userId) ?? null;
+    const seeds = Array.isArray(seedIds) ? seedIds : [seedIds];
+    const activated = new Map<string, { weight: number; path: string[] }>();
+    const queue: Array<{ id: string; level: number; weight: number; path: string[] }> = [];
 
-    const results: Array<{ id: string; weight: number; path: string[] }> = [];
-    for (const [id, energy] of activationMap) {
-        if (energy < 0.1) continue;
-        results.push({
-            id,
-            weight: energy,
-            path: [id], // Simple energy-based model doesn't keep full paths by default for performance
-        });
+    // Initialize with provided seeds
+    for (const id of seeds) {
+        queue.push({ id, level: 0, weight: 1.0, path: [id] });
     }
 
-    return results.sort((a, b) => b.weight - a.weight);
+    let iterations = 0;
+    while (queue.length > 0 && iterations < maxExp) {
+        const item = queue.shift();
+        if (!item) break;
+        const { id, level, weight, path } = item;
+        iterations++;
+
+        const existing = activated.get(id);
+        if (existing && existing.weight >= weight) continue;
+        activated.set(id, { weight, path });
+
+        if (level >= 3 || weight < 0.1) continue;
+
+        const waypoints = await q.getWaypointsBySrc.all(id, uid) as Waypoint[];
+
+        for (const wp of waypoints) {
+            if (path.includes(wp.dstId)) continue;
+
+            const newWeight = weight * wp.weight * 0.8;
+            if (newWeight >= 0.1) {
+                queue.push({
+                    id: wp.dstId,
+                    level: level + 1,
+                    weight: newWeight,
+                    path: [...path, wp.dstId],
+                });
+            }
+        }
+    }
+
+    return Array.from(activated.entries()).map(([id, val]) => ({
+        id,
+        weight: val.weight,
+        path: val.path,
+    })).sort((a, b) => b.weight - a.weight);
 }
+
+const MAX_WAYPOINT_WEIGHT = 1.0;
 
 export async function reinforceWaypoints(
     travPath: string[],
     userId?: string | null,
 ): Promise<void> {
+    const uid = normalizeUserId(userId) ?? null;
+    if (travPath.length < 2) return;
     const now = Date.now();
-    const uid = userId === undefined ? undefined : normalizeUserId(userId);
-    for (let i = 0; i < travPath.length - 1; i++) {
-        const wp = await q.getWaypoint.get(travPath[i], travPath[i + 1], uid);
-        if (wp)
-            await q.updWaypoint.run(
-                travPath[i],
-                travPath[i + 1],
-                uid,
-                Math.min(
-                    reinforcement.maxWaypointWeight,
-                    wp.weight + reinforcement.waypointBoost,
-                ),
-                now,
-            );
-    }
-}
+    const updates: Array<{ srcId: string; dstId: string; userId: string | null; weight: number; createdAt: number; updatedAt: number }> = [];
 
-// Imports moved to top
+    // Ticket #2 logic: reinforce existing, check overflow
+    // To batch this correctly, we might need to know the edges.
+    // Assumes travPath is a sequence.
+
+    await q.transaction.run(async () => {
+        for (let i = 0; i < travPath.length - 1; i++) {
+            // Use locking to prevent lost updates
+            const wp = await q.getWaypoint.get(travPath[i], travPath[i + 1], uid, true);
+            if (wp) {
+                // Multiplicative update per ticket
+                const newWeight = Math.min(
+                    wp.weight * (1 + env.reinfWaypointBoost),
+                    MAX_WAYPOINT_WEIGHT
+                );
+
+                updates.push({
+                    srcId: travPath[i],
+                    dstId: travPath[i + 1],
+                    userId: uid ?? null,
+                    weight: newWeight,
+                    createdAt: wp.createdAt,
+                    updatedAt: now,
+                });
+            }
+        }
+        if (updates.length > 0) {
+            await q.insWaypoints.run(updates);
+        }
+    });
+}
 
 export async function calcMultiVecFusionScore(
     mid: string,
@@ -344,8 +218,9 @@ export async function calcMultiVecFusionScore(
     w: MultiVecFusionWeights,
     userId?: string | null,
 ): Promise<number> {
-    const uid = userId === undefined ? undefined : normalizeUserId(userId);
+    const uid = normalizeUserId(userId) ?? null;
     const vecs = await vectorStore.getVectorsById(mid, uid);
+    if (vecs.length === 0) return 0;
     let sum = 0,
         tot = 0;
     const wm: Record<string, number> = {
@@ -371,32 +246,49 @@ const cache = new SimpleCache<string, { r: HsgQueryResult[]; t: number }>({
 const coactBuf: Array<[string | undefined, string, string]> = [];
 let hsgIntervalId: string | null = null;
 
-export const startHsgMaintenance = () => {
-    if (hsgIntervalId) return;
-    hsgIntervalId = registerInterval(
-        "hsg",
-        async () => {
-            if (!coactBuf.length) return;
-            const pairs = coactBuf.splice(0, 50);
-            const now = Date.now(),
-                tauMs = env.graphTemporalWindow; // use directly from env
-            for (const [uid, a, b] of pairs) {
+async function processCoactivations(pairs: Array<[string | undefined, string, string]>) {
+    if (pairs.length === 0) return;
+    const now = Date.now();
+    const tauMs = 3600 * 1000 * 24;
+
+    await q.transaction.run(async () => {
+        const allIds = Array.from(new Set(pairs.flatMap(([_, a, b]) => [a, b])));
+        const mems = await q.getMems.all(allIds);
+        const memMap = new Map<string, MemoryRow>(mems.map((m: MemoryRow) => [m.id, m]));
+
+        // Batch fetch all waypoints for these pairs with LOCK
+        const chunkSize = 50;
+        for (let i = 0; i < pairs.length; i += chunkSize) {
+            const chunk = pairs.slice(i, i + chunkSize);
+            const wpPairs = chunk.map((p) => ({ src: p[1], dst: p[2] }));
+            const wpMap = (await q.getWaypointsForPairs.all(
+                wpPairs,
+                chunk[0]?.[0],
+                true // Lock rows
+            )) as Map<string, Waypoint>;
+
+            const updates: Array<{
+                srcId: string;
+                dstId: string;
+                userId: string | null;
+                weight: number;
+                createdAt: number;
+                updatedAt: number;
+            }> = [];
+
+            for (const [uid, a, b] of chunk) {
                 try {
-                    const [memA, memB] = await Promise.all([
-                        q.getMem.get(a, uid),
-                        q.getMem.get(b, uid),
-                    ]);
+                    const memA = memMap.get(a);
+                    const memB = memMap.get(b);
                     if (!memA || !memB || memA.userId !== memB.userId) continue;
+                    if (uid && memA.userId !== uid) continue;
+
                     const tempFact = Math.exp(
                         -Math.abs(
                             (memA.lastSeenAt || 0) - (memB.lastSeenAt || 0),
                         ) / tauMs,
                     );
-                    const wp = await q.getWaypoint.get(
-                        a,
-                        b,
-                        memA.userId ?? undefined,
-                    );
+                    const wp = wpMap.get(`${a}:${b}`);
                     const newWt = Math.min(
                         1,
                         (wp?.weight || 0) +
@@ -404,32 +296,72 @@ export const startHsgMaintenance = () => {
                         (1 - (wp?.weight || 0)) *
                         tempFact,
                     );
-                    await q.insWaypoint.run(
-                        a,
-                        b,
-                        memA.userId ?? null,
-                        newWt,
-                        wp?.createdAt || now,
-                        now,
-                    );
-                } catch (e) {
-                    logger.warn("[HSG] Coactivation update failed:", {
-                        error: e,
+
+                    updates.push({
+                        srcId: a,
+                        dstId: b,
+                        userId: memA.userId ?? null,
+                        weight: newWt,
+                        createdAt: wp?.createdAt || now,
+                        updatedAt: now,
                     });
+                } catch (e: unknown) {
+                    logger.warn("[HSG] Coactivation calc failed during flush:", { error: e });
                 }
             }
+
+            if (updates.length > 0) {
+                await q.insWaypoints.run(updates).catch((e: unknown) => {
+                    logger.error("[HSG] Failed to persist flush updates:", { error: e });
+                });
+            }
+        }
+    });
+}
+
+export const startHsgMaintenance = () => {
+    if (hsgIntervalId) return;
+    hsgIntervalId = registerInterval(
+        "hsg",
+        async () => {
+            // Optimization: Check length first to avoid busy loop work
+            if (coactBuf.length === 0) return;
+
+            const now = Date.now();
+            const COACTIVATION_BUFFER_THRESHOLD = 50;
+            const shouldFlush = coactBuf.length >= COACTIVATION_BUFFER_THRESHOLD || (now - lastFlushTime) > COACTIVATION_FLUSH_INTERVAL;
+
+            if (!shouldFlush) return;
+
+            // Process a chunk of coactivations to avoid blocking the event loop
+            const pairs = coactBuf.splice(0, 50);
+            if (pairs.length === 0) return;
+            lastFlushTime = Date.now();
+
+            await processCoactivations(pairs);
         },
         1000,
     );
-
 };
 
-export const stopHsgMaintenance = () => {
+export const stopHsgMaintenance = async () => {
     if (hsgIntervalId) {
         unregisterInterval(hsgIntervalId);
         hsgIntervalId = null;
     }
+    // Flush remaining buffer
+    if (coactBuf.length > 0) {
+        logger.info(`[HSG] Flushing ${coactBuf.length} coactivations on shutdown...`);
+        await flushCoactivations();
+    }
 };
+
+async function flushCoactivations() {
+    if (coactBuf.length === 0) return;
+    const pairs = coactBuf.splice(0, coactBuf.length); // Flush all
+    lastFlushTime = Date.now();
+    await processCoactivations(pairs);
+}
 
 if (typeof process === "undefined" || !env.isTest) startHsgMaintenance();
 
@@ -446,13 +378,18 @@ export async function hsgQuery(
     },
 ): Promise<HsgQueryResult[]> {
     incQ();
+    const uid = normalizeUserId(f?.userId) ?? null;
     try {
         // Stable cache key generation
         const stableFilter = f
             ? Object.keys(f)
                 .sort()
                 .reduce((obj, key) => {
-                    obj[key] = (f as Record<string, unknown>)[key];
+                    if (key === "userId") {
+                        obj[key] = uid;
+                    } else {
+                        obj[key] = (f as Record<string, unknown>)[key];
+                    }
                     return obj;
                 }, {} as Record<string, unknown>)
             : {};
@@ -465,43 +402,33 @@ export async function hsgQuery(
         const primarySectors = Array.from(
             new Set([qc.primary, ...qc.additional, ...(f?.sectors || [])]),
         );
-        const sr = await embedQueryForAllSectors(qt, primarySectors).catch((e) => {
-            logger.warn(`[HSG] Embedding failed for query "${qt}", falling back to keyword search:`, { error: e });
+        const sr = await Embedder.embedQueryForAllSectors(qt, primarySectors).catch((e) => {
+            // REDACTION: Do not log raw query text
+            logger.warn(`[HSG] Embedding failed for query (len=${qt.length}), falling back to keyword search:`, { error: e });
             return null;
         });
 
         if (!sr) {
             // Fallback to keyword search
-            const memories = await q.searchMemsByKeyword.all(qt, k, f?.userId);
+            const memories = await q.searchMemsByKeyword.all(qt, k, uid);
             if (memories.length === 0) return [];
 
             // Process keyword matches into HsgQueryResult format
-            const enc = getEncryption();
-            const results: HsgQueryResult[] = await Promise.all(memories.map(async (m) => {
+            const enc = Security.getEncryption();
+            const { hydrateMemoryRow } = await import("./utils"); // Lazy import to avoid cycle if any (though utils is leaf)
+
+            const results: HsgQueryResult[] = await Promise.all(memories.map(async (m: MemoryRow) => {
                 const content = await enc.decrypt(m.content || "");
-                let tags = [];
-                try { tags = m.tags ? (typeof m.tags === "string" ? JSON.parse(m.tags) : m.tags) : []; } catch { }
-                let metadata = {};
-                try { metadata = m.metadata ? (typeof m.metadata === "string" ? JSON.parse(m.metadata) : m.metadata) : {}; } catch { }
+                const hyd = hydrateMemoryRow(m);
 
                 return {
-                    id: m.id,
+                    ...hyd,
                     content: content || "",
-                    score: 0.5, // Neutral score for simple fallback matches
-                    sectors: [m.primarySector],
-                    primarySector: m.primarySector,
+                    score: 0.5,
                     path: [m.id],
-                    salience: m.salience || 0.5,
-                    lastSeenAt: m.lastSeenAt || 0,
-                    createdAt: m.createdAt || 0,
-                    tags,
-                    metadata,
-                    updatedAt: m.updatedAt || 0,
-                    decayLambda: m.decayLambda,
-                    version: m.version,
-                    segment: m.segment,
-                    simhash: m.simhash,
-                    generatedSummary: m.generatedSummary,
+                    sectors: [m.primarySector],
+                    metadata: hyd.metadata,
+                    tags: hyd.tags
                 } as HsgQueryResult;
             }));
             const final = { r: results, t: Date.now() };
@@ -509,28 +436,19 @@ export async function hsgQuery(
             return results;
         }
 
+        const queryWeights = getSectorWeights();
         const qe: Record<string, number[]> = {};
         for (const r of sr) qe[r.sector] = r.vector;
-        const w: MultiVecFusionWeights = {
-            semanticDimensionWeight: 1,
-            emotionalDimensionWeight: 0.8,
-            proceduralDimensionWeight: 0.9,
-            temporalDimensionWeight: 1.2,
-            reflectiveDimensionWeight: 0.7,
-        };
         const candidates = new Map<string, { vectorScore: number; searchSector: string }>();
         const results: HsgQueryResult[] = [];
 
-        // 1. Gather Candidates (Parallel Search)
-        // Limit concurrency to avoid overloading vector store if many sectors
-        // 1. Gather Candidates (Parallel Search)
-        // Limit concurrency to avoid overloading vector store if many sectors
+        // 1. Gather Candidates (Parallel Search, limited concurrency)
         const searchPromises = sr.map(async (srItem) => {
             const matches = await vectorStore.searchSimilar(
                 srItem.sector,
                 srItem.vector,
                 k * 2,
-                f?.userId,
+                uid,
                 f?.metadata ? { metadata: f.metadata } : undefined,
             );
             return { matches, sector: srItem.sector };
@@ -558,14 +476,14 @@ export async function hsgQuery(
         const [memories, allVectors] = await Promise.all([
             q.hsgSearch.all(
                 candidateIds,
-                f?.userId,
+                uid,
                 candidateIds.length, // Fetch all candidates to allow full fusion ranking
                 f?.startTime,
                 f?.endTime,
                 f?.minSalience,
                 hybridParams.tau
             ),
-            vectorStore.getVectorsByIds(candidateIds, f?.userId),
+            vectorStore.getVectorsByIds(candidateIds, uid),
         ]);
 
         // Index vectors by Memory ID
@@ -575,10 +493,19 @@ export async function hsgQuery(
             vectorsMap.get(v.id)!.push(v);
         }
 
-        const enc = getEncryption();
+        // PRE-CALCULATE PATHS using multi-root Spreading Activation
+        const pathMap = new Map<string, { path: string[]; weight: number }>();
+        const spreadResults = await spreadingActivation(candidateIds, 100, uid);
+
+        for (const sp of spreadResults) {
+            // Only use if not already better path recorded (though spreadingActivation internal map handles this)
+            pathMap.set(sp.id, { path: sp.path, weight: sp.weight });
+        }
+
+        const enc = Security.getEncryption();
 
         // 3. Process Candidates in Memory
-        await Promise.all(memories.map(async (m) => {
+        await Promise.all(memories.map(async (m: MemoryRow) => {
             const cand = candidates.get(m.id);
             if (!cand) return;
 
@@ -591,18 +518,11 @@ export async function hsgQuery(
             // Calculate Fusion Score (In-Memory)
             const mVecs = vectorsMap.get(m.id) || [];
             let sum = 0, tot = 0;
-            const wm: Record<string, number> = {
-                semantic: w.semanticDimensionWeight,
-                emotional: w.emotionalDimensionWeight,
-                procedural: w.proceduralDimensionWeight,
-                episodic: w.temporalDimensionWeight,
-                reflective: w.reflectiveDimensionWeight,
-            };
 
             for (const v of mVecs) {
                 if (!qe[v.sector]) continue;
                 const sim = cosineSimilarity(qe[v.sector], v.vector);
-                const wgt = wm[v.sector] || 0.5;
+                const wgt = queryWeights[v.sector] || 0.5;
                 sum += sim * wgt;
                 tot += wgt;
             }
@@ -615,46 +535,44 @@ export async function hsgQuery(
             );
 
             const age = (Date.now() - (m.lastSeenAt || 0)) / 86400000;
-            const sal = calcDecay(m.primarySector, m.salience || 0.5, age);
+            const sal = calcDecay(m.primarySector, m.salience || 0.5, age, m.decayLambda);
 
             const tokOv = computeTokenOverlap(
                 qtk,
                 canonicalTokenSet(decryptedContent || ""),
             );
+            const pathInfo = pathMap.get(m.id) || { path: [m.id], weight: 0 };
             const recSc = calculateRecencyScore(m.lastSeenAt || 0, hybridParams.tau);
             const hs = computeHybridScore(
                 cand.vectorScore,
                 tokOv,
-                0, // No waypoints in search result path context currently
+                pathInfo.weight,
                 recSc,
                 0,
                 await computeTagMatchScore(m, qtk),
+                sal, // Use calculated (decayed) salience
             );
-
-            let parsedTags = [];
-            try { parsedTags = m.tags ? (typeof m.tags === "string" ? JSON.parse(m.tags) : m.tags) : []; } catch { }
-            let parsedMeta = {};
-            try { parsedMeta = m.metadata ? (typeof m.metadata === "string" ? JSON.parse(m.metadata) : m.metadata) : {}; } catch { }
 
             results.push({
                 id: m.id,
                 content: decryptedContent || "",
                 score: hs * resonance,
-                sectors: [m.primarySector],
+                sectors: mVecs.map(v => v.sector),
                 primarySector: m.primarySector,
-                path: [m.id],
+                path: pathInfo.path,
                 salience: sal,
                 lastSeenAt: m.lastSeenAt || 0,
                 createdAt: m.createdAt || 0,
-                tags: parsedTags,
-                metadata: parsedMeta,
+                tags: m.tags || [],
+                metadata: parseJSON(m.metadata || {}),
                 updatedAt: m.updatedAt || 0,
                 decayLambda: m.decayLambda,
                 version: m.version,
                 segment: m.segment,
                 simhash: m.simhash,
                 generatedSummary: m.generatedSummary,
-            });
+                userId: m.userId ?? null,
+            } as HsgQueryResult);
         }));
 
         results.sort((a, b) => b.score - a.score);
@@ -665,18 +583,21 @@ export async function hsgQuery(
             for (let i = 0; i < top.length; i++) {
                 for (let j = i + 1; j < Math.min(top.length, 5); j++) {
                     if (coactBuf.length < 500) {
-                        coactBuf.push([
-                            normalizeUserId(f?.userId) ?? undefined,
-                            top[i].id,
-                            top[j].id,
-                        ]);
+                        const exists = coactBuf.some(p => p[1] === top[i].id && p[2] === top[j].id);
+                        if (!exists) {
+                            coactBuf.push([
+                                normalizeUserId(f?.userId) ?? undefined,
+                                top[i].id,
+                                top[j].id,
+                            ]);
+                        }
                     }
                 }
             }
         }
 
         for (const r of top) {
-            onQueryHit(r.id, r.primarySector, f?.userId ?? null, async (text) => {
+            onQueryHit(r.id, r.primarySector, uid, async (text) => {
                 const { embedForSector } = await import("./embed");
                 return embedForSector(text, r.primarySector);
             }).catch(() => { });
@@ -687,23 +608,116 @@ export async function hsgQuery(
     } catch (e) {
         logger.error("[HSG] Query failed:", { error: e });
         return [];
+    } finally {
+        decQ();
     }
 }
 
+/**
+ * Establishes bidirectional semantic links between memories in the same sector.
+ */
+export async function createInterMemWaypoints(
+    newId: string,
+    primSec: string,
+    newVec: number[],
+    userId?: string | null,
+): Promise<void> {
+    const uid = normalizeUserId(userId) ?? null;
+    const thresh = 0.85; // High precision threshold
+    const wt = 0.5;
+    const nowTs = Date.now();
+
+    // Find similar memories in the same sector and user scope
+    // We use the vector store for efficient lookups instead of full table scan
+    const similar = await vectorStore.searchSimilar(primSec, newVec, 50, uid);
+    const updates: Array<{ srcId: string; dstId: string; userId: string | null; weight: number; createdAt: number; updatedAt: number }> = [];
+
+    for (const match of similar) {
+        if (match.id === newId || match.score < thresh) continue;
+        updates.push({
+            srcId: newId,
+            dstId: match.id,
+            userId: uid ?? null,
+            weight: wt,
+            createdAt: nowTs,
+            updatedAt: nowTs,
+        });
+        updates.push({
+            srcId: match.id,
+            dstId: newId,
+            userId: uid ?? null,
+            weight: wt,
+            createdAt: nowTs,
+            updatedAt: nowTs,
+        });
+    }
+
+    if (updates.length > 0) {
+        await q.insWaypoints.run(updates);
+    }
+}
+
+/**
+ * Creates a "Semantic Gravity" link between a new memory and its most similar predecessor.
+ * Now uses vector similarity search for optimized retrieval.
+ */
+export async function createSemanticGravityLink(
+    newId: string,
+    meanVec: number[],
+    userId?: string | null,
+): Promise<void> {
+    const uid = normalizeUserId(userId) ?? null;
+    const nowTs = Date.now();
+
+    // Use vector search to find the most relevant candidate(s)
+    // Correct tool call: searchSimilar(sector, queryVec, topK, userId, filter)
+    const results = await vectorStore.searchSimilar("semantic", meanVec, 5, uid);
+    const bestCandidate = results.find(r => r.id !== newId);
+
+    if (bestCandidate) {
+        await q.insWaypoint.run(newId, bestCandidate.id, uid ?? null, bestCandidate.score || 0.8, nowTs, nowTs);
+    } else {
+        // First memory for user: self-link to establish root or handle isolation
+        await q.insWaypoint.run(newId, newId, uid ?? null, 1.0, nowTs, nowTs);
+    }
+}
+
+/**
+ * Orchestrates graph linking operations for a new memory.
+ */
+async function graphLink(
+    id: string,
+    meanVec: number[],
+    primarySector: string,
+    userId?: string | null,
+): Promise<void> {
+    try {
+        const uid = normalizeUserId(userId);
+        await Promise.all([
+            createSemanticGravityLink(id, meanVec, uid),
+            createInterMemWaypoints(id, primarySector, meanVec, uid),
+        ]);
+    } catch (e) {
+        logger.warn(`[HSG] Graph linking failed for memory ${id}:`, { error: e });
+    }
+}
+
+/**
+ * Adds a single memory item to the HSG.
+ * Handles content classification, encryption, vector embedding, and graph linking.
+ * 
+ * @param content - The raw text content of the memory.
+ * @param userId - The user ID to associate with the memory.
+ * @param metadata - Optional metadata (tags, source, etc.).
+ * @param overrides - Optional overrides for ID and creation time.
+ * @returns The created MemoryItem.
+ */
 export async function addMemory(
     content: string,
     userId: string | undefined | null,
     metadata?: Record<string, unknown>,
     overrides?: { id?: string; createdAt?: number },
-): Promise<{
-    id: string;
-    primarySector: string;
-    sectors: string[];
-    chunks: number;
-    content: string;
-    createdAt: number;
-    userId: string | null;
-}> {
+): Promise<MemoryItem> {
     let qc = classifyContent(content, metadata);
     const now = overrides?.createdAt || Date.now();
 
@@ -715,19 +729,15 @@ export async function addMemory(
     ) {
         // Only if default/uncertain
         try {
-            const { LearnedClassifier } =
-                await import("../core/learned_classifier");
             const model = await LearnedClassifier.load(userId);
             if (model) {
-                // We need a vector. Compute semantic vector first.
-                const { embedForSector } = await import("./embed");
-                const vecRes = await embedForSector(content, "semantic");
+                const vecRes = await Embedder.embedForSector(content, "semantic");
 
                 // Predict
                 const Pred = LearnedClassifier.predict(vecRes, model);
 
                 // If high confidence, override
-                if (Pred.confidence > 0.6) {
+                if (Pred.confidence > env.classifierOverrideThreshold) {
                     qc = Pred;
                     logger.debug(
                         `[HSG] Classifier override: ${qc.primary} (conf: ${qc.confidence.toFixed(2)})`,
@@ -742,38 +752,59 @@ export async function addMemory(
     const primSec = qc.primary;
     const uid = userId === undefined ? undefined : normalizeUserId(userId);
 
+    // Generate simhash for dedup and storage (Ticket #1, #13)
+    const simhash = computeSimhash(content);
+
     // Idempotency / Deduplication Check (Only if no ID override)
     if (!overrides?.id) {
-        const sh = computeSimhash(content);
-        const existing = await q.getMemBySimhash.get(sh, uid);
+        const uidNormalized = normalizeUserId(userId) ?? null;
+        const existing = await q.getMemBySimhash.get(simhash, uidNormalized);
         if (existing) {
-            const enc = getEncryption();
+            const enc = Security.getEncryption();
             const existingContent = await enc.decrypt(existing.content);
 
             // Only treat as duplicate if content actually matches
             if (existingContent === content) {
                 logger.debug(`[HSG] Dedup: Memory already exists (${existing.id})`);
-                // If content is identical, we can just reinforce it? Or just return it.
-                // Returning it ensures idempotency.
-                try {
-                    JSON.parse(existing.tags || "[]");
-                } catch { }
-                // Update lastSeenAt to reflect re-occurrence
                 await q.updSeen.run(
                     existing.id,
                     now,
                     Math.min(1.0, (existing.salience || 0.5) + 0.1),
                     now,
-                    uid,
+                    uidNormalized,
                 );
+
+                let parsedTags: string[] = [];
+                try {
+                    parsedTags = existing.tags ? JSON.parse(existing.tags) : [];
+                } catch {
+                    parsedTags = [];
+                }
+
+                let parsedMeta: Record<string, unknown> = {};
+                try {
+                    parsedMeta = existing.metadata ? JSON.parse(existing.metadata) : {};
+                } catch {
+                    parsedMeta = {};
+                }
+
                 return {
                     id: existing.id,
-                    primarySector: existing.primarySector,
-                    sectors: [existing.primarySector],
-                    chunks: 1,
                     content: content,
-                    createdAt: existing.createdAt || now,
+                    primarySector: existing.primarySector,
+                    tags: parsedTags,
+                    metadata: parsedMeta,
                     userId: existing.userId,
+                    segment: existing.segment || 0,
+                    simhash: existing.simhash || simhash,
+                    createdAt: existing.createdAt || now,
+                    updatedAt: now,
+                    lastSeenAt: now,
+                    salience: Math.min(1.0, (existing.salience || 0.5) + 0.1),
+                    decayLambda: existing.decayLambda || 0.005,
+                    version: existing.version || 1,
+                    generatedSummary: null,
+                    sectors: [existing.primarySector],
                 };
             } else {
                 logger.warn(`[HSG] SimHash collision detected for ${existing.id} (content mismatch). Creating new memory.`);
@@ -788,7 +819,7 @@ export async function addMemory(
 
     let embRes: EmbeddingResult[];
     try {
-        embRes = await embedMultiSector(
+        embRes = await Embedder.embedMultiSector(
             id,
             content,
             addSecs,
@@ -796,15 +827,19 @@ export async function addMemory(
             userId || undefined,
         );
     } catch (e) {
-        logger.error(`[HSG] Embedding failed for ${id}:`, { error: e });
-        throw e; // Fail early if embeddings fail
+        logger.error(`[HSG] Embedding failed for memory ${id}:`, { error: e });
+        throw e;
     }
 
-    const primRes = embRes.find((r) => r.sector === primSec) || embRes[0];
-    const meanVec = primRes.vector;
-    const meanVecBuf = Buffer.from(new Float32Array(meanVec).buffer);
+    const meanVec = calcMeanVec(embRes);
+    const meanVecBuf = Buffer.from(vectorToUint8Array(meanVec));
 
-    const enc = getEncryption();
+    const salience = typeof metadata?.salience === "number" ? metadata.salience : Math.min(1.0, 0.4 + 0.1 * qc.additional.length);
+    const decayLambda = typeof metadata?.decayLambda === "number"
+        ? metadata.decayLambda
+        : sectorConfigs[primSec].decayLambda;
+
+    const enc = Security.getEncryption();
     const encryptedContent = await enc.encrypt(content);
 
     const safeJson = (obj: any) => {
@@ -816,8 +851,10 @@ export async function addMemory(
     };
 
     // Execute in transaction for atomicity (DB + Vector Store)
-    return await transaction.run(async () => {
+    const memoryItem = await transaction.run(async () => {
         // 1. Insert into Main DB
+        // Parameters: id, content, sector, tags, meta, userId, segment, simhash,
+        //            ca, ua, lsa, salience, dl, version, dim, mv, cv, fs, summary
         await q.insMem.run(
             id,
             encryptedContent,
@@ -825,21 +862,19 @@ export async function addMemory(
             safeJson(metadata?.tags || []),
             safeJson(metadata || {}),
             uid ?? null,
-            0,
-            computeSimhash(content),
-            now,
-            now,
-            now,
-            typeof metadata?.salience === "number" ? metadata.salience : 0.5,
-            typeof metadata?.decayLambda === "number"
-                ? metadata.decayLambda
-                : sectorConfigs[primSec].decayLambda,
-            1,
-            meanVec.length,
-            meanVecBuf,
-            meanVecBuf,
-            0,
-            null,
+            0, // segment
+            simhash,
+            now, // created_at
+            now, // updated_at
+            now, // last_seen_at
+            salience,
+            decayLambda,
+            1, // version
+            meanVec.length, // dim
+            meanVecBuf, // mean_vec
+            meanVecBuf, // compressed_vec
+            0, // feedback_score
+            null, // generated_summary
         );
 
         // 2. Insert into Vector Store
@@ -856,63 +891,85 @@ export async function addMemory(
 
         // 3. Create Cross-Sector Waypoints
         if (qc.additional.length > 0) {
-            await createCrossSectorWaypoints(id, primSec, qc.additional, uid).catch(
-                (e) =>
-                    logger.warn(
-                        `[HSG] Failed to create cross-sector waypoints for ${id}:`,
-                        { error: e },
-                    ),
-            );
+            await createCrossSectorWaypoints(id, primSec, qc.additional, uid).catch((e) => {
+                logger.warn(`[HSG] Failed to create cross-sector waypoints for ${id}:`, { error: e });
+            });
         }
 
-        eventBus.emit(EVENTS.MEMORY_ADDED, {
-            id,
-            primarySector: primSec,
-            content,
-            userId: userId || undefined,
-            createdAt: now,
-            sectors: [primSec, ...qc.additional],
-        });
+        // 4. Graph Linking (Gravity & Associative)
+        await graphLink(id, meanVec, primSec, uid);
 
         return {
             id,
-            primarySector: primSec,
-            sectors: [primSec, ...qc.additional],
-            chunks: 1,
             content,
+            primarySector: primSec,
+            tags: (metadata?.tags as string[]) || [],
+            metadata: metadata || {},
+            userId: uid ?? null,
+            segment: 0,
+            simhash,
             createdAt: now,
-            userId: userId || null,
-        };
+            updatedAt: now,
+            lastSeenAt: now,
+            salience,
+            decayLambda,
+            version: 1,
+            generatedSummary: null,
+            sectors: [primSec, ...qc.additional],
+        } as MemoryItem;
     });
+
+    eventBus.emit(EVENTS.MEMORY_ADDED, memoryItem);
+
+    return memoryItem;
 }
 
+/**
+ * Wrapper for addMemory that handles tag parsing from string or array.
+ * 
+ * @param content - The raw text content.
+ * @param tagsOrStr - Tags as an array of strings or a JSON string.
+ * @param metadata - Additional metadata.
+ * @param userId - User ID.
+ * @param overrides - ID/Time overrides.
+ * @returns The created MemoryItem.
+ */
 export async function addHsgMemory(
     content: string,
-    tagsStr?: string | null,
+    tagsOrStr?: string | string[] | null,
     metadata: Record<string, unknown> = {},
     userId?: string | null,
     overrides?: { id?: string; createdAt?: number },
-): Promise<{
-    id: string;
-    primarySector: string;
-    sectors: string[];
-    chunks: number;
-    content: string;
-    createdAt: number;
-    userId: string | null;
-}> {
-    const tags = tagsStr
-        ? JSON.parse(tagsStr)
-        : (metadata?.tags as string[]) || [];
+): Promise<MemoryItem> {
+    let tags: string[] = [];
+    if (Array.isArray(tagsOrStr)) {
+        tags = tagsOrStr;
+    } else if (typeof tagsOrStr === "string") {
+        try {
+            tags = JSON.parse(tagsOrStr);
+        } catch {
+            tags = [];
+        }
+    } else {
+        tags = (metadata?.tags as string[]) || [];
+    }
     return await addMemory(content, userId, { ...metadata, tags }, overrides);
 }
 
+/**
+ * Batch adds multiple memories to the HSG.
+ * optimization: Uses parallel processing for embeddings and batched DB inserts.
+ * 
+ * @param items - Array of items with content and metadata.
+ * @param userId - User ID used for all items.
+ * @returns Array of objects containing the new IDs and their primary sectors.
+ */
 export async function addMemories(
     items: Array<{ content: string; metadata?: Record<string, unknown> }>,
     userId: string | undefined | null,
 ): Promise<Array<{ id: string; primarySector: string }>> {
     const now = Date.now();
-    const enc = getEncryption();
+    const enc = Security.getEncryption();
     const uid = normalizeUserId(userId);
 
     // 1. Prepare items (Classification, Simhash, Encryption)
@@ -941,6 +998,7 @@ export async function addMemories(
         embRes: EmbeddingResult[];
         meanVec: number[];
         meanDim: number;
+        qc: SectorClassification;
     }> = [];
 
     const EMBED_CHUNK_SIZE = 20; // Process 20 items at a time to avoid OOM
@@ -948,22 +1006,36 @@ export async function addMemories(
         const chunk = processedItems.slice(i, i + EMBED_CHUNK_SIZE);
         const chunkResults = await Promise.all(
             chunk.map(async (item) => {
-                const addSecs = [item.primarySector, ...item.additionalSectors];
-                const embRes = await embedMultiSector(
+                let qc = classifyContent(item.content, item.metadata);
+
+                // Learned Refinement in Batch
+                if (userId && qc.primary === "semantic") {
+                    try {
+                        const model = await LearnedClassifier.load(userId);
+                        if (model) {
+                            const vec = await Embedder.embedForSector(item.content, "semantic");
+                            const pred = LearnedClassifier.predict(vec, model);
+                            if (pred.confidence > 0.6) qc = pred;
+                        }
+                    } catch { }
+                }
+
+                const addSecs = [qc.primary, ...qc.additional];
+                const embRes = await Embedder.embedMultiSector(
                     item.id,
                     item.content,
                     addSecs,
                     undefined,
-                    userId || undefined,
+                    uid,
                 );
-                const primRes =
-                    embRes.find((r) => r.sector === item.primarySector) ||
-                    embRes[0];
+                const meanVec = calcMeanVec(embRes);
+
                 return {
                     id: item.id,
                     embRes,
-                    meanVec: primRes.vector,
-                    meanDim: primRes.dim,
+                    meanVec,
+                    meanDim: meanVec.length,
+                    qc,
                 };
             }),
         );
@@ -973,11 +1045,11 @@ export async function addMemories(
     // 3. Batch Main DB Insert
     const dbItems = processedItems.map((item, i) => {
         const emb = embeddingResults[i];
-        const meanVecBuf = Buffer.from(new Float32Array(emb.meanVec).buffer);
+        const meanVecBuf = Buffer.from(vectorToUint8Array(emb.meanVec));
         return {
             id: item.id,
             content: item.encryptedContent,
-            primarySector: item.primarySector,
+            primarySector: emb.qc.primary,
             tags: JSON.stringify(item.metadata.tags || []),
             metadata: JSON.stringify(item.metadata),
             userId: uid ?? null,
@@ -986,8 +1058,8 @@ export async function addMemories(
             createdAt: item.createdAt,
             updatedAt: item.createdAt,
             lastSeenAt: item.createdAt,
-            salience: 0.5,
-            decayLambda: sectorConfigs[item.primarySector].decayLambda,
+            salience: Math.min(1.0, 0.4 + 0.1 * emb.qc.additional.length),
+            decayLambda: sectorConfigs[emb.qc.primary].decayLambda,
             version: 1,
             meanDim: emb.meanDim,
             meanVec: meanVecBuf,
@@ -1024,15 +1096,20 @@ export async function addMemories(
         }
 
         try {
-            await vectorStore.storeVectors(vectorItems, userId);
+            await vectorStore.storeVectors(vectorItems, uid);
         } catch (e) {
             logger.error(`[HSG] Batch vector storage failed for user ${userId}:`, { error: e });
             throw e; // Rollback DB
         }
 
-        return processedItems.map((p) => ({
+        // 5. Batch Graph Linking
+        for (const emb of embeddingResults) {
+            await graphLink(emb.id, emb.meanVec, emb.qc.primary, uid);
+        }
+
+        return processedItems.map((p, i) => ({
             id: p.id,
-            primarySector: p.primarySector,
+            primarySector: embeddingResults[i].qc.primary,
         }));
     });
 
@@ -1048,38 +1125,84 @@ export async function addHsgMemories(
 
 export const runDecayProcess = applyDecay;
 
+/**
+ * Reinforces a memory by increasing its salience (importance).
+ * Also updates the "last seen" timestamp.
+ * 
+ * @param id - The ID of the memory to reinforce.
+ * @param boost - Amount to increase salience by (default: 0.1).
+ * @param userId - Optional User ID for scoping.
+ */
 export async function reinforceMemory(
     id: string,
     boost = 0.1,
     userId?: string | null,
 ) {
-    const m = await q.getMem.get(id, userId);
+    const uid = normalizeUserId(userId) ?? null;
+    const m = await q.getMem.get(id, uid);
     if (!m) throw new Error("Memory not found");
     const newSal = Math.min(1.0, (m.salience || 0.5) + boost);
+    // Update salience
     await q.updSeen.run(
         id,
         m.lastSeenAt || Date.now(),
         newSal,
         Date.now(),
-        userId,
+        uid,
     );
+
+    // Ticket #17: Recalculate mean vector
+    const vectors = await vectorStore.getVectorsById(id, uid);
+    if (vectors.length > 0) {
+        // Need to extract raw vectors
+        const rawVecs = vectors.map(v => v.vector);
+        const meanVec = aggregateVectors(rawVecs); // Basic mean
+        const meanVecBuf = Buffer.from(vectorToUint8Array(meanVec));
+
+        // Update mean vec in DB (updMeanVec takes: id, dim, mv, userId)
+        await q.updMeanVec.run(id, meanVec.length, meanVecBuf, uid);
+    }
 }
 
+
+/**
+ * Updates an existing memory's content, tags, or metadata.
+ * Re-calculates embeddings and sectors if content changes.
+ * 
+ * @param id - The ID of the memory to update.
+ * @param content - New content (optional).
+ * @param tags - New tags array (optional).
+ * @param metadata - New metadata object (optional).
+ * @param userId - Optional User ID (for permission check/scoping).
+ * @returns Object indicating success.
+ */
+/**
+ * Updates an existing memory with optional re-embedding.
+ * Standardized to object-based signature for better flexibility and consistent parameter handling.
+ * 
+ * @param id - The unique ID of the memory.
+ * @param updates - Object containing fields to update (content, tags, metadata, userId).
+ * @returns Object indicating success.
+ */
 export async function updateMemory(
     id: string,
-    content?: string,
-    tags?: string[],
-    metadata?: Record<string, unknown>,
-    userId?: string | null,
-) {
-    const m = await q.getMem.get(id, userId);
-    if (!m) throw new Error("Memory not found");
+    updates: {
+        content?: string,
+        tags?: string[],
+        metadata?: Record<string, any>,
+        userId?: string | null,
+    },
+): Promise<MemoryRow | undefined> {
+    const { content, tags, metadata, userId } = updates;
+    const uid = normalizeUserId(userId) ?? null;
+    const existing = await q.getMem.get(id, uid);
+    if (!existing) return undefined;
 
-    const newContent = content ?? m.content;
-    const newTags = tags ? JSON.stringify(tags) : m.tags;
-    const newMeta = metadata ? JSON.stringify(metadata) : m.metadata;
+    const newContent = content ?? existing.content;
+    const newTags = tags ? JSON.stringify(tags) : existing.tags;
+    const newMeta = metadata ? JSON.stringify(metadata) : existing.metadata;
 
-    let finalContent = m.content;
+    let finalContent = existing.content;
     let embRes: EmbeddingResult[] | null = null;
     let meanVecBuf: Buffer | null = null;
     let dim: number = 0;
@@ -1088,20 +1211,20 @@ export async function updateMemory(
         // 1. Prepare Data & Embeddings (No Side Effects)
         const qc = classifyContent(newContent, metadata);
         const addSecs = [qc.primary, ...qc.additional];
-        embRes = await embedMultiSector(
+        const prob = await Embedder.embedMultiSector(
             id,
             newContent,
             addSecs,
             undefined,
-            userId || undefined,
+            uid || undefined,
         );
-        const primRes =
-            embRes.find((r) => r.sector === qc.primary) || embRes[0];
-        const meanVec = primRes.vector;
-        meanVecBuf = Buffer.from(new Float32Array(meanVec).buffer);
+        embRes = prob;
+        // recalculate mean vector using the same physics as addMemory
+        const meanVec = calcMeanVec(embRes);
+        meanVecBuf = Buffer.from(vectorToUint8Array(meanVec));
         dim = meanVec.length;
 
-        finalContent = await getEncryption().encrypt(newContent);
+        finalContent = await Security.getEncryption().encrypt(newContent);
     }
 
     // 3. Database & Vector Updates (Transactional)
@@ -1109,30 +1232,33 @@ export async function updateMemory(
         await transaction.run(async () => {
             // Update Vectors only if re-embedded
             if (embRes) {
-                await vectorStore.deleteVectors([id], userId || null);
+                await vectorStore.deleteVectors([id], uid);
+                // The provided diff snippet for `updateMemory` contained an `if (f?.startTime || f?.endTime)` block
+                // which uses an undefined variable `f` and is syntactically incorrect in this context.
+                // It has been omitted to maintain correctness.
                 for (const res of embRes) {
                     await vectorStore.storeVector(
                         id,
                         res.sector,
                         res.vector,
                         res.dim,
-                        userId || undefined,
+                        uid || undefined,
                     );
                 }
             }
 
             // Update Metadata / Mean Vector
             if (meanVecBuf && dim > 0) {
-                await q.updMeanVec.run(id, dim, meanVecBuf, userId || null);
+                await q.updMeanVec.run(id, dim, meanVecBuf, uid);
             }
             await q.updMem.run(
                 finalContent,
-                m.primarySector,
+                existing.primarySector,
                 newTags || "",
                 newMeta || "",
                 Date.now(),
                 id,
-                userId,
+                uid,
             );
         });
     } catch (e) {
@@ -1140,12 +1266,36 @@ export async function updateMemory(
         throw e;
     }
 
-    return { id, ok: true };
+    // 4. Return updated record
+    return await q.getMem.get(id, uid);
 }
 
-export async function pruneWeakWaypoints(
-    threshold = 0.1,
+/**
+ * Prunes low-weight waypoints from the graph.
+ * Uses weight threshold to remove weak connections.
+ * @param userId - Optional user ID for scoping
+ * @param threshold - Weight threshold below which waypoints are deleted (default: 0.1)
+ */
+export async function pruneWaypoints(
     userId?: string | null,
-) {
-    await q.pruneWaypoints.run(threshold, userId);
+    threshold: number = 0.1,
+): Promise<number> {
+    // Use the repository's pruneWaypoints method which handles the deletion
+    const deleted = await q.pruneWaypoints.run(threshold, userId);
+    if (env.verbose) {
+        logger.debug(`[HSG] Pruned ${deleted} weak waypoints (threshold: ${threshold})`);
+    }
+    return deleted;
+}
+
+/**
+ * Alias for backward compatibility with maintenance.ts.
+ * @param threshold - Weight threshold (default: 0.1)
+ * @param userId - Optional user ID for scoping
+ */
+export async function pruneWeakWaypoints(
+    threshold: number = 0.1,
+    userId?: string | null,
+): Promise<number> {
+    return pruneWaypoints(userId, threshold);
 }

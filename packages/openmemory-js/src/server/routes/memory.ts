@@ -1,20 +1,21 @@
+import { Elysia } from "elysia";
 import { z } from "zod";
+import { MAX_CONTENT_LENGTH } from "../../ai/schemas";
 
 import { env } from "../../core/cfg";
 import { vectorStore } from "../../core/db";
 import { Memory } from "../../core/memory";
+import { UserContext } from "../../core/types";
 import { updateUserSummary } from "../../memory/user_summary";
 import { normalizeUserId } from "../../utils";
 import { logger } from "../../utils/logger";
-import { AppError, sendError } from "../errors";
-import {
-    validateBody,
-    validateParams,
-    validateQuery,
-} from "../middleware/validate";
+import { AppError } from "../errors";
+import { verifyUserAccess, getUser, getEffectiveUserId } from "../middleware/auth";
+
+// --- Schemas ---
 
 const AddMemorySchema = z.object({
-    content: z.string().min(1).max(100000),
+    content: z.string().min(1).max(MAX_CONTENT_LENGTH),
     tags: z.array(z.string()).optional().default([]),
     metadata: z.record(z.string(), z.unknown()).optional().default({}),
     userId: z.string().optional(),
@@ -30,6 +31,7 @@ const IngestSchema = z.object({
     userId: z.string().optional(),
     id: z.string().optional(),
     createdAt: z.number().int().optional(),
+    source: z.string().optional(),
 });
 
 const IngestUrlSchema = z.object({
@@ -43,7 +45,7 @@ const IngestUrlSchema = z.object({
 
 const BatchAddSchema = z.object({
     items: z.array(z.object({
-        content: z.string().min(1).max(100000),
+        content: z.string().min(1).max(MAX_CONTENT_LENGTH),
         tags: z.array(z.string()).optional(),
         metadata: z.record(z.string(), z.unknown()).optional(),
     })),
@@ -52,16 +54,30 @@ const BatchAddSchema = z.object({
 
 const QueryMemorySchema = z.object({
     query: z.string().min(1),
-    k: z.number().optional().default(8),
+    k: z.number().max(100).optional().default(8),
     filters: z
         .object({
             sector: z.string().optional(),
             minScore: z.number().optional(),
             userId: z.string().optional(),
-            startTime: z.string().or(z.number()).optional(),
-            endTime: z.string().or(z.number()).optional(),
+            startTime: z.coerce.number().optional(),
+            endTime: z.coerce.number().optional(),
         })
         .optional(),
+});
+
+const BatchDeleteSchema = z.object({
+    ids: z.array(z.string().min(1)).min(1),
+});
+
+const BatchUpdateSchema = z.object({
+    items: z.array(z.object({
+        id: z.string().min(1),
+        content: z.string().max(MAX_CONTENT_LENGTH).optional(),
+        tags: z.array(z.string()).optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
+    })),
+    userId: z.string().optional(),
 });
 
 const ReinforceSchema = z.object({
@@ -69,7 +85,7 @@ const ReinforceSchema = z.object({
 });
 
 const UpdateMemorySchema = z.object({
-    content: z.string().max(100000).optional(),
+    content: z.string().max(MAX_CONTENT_LENGTH).optional(),
     tags: z.array(z.string()).optional(),
     metadata: z.record(z.string(), z.unknown()).optional(),
     userId: z.string().optional(),
@@ -86,218 +102,149 @@ const IdParamsSchema = z.object({
     id: z.string().min(1),
 });
 
-import type { AdvancedRequest, AdvancedResponse, ServerApp } from "../server";
-
 /**
  * Registers Memory Operations routes.
  * Includes Add, Ingest, Query, Reinforce, Update, List, Get, Delete.
- * @param app Express/Server app instance
  */
-export function memoryRoutes(app: ServerApp) {
-    /**
-     * Helper to resolve the user context based on auth scope and request parameters.
-     * Enforces tenant isolation for non-admin users.
-     */
-    const getEffectiveUserId = (req: AdvancedRequest, bodyUserId?: string): string | undefined => {
-        const isAdmin = (req.user?.scopes || []).includes("admin:all");
-        let userId = req.user?.id;
+export const memoryRoutes = (app: Elysia) => app.group("/memory", (app) => {
+    return app
+        /**
+         * POST /memory/add
+         * Adds a new memory to the HSG.
+         */
+        .post("/add", async ({ body, ...ctx }) => {
+            const user = getUser(ctx);
+            const b = AddMemorySchema.parse(body);
+            const normalizedUid = getEffectiveUserId(user, b.userId);
 
-        if (isAdmin && bodyUserId) {
-            userId = bodyUserId;
-        } else if (!userId) {
-            // Unauthenticated (Open Mode) or Fallback
-            userId = bodyUserId;
-        }
-
-        return normalizeUserId(userId) ?? undefined;
-    };
-
-    /**
-     * POST /memory/add
-     * Adds a new memory to the HSG.
-     */
-    // Handlers extracted for clarity and potential testing
-    const addMemoryHandler = async (
-        req: AdvancedRequest,
-        res: AdvancedResponse,
-    ) => {
-        try {
-            const body = req.body as z.infer<typeof AddMemorySchema>;
-            const { content, tags, metadata, userId: bodyUserId, id, createdAt } = body;
-
-            const normalizedUid = getEffectiveUserId(req, bodyUserId);
-
-            // Use Memory class which handles event emission and hydration
             const m = new Memory(normalizedUid);
-            const item = await m.add(content, {
-                tags,
-                id,
-                createdAt,
-                ...metadata,
+            const item = await m.add(b.content, {
+                tags: b.tags,
+                id: b.id,
+                createdAt: b.createdAt,
+                ...b.metadata,
             });
 
-            res.json(item);
-
             if (normalizedUid) {
+                // Async update
                 updateUserSummary(normalizedUid).catch((e) =>
-                    logger.error("[mem] user summary update failed:", {
-                        error: e,
-                    }),
+                    logger.error("[mem] user summary update failed:", { error: e })
                 );
             }
-        } catch (e: unknown) {
-            sendError(res, e);
-        }
-    };
+            return item;
+        })
 
-
-
-
-    const addBatchHandler = async (
-        req: AdvancedRequest,
-        res: AdvancedResponse,
-    ) => {
-        try {
-            const body = req.body as z.infer<typeof BatchAddSchema>;
-            const { items, userId: bodyUserId } = body;
-            const normalizedUid = getEffectiveUserId(req, bodyUserId);
+        /**
+         * POST /memory/batch
+         * Adds multiple memories.
+         */
+        .post("/batch", async ({ body, ...ctx }) => {
+            const user = getUser(ctx);
+            const b = BatchAddSchema.parse(body);
+            const normalizedUid = getEffectiveUserId(user, b.userId);
 
             const m = new Memory(normalizedUid);
-            const added = await m.addBatch(items, { userId: normalizedUid ?? undefined });
+            const added = await m.addBatch(b.items, { userId: normalizedUid ?? undefined });
 
-            // Filter out error entries to find successful additions
+            // Check for successful adds
             const successful = added.filter((r) => r && !('error' in r));
-
-            // Update user summary only when there are successful additions
-            if (successful.length > 0) {
-                await updateUserSummary(normalizedUid).catch((e) =>
+            if (successful.length > 0 && normalizedUid) {
+                updateUserSummary(normalizedUid).catch((e) =>
                     logger.warn(`Failed to update user summary for ${normalizedUid}:`, e)
                 );
             }
 
-            res.json({ items: added });
-        } catch (e: unknown) {
-            sendError(res, e);
-        }
-    };
+            return { items: added };
+        })
 
-    const ingestHandler = async (
-        req: AdvancedRequest,
-        res: AdvancedResponse,
-    ) => {
-        try {
-            const {
-                contentType,
-                data,
-                metadata,
-                config,
-                userId: bodyUserId,
-                id,
-                createdAt,
-            } = req.body as z.infer<typeof IngestSchema>;
+        /**
+         * PATCH /memory/batch
+         * Batch updates multiple memories.
+         */
+        .patch("/batch", async ({ body, ...ctx }) => {
+            const user = getUser(ctx);
+            const b = BatchUpdateSchema.parse(body);
+            const normalizedUid = getEffectiveUserId(user, b.userId);
 
-            const normalizedUid = getEffectiveUserId(req, bodyUserId);
+            const m = new Memory(normalizedUid);
+            const results = await m.updateBatchItems(b.items, normalizedUid ?? undefined);
 
-            if (typeof data !== "string" && !Buffer.isBuffer(data)) {
-                return sendError(
-                    res,
-                    new AppError(
-                        400,
-                        "INVALID_PAYLOAD",
-                        "Data must be a string or Buffer",
-                    ),
-                );
+            return { items: results };
+        })
+
+        /**
+         * POST /memory/ingest
+         * Ingests a document from raw data.
+         */
+        .post("/ingest", async ({ body, ...ctx }) => {
+            const user = getUser(ctx);
+            const b = IngestSchema.parse(body);
+            const normalizedUid = getEffectiveUserId(user, b.userId);
+
+            if (typeof b.data !== "string" && !Buffer.isBuffer(b.data) && !(b.data instanceof Uint8Array)) {
+                throw new AppError(400, "INVALID_PAYLOAD", "Data must be a string, Buffer, or Uint8Array");
             }
 
-            // Use Memory Facade
             const m = new Memory(normalizedUid);
             const result = await m.ingest({
-                contentType,
-                data,
-                metadata,
-                config,
+                source: "api",
+                contentType: b.contentType,
+                data: b.data as string | Buffer | Uint8Array,
+                metadata: b.metadata,
+                config: b.config,
                 userId: normalizedUid ?? undefined,
-                id,
-                createdAt,
+                id: b.id,
+                createdAt: b.createdAt,
             });
-            res.json(result);
-        } catch (e: unknown) {
-            sendError(
-                res,
-                new AppError(
-                    500,
-                    "INGEST_FAILED",
-                    "Ingestion failed",
-                    e instanceof Error ? e.message : String(e),
-                ),
-            );
-        }
-    };
+            return result;
+        })
 
-    const ingestUrlHandler = async (
-        req: AdvancedRequest,
-        res: AdvancedResponse,
-    ) => {
-        try {
-            const {
-                url,
-                metadata,
-                config,
-                userId: bodyUserId,
-                id,
-                createdAt,
-            } = req.body as z.infer<typeof IngestUrlSchema>;
+        /**
+         * POST /memory/ingest/url
+         * Ingests content from a URL.
+         */
+        .post("/ingest/url", async ({ body, ...ctx }) => {
+            const user = getUser(ctx);
+            const b = IngestUrlSchema.parse(body);
+            const normalizedUid = getEffectiveUserId(user, b.userId);
 
-            const normalizedUid = getEffectiveUserId(req, bodyUserId);
-
-            // Use Memory Facade
             const m = new Memory(normalizedUid);
-            const result = await m.ingestUrl(url, {
-                metadata,
-                config,
+            const result = await m.ingestUrl(b.url, {
+                metadata: b.metadata,
+                config: b.config,
                 userId: normalizedUid ?? undefined,
-                id,
-                createdAt,
+                id: b.id,
+                createdAt: b.createdAt,
             });
-            res.json(result);
-        } catch (e: unknown) {
-            sendError(
-                res,
-                new AppError(
-                    500,
-                    "URL_INGEST_FAILED",
-                    "URL ingestion failed",
-                    e instanceof Error ? e.message : String(e),
-                ),
-            );
-        }
-    };
+            return result;
+        })
 
-    const queryMemoryHandler = async (
-        req: AdvancedRequest,
-        res: AdvancedResponse,
-    ) => {
-        try {
-            const { query, k, filters } = req.body as z.infer<
-                typeof QueryMemorySchema
-            >;
-
-            const normalizedUid = getEffectiveUserId(req, filters?.userId);
+        /**
+         * POST /memory/query
+         * Queries memories based on semantic similarity and filters.
+         */
+        .post("/query", async ({ body, ...ctx }) => {
+            const user = getUser(ctx);
+            const b = QueryMemorySchema.parse(body);
+            const normalizedUid = getEffectiveUserId(user, b.filters?.userId);
 
             const filter = {
-                sectors: filters?.sector ? [filters.sector] : undefined,
-                minSalience: filters?.minScore,
+                sectors: b.filters?.sector ? [b.filters.sector] : undefined,
+                minSalience: b.filters?.minScore,
                 userId: normalizedUid ?? undefined,
+                startTime: b.filters?.startTime,
+                endTime: b.filters?.endTime,
             };
 
             const m = new Memory(normalizedUid);
-            const matches = await m.search(query, {
+            const matches = await m.search(b.query, {
                 ...filter,
-                limit: k,
+                limit: b.k,
             });
 
-            res.json({
-                query,
+            return {
+                success: true,
+                query: b.query,
                 matches: matches.map((x) => ({
                     id: x.id,
                     content: x.content,
@@ -314,293 +261,156 @@ export function memoryRoutes(app: ServerApp) {
                     simhash: x.simhash,
                     generatedSummary: x.generatedSummary,
                 })),
+            };
+        })
+
+        /**
+         * POST /memory/:id/reinforce
+         * Reinforces a specific memory.
+         */
+        .post("/:id/reinforce", async ({ params, body, query, ...ctx }) => {
+            const user = getUser(ctx);
+            const p = IdParamsSchema.parse(params);
+            const b = ReinforceSchema.parse(body);
+
+            const normalizedUid = getEffectiveUserId(user, query.userId);
+            const m = new Memory(normalizedUid);
+            await m.reinforce(p.id, b.boost);
+
+            return { success: true };
+        })
+
+        /**
+         * PATCH /memory/:id
+         * Updates an existing memory.
+         */
+        .patch("/:id", async ({ params, body, query, ...ctx }) => {
+            const user = getUser(ctx);
+            const p = IdParamsSchema.parse(params);
+            const b = UpdateMemorySchema.parse(body);
+            const normalizedUid = getEffectiveUserId(user, query.userId || b.userId);
+
+            const m = new Memory(normalizedUid);
+            const existing = await m.get(p.id);
+            if (!existing) throw new AppError(404, "NOT_FOUND", "Memory not found");
+
+            const result = await m.update(p.id, {
+                content: b.content,
+                tags: b.tags,
+                metadata: b.metadata,
+                userId: normalizedUid ?? undefined,
             });
-        } catch (e: unknown) {
-            logger.error("[query] error:", { error: e });
-            sendError(res, e instanceof Error ? e : new Error(String(e)));
-        }
-    };
+            return result;
+        })
 
-    const reinforceHandler = async (
-        req: AdvancedRequest,
-        res: AdvancedResponse,
-    ) => {
-        try {
-            const { id } = req.params;
-            const { boost } = req.body as z.infer<typeof ReinforceSchema>;
-
-            const m = new Memory(req.user?.id);
-            await m.reinforce(id, boost);
-
-            res.json({ ok: true });
-        } catch (e: unknown) {
-            sendError(
-                res,
-                new AppError(
-                    404,
-                    "NOT_FOUND",
-                    "Memory not found for reinforcement",
-                ),
-            );
-        }
-    };
-
-    const updateMemoryHandler = async (
-        req: AdvancedRequest,
-        res: AdvancedResponse,
-    ) => {
-        try {
-            const id = req.params.id;
-            const body = req.body as z.infer<typeof UpdateMemorySchema>;
-            const { content, tags, metadata, userId: bodyUserId } = body;
-
-            if (!id)
-                return sendError(
-                    res,
-                    new AppError(400, "MISSING_ID", "ID is required"),
-                );
-
-            const checkUserId = getEffectiveUserId(req, bodyUserId);
-
-            const m = new Memory(checkUserId);
-            // Verify existence AND ownership via Facade get()
-            const existing = await m.get(id);
-
-            if (!existing)
-                return sendError(
-                    res,
-                    new AppError(404, "NOT_FOUND", "Memory not found"),
-                );
-
-            const result = await m.update(
-                id,
-                content,
-                tags,
-                metadata,
-                checkUserId ?? undefined,
-            );
-            res.json(result);
-        } catch (e: unknown) {
-            sendError(res, e);
-        }
-    };
-
-    const listMemoryHandler = async (
-        req: AdvancedRequest,
-        res: AdvancedResponse,
-    ) => {
-        try {
-            // zod validation ensures types
-            const query = req.query as unknown as z.infer<
-                typeof ListMemorySchema
-            >;
-            const { u, l, sector, userId: queryUserId } = query;
-
-            // Determine effective user context
-            const targetUserId = getEffectiveUserId(req, queryUserId);
+        /**
+         * GET /memory/all
+         * Lists all memories with pagination and filtering.
+         */
+        .get("/all", async ({ query, ...ctx }) => {
+            const user = getUser(ctx);
+            const qParams = ListMemorySchema.parse(query);
+            const normalizedUid = getEffectiveUserId(user, qParams.userId); // explicit userId in query overrides context if allowed
 
             // Regular users can ONLY see their own data if API Key is set
-            if (env.apiKey && !req.user?.id) {
-                return sendError(
-                    res,
-                    new AppError(
-                        401,
-                        "UNAUTHORIZED",
-                        "Authentication required",
-                    ),
-                );
-            }
+            // (handled by getEffectiveUserId implicitly via verifyUserAccess, but verifyUserAccess allows mismatch for admin)
+            // If user is not admin and tries to see global (null id)...
+            // verifyUserAccess(user, null) -> returns null if allowed (i.e. user matches null?? No).
 
-            // Use Memory class for consistent hydration/decryption
-            const m = new Memory(targetUserId);
-            // If admin and no user specified, we might want global list, but Memory class defaults to "system" or specific user.
-            // We use hostList which supports the null/admin case better
-            const items = await m.hostList(l, u, sector, targetUserId);
+            // Re-evaluating verifyUserAccess logic in auth.ts:
+            // if target is null ("me" -> auth), it becomes auth.
+            // if target is explicit, checks match.
+            // If target is undefined in getEffectiveUserId call:
+            // normalizeUserId(undefined) -> null.
+            // verifyUserAccess(u, null) ->
+            //   if admin -> null ok.
+            //   if not admin ->
+            //      if !auth -> throw "auth required"
+            //      if auth -> throw "access denied" (auth != null)
+            // So non-admins CANNOT list global (all users). Correct.
 
-            res.json({ items });
-        } catch (e: unknown) {
-            sendError(res, e);
-        }
-    };
+            const m = new Memory(normalizedUid);
+            const items = await m.hostList(qParams.l, qParams.u, qParams.sector, normalizedUid);
+            return { items };
+        })
 
-    const getMemoryHandler = async (
-        req: AdvancedRequest,
-        res: AdvancedResponse,
-    ) => {
-        try {
-            const id = req.params.id;
-            const isAdmin = (req.user?.scopes || []).includes("admin:all");
-            const userId = isAdmin ? undefined : req.user?.id;
-
-            // Use Memory class
+        /**
+         * GET /memory/:id
+         * Retrieves a single memory by ID.
+         */
+        .get("/:id", async ({ params, query, ...ctx }) => {
+            const user = getUser(ctx);
+            const p = IdParamsSchema.parse(params);
+            const userId = getEffectiveUserId(user, query.userId);
             const m = new Memory(userId);
-            const memory = await m.get(id);
+            const memory = await m.get(p.id);
 
-            if (!memory)
-                return sendError(
-                    res,
-                    new AppError(404, "NOT_FOUND", "Memory not found"),
-                );
+            if (!memory) throw new AppError(404, "NOT_FOUND", "Memory not found");
 
-            // Hydration already done by Memory.get
-            // Just need to attach vectors if needed, but the route didn't seem to request them in the previous code?
-            // Actually previous code fetched vectors but didn't seem to use them in the response JSON explicitly
-            // except for mapping sectors? The sectors are already in the memory item (if we assume consistency).
-            // Retaining original behavior of fetching sectors from vectors to be safe, though strict MemoryItem might be enough.
+            // Additional vector/sector info not usually needed if MemoryItem has it, 
+            // but preserving legacy behavior of fetching sectors from vector store if consistent.
+            const vectors = await vectorStore.getVectorsById(p.id);
+            const sectors = vectors.map((x) => x.sector);
 
-            const vectors = await vectorStore.getVectorsById(id);
-            const sectors = vectors.map((x: { sector: string }) => x.sector);
+            return { ...memory, sectors };
+        })
 
-            res.json({
-                ...memory,
-                sectors, // augment with sectors found in vector store
-            });
-        } catch (e: unknown) {
-            sendError(res, e);
-        }
-    };
+        /**
+         * DELETE /memory/all
+         * Deletes all memories for a user or global (admin only).
+         */
+        .delete("/all", async ({ query, ...ctx }) => {
+            const user = getUser(ctx);
+            const qParams = query as Record<string, string>;
+            const userId = getEffectiveUserId(user, qParams.userId);
 
-    const deleteMemoryHandler = async (
-        req: AdvancedRequest,
-        res: AdvancedResponse,
-    ) => {
-        try {
-            const id = req.params.id;
-            const userId = getEffectiveUserId(req);
-
-            const m = new Memory(userId);
-            const existing = await m.get(id); // Verification
-            if (!existing)
-                return sendError(
-                    res,
-                    new AppError(404, "NOT_FOUND", "Memory not found"),
-                );
-
-            await m.delete(id);
-            res.json({ ok: true });
-        } catch (e: unknown) {
-            sendError(res, e);
-        }
-    };
-
-    const deleteAllMemoryHandler = async (
-        req: AdvancedRequest,
-        res: AdvancedResponse,
-    ) => {
-        try {
-            const query = req.query as Record<string, string>;
-            const userId = getEffectiveUserId(req, query.userId); // Returns null if admin + no userId, or specific userId
-
-            const isAdmin = (req.user?.scopes || []).includes("admin:all");
+            const isAdmin = (user?.scopes || []).includes("admin:all");
 
             if (!userId && !isAdmin) {
-                return sendError(
-                    res,
-                    new AppError(403, "FORBIDDEN", "Global wipe requires admin privileges"),
-                );
+                throw new AppError(403, "FORBIDDEN", "Global wipe requires admin privileges");
             }
 
-            const m = new Memory(userId); // userId is normalized (null for global admin wipe)
-
+            const m = new Memory(userId);
             let count = 0;
             if (!userId && isAdmin) {
-                // Global Wipe
                 await m.wipe();
-                // Return 0 or undefined for count? wipe() is void. We can't easily get count for global wipe efficiently without pre-count.
-                // Let's assume OK.
+                count = 0; // Unknown count
+            } else if (userId) {
                 count = await m.deleteAll(userId);
             }
-            res.json({ ok: true, success: true, deleted: count, deletedCount: count });
-        } catch (e: unknown) {
-            sendError(res, e);
-        }
-    };
 
-    /**
-     * POST /memory/add
-     * Adds a new memory to the HSG.
-     */
-    app.post("/memory/add", validateBody(AddMemorySchema), addMemoryHandler);
+            return { success: true, deleted: count };
+        })
 
-    /**
-     * POST /memory/batch
-     * Adds multiple memories.
-     */
-    app.post("/memory/batch", validateBody(BatchAddSchema), addBatchHandler);
+        /**
+         * POST /memory/batch/delete
+         * Deletes multiple memories by ID.
+         */
+        .post("/batch/delete", async ({ body, query, ...ctx }) => {
+            const b = BatchDeleteSchema.parse(body);
+            const user = getUser(ctx);
+            const normalizedUid = getEffectiveUserId(user, query.userId);
 
-    /**
-     * POST /memory/ingest
-     * Ingests a document from raw data.
-     */
-    app.post("/memory/ingest", validateBody(IngestSchema), ingestHandler);
+            const m = new Memory(normalizedUid);
+            const count = await m.deleteBatch(b.ids, normalizedUid);
 
-    /**
-     * POST /memory/ingest/url
-     * Ingests content from a URL.
-     */
-    app.post(
-        "/memory/ingest/url",
-        validateBody(IngestUrlSchema),
-        ingestUrlHandler,
-    );
+            return { success: true, count };
+        })
 
-    /**
-     * POST /memory/query
-     * Queries memories based on semantic similarity and filters.
-     */
-    app.post(
-        "/memory/query",
-        validateBody(QueryMemorySchema),
-        queryMemoryHandler,
-    );
+        /**
+         * DELETE /memory/:id
+         * Deletes a memory by ID.
+         */
+        .delete("/:id", async ({ params, query, ...ctx }) => {
+            const user = getUser(ctx);
+            const userId = getEffectiveUserId(user, query.userId);
+            const m = new Memory(userId);
+            const memory = await m.get(params.id);
+            if (!memory) throw new AppError(404, "NOT_FOUND", "Memory not found");
 
-    /**
-     * POST /memory/:id/reinforce
-     * Reinforces a specific memory.
-     */
-    app.post(
-        "/memory/:id/reinforce",
-        validateParams(IdParamsSchema),
-        validateBody(ReinforceSchema),
-        reinforceHandler,
-    );
+            await m.delete(params.id);
+            return { success: true };
+        });
+});
 
-    /**
-     * PATCH /memory/:id
-     * Updates an existing memory.
-     */
-    app.patch(
-        "/memory/:id",
-        validateParams(IdParamsSchema),
-        validateBody(UpdateMemorySchema),
-        updateMemoryHandler,
-    );
-
-    /**
-     * GET /memory/all
-     * Lists all memories with pagination and filtering.
-     */
-    app.get("/memory/all", validateQuery(ListMemorySchema), listMemoryHandler);
-
-    /**
-     * GET /memory/:id
-     * Retrieves a single memory by ID.
-     */
-    app.get("/memory/:id", validateParams(IdParamsSchema), getMemoryHandler);
-
-    /**
-     * DELETE /memory/all
-     * Deletes all memories for a user or global (admin only).
-     */
-    app.delete("/memory/all", deleteAllMemoryHandler);
-
-    /**
-     * DELETE /memory/:id
-     * Deletes a memory by ID.
-     */
-    app.delete(
-        "/memory/:id",
-        validateParams(IdParamsSchema),
-        deleteMemoryHandler,
-    );
-}
+// End of file

@@ -50,9 +50,11 @@ if (
     # This wrapper will:
     # - Call `history.messages` (or equivalent) to get context.
     # - Call `history.add_user_message` / `add_ai_message` after generation.
+    from openmemory.client import Memory
+    mem = Memory()
     chain_with_history = RunnableWithMessageHistory(
         chain,
-        lambda session_id: OpenMemoryChatMessageHistory(memory=None, user_id="user", session_id=session_id),  # type: ignore[arg-type]
+        lambda session_id: OpenMemoryChatMessageHistory(memory=mem, user_id="user", session_id=session_id),  # type: ignore[arg-type]
         input_messages_key="input",
         history_messages_key="history",
     )

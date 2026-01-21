@@ -11,6 +11,52 @@ class LearnedClassifier:
     A simple Linear Classifier for sector classification.
     Parity with openmemory-js implementation.
     """
+    
+    _cache: Dict[str, Dict[str, Any]] = {}
+    _cache_ttl: int = 60000 # 60s
+    _max_cache: int = 100
+
+    @classmethod
+    async def load(cls, user_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Load classifier model for user, checking memory cache first.
+        """
+        now = int(time.time() * 1000)
+        
+        # Check cache
+        if user_id in cls._cache:
+            entry = cls._cache[user_id]
+            if now - entry["ts"] < cls._cache_ttl:
+                return entry["model"]
+            else:
+                del cls._cache[user_id]
+
+        from .db import q
+        
+        # Fetch from DB
+        row = await q.get_classifier_model(user_id)
+        if not row: return None
+
+        try:
+            model = {
+                "userId": user_id,
+                "weights": json.loads(row["weights"]),
+                "biases": json.loads(row["biases"]),
+                "version": row["version"],
+                "updatedAt": row["updated_at"]
+            }
+            
+            # Update cache
+            if len(cls._cache) >= cls._max_cache:
+                # Simple removal of random key or oldest? 
+                # Python dicts preserve insertion order, pop first item
+                cls._cache.pop(next(iter(cls._cache)))
+            
+            cls._cache[user_id] = {"model": model, "ts": now}
+            return model
+        except Exception as e:
+            logger.error(f"[Classifier] Failed to load model for {user_id}: {e}")
+            return None
 
     @staticmethod
     def predict(vector: List[float], model: Dict[str, Any]) -> Dict[str, Any]:
@@ -70,10 +116,13 @@ class LearnedClassifier:
             return existing_model or {"weights": {}, "biases": {}, "version": 1, "updated_at": 0}
 
         dim = len(data[0]["vector"]) if data else 1536
-        sectors = list(set(d["label"] for d in data))
+        # Consolidate sectors from data and existing model
+        sectors_set = set(d["label"] for d in data)
+        weights = (existing_model or {}).get("weights", {})
+        biases = (existing_model or {}).get("biases", {})
         
-        weights = existing_model.get("weights", {}) if existing_model else {}
-        biases = existing_model.get("biases", {}) if existing_model else {}
+        for s in weights: sectors_set.add(s)
+        sectors = list(sectors_set)
         
         # Initialize new sectors
         for sector in sectors:

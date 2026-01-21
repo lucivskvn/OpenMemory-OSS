@@ -13,9 +13,10 @@ except ImportError:
     LANGCHAIN_AVAILABLE = False
     # Optional dependencies
     class DummyMessage:
-        def __init__(self, content=None, page_content=None, **kwargs):
+        def __init__(self, content=None, page_content=None, metadata=None, **kwargs):
             self.content = content or page_content
             self.page_content = self.content
+            self.metadata = metadata or {}
 
     class BaseChatMessageHistory:  # type: ignore[no-redef]
         def add_message(self, message: Any) -> None: pass
@@ -37,7 +38,7 @@ from ..main import Memory
 from ..utils.async_bridge import run_sync
 
 class OpenMemoryChatMessageHistory(BaseChatMessageHistory):  # type: ignore[misc]
-    def __init__(self, memory: Memory, user_id: str, session_id: str = "default"):
+    def __init__(self, memory: Any, user_id: str, session_id: str = "default"):
         self.mem = memory
         self.user_id = user_id
         self.session_id = session_id
@@ -64,7 +65,7 @@ class OpenMemoryChatMessageHistory(BaseChatMessageHistory):  # type: ignore[misc
 
     async def aget_messages(self) -> List[Any]:  # type: ignore[override]
         # Custom Async method for retrieval
-        history = await self.mem.history(self.user_id)
+        history = run_sync(self.mem.history(self.user_id))
         # Convert to BaseMessage
         msgs = []
         for h in history:
@@ -93,8 +94,11 @@ class OpenMemoryChatMessageHistory(BaseChatMessageHistory):  # type: ignore[misc
         pass
 
 
+from pydantic import ConfigDict
+
 class OpenMemoryRetriever(BaseRetriever):  # type: ignore
-    memory: Memory
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    memory: Any
     user_id: str
     k: int = 5
 
@@ -121,7 +125,7 @@ class OpenMemoryRetriever(BaseRetriever):  # type: ignore
 class OpenMemoryVectorStore:
     """VectorStore implementation for OpenMemory."""
 
-    def __init__(self, memory: Memory, user_id: str):
+    def __init__(self, memory: Any, user_id: str):
         self.memory = memory
         self.user_id = user_id
 

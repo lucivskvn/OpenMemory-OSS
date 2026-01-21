@@ -1,7 +1,6 @@
-import * as fs from "node:fs";
+import { unlink } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-
 import * as cheerio from "cheerio";
 import ffmpeg from "fluent-ffmpeg";
 import mammoth from "mammoth";
@@ -11,37 +10,7 @@ import TurndownService from "turndown";
 import { env } from "../core/cfg";
 import { logger } from "../utils/logger";
 import { validateUrl } from "../utils/security";
-
-// Bun native file helpers
-const bunExists = async (path: string) => {
-    return await Bun.file(path).exists();
-};
-const bunUnlink = async (path: string) => {
-    try {
-        if (await bunExists(path)) {
-            await fs.promises.unlink(path);
-        }
-    } catch (e) {
-        if (env.verbose)
-            logger.warn(`[EXTRACT] Failed to unlink ${path}:`, { error: e });
-    }
-};
-
-export interface ExtractionConfig {
-    maxSizeBytes?: number;
-    // Add more config options as needed
-}
-
-export interface ExtractionResult {
-    text: string;
-    metadata: {
-        contentType: string;
-        charCount: number;
-        estimatedTokens: number;
-        extractionMethod: string;
-        [key: string]: unknown;
-    };
-}
+import { ExtractionConfig, ExtractionResult } from "../core/types";
 
 interface OpenAIAudioResponse {
     text: string;
@@ -62,17 +31,20 @@ function estimateTokens(text: string): number {
  * @param config - Optional configuration (size limits).
  */
 export async function extractPDF(
-    buffer: Buffer,
-    config?: { maxSizeBytes?: number },
+    buffer: Uint8Array,
+    config?: ExtractionConfig,
 ): Promise<ExtractionResult> {
     const maxSize = config?.maxSizeBytes || 50 * 1024 * 1024; // Default 50MB
-    if (buffer.length > maxSize) {
+    if (buffer.byteLength > maxSize) {
         throw new Error(
-            `PDF file too large: ${(buffer.length / 1024 / 1024).toFixed(2)}MB. Limit is ${(maxSize / 1024 / 1024).toFixed(2)}MB.`,
+            `PDF file too large: ${(buffer.byteLength / 1024 / 1024).toFixed(2)}MB. Limit is ${(maxSize / 1024 / 1024).toFixed(2)}MB.`,
         );
     }
-    const pdf = (await import("pdf-parse")).default;
-    const data = await pdf(buffer);
+    const pdfImport = await import("pdf-parse");
+    const pdf = (pdfImport as any).default || pdfImport;
+    // pdf-parse expects Buffer, so we ensure it is one for compatibility
+    const buf = Buffer.from(buffer);
+    const data = await pdf(buf);
 
     return {
         text: data.text,
@@ -95,16 +67,18 @@ export async function extractPDF(
  * @param config - Optional configuration (size limits).
  */
 export async function extractDOCX(
-    buffer: Buffer,
-    config?: { maxSizeBytes?: number },
+    buffer: Uint8Array,
+    config?: ExtractionConfig,
 ): Promise<ExtractionResult> {
     const maxSize = config?.maxSizeBytes || 20 * 1024 * 1024; // Default 20MB
-    if (buffer.length > maxSize) {
+    if (buffer.byteLength > maxSize) {
         throw new Error(
-            `DOCX file too large: ${(buffer.length / 1024 / 1024).toFixed(2)}MB. Limit is ${(maxSize / 1024 / 1024).toFixed(2)}MB.`,
+            `DOCX file too large: ${(buffer.byteLength / 1024 / 1024).toFixed(2)}MB. Limit is ${(maxSize / 1024 / 1024).toFixed(2)}MB.`,
         );
     }
-    const result = await mammoth.extractRawText({ buffer });
+    // mammoth expects Buffer node-style
+    const buf = Buffer.from(buffer);
+    const result = await mammoth.extractRawText({ buffer: buf });
 
     return {
         text: result.value,
@@ -180,17 +154,19 @@ export async function extractURL(
     url: string,
     config?: ExtractionConfig,
 ): Promise<ExtractionResult> {
-    await validateUrl(url);
+    const { url: safeUrl, originalUrl } = await validateUrl(url);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000); // 30s timeout
     const MAX_SIZE = config?.maxSizeBytes || 10 * 1024 * 1024; // Default 10MB
 
+    const userAgent = config?.userAgent || env.userAgent || "OpenMemory/2.4.0 (Bot; +https://github.com/nullure/openmemory)";
+
     try {
-        const response = await fetch(url, {
+        const response = await fetch(safeUrl, {
             headers: {
-                "User-Agent":
-                    "OpenMemory/2.3.0 (Bot; +https://github.com/nullure/openmemory)",
+                "User-Agent": userAgent,
                 Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                Host: new URL(originalUrl).hostname,
             },
             signal: controller.signal,
         });
@@ -229,7 +205,8 @@ export async function extractURL(
                 ...result.metadata,
                 contentType: "url",
                 extractionMethod: "node-fetch+turndown",
-                sourceUrl: url,
+                url: safeUrl,
+                originalUrl,
                 fetchedAt: new Date().toISOString(),
                 fileSizeBytes: totalBytes,
             },
@@ -247,9 +224,9 @@ export async function extractURL(
  * @param config - Config options.
  */
 export async function extractAudio(
-    buffer: Buffer,
+    buffer: Uint8Array,
     mimeType: string,
-    config?: { maxSizeBytes?: number },
+    config?: ExtractionConfig,
 ): Promise<ExtractionResult> {
     const apiKey = env.openaiKey;
     if (!apiKey) {
@@ -260,9 +237,9 @@ export async function extractAudio(
 
     // Check file size (Whisper API limit is 25MB effectively, but we allow config override)
     const maxSize = config?.maxSizeBytes || 25 * 1024 * 1024; // Default 25MB
-    if (buffer.length > maxSize) {
+    if (buffer.byteLength > maxSize) {
         throw new Error(
-            `Audio file too large: ${(buffer.length / 1024 / 1024).toFixed(2)}MB. Limit is ${(maxSize / 1024 / 1024).toFixed(2)}MB.`,
+            `Audio file too large: ${(buffer.byteLength / 1024 / 1024).toFixed(2)}MB. Limit is ${(maxSize / 1024 / 1024).toFixed(2)}MB.`,
         );
     }
 
@@ -271,7 +248,7 @@ export async function extractAudio(
     const ext = getAudioExtension(mimeType);
     const tempFilePath = path.join(
         tempDir,
-        `audio-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`,
+        `audio-${Date.now()}-${globalThis.crypto.randomUUID()}${ext}`,
     );
 
     try {
@@ -283,7 +260,7 @@ export async function extractAudio(
 
         // Transcribe audio using Whisper
         const transcription = (await openai.audio.transcriptions.create({
-            file: fs.createReadStream(tempFilePath),
+            file: await Bun.file(tempFilePath) as any,
             model: "whisper-1",
             response_format: "verbose_json",
         })) as unknown as OpenAIAudioResponse;
@@ -298,8 +275,8 @@ export async function extractAudio(
                 estimatedTokens: estimateTokens(text),
                 extractionMethod: "whisper",
                 audioFormat: ext.replace(".", ""),
-                fileSizeBytes: buffer.length,
-                fileSizeMb: (buffer.length / 1024 / 1024).toFixed(2),
+                fileSizeBytes: buffer.byteLength,
+                fileSizeMb: (buffer.byteLength / 1024 / 1024).toFixed(2),
                 durationSeconds: transcription.duration || null,
                 language: transcription.language || null,
             },
@@ -310,24 +287,31 @@ export async function extractAudio(
         throw new Error(`Audio transcription failed: ${msg}`);
     } finally {
         // Clean up temp file
-        await bunUnlink(tempFilePath);
+        try {
+            if (await Bun.file(tempFilePath).exists()) {
+                await unlink(tempFilePath);
+            }
+        } catch (e) {
+            if (env.verbose) logger.warn(`[EXTRACT] Failed to unlink ${tempFilePath}`, { error: e });
+        }
     }
 }
 
+
 export async function extractVideo(
-    buffer: Buffer,
-    config?: { maxSizeBytes?: number },
+    buffer: Uint8Array,
+    config?: ExtractionConfig,
 ): Promise<ExtractionResult> {
     const maxSize = config?.maxSizeBytes || 100 * 1024 * 1024; // Default 100MB
-    if (buffer.length > maxSize) {
+    if (buffer.byteLength > maxSize) {
         throw new Error(
-            `Video file too large: ${(buffer.length / 1024 / 1024).toFixed(2)}MB. Limit is ${(maxSize / 1024 / 1024).toFixed(2)}MB.`,
+            `Video file too large: ${(buffer.byteLength / 1024 / 1024).toFixed(2)}MB. Limit is ${(maxSize / 1024 / 1024).toFixed(2)}MB.`,
         );
     }
     // Create temporary files for video and audio
     const tempDir = os.tmpdir();
-    const videoPath = path.join(tempDir, `video-${Date.now()}.mp4`);
-    const audioPath = path.join(tempDir, `audio-${Date.now()}.mp3`);
+    const videoPath = path.join(tempDir, `video-${globalThis.crypto.randomUUID()}.mp4`);
+    const audioPath = path.join(tempDir, `audio-${globalThis.crypto.randomUUID()}.mp3`);
 
     try {
         // Write video buffer to temp file
@@ -355,15 +339,15 @@ export async function extractVideo(
         // Update metadata to reflect video source
         result.metadata.contentType = "video";
         result.metadata.extractionMethod = "ffmpeg+whisper";
-        result.metadata.videoFileSizeBytes = buffer.length;
-        result.metadata.videoFileSizeMb = (buffer.length / 1024 / 1024).toFixed(
+        result.metadata.videoFileSizeBytes = buffer.byteLength;
+        result.metadata.videoFileSizeMb = (buffer.byteLength / 1024 / 1024).toFixed(
             2,
         );
 
         return result;
     } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : String(error);
-        if (msg.includes("ffmpeg")) {
+        if (msg.includes("ffmpeg") || msg.includes("FFmpeg")) {
             throw new Error(
                 "FFmpeg not found. Please install FFmpeg to process video files. Visit: https://ffmpeg.org/download.html",
             );
@@ -372,7 +356,11 @@ export async function extractVideo(
         throw new Error(`Video processing failed: ${msg}`);
     } finally {
         // Clean up temp files
-        await Promise.all([bunUnlink(videoPath), bunUnlink(audioPath)]);
+        // Clean up temp files
+        const cleanup = async (p: string) => {
+            if (await Bun.file(p).exists()) await unlink(p).catch(() => { });
+        };
+        await Promise.all([cleanup(videoPath), cleanup(audioPath)]);
     }
 }
 
@@ -394,7 +382,7 @@ function getAudioExtension(mimeType: string): string {
 
 export async function extractText(
     contentType: string,
-    data: string | Buffer,
+    data: string | Uint8Array,
     config?: ExtractionConfig,
 ): Promise<ExtractionResult> {
     const type = contentType.toLowerCase();
@@ -434,7 +422,7 @@ export async function extractText(
         if (typeof data === "string" && data.length > 100 * 1024 * 1024) {
             throw new Error("Base64 audio data too large (>100MB). processing rejected to prevent OOM.");
         }
-        const buffer = Buffer.isBuffer(data)
+        const buffer = data instanceof Uint8Array
             ? data
             : Buffer.from(data as string, "base64");
         return extractAudio(
@@ -448,7 +436,7 @@ export async function extractText(
         if (typeof data === "string" && data.length > 100 * 1024 * 1024) {
             throw new Error("Base64 video data too large (>100MB). processing rejected to prevent OOM.");
         }
-        const buffer = Buffer.isBuffer(data)
+        const buffer = data instanceof Uint8Array
             ? data
             : Buffer.from(data as string, "base64");
         return extractVideo(buffer, config);
@@ -458,7 +446,7 @@ export async function extractText(
         case "pdf":
         case "application/pdf":
             return extractPDF(
-                Buffer.isBuffer(data)
+                data instanceof Uint8Array
                     ? data
                     : Buffer.from(data as string, "base64"),
                 config,
@@ -467,7 +455,7 @@ export async function extractText(
         case "docx":
         case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
             return extractDOCX(
-                Buffer.isBuffer(data)
+                data instanceof Uint8Array
                     ? data
                     : Buffer.from(data as string, "base64"),
                 config,
@@ -479,7 +467,7 @@ export async function extractText(
                 "[EXTRACT] Legacy .doc file detected. Attempting to process as .docx (mammoth), which may fail.",
             );
             return extractDOCX(
-                Buffer.isBuffer(data)
+                data instanceof Uint8Array
                     ? data
                     : Buffer.from(data as string, "base64"),
                 config,
@@ -488,13 +476,15 @@ export async function extractText(
         case "html":
         case "htm":
         case "text/html":
-            return extractHTML(data.toString());
+            return extractHTML(
+                typeof data === "string" ? data : new TextDecoder().decode(data)
+            );
 
         case "md":
         case "markdown":
         case "text/markdown":
         case "text/x-markdown": {
-            const text = data.toString();
+            const text = typeof data === "string" ? data : new TextDecoder().decode(data);
             return {
                 text,
                 metadata: {
@@ -509,7 +499,7 @@ export async function extractText(
         case "txt":
         case "text":
         case "text/plain": {
-            const text = data.toString();
+            const text = typeof data === "string" ? data : new TextDecoder().decode(data);
             return {
                 text,
                 metadata: {

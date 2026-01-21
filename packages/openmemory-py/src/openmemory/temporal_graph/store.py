@@ -1,3 +1,6 @@
+"""
+Audited: 2026-01-19
+"""
 import time
 import uuid
 import json
@@ -20,11 +23,13 @@ async def insert_fact(
     metadata: Optional[Dict[str, Any]] = None,
     userId: Optional[str] = None,
     user_id: Optional[str] = None,
+    valid_from: Optional[int] = None,
 ) -> str:
     # args...
+    vf = validFrom if validFrom is not None else valid_from
     async with db.transaction():
         return await _insert_fact_core(
-            subject, predicate, fact_object, validFrom, confidence, metadata, userId=userId or user_id
+            subject, predicate, fact_object, vf, confidence, metadata, userId=userId or user_id
         )
 
 
@@ -43,34 +48,59 @@ async def _insert_fact_core(
     validFromTs = validFrom if validFrom is not None else now
 
     t = q.tables
-    # Invalidate existing
-    user_clause = "AND userId = ?" if userId else "AND userId IS NULL"
-    user_param = (userId,) if userId else ()
+    uid = userId # Normalize logic handled in repository if exists, but here we use it directly
 
-    existing = await db.async_fetchall(
-        f"SELECT id, validFrom FROM {t['temporal_facts']} WHERE subject=? AND predicate=? {user_clause} AND validTo IS NULL ORDER BY validFrom DESC",
-        (subject, predicate) + user_param,
-    )
+    # Integrity: Fetch existing overlapping facts to enforce Cardinality 1 (Single-Value Predicates)
+    user_clause = "AND user_id = ?" if uid else "AND user_id IS NULL"
+    user_param = (uid,) if uid else ()
+
+    for_update = " FOR UPDATE" if db.is_pg else ""
+    # JS uses: (valid_to IS NULL OR valid_to >= ?) ORDER BY valid_from ASC
+    sql = f"""
+        SELECT id, valid_from, valid_to 
+        FROM {t['temporal_facts']} 
+        WHERE subject=? AND predicate=? {user_clause} 
+        AND (valid_to IS NULL OR valid_to >= ?) 
+        ORDER BY valid_from ASC {for_update}
+    """
+    existing = await db.async_fetchall(sql, (subject, predicate) + user_param + (validFromTs,))
+
+    newFactValidTo = None
 
     for old in existing:
-        if old["validFrom"] < validFromTs:
-            logger.info(f"[Temporal] Invalidating old fact {old['id']} for {subject}.{predicate}")
+        oldValidFrom = int(old["valid_from"])
+        
+        if oldValidFrom < validFromTs:
+            # Existing fact started before the new one -> close it
             await db.async_execute(
-                f"UPDATE {t['temporal_facts']} SET validTo=? WHERE id=?",
-                (validFromTs - 1, old["id"]),
+                f"UPDATE {t['temporal_facts']} SET valid_to=?, last_updated=? WHERE id=?",
+                (validFromTs - 1, now, old["id"]),
             )
+            logger.debug(f"[TEMPORAL] Closed fact {old['id']}")
+        elif oldValidFrom == validFromTs:
+            # Collision: existing fact starts at same time -> invalidate it completely
+            await db.async_execute(
+                f"UPDATE {t['temporal_facts']} SET valid_to=?, last_updated=? WHERE id=?",
+                (validFromTs - 1, now, old["id"]),
+            )
+            logger.debug(f"[TEMPORAL] Collided fact {old['id']} invalidated")
+        elif oldValidFrom > validFromTs:
+            # Future fact exists -> cap the new fact's validity to start of next one
+            if newFactValidTo is None or oldValidFrom - 1 < newFactValidTo:
+                newFactValidTo = oldValidFrom - 1
 
     meta_json = json.dumps(metadata) if metadata else None
 
     await db.async_execute(
-        f"INSERT INTO {t['temporal_facts']}(id, userId, subject, predicate, object, validFrom, validTo, confidence, lastUpdated, metadata) VALUES (?,?,?,?,?,?,NULL,?,?,?)",
+        f"INSERT INTO {t['temporal_facts']}(id, user_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata) VALUES (?,?,?,?,?,?,?,?,?,?)",
         (
             fact_id,
-            userId,
+            uid,
             subject,
             predicate,
             fact_object,
             validFromTs,
+            newFactValidTo,
             confidence,
             now,
             meta_json,
@@ -100,14 +130,14 @@ async def update_fact(
 
     if not updates: return
 
-    updates.append("lastUpdated=?")
+    updates.append("last_updated=?")
     params.append(int(time.time() * 1000))
     params.append(fact_id)
     params.append(userId)
 
     t = q.tables
     sql = (
-        f"UPDATE {t['temporal_facts']} SET {', '.join(updates)} WHERE id=? AND userId=?"
+        f"UPDATE {t['temporal_facts']} SET {', '.join(updates)} WHERE id=? AND user_id=?"
     )
     async with db.transaction():
         await db.async_execute(sql, tuple(params))
@@ -119,7 +149,7 @@ async def invalidate_fact(fact_id: str, userId: str, validTo: Optional[int] = No
     t = q.tables
     async with db.transaction():
         await db.async_execute(
-            f"UPDATE {t['temporal_facts']} SET validTo=?, lastUpdated=? WHERE id=? AND userId=?",
+            f"UPDATE {t['temporal_facts']} SET valid_to=?, last_updated=? WHERE id=? AND user_id=?",
             (ts, int(time.time() * 1000), fact_id, userId),
         )
 
@@ -129,12 +159,12 @@ async def delete_fact(fact_id: str, userId: str):
     t = q.tables
     async with db.transaction():
         await db.async_execute(
-            f"DELETE FROM {t['temporal_facts']} WHERE id=? AND userId=?",
+            f"DELETE FROM {t['temporal_facts']} WHERE id=? AND user_id=?",
             (fact_id, userId),
         )
         # Also delete related edges (orphans)
         await db.async_execute(
-            f"DELETE FROM {t['temporal_edges']} WHERE (sourceId=? OR targetId=?) AND userId=?",
+            f"DELETE FROM {t['temporal_edges']} WHERE (source_id=? OR target_id=?) AND user_id=?",
             (fact_id, fact_id, userId),
         )
 
@@ -149,46 +179,59 @@ async def insert_edge(
     userId: Optional[str] = None,
     user_id: Optional[str] = None,
     commit: bool = True,
+    valid_from: Optional[int] = None,
 ) -> str:
     """Insert a new temporal edge between two facts."""
-    userId = userId or user_id
+    uid = userId or user_id
     edge_id = str(uuid.uuid4())
     now = int(time.time() * 1000)
-    validFromTs = validFrom if validFrom is not None else now
+    vf = validFrom if validFrom is not None else valid_from
+    validFromTs = vf if vf is not None else now
     t = q.tables
 
     async with db.transaction():
         # Invalidate existing edges of same type between same nodes
-        user_clause = "AND userId = ?" if userId else "AND userId IS NULL"
-        user_param = (userId,) if userId else ()
+        user_clause = "AND user_id = ?" if uid else "AND user_id IS NULL"
+        user_param = (uid,) if uid else ()
 
-        existing = await db.async_fetchall(
-            f"SELECT id, validFrom FROM {t['temporal_edges']} WHERE sourceId=? AND targetId=? AND relationType=? {user_clause} AND validTo IS NULL",
-            (sourceId, targetId, relationType) + user_param,
-        )
+        # insert_edge SELECT
+        for_update = " FOR UPDATE" if db.is_pg else ""
+        sql = f"""
+            SELECT id, valid_from 
+            FROM {t['temporal_edges']} 
+            WHERE source_id=? AND target_id=? AND relation_type=? {user_clause} 
+            AND valid_to IS NULL {for_update}
+        """
+        existing = await db.async_fetchall(sql, (sourceId, targetId, relationType) + user_param)
 
         for old in existing:
-            if old["validFrom"] < validFromTs:
-                logger.info(
-                    f"[Temporal] Invalidating old edge {old['id']} between {sourceId} and {targetId}"
-                )
+            oldValidFrom = int(old["valid_from"])
+            if oldValidFrom < validFromTs:
+                logger.debug(f"[TEMPORAL] Closing old edge {old['id']}")
                 await db.async_execute(
-                    f"UPDATE {t['temporal_edges']} SET validTo=? WHERE id=?",
-                    (validFromTs - 1, old["id"]),
+                    f"UPDATE {t['temporal_edges']} SET valid_to=?, last_updated=? WHERE id=?",
+                    (validFromTs - 1, now, old["id"]),
+                )
+            elif oldValidFrom == validFromTs:
+                logger.debug(f"[TEMPORAL] Collided edge {old['id']} invalidated")
+                await db.async_execute(
+                    f"UPDATE {t['temporal_edges']} SET valid_to=?, last_updated=? WHERE id=?",
+                    (validFromTs - 1, now, old["id"]),
                 )
 
         meta_json = json.dumps(metadata) if metadata else None
 
         await db.async_execute(
-            f"INSERT INTO {t['temporal_edges']}(id, userId, sourceId, targetId, relationType, validFrom, validTo, weight, metadata) VALUES (?,?,?,?,?,?,NULL,?,?)",
+            f"INSERT INTO {t['temporal_edges']}(id, user_id, source_id, target_id, relation_type, valid_from, valid_to, weight, last_updated, metadata) VALUES (?,?,?,?,?,?,NULL,?,?,?)",
             (
                 edge_id,
-                userId,
+                uid,
                 sourceId,
                 targetId,
                 relationType,
                 validFromTs,
                 weight,
+                now,
                 meta_json,
             ),
         )
@@ -201,7 +244,7 @@ async def invalidate_edge(edge_id: str, userId: str, validTo: Optional[int] = No
     t = q.tables
     async with db.transaction():
         await db.async_execute(
-            f"UPDATE {t['temporal_edges']} SET validTo=? WHERE id=? AND userId=?",
+            f"UPDATE {t['temporal_edges']} SET valid_to=? WHERE id=? AND user_id=?",
             (ts, edge_id, userId),
         )
 
@@ -267,8 +310,8 @@ async def apply_confidence_decay(decay_rate: float = 0.01) -> int:
 
     sql = f"""
         UPDATE {t['temporal_facts']}
-        SET confidence = {func}(0.1, confidence * (1 - ? * ((? - validFrom) / ?)))
-        WHERE validTo IS NULL AND confidence > 0.1
+        SET confidence = {func}(0.1, confidence * (1 - ? * ((? - valid_from) / ?)))
+        WHERE valid_to IS NULL AND confidence > 0.1
     """
     async with db.transaction():
         cursor = await db.async_execute(sql, (decay_rate, now, one_day))

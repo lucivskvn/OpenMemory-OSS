@@ -7,6 +7,14 @@ interface ActivityFeedProps {
     activities: ActivityItem[];
 }
 
+const ACTIVITY_COLORS: Record<string, string> = {
+    memory_created: "bg-green-500/10 text-green-400 border border-green-500/20",
+    memory_updated: "bg-blue-500/10 text-blue-400 border border-blue-500/20",
+    reflection: "bg-purple-500/10 text-purple-400 border border-purple-500/20",
+    decay: "bg-red-500/10 text-red-400 border border-red-500/20",
+    default: "bg-zinc-500/10 text-zinc-400 border border-zinc-500/20"
+};
+
 export const ActivityFeed: React.FC<ActivityFeedProps> = ({ activities }) => {
     if (!activities.length) {
         return (
@@ -25,13 +33,13 @@ export const ActivityFeed: React.FC<ActivityFeedProps> = ({ activities }) => {
             <div className="flex-1 overflow-y-auto pr-2 flex flex-col gap-3 custom-scrollbar">
                 {activities.map((item) => (
                     <div
-                        key={`${item.id}-${item.timestamp}`}
+                        key={item.id}
                         className="bg-white/5 hover:bg-white/10 p-4 rounded-xl transition-all border-l-4 border-transparent hover:border-primary group cursor-default"
                     >
                         <div className="flex justify-between items-start mb-2">
                             <span className={cn(
                                 "text-[10px] uppercase tracking-widest font-black px-2 py-1 rounded-md",
-                                getTypeColor(item.type)
+                                ACTIVITY_COLORS[item.type] || ACTIVITY_COLORS.default
                             )}>
                                 {formatType(item.type)}
                             </span>
@@ -54,16 +62,9 @@ export const ActivityFeed: React.FC<ActivityFeedProps> = ({ activities }) => {
     );
 };
 
-function getTypeColor(type: string): string {
-    switch (type) {
-        case "memory_created": return "bg-green-500/10 text-green-400 border border-green-500/20";
-        case "memory_updated": return "bg-blue-500/10 text-blue-400 border border-blue-500/20";
-        case "reflection": return "bg-purple-500/10 text-purple-400 border border-purple-500/20";
-        case "decay": return "bg-red-500/10 text-red-400 border border-red-500/20";
-        default: return "bg-zinc-500/10 text-zinc-400 border border-zinc-500/20";
-    }
-}
-
 function formatType(type: string): string {
-    return type.replace(/_/g, " ");
+    return type
+        .split("_")
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(" ");
 }

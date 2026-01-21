@@ -11,6 +11,7 @@
         "lint": "bun run --filter '*' lint",
         "dev": "bun run --cwd packages/openmemory-js dev",
         "dev:dashboard": "bun run --cwd apps/dashboard dev",
-        "typecheck": "bun run --filter '*' typecheck"
+        "typecheck": "bun run --filter '*' typecheck",
+        "test:js": "bun run --filter './packages/openmemory-js' --filter './apps/dashboard' test"
     }
 }

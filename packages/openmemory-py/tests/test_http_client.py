@@ -13,12 +13,12 @@ class TestMemoryClient(unittest.IsolatedAsyncioTestCase):
         self.client._client.request.return_value = self.mock_resp
 
     async def test_users_register(self):
-        await self.client.register_user("u1", "admin")
+        await self.client.register_user("u1", "admin summary")
 
         self.client._client.request.assert_called_with(
             "POST",
-            "http://test-api/users/register",
-            json={"userId": "u1", "scope": "admin"},
+            "http://test-api/admin/users",
+            json={"userId": "u1", "summary": "admin summary"},
             params=None,
             headers={
                 "Content-Type": "application/json",
@@ -29,17 +29,17 @@ class TestMemoryClient(unittest.IsolatedAsyncioTestCase):
 
     async def test_users_list_keys(self):
         self.mock_resp.json.return_value = {"keys": [{"userId": "u1"}]}
-        res = await self.client.list_api_keys()
+        res = await self.client.list_api_keys("u1")
         self.assertEqual(len(res), 1)
         self.client._client.request.assert_called_with(
-            "GET", "http://test-api/users/keys", json=None, params=None, headers=ANY
+            "GET", "http://test-api/admin/users/u1/keys", json=None, params=None, headers=ANY
         )
 
     async def test_ide_session_start(self):
         await self.client.start_ide_session("proj1", "vscode", "u1")
         self.client._client.request.assert_called_with(
             "POST",
-            "http://test-api/api/ide/session/start",
+            "http://test-api/ide/session/start",
             json={"projectName": "proj1", "ideName": "vscode", "userId": "u1"},
             params=None,
             headers=ANY,
@@ -49,7 +49,7 @@ class TestMemoryClient(unittest.IsolatedAsyncioTestCase):
         await self.client.send_ide_event("sess1", "save", "foo.ts", "content", "ts", {"meta": 1}, "u1")
         self.client._client.request.assert_called_with(
             "POST",
-            "http://test-api/api/ide/events",
+            "http://test-api/ide/events",
             json={
                 "sessionId": "sess1",
                 "eventType": "save",
@@ -69,14 +69,20 @@ class TestMemoryClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res["id"], "f1")
         self.client._client.request.assert_called_with(
             "GET",
-            "http://test-api/api/temporal/fact/current",
+            "http://test-api/temporal/fact/current",
             json=None,
             params={"subject": "sub", "predicate": "pred"},
             headers=ANY,
         )
 
     async def test_dynamics_calculate_salience(self):
-        await self.client.calculate_salience(initial_salience=0.9)
+        await self.client.calculate_salience({
+             "initialSalience": 0.9,
+             "decayLambda": 0.01,
+             "recallCount": 0,
+             "emotionalFrequency": 0,
+             "timeElapsedDays": 0,
+        })
         self.client._client.request.assert_called_with(
             "POST",
             "http://test-api/dynamics/salience/calculate",

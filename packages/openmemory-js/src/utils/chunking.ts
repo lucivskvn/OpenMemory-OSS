@@ -2,8 +2,13 @@
  * Text Chunking Utilities for OpenMemory.
  * Provides strategies for splitting large documents while preserving semantic boundaries (paragraphs, sentences).
  */
-const DEFAULT_CPT = 4;
-const estimateTokens = (t: string) => Math.ceil(t.length / DEFAULT_CPT);
+const DEFAULT_CHAR_PER_TOKEN = 4;
+/**
+ * Estimates the number of tokens in a given text.
+ * @param text The text to estimate tokens for.
+ * @returns Estimated token count.
+ */
+export const estimateTokens = (text: string) => Math.ceil(text.length / DEFAULT_CHAR_PER_TOKEN);
 
 export interface TextChunk {
     text: string;
@@ -52,6 +57,19 @@ export const splitText = (
             }
         }
 
+        // Validating Surrogate Pairs: Don't split exactly between a high/low surrogate
+        // Only check if we are actually cutting the string (not at the end)
+        if (endIndex < text.length) {
+            const charCode = text.charCodeAt(endIndex);
+            if (charCode >= 0xDC00 && charCode <= 0xDFFF) {
+                // Check if previous is high surrogate (0xD800-0xDBFF)
+                const prevCode = text.charCodeAt(endIndex - 1);
+                if (prevCode >= 0xD800 && prevCode <= 0xDBFF) {
+                    endIndex--;
+                }
+            }
+        }
+
         const chunk = text.slice(startIndex, endIndex).trim();
         if (chunk) sections.push(chunk);
 
@@ -66,48 +84,69 @@ export const splitText = (
  * Legacy/Variant: Splits text into sections based on paragraph boundaries.
  */
 export const chunkTextByParagraphs = (
-    txt: string,
-    tgt = 768,
-    ovr = 0.1,
+    text: string,
+    targetTokens = 768,
+    overlapRatio = 0.1,
 ): TextChunk[] => {
-    const tot = estimateTokens(txt);
-    if (tot <= tgt)
-        return [{ text: txt, start: 0, end: txt.length, tokens: tot }];
+    const totalTokens = estimateTokens(text);
+    if (totalTokens <= targetTokens)
+        return [{ text: text, start: 0, end: text.length, tokens: totalTokens }];
 
-    const tch = tgt * DEFAULT_CPT,
-        och = Math.floor(tch * ovr);
-    const paras = txt.split(/\n\n+/);
+    const targetCharLimit = targetTokens * DEFAULT_CHAR_PER_TOKEN;
+    const overlapCharLimit = Math.floor(targetCharLimit * overlapRatio);
+    const paragraphs = text.split(/\n\n+/);
 
-    const chks: TextChunk[] = [];
-    let cur = "",
-        cs = 0;
+    const chunks: TextChunk[] = [];
+    let currentText = "";
+    let currentIndex = 0;
 
-    for (const p of paras) {
-        const sents = p.split(/(?<=[.!?])\s+/);
-        for (const s of sents) {
-            const pot = cur + (cur ? " " : "") + s;
-            if (pot.length > tch && cur.length > 0) {
-                chks.push({
-                    text: cur,
-                    start: cs,
-                    end: cs + cur.length,
-                    tokens: estimateTokens(cur),
+    for (const paragraph of paragraphs) {
+        // Split by sentences using lookbehind for terminal punctuation
+        const sentences = paragraph.split(/(?<=[.!?])\s+/);
+        for (const sentence of sentences) {
+            const potentialChunk = currentText + (currentText ? " " : "") + sentence;
+
+            if (potentialChunk.length > targetCharLimit && currentText.length > 0) {
+                chunks.push({
+                    text: currentText,
+                    start: currentIndex,
+                    end: currentIndex + currentText.length,
+                    tokens: estimateTokens(currentText),
                 });
-                const ovt = cur.slice(-och);
-                cur = ovt + " " + s;
-                cs = cs + cur.length - ovt.length - 1;
-            } else cur = pot;
+
+                // Carry over overlap for continuity
+                // Safe slice to avoid splitting surrogate pairs
+                let sliceStart = currentText.length - overlapCharLimit;
+                // If sliceStart lands on low surrogate (DC00-DFFF) of a pair...
+                // Actually slice(-N) counts from end. 
+                // Let's use code point aware slicing if needed but for now just check boundary.
+                const charAtCut = currentText.charCodeAt(sliceStart);
+                const charBeforeCut = currentText.charCodeAt(sliceStart - 1);
+
+                // If we are cutting between High (prev) and Low (curr) surrogate
+                if (charAtCut >= 0xDC00 && charAtCut <= 0xDFFF && charBeforeCut >= 0xD800 && charBeforeCut <= 0xDBFF) {
+                    sliceStart--; // Include the high surrogate in the overlap (move back)
+                }
+
+                const overlapText = currentText.slice(sliceStart);
+                currentText = overlapText + (overlapText ? " " : "") + sentence;
+                currentIndex = currentIndex + currentText.length - overlapText.length - 1;
+            } else {
+                currentText = potentialChunk;
+            }
         }
     }
 
-    if (cur.length > 0)
-        chks.push({
-            text: cur,
-            start: cs,
-            end: cs + cur.length,
-            tokens: estimateTokens(cur),
+    if (currentText.length > 0) {
+        chunks.push({
+            text: currentText,
+            start: currentIndex,
+            end: currentIndex + currentText.length,
+            tokens: estimateTokens(currentText),
         });
-    return chks;
+    }
+
+    return chunks;
 };
 
 // aggregateVectors moved to src/utils/vectors.ts

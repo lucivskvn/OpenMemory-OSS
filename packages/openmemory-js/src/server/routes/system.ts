@@ -1,9 +1,23 @@
-import { env, tier } from "../../core/cfg";
+import { Elysia } from "elysia";
+import { z } from "zod";
+import { VERSION, env, tier } from "../../core/cfg";
 import { q } from "../../core/db";
 import { sectorConfigs } from "../../core/hsg_config";
 import { getRunningIntervals } from "../../core/scheduler";
 import { getEmbeddingInfo } from "../../memory/embed";
-import { AppError, sendError } from "../errors";
+import { AppError } from "../errors";
+import { normalizeUserId } from "../../utils";
+import { getUser } from "../middleware/auth";
+import type { UserContext } from "../middleware/auth";
+
+const SectorQuerySchema = z.object({
+    userId: z.string().optional(),
+});
+
+const LogsQuerySchema = z.object({
+    limit: z.coerce.number().default(50),
+    userId: z.string().optional(),
+});
 
 const TIER_BENEFITS = {
     hybrid: {
@@ -32,167 +46,170 @@ const TIER_BENEFITS = {
     },
 };
 
-import { z } from "zod";
+export const systemRoutes = (app: Elysia) => app
+    /**
+     * GET /health
+     * GET /api/system/health
+     */
+    .get("/health", () => getHealthHandler())
+    .get("/api/system/health", () => getHealthHandler())
 
-import { validateQuery } from "../middleware/validate";
+    /**
+     * GET /sectors
+     * GET /api/system/sectors
+     */
+    .get("/sectors", async ({ query, ...ctx }) => {
+        const qParams = SectorQuerySchema.parse(query);
+        const user = getUser(ctx);
+        return getSectorsHandler(user, qParams.userId);
+    })
+    .get("/api/system/sectors", async ({ query, ...ctx }) => {
+        const qParams = SectorQuerySchema.parse(query);
+        const user = getUser(ctx);
+        return getSectorsHandler(user, qParams.userId);
+    })
 
-const SectorQuerySchema = z.object({
-    userId: z.string().optional(),
-});
+    /**
+     * GET /system/metrics
+     * GET /api/system/metrics
+     * (Admin Only)
+     */
+    .get("/system/metrics", async (ctx) => {
+        const user = getUser(ctx);
+        ensureAdmin(user);
+        return getSystemMetricsHandler();
+    })
+    .get("/api/system/metrics", async (ctx) => {
+        const user = getUser(ctx);
+        ensureAdmin(user);
+        return getSystemMetricsHandler();
+    })
 
-export const getHealth = async (
-    _req: AdvancedRequest,
-    res: AdvancedResponse,
-) => {
-    // Check GPU Status (basic check for Nvidia inside container)
-    let gpu = false;
+    /**
+     * GET /api/system/maintenance
+     * (Admin Only)
+     */
+    .get("/api/system/maintenance", async (ctx) => {
+        const user = getUser(ctx);
+        ensureAdmin(user);
+        return getMaintenanceStatusHandler();
+    })
+
+    /**
+     * GET /api/system/maintenance/logs
+     * (Admin Only)
+     */
+    .get("/api/system/maintenance/logs", async ({ query, ...ctx }) => {
+        const qParams = LogsQuerySchema.parse(query);
+        const user = getUser(ctx);
+        ensureAdmin(user);
+        return getMaintenanceLogsHandler(user, qParams.limit, qParams.userId);
+    });
+
+// --- Handlers ---
+
+function checkGpu() {
     try {
-        const { execSync } = await import("node:child_process");
-        execSync("nvidia-smi", { stdio: "ignore" });
-        gpu = true;
-    } catch { }
+        const proc = Bun.spawnSync(["nvidia-smi"], { stderr: "ignore" });
+        return proc.success;
+    } catch {
+        return false;
+    }
+}
 
-    res.json({
-        ok: true,
-        version: "2.3.0",
-        gpu,
+function getHealthHandler() {
+    return {
+        success: true,
+        version: VERSION,
+        gpu: checkGpu(),
         model: env.ollamaModel,
         embedding: getEmbeddingInfo(),
         tier,
         dim: env.vecDim,
         cache: env.cacheSegments,
         expected: (TIER_BENEFITS as Record<string, unknown>)[tier],
-    });
-};
-
-export const getSectors = async (
-    req: AdvancedRequest,
-    res: AdvancedResponse,
-) => {
-    try {
-        const isAdmin = (req.user?.scopes || []).includes("admin:all");
-        let userId = req.user?.id;
-
-        if (isAdmin) {
-            const { userId: queryUserId } = req.query as unknown as z.infer<
-                typeof SectorQuerySchema
-            >;
-            if (queryUserId) userId = queryUserId;
-        }
-
-        const stats = await q.getSectorStats.all(userId);
-        res.json({
-            sectors: Object.keys(sectorConfigs),
-            configs: sectorConfigs,
-            stats,
-        });
-    } catch (err: unknown) {
-        sendError(res, err);
-    }
-};
-
-export const getMaintenanceStatus = async (
-    _req: AdvancedRequest,
-    res: AdvancedResponse,
-) => {
-    try {
-        const running = getRunningIntervals();
-        res.json({
-            ok: true,
-            active_jobs: running,
-            count: running.length,
-        });
-    } catch (err: unknown) {
-        sendError(res, err);
-    }
-};
-
-export const getMaintenanceLogs = async (
-    req: AdvancedRequest,
-    res: AdvancedResponse,
-) => {
-    try {
-        const limitStr = req.query.limit as string;
-        const limit = parseInt(limitStr || "50");
-
-        const isAdmin = (req.user?.scopes || []).includes("admin:all");
-        let userId = req.user?.id;
-
-        if (isAdmin) {
-            // Admin can see system logs (userId=undefined/null) or specific user
-            const queryUser = req.query.userId as string;
-            userId = queryUser || undefined;
-        }
-
-        const logs = await q.getMaintenanceLogs.all(limit, userId);
-        res.json({ logs });
-    } catch (err: unknown) {
-        sendError(res, err);
-    }
-};
-
-import type { AdvancedRequest, AdvancedResponse, ServerApp } from "../server";
-
-export function systemRoutes(app: ServerApp) {
-    app.get("/health", getHealth);
-    app.get("/api/system/health", getHealth);
-    app.get("/api/system/maintenance", getMaintenanceStatus);
-    app.get("/api/system/maintenance/logs", getMaintenanceLogs);
-    app.get("/api/system/sectors", validateQuery(SectorQuerySchema), getSectors);
-    app.get("/sectors", validateQuery(SectorQuerySchema), getSectors);
-    app.get("/api/system/metrics", getSystemMetrics); // Admin only (enforced by logic or middleware if applied)
-    app.get("/system/metrics", getSystemMetrics);
+    };
 }
 
-export const getSystemMetrics = async (
-    req: AdvancedRequest,
-    res: AdvancedResponse,
-) => {
-    try {
-        // Strict Admin check for metrics
-        const isAdmin = (req.user?.scopes || []).includes("admin:all");
-        if (!isAdmin) {
-            return sendError(res, new AppError(403, "FORBIDDEN", "Admin access required"));
-        }
+async function getSectorsHandler(user: UserContext | undefined, queryUserId?: string) {
+    const isAdmin = (user?.scopes || []).includes("admin:all");
+    let userId = user?.id;
 
-        const memUsage = process.memoryUsage();
-
-        let poolStats = {};
-        if (env.metadataBackend === 'postgres') {
-            // If we had pool access exposed we could show it, currently DB is encapsulated.
-            // We can check `pg.totalCount` if we exported it from `db.ts` or just leave generic.
-            poolStats = { type: 'postgres' };
-        } else {
-            poolStats = { type: 'sqlite', mode: env.mode };
-        }
-
-        const runningJobs = getRunningIntervals();
-
-        const metrics = {
-            memory: {
-                rss: Math.round(memUsage.rss / 1024 / 1024),
-                heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
-                heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
-                external: Math.round(memUsage.external / 1024 / 1024),
-            },
-            cpu: process.cpuUsage(),
-            uptime: process.uptime(),
-            connections: {
-                active: 0, // Placeholder
-                pool: poolStats
-            },
-            jobs: {
-                active: runningJobs.length,
-                names: runningJobs
-            },
-            version: "2.3.0"
-        };
-
-        res.json({
-            success: true,
-            metrics
-        });
-    } catch (err) {
-        sendError(res, err);
+    if (isAdmin) {
+        if (queryUserId) userId = queryUserId;
     }
-};
+
+    const stats = await q.getSectorStats.all(userId);
+    return {
+        sectors: Object.keys(sectorConfigs),
+        configs: sectorConfigs,
+        stats,
+    };
+}
+
+async function getSystemMetricsHandler() {
+    const memUsage = process.memoryUsage();
+
+    let poolStats = {};
+    if (env.metadataBackend === 'postgres') {
+        poolStats = { type: 'postgres' };
+    } else {
+        poolStats = { type: 'sqlite', mode: env.mode };
+    }
+
+    const runningJobs = getRunningIntervals();
+
+    const metrics = {
+        memory: {
+            rss: Math.round(memUsage.rss / 1024 / 1024),
+            heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
+            heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
+            external: Math.round(memUsage.external / 1024 / 1024),
+        },
+        cpu: process.cpuUsage(),
+        uptime: process.uptime(),
+        connections: {
+            active: 0, // Placeholder
+            pool: poolStats
+        },
+        jobs: {
+            active: runningJobs.length,
+            names: runningJobs
+        },
+        version: VERSION
+    };
+
+    return {
+        success: true,
+        metrics
+    };
+}
+
+function getMaintenanceStatusHandler() {
+    const running = getRunningIntervals();
+    return {
+        success: true,
+        active_jobs: running,
+        count: running.length,
+    };
+}
+
+async function getMaintenanceLogsHandler(user: UserContext | undefined, limit: number, queryUserId?: string) {
+    const isAdmin = (user?.scopes || []).includes("admin:all");
+    let userId = user?.id;
+
+    if (isAdmin) {
+        // Admin can see system logs (userId=undefined/null) or specific user
+        userId = queryUserId || undefined;
+    }
+
+    const logs = await q.getMaintenanceLogs.all(limit, userId);
+    return { success: true, logs };
+}
+
+function ensureAdmin(user: UserContext | undefined) {
+    const isAdmin = (user?.scopes || []).includes("admin:all");
+    if (!isAdmin) {
+        throw new AppError(403, "FORBIDDEN", "Admin access required");
+    }
+}

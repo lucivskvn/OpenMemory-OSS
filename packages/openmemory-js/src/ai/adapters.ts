@@ -1,37 +1,27 @@
+/**
+ * @file adapters.ts
+ * @description LLM Generation Adapters for OpenMemory (OpenAI, Anthropic, Gemini, Ollama).
+ * @audited 2026-01-19
+ */
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 
 import { env, USER_AGENT } from "../core/cfg";
 import { getPersistedConfig } from "../core/persisted_cfg";
 import { embed, getEmbeddingInfo, getEmbeddingProvider } from "../memory/embed";
-import { logger } from "../utils/logger";
+import { logger, redact } from "../utils/logger";
 import { CircuitBreaker, withResilience } from "../utils/retry";
+import { GeminiCandidate, GeminiResponse, OllamaChatResponse, OllamaResponse } from "./types";
 
 const DEFAULT_TIMEOUT = 30000;
 const OLLAMA_TIMEOUT = env.ollamaTimeout;
 
 export { embed, getEmbeddingInfo, getEmbeddingProvider };
 
-/**
- * Helper to manage AbortController for timeouts.
- * @returns An object containing the signal and a cleanup function.
- */
-function useTimeout(
-    providedSignal?: AbortSignal,
-    ms: number = DEFAULT_TIMEOUT,
-): { signal: AbortSignal; cleanup: () => void } {
-    if (providedSignal) return { signal: providedSignal, cleanup: () => { } };
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), ms);
-    return {
-        signal: controller.signal,
-        cleanup: () => clearTimeout(id),
-    };
-}
 
-/**
- * Interface for LLM Text Generation Adapters
- */
+
+
+
 /**
  * Interface for LLM Text Generation Adapters.
  * Provides a unified contract for different AI providers (OpenAI, Anthropic, Gemini, Ollama).
@@ -48,6 +38,7 @@ export interface GenerationAdapter {
             max_tokens?: number;
             temperature?: number;
             signal?: AbortSignal;
+            system?: string;
         },
     ): Promise<string>;
 
@@ -64,6 +55,7 @@ export interface GenerationAdapter {
             max_tokens?: number;
             temperature?: number;
             signal?: AbortSignal;
+            system?: string;
         },
     ): Promise<T>;
 
@@ -76,6 +68,21 @@ export interface GenerationAdapter {
 
     /** The model identifier string */
     model: string;
+
+    /**
+     * Generates a stream of text chunks based on a prompt.
+     * @param prompt - The input prompt.
+     * @param options - Generation options (tokens, temp, signal).
+     */
+    generateStream(
+        prompt: string,
+        options?: {
+            max_tokens?: number;
+            temperature?: number;
+            signal?: AbortSignal;
+            system?: string;
+        },
+    ): AsyncGenerator<string, void, unknown>;
 }
 
 export class ProviderError extends Error {
@@ -101,18 +108,14 @@ function handleProviderError(provider: string, error: unknown): never {
         message?: string;
         code?: string | number;
     };
-    let msg =
-        (error instanceof Error ? error.message : String(error)) ||
-        "Unknown error";
+    let msg = (error instanceof Error ? error.message : err?.message) || String(error);
+    if (!msg || msg === "undefined" || msg === "[object Object]") {
+        msg = "Unknown error";
+    }
 
     // REDACTION: Remove potential API keys and sensitive tokens
-    msg = msg
-        .replace(/sk-ant-[a-zA-Z0-9-_]{20,}/g, "sk-ant-[REDACTED]")
-        .replace(/sk-[a-zA-Z0-9]{20,}/g, "sk-[REDACTED]")
-        .replace(/AIza[a-zA-Z0-9-_]{20,}/g, "AIza[REDACTED]")
-        .replace(/(?<=key=)[a-zA-Z0-9-_]{20,}/gi, "[REDACTED]")
-        .replace(/(?<=Authorization: Bearer )[a-zA-Z0-9.\-_]{20,}/gi, "[REDACTED]")
-        .replace(/(?<=x-api-key: )[a-zA-Z0-9-_]{20,}/gi, "[REDACTED]");
+    // Delegated to centralized logger redaction
+    msg = redact(msg) as string;
 
     let code = String(err?.code || "UNKNOWN");
     let retryable = true;
@@ -125,6 +128,10 @@ function handleProviderError(provider: string, error: unknown): never {
     } else if (status === 401 || status === 403) {
         msg = "Authentication failed";
         code = "AUTH_ERROR";
+        retryable = false;
+    } else if (status === 400) {
+        msg = `Invalid request: ${msg}`;
+        code = "INVALID_REQUEST";
         retryable = false;
     } else if (status >= 500) {
         msg = "Provider server error";
@@ -160,6 +167,24 @@ function handleProviderError(provider: string, error: unknown): never {
 }
 
 /**
+ * Common Timeout Helper.
+ * @param providedSignal Optional signal from caller.
+ * @param ms Timeout duration in milliseconds.
+ */
+function useTimeout(
+    providedSignal?: AbortSignal,
+    ms: number = DEFAULT_TIMEOUT,
+): { signal: AbortSignal; cleanup: () => void } {
+    if (providedSignal) return { signal: providedSignal, cleanup: () => { } };
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), ms);
+    return {
+        signal: controller.signal,
+        cleanup: () => clearTimeout(id),
+    };
+}
+
+/**
  * OpenAI Text Generation Adapter.
  * Uses the official OpenAI SDK with resilience patterns (CircuitBreaker + Retry).
  */
@@ -192,6 +217,7 @@ export class OpenAIGenerator implements GenerationAdapter {
             max_tokens?: number;
             temperature?: number;
             signal?: AbortSignal;
+            system?: string;
         },
     ): Promise<string> {
         return withResilience(
@@ -200,7 +226,10 @@ export class OpenAIGenerator implements GenerationAdapter {
                     const res = await this.client.chat.completions.create(
                         {
                             model: this.model,
-                            messages: [{ role: "user", content: prompt }],
+                            messages: [
+                                ...(options?.system ? [{ role: "system" as const, content: options.system }] : []),
+                                { role: "user", content: prompt }
+                            ],
                             max_tokens: options?.max_tokens || 4096,
                             temperature: options?.temperature ?? 0.7,
                         },
@@ -238,6 +267,7 @@ export class OpenAIGenerator implements GenerationAdapter {
             max_tokens?: number;
             temperature?: number;
             signal?: AbortSignal;
+            system?: string;
         },
     ): Promise<T> {
         return withResilience(
@@ -250,6 +280,7 @@ export class OpenAIGenerator implements GenerationAdapter {
                                 {
                                     role: "system",
                                     content:
+                                        (options?.system ? options.system + "\n" : "") +
                                         "You are a helpful assistant that outputs JSON only.",
                                 },
                                 {
@@ -302,23 +333,54 @@ export class OpenAIGenerator implements GenerationAdapter {
             },
         );
     }
+
+    async *generateStream(
+        prompt: string,
+        options?: {
+            max_tokens?: number;
+            temperature?: number;
+            signal?: AbortSignal;
+            system?: string;
+        },
+    ): AsyncGenerator<string, void, unknown> {
+        const { signal, cleanup } = useTimeout(options?.signal, DEFAULT_TIMEOUT);
+
+        try {
+            const stream = await this.client.chat.completions.create(
+                {
+                    model: this.model,
+                    messages: [
+                        ...(options?.system ? [{ role: "system" as const, content: options.system }] : []),
+                        { role: "user", content: prompt }
+                    ],
+                    max_tokens: options?.max_tokens || 4096,
+                    temperature: options?.temperature ?? 0.7,
+                    stream: true,
+                    stream_options: { include_usage: true },
+                },
+                { signal },
+            );
+
+            for await (const chunk of stream) {
+                const content = chunk.choices[0]?.delta?.content || "";
+                if (content) yield content;
+                if (chunk.usage) {
+                    this.usage = {
+                        promptTokens: chunk.usage.prompt_tokens,
+                        completionTokens: chunk.usage.completion_tokens,
+                        totalTokens: chunk.usage.total_tokens,
+                    };
+                }
+            }
+        } catch (error) {
+            handleProviderError("openai", error);
+        } finally {
+            cleanup();
+        }
+    }
 }
 
-interface GeminiCandidate {
-    content: {
-        parts: { text: string }[];
-    };
-    finishReason?: string;
-}
 
-interface GeminiResponse {
-    candidates?: GeminiCandidate[];
-    error?: {
-        code: number;
-        message: string;
-        status: string;
-    };
-}
 
 /**
  * Google Gemini Text Generation Adapter.
@@ -417,16 +479,14 @@ export class GeminiGenerator implements GenerationAdapter {
                         errMsg = errData.error.message;
                         status = typeof errData.error.code === 'number' ? errData.error.code : status;
                     }
-                } catch { }
-                throw new ProviderError(
-                    `Gemini Error ${status}: ${errMsg}`,
-                    "gemini",
-                    String(status),
-                    status === 429 || status >= 500,
-                );
+                } catch (parseErr) {
+                    logger.debug("[AI] Gemini error response parse failed", { error: parseErr });
+                }
+
+                handleProviderError("gemini", { status, message: errMsg });
             }
 
-            const data = (await res.json()) as GeminiResponse & { usageMetadata?: { promptTokenCount: number; candidatesTokenCount: number; totalTokenCount: number } };
+            const data = (await res.json()) as GeminiResponse;
             if (data.usageMetadata) {
                 this.usage = {
                     promptTokens: data.usageMetadata.promptTokenCount,
@@ -440,7 +500,6 @@ export class GeminiGenerator implements GenerationAdapter {
         } finally {
             cleanup();
         }
-        throw new Error("Unreachable");
     }
 
     async generate(
@@ -449,10 +508,16 @@ export class GeminiGenerator implements GenerationAdapter {
             max_tokens?: number;
             temperature?: number;
             signal?: AbortSignal;
+            system?: string;
         },
     ): Promise<string> {
         return withResilience(
-            () => this.call(prompt, false, options),
+            () => {
+                const finalPrompt = options?.system
+                    ? `System: ${options.system}\n\nUser: ${prompt}`
+                    : prompt;
+                return this.call(finalPrompt, false, options);
+            },
             this.breaker,
             {
                 retries: 3,
@@ -472,13 +537,17 @@ export class GeminiGenerator implements GenerationAdapter {
             max_tokens?: number;
             temperature?: number;
             signal?: AbortSignal;
+            system?: string;
         },
     ): Promise<T> {
         return withResilience(
             async () => {
                 try {
+                    const finalPrompt = options?.system
+                        ? `System: ${options.system}\n\nUser: ${prompt}`
+                        : prompt;
                     const text = await this.call(
-                        prompt + "\nResponse must be valid JSON.",
+                        finalPrompt + "\nResponse must be valid JSON.",
                         true,
                         options,
                         schema,
@@ -507,21 +576,90 @@ export class GeminiGenerator implements GenerationAdapter {
             },
         );
     }
+
+    async *generateStream(
+        prompt: string,
+        options?: {
+            max_tokens?: number;
+            temperature?: number;
+            signal?: AbortSignal;
+            system?: string;
+        },
+    ): AsyncGenerator<string, void, unknown> {
+        const url = `${this.baseUrl}/${this.apiVersion}/models/${this.model}:streamGenerateContent?alt=sse`;
+        const { signal, cleanup } = useTimeout(options?.signal, DEFAULT_TIMEOUT);
+
+        try {
+            const finalPrompt = options?.system
+                ? `System: ${options.system}\n\nUser: ${prompt}`
+                : prompt;
+            const body: Record<string, unknown> = {
+                contents: [{ parts: [{ text: finalPrompt }] }],
+                generationConfig: {
+                    temperature: options?.temperature ?? 0.7,
+                },
+            };
+            if (options?.max_tokens) {
+                (body.generationConfig as Record<string, unknown>).maxOutputTokens = options.max_tokens;
+            }
+
+            const res = await fetch(url, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "User-Agent": USER_AGENT,
+                    "x-goog-api-key": this.key,
+                },
+                body: JSON.stringify(body),
+                signal,
+            });
+
+            if (!res.ok) {
+                handleProviderError("gemini", { status: res.status, message: res.statusText });
+            }
+
+            if (!res.body) return;
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                const chunk = decoder.decode(value, { stream: true });
+
+                // Parse SSE format: data: { ... }
+                const lines = chunk.split("\n");
+                for (const line of lines) {
+                    if (line.startsWith("data: ")) {
+                        const jsonStr = line.slice(6);
+                        if (jsonStr.trim() === "[DONE]") continue;
+                        try {
+                            const data = JSON.parse(jsonStr) as GeminiResponse;
+                            const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                            if (text) yield text;
+                            if (data.usageMetadata) {
+                                this.usage = {
+                                    promptTokens: data.usageMetadata.promptTokenCount,
+                                    completionTokens: data.usageMetadata.candidatesTokenCount,
+                                    totalTokens: data.usageMetadata.totalTokenCount,
+                                };
+                            }
+                        } catch (e) {
+                            // Ignore parse errors for partial chunks
+                        }
+                    }
+                }
+            }
+
+        } catch (error) {
+            handleProviderError("gemini", error);
+        } finally {
+            cleanup();
+        }
+    }
 }
 
-interface OllamaResponse {
-    model: string;
-    created_at: string;
-    response: string;
-    done: boolean;
-    context?: number[];
-    total_duration?: number;
-    load_duration?: number;
-    prompt_eval_count?: number;
-    prompt_eval_duration?: number;
-    eval_count?: number;
-    eval_duration?: number;
-}
+
 
 /**
  * Ollama Local GenAI Adapter.
@@ -542,12 +680,60 @@ export class OllamaGenerator implements GenerationAdapter {
         });
     }
 
+    private async callOllama(
+        endpoint: "/api/generate" | "/api/chat",
+        body: Record<string, unknown>,
+        signal?: AbortSignal,
+    ): Promise<OllamaResponse | OllamaChatResponse> {
+        const res = await fetch(`${this.url}${endpoint}`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "User-Agent": USER_AGENT,
+            },
+            body: JSON.stringify(body),
+            signal: signal,
+        });
+
+        if (!res.ok) {
+            let errMsg = res.statusText;
+            let status = res.status;
+            try {
+                const errData = (await res.json()) as { error?: string };
+                if (errData.error) {
+                    errMsg = errData.error;
+                }
+            } catch (parseErr) {
+                logger.debug("[AI] Ollama error response parse failed", { error: parseErr });
+            }
+            const retryable = res.status === 429 || res.status >= 500;
+            throw new ProviderError(
+                `Ollama Error ${status}: ${errMsg}`,
+                "ollama",
+                String(status),
+                retryable,
+            );
+        }
+
+        const data = await res.json() as OllamaResponse | OllamaChatResponse;
+
+        // Normalize usage tracking if available (Ollama provides eval counts)
+        const usageData = data as OllamaResponse;
+        this.usage = {
+            promptTokens: usageData.prompt_eval_count || 0,
+            completionTokens: usageData.eval_count || 0,
+            totalTokens: (usageData.prompt_eval_count || 0) + (usageData.eval_count || 0),
+        };
+        return data;
+    }
+
     async generate(
         prompt: string,
         options?: {
             max_tokens?: number;
             temperature?: number;
             signal?: AbortSignal;
+            system?: string;
         },
     ): Promise<string> {
         return withResilience(
@@ -555,42 +741,39 @@ export class OllamaGenerator implements GenerationAdapter {
                 const { signal, cleanup } = useTimeout(options?.signal, OLLAMA_TIMEOUT);
 
                 try {
-                    const body: Record<string, unknown> = {
-                        model: this.model,
-                        prompt,
-                        stream: false,
-                    };
-                    if (options?.max_tokens)
-                        body.num_predict = options.max_tokens;
-                    if (options?.temperature !== undefined)
-                        body.temperature = options.temperature;
+                    // Use /api/chat for better prompt handling if it looks like it has instructions
+                    const useChat = prompt.includes("Instructions:") || prompt.includes("Context:");
+                    if (useChat) {
+                        const body: Record<string, unknown> = {
+                            model: this.model,
+                            messages: [
+                                ...(options?.system ? [{ role: "system" as const, content: options.system }] : []),
+                                { role: "user", content: prompt }
+                            ],
+                            stream: false,
+                        };
+                        if (options?.max_tokens)
+                            body.options = { ...(body.options as object || {}), num_predict: options.max_tokens };
+                        if (options?.temperature !== undefined)
+                            body.options = { ...(body.options as object || {}), temperature: options.temperature };
 
-                    const res = await fetch(`${this.url}/api/generate`, {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json",
-                            "User-Agent": USER_AGENT,
-                        },
-                        body: JSON.stringify(body),
-                        signal: signal,
-                    });
-                    if (!res.ok) {
-                        const retryable =
-                            res.status === 429 || res.status >= 500;
-                        throw new ProviderError(
-                            `Ollama Error ${res.status}`,
-                            "ollama",
-                            String(res.status),
-                            retryable,
-                        );
+                        const data = (await this.callOllama("/api/chat", body, signal)) as OllamaChatResponse;
+                        return data.message.content;
+                    } else {
+                        const body: Record<string, unknown> = {
+                            model: this.model,
+                            prompt,
+                            system: options?.system,
+                            stream: false,
+                        };
+                        if (options?.max_tokens)
+                            body.num_predict = options.max_tokens;
+                        if (options?.temperature !== undefined)
+                            body.temperature = options.temperature;
+
+                        const data = (await this.callOllama("/api/generate", body, signal)) as OllamaResponse;
+                        return data.response;
                     }
-                    const data = (await res.json()) as OllamaResponse;
-                    this.usage = {
-                        promptTokens: data.prompt_eval_count || 0,
-                        completionTokens: data.eval_count || 0,
-                        totalTokens: (data.prompt_eval_count || 0) + (data.eval_count || 0),
-                    };
-                    return data.response;
                 } catch (error) {
                     handleProviderError("ollama", error);
                 } finally {
@@ -616,6 +799,7 @@ export class OllamaGenerator implements GenerationAdapter {
             max_tokens?: number;
             temperature?: number;
             signal?: AbortSignal;
+            system?: string;
         },
     ): Promise<T> {
         return withResilience(
@@ -630,35 +814,18 @@ export class OllamaGenerator implements GenerationAdapter {
                             (schema
                                 ? `\n\nFollow this JSON schema: ${JSON.stringify(schema)}`
                                 : ""),
+                        system: options?.system
+                            ? options.system + "\nYou are a helpful assistant that outputs JSON only."
+                            : "You are a helpful assistant that outputs JSON only.",
                         format: "json",
                         stream: false,
                     };
+                    if (options?.max_tokens)
+                        body.num_predict = options.max_tokens;
+                    if (options?.temperature !== undefined)
+                        body.temperature = options.temperature;
 
-                    const res = await fetch(`${this.url}/api/generate`, {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json",
-                            "User-Agent": USER_AGENT,
-                        },
-                        body: JSON.stringify(body),
-                        signal: signal,
-                    });
-                    if (!res.ok) {
-                        const retryable =
-                            res.status === 429 || res.status >= 500;
-                        throw new ProviderError(
-                            `Ollama Error ${res.status}`,
-                            "ollama",
-                            String(res.status),
-                            retryable,
-                        );
-                    }
-                    const data = (await res.json()) as OllamaResponse;
-                    this.usage = {
-                        promptTokens: data.prompt_eval_count || 0,
-                        completionTokens: data.eval_count || 0,
-                        totalTokens: (data.prompt_eval_count || 0) + (data.eval_count || 0),
-                    };
+                    const data = (await this.callOllama("/api/generate", body, signal)) as OllamaResponse;
                     return JSON.parse(data.response) as T;
                 } catch (error) {
                     if (error instanceof SyntaxError) {
@@ -684,6 +851,81 @@ export class OllamaGenerator implements GenerationAdapter {
                     }),
             },
         );
+    }
+
+    async *generateStream(
+        prompt: string,
+        options?: {
+            max_tokens?: number;
+            temperature?: number;
+            signal?: AbortSignal;
+            system?: string;
+        },
+    ): AsyncGenerator<string, void, unknown> {
+        const { signal, cleanup } = useTimeout(options?.signal, OLLAMA_TIMEOUT);
+
+        try {
+            const body: Record<string, unknown> = {
+                model: this.model,
+                prompt,
+                system: options?.system,
+                stream: true,
+            };
+            if (options?.max_tokens)
+                body.num_predict = options.max_tokens;
+            if (options?.temperature !== undefined)
+                body.temperature = options.temperature;
+
+            const res = await fetch(`${this.url}/api/generate`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "User-Agent": USER_AGENT,
+                },
+                body: JSON.stringify(body),
+                signal,
+            });
+
+            if (!res.ok) {
+                handleProviderError("ollama", { status: res.status, message: res.statusText });
+            }
+
+            if (!res.body) return;
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                const chunk = decoder.decode(value, { stream: true });
+                const lines = chunk.split("\n");
+
+                for (const line of lines) {
+                    if (!line.trim()) continue;
+                    try {
+                        const data = JSON.parse(line) as OllamaResponse;
+                        if (data.response) yield data.response;
+
+                        // Capture usage if done
+                        if (data.done) {
+                            this.usage = {
+                                promptTokens: data.prompt_eval_count || 0,
+                                completionTokens: data.eval_count || 0,
+                                totalTokens: (data.prompt_eval_count || 0) + (data.eval_count || 0),
+                            };
+                            break;
+                        }
+                    } catch (e) {
+                        // ignore partial JSON
+                    }
+                }
+            }
+
+        } catch (error) {
+            handleProviderError("ollama", error);
+        } finally {
+            cleanup();
+        }
     }
 }
 
@@ -720,6 +962,7 @@ export class AnthropicGenerator implements GenerationAdapter {
             max_tokens?: number;
             temperature?: number;
             signal?: AbortSignal;
+            system?: string;
         },
     ): Promise<string> {
         return withResilience(
@@ -731,6 +974,7 @@ export class AnthropicGenerator implements GenerationAdapter {
                         {
                             model: this.model,
                             max_tokens: options?.max_tokens || 4096,
+                            system: options?.system,
                             messages: [{ role: "user", content: prompt }],
                             temperature: options?.temperature ?? 0.7,
                         },
@@ -761,6 +1005,60 @@ export class AnthropicGenerator implements GenerationAdapter {
         );
     }
 
+    async *generateStream(
+        prompt: string,
+        options?: {
+            max_tokens?: number;
+            temperature?: number;
+            signal?: AbortSignal;
+            system?: string;
+        },
+    ): AsyncGenerator<string, void, unknown> {
+        const { signal, cleanup } = useTimeout(options?.signal, DEFAULT_TIMEOUT);
+        // Track local usage to accumulate
+        let inputTokens = 0;
+        let outputTokens = 0;
+
+        try {
+            const stream = await this.client.messages.create(
+                {
+                    model: this.model,
+                    max_tokens: options?.max_tokens || 4096,
+                    system: options?.system,
+                    messages: [{ role: "user", content: prompt }],
+                    temperature: options?.temperature ?? 0.7,
+                    stream: true,
+                },
+                { signal },
+            );
+
+            for await (const chunk of stream) {
+                if (chunk.type === "content_block_delta" && chunk.delta.type === "text_delta") {
+                    yield chunk.delta.text;
+                }
+
+                // Capture usage from events
+                if (chunk.type === "message_start" && chunk.message.usage) {
+                    inputTokens = chunk.message.usage.input_tokens || 0;
+                }
+                if (chunk.type === "message_delta" && chunk.usage) {
+                    outputTokens = chunk.usage.output_tokens || 0;
+                }
+            }
+            // Update final usage
+            this.usage = {
+                promptTokens: inputTokens,
+                completionTokens: outputTokens,
+                totalTokens: inputTokens + outputTokens,
+            };
+
+        } catch (error) {
+            handleProviderError("anthropic", error);
+        } finally {
+            cleanup();
+        }
+    }
+
     async generateJSON<T>(
         prompt: string,
         schema?: Record<string, unknown>,
@@ -768,6 +1066,7 @@ export class AnthropicGenerator implements GenerationAdapter {
             max_tokens?: number;
             temperature?: number;
             signal?: AbortSignal;
+            system?: string;
         },
     ): Promise<T> {
         return withResilience(
@@ -779,7 +1078,7 @@ export class AnthropicGenerator implements GenerationAdapter {
                         {
                             model: this.model,
                             max_tokens: options?.max_tokens || 4096,
-                            system: "Output ONLY valid JSON.",
+                            system: (options?.system ? options.system + "\n" : "") + "Output ONLY valid JSON.",
                             messages: [
                                 {
                                     role: "user",
@@ -999,4 +1298,27 @@ export const get_generator = async (
     }
 
     return g;
+};
+
+/**
+ * Invalidates the cached generator for a specific user or the system.
+ * Use this when AI configurations (API keys, models) are updated.
+ * 
+ * @param userId - The user ID to flush. Pass null/undefined to flush system default.
+ */
+export const flush_generator = (userId?: string | null): void => {
+    const uid = normalizeUserId(userId);
+    if (uid) {
+        _userGenerators.delete(uid);
+    } else {
+        _generator = null;
+    }
+};
+
+/**
+ * Clears all cached AI generators.
+ */
+export const flush_all_generators = (): void => {
+    _userGenerators.clear();
+    _generator = null;
 };

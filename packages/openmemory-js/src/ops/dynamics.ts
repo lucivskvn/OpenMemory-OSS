@@ -1,23 +1,22 @@
-import { allAsync, pUser, q, sqlUser } from "../core/db";
-import { vectorStore } from "../core/db";
-import { MemoryRow } from "../core/types";
+import { q, vectorStore } from "../core/db";
+import { MemoryRow, Waypoint } from "../core/types";
 import { normalizeUserId, now } from "../utils";
 import { logger } from "../utils/logger";
 import { cosineSimilarity } from "../utils/vectors";
+import { env } from "../core/cfg";
 
 /**
- * Learning Rate for Recall Reinforcement.
- * How much salience increases when a memory is recalled.
+ * Dynamics Coefficients moved to src/core/cfg.ts
  */
-export const alphaLearningRateForRecallReinforcement = 0.15;
-export const betaLearningRateForEmotionalFrequency = 0.2;
-export const gammaAttenuationConstantForGraphDistance = 0.35;
-export const thetaConsolidationCoefficientForLongTerm = 0.4;
-export const etaReinforcementFactorForTraceLearning = 0.18;
-export const lambdaOneFastDecayRate = 0.015;
-export const lambdaTwoSlowDecayRate = 0.002;
+export const alphaLearningRateForRecallReinforcement = env.dynamicsAlpha;
+export const betaLearningRateForEmotionalFrequency = env.dynamicsBeta;
+export const gammaAttenuationConstantForGraphDistance = env.dynamicsGamma;
+export const thetaConsolidationCoefficientForLongTerm = env.dynamicsTheta;
+export const etaReinforcementFactorForTraceLearning = env.dynamicsEta;
+export const lambdaOneFastDecayRate = env.decayFast;
+export const lambdaTwoSlowDecayRate = env.decaySlow;
 // Energy threshold coefficient for retrieval activation
-export const tauEnergyThresholdForRetrieval = 0.4;
+export const tauEnergyThresholdForRetrieval = env.dynamicsTau;
 
 export const sectoralInterdependenceMatrixForCognitiveResonance = [
     [1.0, 0.7, 0.3, 0.6, 0.6],
@@ -60,7 +59,7 @@ export interface AssociativeWaypointGraphNode {
  * @returns Value in range (0, 1).
  */
 export const sigmoid = (x: number): number => {
-    // Prevent overflow for very large negative numbers
+    if (typeof x !== 'number' || Number.isNaN(x)) return 0.5;
     if (x < -40) return 0;
     if (x > 40) return 1;
     return 1 / (1 + Math.exp(-x));
@@ -74,7 +73,8 @@ export const sigmoid = (x: number): number => {
  * @returns Score in range (0, 1).
  */
 export function calculateRecencyScore(lastSeenAt: number, tau = 0.5, maxDays = 60): number {
-    const daysSince = (Date.now() - lastSeenAt) / 86400000;
+    const ts = now();
+    const daysSince = (ts - lastSeenAt) / 86400000;
     return Math.max(0, Math.exp(-daysSince / tau) * (1 - daysSince / maxDays));
 }
 
@@ -147,7 +147,7 @@ export async function calculateAssociativeWaypointLinkWeight(
     timeGapMs: number,
 ): Promise<number> {
     const sim = cosineSimilarity(sourceVec, targetVec);
-    const timeDeltaDays = timeGapMs / 86400000;
+    const timeDeltaDays = Math.abs(timeGapMs) / 86400000;
     return Math.max(0, sim / (1 + timeDeltaDays));
 }
 
@@ -203,7 +203,7 @@ export async function propagateReinforcementToNeighbors(
     const updates: Array<{ nodeId: string; newSalience: number }> = [];
 
     for (const wp of waypoints) {
-        const memory = memories.find((m) => m.id === wp.targetId);
+        const memory = memories.find((m: MemoryRow) => m.id === wp.targetId);
         if (memory) {
             const propagationAmount =
                 etaReinforcementFactorForTraceLearning *
@@ -254,76 +254,63 @@ export async function determineEnergyBasedRetrievalThreshold(
 
 /**
  * Applies the dual-phase decay model to all memories in the system.
- * Designed to be run periodically (e.g., hourly/daily).
- *
- * @param userId - Optional user ID to scope the decay operation.
- * @returns The number of memories processed.
+ * Applies the dual-phase decay model to prune stale memories.
+ * Instead of overwriting salience (which accelerates decay exponentially),
+ * this operation identifies and removes memories that have logically "forgotten".
+ * 
+ * @param userId - Optional user ID for isolation.
+ * @param threshold - Salience threshold for deletion (Default: 0.05).
+ * @returns The number of memories pruned.
  */
-export async function applyDualPhaseDecayToAllMemories(
+export async function applyDualPhaseDecayToPruneMemories(
     userId?: string | null,
+    threshold: number = 0.05,
 ): Promise<number> {
     const chunkSize = 1000;
-    let totalProcessed = 0;
+    let totalPruned = 0;
     const ts = now();
+    const dayMs = 86400000;
 
     let cursor: { createdAt: number; id: string } | null = null;
     const uid = userId === undefined ? undefined : normalizeUserId(userId);
 
     while (true) {
-        // Use cursor-based pagination for O(1) fetch performance
-        const mems = (await q.allMemCursor.all(
-            chunkSize,
-            cursor,
-            uid,
-        )) as MemoryRow[];
-
+        const mems = (await q.allMemCursor.all(chunkSize, cursor, uid)) as MemoryRow[];
         if (mems.length === 0) break;
 
-        const updates = [];
+        const toDelete: string[] = [];
         let lastMem: MemoryRow | null = null;
 
         for (const m of mems) {
             lastMem = m;
-            const timeDeltaMs = Math.max(
-                0,
-                ts - (m.lastSeenAt || m.updatedAt || 0),
-            );
-            const timeDeltaDays = timeDeltaMs / 86400000;
-            const newSalience = calculateDualPhaseDecayMemoryRetention(
+            const timeDeltaMs = Math.max(0, ts - (m.lastSeenAt || m.createdAt || 0));
+            const timeDeltaDays = timeDeltaMs / dayMs;
+            const effectiveSalience = calculateDualPhaseDecayMemoryRetention(
                 m.salience || 0,
                 timeDeltaDays,
+                m.decayLambda || undefined
             );
 
-            // Preserve original lastSeenAt during decay to avoid resetting the decay clock.
-            // Only salience and updatedAt are refreshed during this operation.
-
-            updates.push({
-                id: m.id,
-                salience: Math.max(0, newSalience),
-                lastSeenAt: m.lastSeenAt || 0, // Preserve original
-                updatedAt: ts, // Mark as updated now
-            });
+            if (effectiveSalience < threshold) {
+                toDelete.push(m.id);
+            }
         }
 
-        if (updates.length > 0) {
-            await q.updSaliences.run(updates, uid);
+        if (toDelete.length > 0) {
+            await q.delMems.run(toDelete, uid);
+            totalPruned += toDelete.length;
         }
 
-        totalProcessed += mems.length;
-
-        // Update cursor for next batch
-        if (lastMem && lastMem.createdAt !== undefined) {
-            cursor = { createdAt: lastMem.createdAt, id: lastMem.id };
-        } else {
-            break; // Should not happen if query is correct
-        }
-
-        // Safety break if less than chunk size returned (End of results)
         if (mems.length < chunkSize) break;
+        if (lastMem) {
+            cursor = { createdAt: lastMem.createdAt, id: lastMem.id };
+        } else break;
     }
 
-    logger.info(`[DECAY] Applied to ${totalProcessed} memories`);
-    return totalProcessed;
+    if (totalPruned > 0) {
+        logger.info(`[DECAY] Pruned ${totalPruned} stale memories (Threshold: ${threshold})`);
+    }
+    return totalPruned;
 }
 
 export async function buildAssociativeWaypointGraphFromMemories(
@@ -333,16 +320,8 @@ export async function buildAssociativeWaypointGraphFromMemories(
     const uid = normalizeUserId(userId);
     const graph = new Map<string, AssociativeWaypointGraphNode>();
     const safeLimit = Math.min(Math.max(1, limit), 50000); // Enforce max cap
-    const sql = sqlUser(
-        `select src_id as srcId, dst_id as dstId, weight, created_at as createdAt from waypoints`,
-        uid,
-    );
-    const allWps = await allAsync<{
-        srcId: string;
-        dstId: string;
-        weight: number;
-        createdAt: number;
-    }>(`${sql} order by created_at desc limit ${safeLimit}`, pUser([], uid));
+
+    const allWps = await q.waypoints.list.all(safeLimit, uid);
 
     if (allWps.length >= safeLimit) {
         logger.warn(
@@ -395,7 +374,6 @@ export async function performSpreadingActivationRetrieval(
     for (const id of initIds) activation.set(id, 1.0);
 
     // Keep track of processed nodes to avoid redundant DB calls in the same iteration
-    // Keep track of processed nodes to avoid redundant DB calls in the same iteration
     const MAX_ACTIVATED_NODES = 2000;
 
     // Safety: Global budget for edge traversals to prevent DoS
@@ -430,8 +408,7 @@ export async function performSpreadingActivationRetrieval(
             if (traversalBudget <= 0) break;
 
             const chunk = batchIds.slice(j, j + CHUNK_SIZE);
-            const chunkParams = chunk.map(() => "?").join(",");
-            const chunkNeighbors = await q.getWaypointsBySrc.all(chunk, uid);
+            const chunkNeighbors = await q.getWaypointsBySrcs.all(chunk, uid);
 
             allNeighbors.push(...chunkNeighbors);
             traversalBudget -= chunkNeighbors.length;
@@ -451,12 +428,13 @@ export async function performSpreadingActivationRetrieval(
 
         const updates = new Map<string, number>();
 
-        for (const [nodeId, currentEnergy] of currentBatch) {
+        const attenuation = Math.exp(
+            -gammaAttenuationConstantForGraphDistance * (i + 1),
+        );
+
+        for (const [nodeId, currentEnergy] of processingBatch) {
             const neighbors = neighborMap.get(nodeId) || [];
             for (const neighbor of neighbors) {
-                const attenuation = Math.exp(
-                    -gammaAttenuationConstantForGraphDistance * (i + 1),
-                );
                 const propagatedEnergy =
                     neighbor.weight * currentEnergy * attenuation;
 
@@ -515,7 +493,7 @@ export async function retrieveMemoriesWithEnergyThresholding(
 
     const scores = new Map<string, number>();
     for (const m of mems) {
-        const cand = candidates.find((c) => c.id === m.id);
+        const cand = candidates.find((c: { id: string; score: number }) => c.id === m.id);
         const baseScore = cand?.score || 0;
         const resonanceScore = await calculateCrossSectorResonance(
             m.primarySector,
@@ -554,8 +532,8 @@ export async function retrieveMemoriesWithEnergyThresholding(
     );
 
     return mems
-        .filter((m) => (combinedScores.get(m.id) || 0) > threshold)
-        .map((m) => ({ ...m, activationEnergy: combinedScores.get(m.id)! }));
+        .filter((m: MemoryRow) => (combinedScores.get(m.id) || 0) > threshold)
+        .map((m: MemoryRow) => ({ ...m, activationEnergy: combinedScores.get(m.id)! }));
 }
 
-export const applyDecay = applyDualPhaseDecayToAllMemories;
+export const applyDecay = applyDualPhaseDecayToPruneMemories;

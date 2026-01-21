@@ -1,7 +1,10 @@
 /**
- * Temporal Knowledge Graph Store for OpenMemory.
- * Handles persistence, versioning, and temporal consistency of facts and edges.
+ * @file store.ts
+ * @description Temporal Knowledge Graph Store for OpenMemory.
+ * @audited 2026-01-19
  */
+
+
 import { env } from "../core/cfg";
 import {
     q,
@@ -31,6 +34,32 @@ import { TemporalEdgeRow, TemporalFactRow } from "./types";
  * @param userId - Owner context.
  * @returns UUID of the inserted (or updated) fact.
  */
+const validateInput = (
+    ...args: [string, any][]
+) => {
+    for (const [key, val] of args) {
+        if (val === undefined || val === null || (typeof val === 'string' && val.trim().length === 0)) {
+            throw new Error(`[TEMPORAL] Invalid Input: ${key} cannot be empty.`);
+        }
+    }
+};
+
+/**
+ * Inserts a new temporal fact.
+ * Handles collision detection and resolution:
+ * - If an EXACT active fact exists, updates confidence/metadata.
+ * - If overlapping facts exist, "closes" them (sets valid_to) to maintain temporal history.
+ * - @warning **Cardinality 1**: This implementation enforces Single-Value Predicates. Inserting `(S, P, O2)` IMPLICITLY invalidates `(S, P, O1)`.
+ * - Ensures no contradictory duplicate facts exist at the same time.
+ * @param subject - The subject entity.
+ * @param predicate - The relationship predicate.
+ * @param object - The object entity.
+ * @param validFrom - Start of validity (default: now).
+ * @param confidence - Certainty (0.0-1.0).
+ * @param metadata - Optional JSON metadata.
+ * @param userId - Owner context.
+ * @returns UUID of the inserted (or updated) fact.
+ */
 export const insertFact = async (
     subject: string,
     predicate: string,
@@ -40,7 +69,13 @@ export const insertFact = async (
     metadata?: Record<string, unknown>,
     userId?: string | null,
 ): Promise<string> => {
-    const id = globalThis.crypto.randomUUID();
+    validateInput(
+        ["subject", subject],
+        ["predicate", predicate],
+        ["object", object]
+    );
+
+    const id = crypto.randomUUID();
     const now = Date.now();
     const validFromTs = validFrom.getTime();
     const uid = normalizeUserId(userId);
@@ -51,10 +86,13 @@ export const insertFact = async (
         if (match) {
             if (env.verbose) logger.debug(`[TEMPORAL] Existing active fact found for ${subject} ${predicate} ${object}. Updating.`);
             const newConfidence = Math.max(match.confidence, confidence);
+            const metaStr = metadata ? JSON.stringify(metadata) : null;
+            const encryptedMeta = metaStr ? await getEncryption().encrypt(metaStr) : null;
+
             await q.updateFactConfidence.run(
                 match.id,
                 newConfidence,
-                metadata ? await getEncryption().encrypt(JSON.stringify(metadata)) : null,
+                encryptedMeta,
                 now
             );
             eventBus.emit(EVENTS.TEMPORAL_FACT_UPDATED, {
@@ -84,6 +122,9 @@ export const insertFact = async (
             }
         }
 
+        const metaStr = metadata ? JSON.stringify(metadata) : null;
+        const encryptedMeta = metaStr ? await getEncryption().encrypt(metaStr) : null;
+
         await q.insertFactRaw.run({
             id,
             userId: uid ?? null,
@@ -94,7 +135,7 @@ export const insertFact = async (
             validTo: newFactValidTo,
             confidence,
             lastUpdated: now,
-            metadata: metadata ? await getEncryption().encrypt(JSON.stringify(metadata)) : null
+            metadata: encryptedMeta
         });
 
         if (env.verbose) logger.debug(`[TEMPORAL] Inserted fact: ${subject} ${predicate} ${object}`);
@@ -120,34 +161,40 @@ export const updateFact = async (
     confidence?: number,
     metadata?: Record<string, unknown>,
 ): Promise<void> => {
-    const updates: string[] = [];
-    const params: (string | number | null)[] = [];
-    const uid = normalizeUserId(userId);
+    const changes = await transaction.run(async () => {
+        const updates: string[] = [];
+        const params: (string | number | null)[] = [];
+        const uid = normalizeUserId(userId);
 
-    if (confidence !== undefined) {
-        updates.push("confidence = ?");
-        params.push(confidence);
-    }
-    if (metadata !== undefined) {
-        updates.push("metadata = ?");
-        params.push(await getEncryption().encrypt(JSON.stringify(metadata)));
-    }
-    updates.push("last_updated = ?");
-    params.push(Date.now());
-
-    if (updates.length > 0) {
-        const changes = await q.updateFactRaw.run(id, updates, params, uid);
-        if (changes === 0) {
-            logger.error(`[TEMPORAL] Update failed: Fact ${id} not found for user ${uid}`);
-        } else {
-            if (env.verbose) logger.debug(`[TEMPORAL] Updated fact ${id}`);
-            eventBus.emit(EVENTS.TEMPORAL_FACT_UPDATED, {
-                id,
-                userId: uid ?? undefined,
-                confidence,
-                metadata,
-            });
+        if (confidence !== undefined) {
+            updates.push("confidence = ?");
+            params.push(confidence);
         }
+        if (metadata !== undefined) {
+            updates.push("metadata = ?");
+            params.push(await getEncryption().encrypt(JSON.stringify(metadata)));
+        }
+        updates.push("last_updated = ?");
+        params.push(Date.now());
+
+        if (updates.length > 0) {
+            const result = await q.updateFactRaw.run(id, updates, params, uid);
+            if (result === 0) {
+                logger.error(`[TEMPORAL] Update failed: Fact ${id} not found for user ${uid}`);
+            }
+            return result;
+        }
+        return 0;
+    });
+
+    if (changes > 0) {
+        if (env.verbose) logger.debug(`[TEMPORAL] Updated fact ${id}`);
+        eventBus.emit(EVENTS.TEMPORAL_FACT_UPDATED, {
+            id,
+            userId: normalizeUserId(userId) ?? undefined,
+            confidence,
+            metadata,
+        });
     }
 };
 
@@ -156,13 +203,14 @@ export const invalidateFact = async (
     userId?: string | null,
     validTo: Date = new Date(),
 ): Promise<void> => {
+    validateInput(["id", id]);
     const uid = normalizeUserId(userId);
 
-    return await transaction.run(async () => {
+    const changes = await transaction.run(async () => {
         const existing = await q.getFact.get(id, uid) as TemporalFactRow | undefined;
         if (!existing) {
             logger.error(`[TEMPORAL] Invalidation failed: Fact ${id} not found for user ${uid}`);
-            return;
+            return 0;
         }
 
         const validFromTs = Number(existing.validFrom);
@@ -172,45 +220,37 @@ export const invalidateFact = async (
             throw new Error(`[TEMPORAL] Integrity Error: validTo cannot be before validFrom`);
         }
 
-        const changes = await q.updateFactRaw.run(id, ["valid_to = ?", "last_updated = ?"], [validToTs, Date.now()], uid);
-
-        if (changes > 0) {
-            if (env.verbose) logger.debug(`[TEMPORAL] Invalidated fact ${id}`);
-            eventBus.emit(EVENTS.TEMPORAL_FACT_DELETED, {
-                id,
-                userId: uid ?? undefined,
-                validTo: validTo.getTime(),
-            });
-        }
+        const result = await q.updateFactRaw.run(id, ["valid_to = ?", "last_updated = ?"], [validToTs, Date.now()], uid);
+        return result;
     });
+
+    if (changes > 0) {
+        if (env.verbose) logger.debug(`[TEMPORAL] Invalidated fact ${id}`);
+        eventBus.emit(EVENTS.TEMPORAL_FACT_DELETED, {
+            id,
+            userId: uid ?? undefined,
+            validTo: validTo.getTime(),
+        });
+    }
 };
 
 export const deleteFact = async (
     id: string,
     userId?: string | null,
 ): Promise<void> => {
+    validateInput(["id", id]);
     const uid = normalizeUserId(userId);
-    // Hard delete fact and orphaned edges using runUser directly as this specific cascade isn't in Repo yet
-    const changes = await runUser(`DELETE FROM ${TABLES.temporal_facts} WHERE id = ?`, [id], uid);
 
-    if (changes > 0) {
-        // Also delete related edges (orphans) - ensure user_id matches for data isolation
-        // Handle three cases: undefined (no filter), null (IS NULL), string (= ?)
-        let edgeSql = `DELETE FROM ${TABLES.temporal_edges} WHERE (source_id = ? OR target_id = ?)`;
-        let edgeParams: any[] = [id, id];
+    await transaction.run(async () => {
+        // Hard delete fact using repository method
+        const changes = await q.deleteFactCascade.run(id, uid);
 
-        if (uid !== undefined) {
-            if (uid === null) {
-                edgeSql += ` AND user_id IS NULL`;
-            } else {
-                edgeSql += ` AND user_id = ?`;
-                edgeParams.push(uid);
-            }
+        if (changes > 0) {
+            // Also delete related edges (orphans) using repository method
+            await q.deleteEdgesByNode.run(id, uid);
+            if (env.verbose) logger.debug(`[TEMPORAL] Deleted fact ${id} and related edges`);
         }
-
-        await runUser(edgeSql, edgeParams, uid);
-        if (env.verbose) logger.debug(`[TEMPORAL] Deleted fact ${id} and related edges`);
-    }
+    });
 };
 
 export const insertEdge = async (
@@ -222,7 +262,13 @@ export const insertEdge = async (
     metadata?: Record<string, unknown>,
     userId?: string | null,
 ): Promise<string> => {
-    const id = globalThis.crypto.randomUUID();
+    validateInput(
+        ["sourceId", sourceId],
+        ["targetId", targetId],
+        ["relationType", relationType]
+    );
+
+    const id = crypto.randomUUID();
     const validFromTs = validFrom.getTime();
     const uid = normalizeUserId(userId);
 
@@ -234,10 +280,13 @@ export const insertEdge = async (
             const now = Date.now();
             const newWeight = Math.max(match.weight || 0, weight);
 
+            const metaStr = metadata ? JSON.stringify(metadata) : null;
+            const encryptedMeta = metaStr ? await getEncryption().encrypt(metaStr) : null;
+
             await q.updateEdgeWeight.run(
                 match.id,
                 newWeight,
-                metadata ? await getEncryption().encrypt(JSON.stringify(metadata)) : null,
+                encryptedMeta,
                 now
             );
 
@@ -260,6 +309,9 @@ export const insertEdge = async (
         }
 
         const now = Date.now();
+        const metaStr = metadata ? JSON.stringify(metadata) : null;
+        const encryptedMeta = metaStr ? await getEncryption().encrypt(metaStr) : null;
+
         await q.insertEdgeRaw.run({
             id,
             userId: uid ?? null,
@@ -270,7 +322,7 @@ export const insertEdge = async (
             validTo: null,
             weight,
             lastUpdated: now,
-            metadata: metadata ? await getEncryption().encrypt(JSON.stringify(metadata)) : null
+            metadata: encryptedMeta
         });
 
         if (env.verbose) logger.debug(`[TEMPORAL] Created edge: ${sourceId} --[${relationType}]--> ${targetId}`);
@@ -295,13 +347,14 @@ export const invalidateEdge = async (
     userId?: string | null,
     validTo: Date = new Date(),
 ): Promise<void> => {
+    validateInput(["id", id]);
     const uid = normalizeUserId(userId);
 
-    return await transaction.run(async () => {
+    const changes = await transaction.run(async () => {
         const existing = await q.getEdge.get(id, uid) as TemporalEdgeRow | undefined;
         if (!existing) {
             logger.error(`[TEMPORAL] Invalidation failed: Edge ${id} not found for user ${uid}`);
-            return;
+            return 0;
         }
 
         const validFromTs = Number(existing.validFrom);
@@ -311,15 +364,18 @@ export const invalidateEdge = async (
             throw new Error(`[TEMPORAL] Integrity Error: validTo cannot be before validFrom`);
         }
 
-        await q.closeEdge.run(id, validToTs);
+        const result = await q.closeEdge.run(id, validToTs, uid);
+        return result;
+    });
 
+    if (changes > 0) {
         if (env.verbose) logger.debug(`[TEMPORAL] Invalidated edge ${id}`);
         eventBus.emit(EVENTS.TEMPORAL_EDGE_DELETED, {
             id,
             userId: uid ?? undefined,
             validTo: validTo.getTime(),
         });
-    });
+    }
 };
 
 export const updateEdge = async (
@@ -327,35 +383,41 @@ export const updateEdge = async (
     options: { weight?: number; metadata?: Record<string, unknown> },
     userId?: string | null,
 ): Promise<void> => {
-    const updates: string[] = [];
-    const params: (string | number | null)[] = [];
-    const uid = normalizeUserId(userId);
+    const changes = await transaction.run(async () => {
+        const updates: string[] = [];
+        const params: (string | number | null)[] = [];
+        const uid = normalizeUserId(userId);
 
-    if (options.weight !== undefined) {
-        updates.push("weight = ?");
-        params.push(options.weight);
-    }
-    if (options.metadata !== undefined) {
-        updates.push("metadata = ?");
-        params.push(await getEncryption().encrypt(JSON.stringify(options.metadata)));
-    }
-    updates.push("last_updated = ?");
-    params.push(Date.now());
-
-    if (updates.length > 0) {
-        const changes = await q.updateEdgeRaw.run(id, updates, params, uid);
-        if (changes === 0) {
-            logger.error(`[TEMPORAL] Update edge failed: Edge ${id} not found for user ${uid}`);
-        } else {
-            if (env.verbose) logger.debug(`[TEMPORAL] Updated edge ${id}`);
-            eventBus.emit(EVENTS.TEMPORAL_EDGE_UPDATED, {
-                id,
-                userId: uid ?? undefined,
-                weight: options.weight,
-                metadata: options.metadata,
-                lastUpdated: Date.now(),
-            });
+        if (options.weight !== undefined) {
+            updates.push("weight = ?");
+            params.push(options.weight);
         }
+        if (options.metadata !== undefined) {
+            updates.push("metadata = ?");
+            params.push(await getEncryption().encrypt(JSON.stringify(options.metadata)));
+        }
+        updates.push("last_updated = ?");
+        params.push(Date.now());
+
+        if (updates.length > 0) {
+            const result = await q.updateEdgeRaw.run(id, updates, params, uid);
+            if (result === 0) {
+                logger.error(`[TEMPORAL] Update edge failed: Edge ${id} not found for user ${uid}`);
+            }
+            return result;
+        }
+        return 0;
+    });
+
+    if (changes > 0) {
+        if (env.verbose) logger.debug(`[TEMPORAL] Updated edge ${id}`);
+        eventBus.emit(EVENTS.TEMPORAL_EDGE_UPDATED, {
+            id,
+            userId: normalizeUserId(userId) ?? undefined,
+            weight: options.weight,
+            metadata: options.metadata,
+            lastUpdated: Date.now(),
+        });
     }
 };
 

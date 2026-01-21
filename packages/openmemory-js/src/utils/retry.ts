@@ -1,26 +1,39 @@
 import { logger } from "./logger";
 
 export interface RetryOptions {
+    /** Maximum number of retry attempts. Default: 3 */
     retries?: number;
-    decay?: number; // exponential factor
-    delay?: number; // base delay in ms
+    /** Exponential backoff factor. Default: 2 */
+    decay?: number;
+    /** Base delay in milliseconds. Default: 1000 */
+    delay?: number;
+    /** Maximum total timeout in milliseconds. Default: 60000 (60s) */
+    maxTimeout?: number;
+    /** Callback invoked on each retry attempt */
     onRetry?: (err: unknown, attempt: number) => void;
+    /** Predicate to determine if error is retryable. Default: retry all errors */
     shouldRetry?: (err: unknown) => boolean;
+    /** AbortSignal to cancel retries */
+    signal?: AbortSignal;
 }
 
 /**
- * Sleep for a specified duration.
+ * Sleep for a specified duration with AbortSignal support.
  * @param ms - Milliseconds to sleep.
+ * @param signal - Optional AbortSignal to cancel sleep.
  */
-export const sleep = (ms: number) =>
-    new Promise((resolve) => setTimeout(resolve, ms));
+export const sleep = (ms: number, signal?: AbortSignal) =>
+    new Promise((resolve, reject) => {
+        if (signal?.aborted) return reject(new Error("Aborted"));
+        const timer = setTimeout(resolve, ms);
+        signal?.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(new Error("Aborted"));
+        }, { once: true });
+    });
 
 /**
  * Standard retry utility with exponential backoff and jitter.
- *
- * @param fn - The async operation to retry.
- * @param options - Configuration for retries (count, decay, delay).
- * @returns The result of the operation.
  */
 export const retry = async <T>(
     fn: () => Promise<T>,
@@ -29,11 +42,13 @@ export const retry = async <T>(
     const retries = options.retries ?? 3;
     const decay = options.decay ?? 2;
     const delay = options.delay ?? 1000;
-    const jitter = 0.1; // 10% jitter
+    const maxTimeout = options.maxTimeout ?? 60000;
+    const jitter = 0.1;
     const startTime = Date.now();
-    const maxTimeout = 60000; // 60s default max total time often useful, but let's keep it optional in interface later if needed, for now just logic
 
     for (let i = 0; i <= retries; i++) {
+        if (options.signal?.aborted) throw new Error("Aborted");
+
         try {
             return await fn();
         } catch (err: unknown) {
@@ -52,53 +67,71 @@ export const retry = async <T>(
 
             const baseMs = delay * Math.pow(decay, i);
             const jitterMs =
-                baseMs * (1 + (Math.random() * jitter * 2 - jitter)); // +/- 10%
-            await sleep(jitterMs);
+                baseMs * (1 + (Math.random() * jitter * 2 - jitter));
+
+            try {
+                await sleep(jitterMs, options.signal);
+            } catch (e) {
+                if (options.signal?.aborted) throw e;
+                throw e;
+            }
         }
     }
     throw new Error("Unreachable");
 };
 
 export enum CircuitState {
-    CLOSED = "CLOSED", // Normal operation
-    OPEN = "OPEN", // Failing, request blocked
-    HALF_OPEN = "HALF_OPEN", // Testing recovery
+    CLOSED = "CLOSED",
+    OPEN = "OPEN",
+    HALF_OPEN = "HALF_OPEN",
 }
 
 export interface CircuitBreakerOptions {
-    failureThreshold?: number; // Number of failures to open circuit
-    resetTimeout?: number; // Time in ms to wait before trying again (HALF_OPEN)
+    failureThreshold?: number;
+    resetTimeout?: number;
     name?: string;
+    onStateChange?: (state: CircuitState, name: string) => void;
 }
 
 /**
- * Circuit Breaker implementation to prevent cascading failures.
+ * Circuit Breaker implementation for SDK resilience.
  */
 export class CircuitBreaker {
-    state: CircuitState = CircuitState.CLOSED;
+    private _state: CircuitState = CircuitState.CLOSED;
     private failures = 0;
     private lastFailureTime = 0;
     private readonly failureThreshold: number;
     private readonly resetTimeout: number;
     private readonly name: string;
+    private readonly onStateChange?: (state: CircuitState, name: string) => void;
+
+    get state(): CircuitState {
+        return this._state;
+    }
 
     constructor(options: CircuitBreakerOptions = {}) {
         this.failureThreshold = options.failureThreshold ?? 5;
         this.resetTimeout = options.resetTimeout ?? 60000;
         this.name = options.name ?? "CircuitBreaker";
+        this.onStateChange = options.onStateChange;
     }
 
-    async execute<T>(fn: () => Promise<T>): Promise<T> {
+    private setState(state: CircuitState) {
+        if (this._state !== state) {
+            this._state = state;
+            this.onStateChange?.(state, this.name);
+        }
+    }
+
+    async execute<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+        if (signal?.aborted) throw new Error("Aborted");
+
         if (this.state === CircuitState.OPEN) {
             if (Date.now() - this.lastFailureTime > this.resetTimeout) {
-                this.state = CircuitState.HALF_OPEN;
-                logger.info(
-                    `[${this.name}] Circuit HALF_OPEN: Probing service...`,
-                );
+                this.setState(CircuitState.HALF_OPEN);
+                logger.info(`[${this.name}] Circuit HALF_OPEN: Probing...`);
             } else {
-                throw new Error(
-                    `[${this.name}] Circuit OPEN: Request blocked.`,
-                );
+                throw new Error(`[${this.name}] Circuit OPEN: Request blocked.`);
             }
         }
 
@@ -117,33 +150,27 @@ export class CircuitBreaker {
             logger.info(`[${this.name}] Circuit CLOSED: Service recovered.`);
         }
         this.failures = 0;
-        this.state = CircuitState.CLOSED;
+        this.setState(CircuitState.CLOSED);
     }
 
     private onFailure() {
         this.failures++;
         this.lastFailureTime = Date.now();
 
-        if (
-            this.state === CircuitState.HALF_OPEN ||
-            this.failures >= this.failureThreshold
-        ) {
-            this.state = CircuitState.OPEN;
-            logger.error(
-                `[${this.name}] Circuit OPENED after ${this.failures} failures.`,
-            );
+        if (this.state === CircuitState.HALF_OPEN || this.failures >= this.failureThreshold) {
+            this.setState(CircuitState.OPEN);
+            logger.error(`[${this.name}] Circuit OPENED after ${this.failures} failures.`);
         }
     }
 }
 
 /**
- * Higher-order function combining Retry and Circuit Breaker.
- * Circuit Breaker wraps the Retry logic (failures in retry contribute to breaking).
+ * Higher-order function combining Retry and Circuit Breaker with AbortSignal support.
  */
 export async function withResilience<T>(
     fn: () => Promise<T>,
     breaker: CircuitBreaker,
     retryOpts?: RetryOptions,
 ): Promise<T> {
-    return breaker.execute(() => retry(fn, retryOpts));
+    return breaker.execute(() => retry(fn, retryOpts), retryOpts?.signal);
 }

@@ -1,2 +1,5 @@
 [test]
-preload = ["./tests/setup.ts"]
+preload = ["./test/setup.ts"]
+# Sequential execution to prevent test isolation issues from shared process.env and module state
+# Tests rely on singleton DB connections and environment variables
+concurrency = 1

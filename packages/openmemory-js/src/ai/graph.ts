@@ -1,6 +1,7 @@
 /**
- * Graph-based Memory AI component for OpenMemory.
- * Integrates LangGraph-style agent memory with OpenMemory sectors and vector storage.
+ * @file graph.ts
+ * @description Graph-based Memory AI component for OpenMemory.
+ * @audited 2026-01-19
  */
 import { env } from "../core/cfg";
 import { q, vectorStore } from "../core/db";
@@ -22,8 +23,10 @@ import type {
 } from "../core/types";
 import { addHsgMemory, hsgQuery } from "../memory/hsg";
 import { AppError } from "../server/errors";
-import { normalizeUserId, now, stringifyJSON } from "../utils";
+import { normalizeUserId, now, stringifyJSON, parseJSON } from "../utils";
 import { logger } from "../utils/logger";
+import { getContext } from "../core/context";
+import { compressionEngine } from "../ops/compress";
 
 /**
  * Graph-specific memory extension.
@@ -130,6 +133,8 @@ const matchesNs = (meta: Record<string, unknown>, ns: string, gid?: string) => {
     return true;
 };
 
+import { hydrateMemoryRow } from "../memory/utils";
+
 const hydrateMemRow = (
     row: MemoryRow,
     metadata: Record<string, unknown>,
@@ -139,37 +144,23 @@ const hydrateMemRow = (
     path?: string[],
     preParsedTags?: string[],
 ): GraphMemoryItem => {
-    const tags = preParsedTags || parseJsonSafe<string[]>(row.tags, []);
+    const base = hydrateMemoryRow(row, metadata, preParsedTags);
     const secs = vectors.length > 0 ? vectors.map((v) => v.sector) : [row.primarySector];
-    const metaTyped = metadata as LgmMetadata;
+    const metaTyped = base.metadata as LgmMetadata;
     const node = metaTyped.lgm?.node || row.primarySector;
 
-    const baseItem: MemoryItem = {
-        id: row.id,
-        content: row.content || "",
-        primarySector: row.primarySector,
-        tags,
-        createdAt: row.createdAt || 0,
-        updatedAt: row.updatedAt || 0,
-        lastSeenAt: row.lastSeenAt || 0,
-        salience: row.salience || 0.5,
-        decayLambda: row.decayLambda || 0.01,
-        version: row.version || 1,
-        userId: row.userId || null,
-        metadata: incMeta ? metadata : {},
-        segment: row.segment || 0,
-        simhash: row.simhash || null,
-        generatedSummary: row.generatedSummary || null,
-    };
-
     const graphItem: GraphMemoryItem = {
-        ...baseItem,
+        ...base,
         node,
         sectors: secs,
     };
 
     if (typeof score === "number") graphItem.score = score;
     if (path) graphItem.path = path;
+
+    if (!incMeta) {
+        graphItem.metadata = {};
+    }
 
     return graphItem;
 };
@@ -180,7 +171,13 @@ const buildReflContent = (p: LgmStoreRequest, ns: string) => {
         `namespace=${ns}`,
     ];
     if (p.graphId) parts.push(`graph=${p.graphId}`);
-    return `${parts.join(" | ")}\n\n${trunc(p.content || "", 480)}`;
+
+    // Use compression engine for more intelligent summarization if content is significant
+    const compressed = (p.content && p.content.length > 300)
+        ? compressionEngine.compress(p.content, "semantic").comp
+        : trunc(p.content || "", 480);
+
+    return `${parts.join(" | ")}\n\n${compressed}`;
 };
 
 const createAutoRefl = async (
@@ -250,94 +247,106 @@ export async function storeNodeMem(
     const meta = buildMeta(p, sec, ns);
     const userId = normalizeUserId(p.userId);
 
-    let res: {
-        id: string;
-        primarySector: string;
-        sectors: string[];
-        createdAt: number;
-        userId: string | null;
-        content?: string;
-    };
+    return await q.transaction.run(async () => {
+        let res: {
+            id: string;
+            primarySector: string;
+            sectors: string[];
+            createdAt: number;
+            userId: string | null;
+            content?: string;
+        };
 
-    if (p.memoryId) {
-        // Linking an existing memory
-        const mem = new Memory(userId || undefined);
-        const existing = await mem.get(p.memoryId);
-        if (!existing) {
-            throw new AppError(404, "NOT_FOUND", `Memory ${p.memoryId} not found`);
+        if (p.memoryId) {
+            // Linking an existing memory
+            const mem = new Memory(userId || undefined);
+            const existing = await mem.get(p.memoryId);
+            if (!existing) {
+                throw new AppError(404, "NOT_FOUND", `Memory ${p.memoryId} not found`);
+            }
+
+            // Update content if provided
+            const updatedContent = p.content !== undefined ? p.content : existing.content;
+
+            // Merge tags and metadata
+            const mergedTags = Array.from(new Set([...existing.tags, ...tagList]));
+            const mergedMeta = { ...existing.metadata, ...meta };
+
+            const updateSuccess = await mem.update(p.memoryId, {
+                content: updatedContent,
+                tags: mergedTags,
+                metadata: mergedMeta,
+            });
+            if (!updateSuccess) {
+                throw new AppError(500, "INTERNAL_ERROR", `Failed to update memory ${p.memoryId} for linking`);
+            }
+
+            // Ensure we don't downgrade a specialized primary sector to a generic one
+            // but we do upgrade a generic one if the node implies a stronger one.
+            const newPrimary = (existing.primarySector === "semantic" && sec !== "semantic")
+                ? sec
+                : existing.primarySector;
+
+            res = {
+                id: p.memoryId,
+                primarySector: newPrimary,
+                sectors: Array.from(new Set([newPrimary || existing.primarySector, sec])),
+                createdAt: existing.createdAt,
+                userId: existing.userId || null,
+                content: updatedContent,
+            };
+        } else {
+            // Creating a new memory
+            const addRes = await addHsgMemory(
+                p.content!,
+                stringifyJSON(tagList),
+                meta,
+                userId,
+            );
+            res = {
+                id: addRes.id,
+                primarySector: addRes.primarySector,
+                sectors: addRes.sectors || [addRes.primarySector],
+                createdAt: addRes.createdAt,
+                userId: addRes.userId || null,
+                content: addRes.content,
+            };
         }
 
-        // Update content if provided
-        const updatedContent = p.content !== undefined ? p.content : existing.content;
-
-        // Merge tags and metadata
-        const mergedTags = Array.from(new Set([...existing.tags, ...tagList]));
-        const mergedMeta = { ...existing.metadata, ...meta };
-
-        const updateSuccess = await mem.update(p.memoryId, updatedContent, mergedTags, mergedMeta);
-        if (!updateSuccess) {
-            throw new AppError(500, "INTERNAL_ERROR", `Failed to update memory ${p.memoryId} for linking`);
-        }
-
-        res = {
-            id: p.memoryId,
-            primarySector: existing.primarySector,
-            sectors: (existing.sectors as string[]) || [],
-            createdAt: existing.createdAt,
-            userId: existing.userId || null,
-            content: updatedContent,
+        const stored: GraphMemoryItem & { namespace: string; graphId: string | null } = {
+            id: res.id,
+            node,
+            primarySector: res.primarySector,
+            sectors: res.sectors,
+            namespace: ns,
+            graphId: p.graphId || null,
+            tags: tagList,
+            metadata: meta,
+            content: res.content || p.content || "",
+            createdAt: res.createdAt,
+            updatedAt: now(),
+            lastSeenAt: now(),
+            userId: res.userId,
+            salience: (meta.salience as number) || 0.5,
+            decayLambda: (meta.decayLambda as number) || 0.01,
+            version: 1,
+            segment: 0,
+            simhash: null,
+            generatedSummary: null,
         };
-    } else {
-        // Creating a new memory
-        const addRes = await addHsgMemory(
-            p.content!,
-            stringifyJSON(tagList),
-            meta,
-            userId,
-        );
-        res = {
-            id: addRes.id,
-            primarySector: addRes.primarySector,
-            sectors: addRes.sectors,
-            createdAt: addRes.createdAt,
-            userId: addRes.userId || null,
-            content: addRes.content,
+
+        const reflSet = p.reflective ?? env.lgReflective;
+        const refl =
+            reflSet && node !== "reflect" ? await createAutoRefl(p, stored) : null;
+
+        return {
+            success: true,
+            memoryId: res.id,
+            node,
+            memory: stored,
+            reflectionId: refl?.id,
         };
-    }
-
-    const stored: GraphMemoryItem & { namespace: string; graphId: string | null } = {
-        id: res.id,
-        node,
-        primarySector: res.primarySector,
-        sectors: res.sectors,
-        namespace: ns,
-        graphId: p.graphId || null,
-        tags: tagList,
-        metadata: meta,
-        content: res.content || p.content || "",
-        createdAt: res.createdAt,
-        updatedAt: now(),
-        lastSeenAt: now(),
-        userId: res.userId,
-        salience: (meta.salience as number) || 0.5,
-        decayLambda: (meta.decayLambda as number) || 0.01,
-        version: 1,
-        segment: 0,
-        simhash: null,
-        generatedSummary: null,
-    };
-
-    const reflSet = p.reflective ?? env.lgReflective;
-    const refl =
-        reflSet && node !== "reflect" ? await createAutoRefl(p, stored) : null;
-
-    return {
-        success: true,
-        memoryId: res.id,
-        node,
-        memory: stored,
-        reflectionId: refl?.id,
-    };
+    });
 }
 
 /**
@@ -413,6 +422,7 @@ export async function retrieveNodeMems(
         }
     } else {
         const nsTag = `lgm:namespace:${ns}`;
+        // logger.debug(`[LGM] fetching act/ns: sec=${sec} nsTag=${nsTag}`);
         const raw_rows = (await q.allMemBySectorAndTag.all(
             sec,
             nsTag,
@@ -420,7 +430,12 @@ export async function retrieveNodeMems(
             0,
             userId,
         )) as MemoryRow[];
-        candidateRows = raw_rows.map((r) => ({ row: r }));
+        // logger.debug(`[LGM] fetch raw_rows length=${raw_rows.length}`);
+        candidateRows = raw_rows.map((r) => ({
+            row: r,
+            preParsedTags: parseJSON<string[]>(r.tags || "[]") || [],
+            preParsedMeta: parseJSON<Record<string, unknown>>(r.metadata || "{}") || {},
+        }));
     }
 
     const filteredRows: {
@@ -435,6 +450,7 @@ export async function retrieveNodeMems(
         const metadata =
             cand.preParsedMeta ||
             parseJsonSafe<Record<string, unknown>>(cand.row.metadata, {});
+
 
         if (!matchesNs(metadata, ns, gid)) continue;
 
@@ -511,8 +527,19 @@ export async function getGraphCtx(
     const gid = p.graphId;
     const lim = p.limit || env.lgMaxContext;
     const nodes = Object.keys(nodeSectorMap);
-    const perNodeLim = Math.max(1, Math.floor(lim / nodes.length) || 1);
 
+    // Use ContextManager for token-aware aggregation
+    const { ContextManager } = await import("./context_manager");
+    const cm = new ContextManager(p.userId);
+
+    // Estimate token budget (approx 4 chars per token -> map char limit to token limit)
+    // env.lgMaxContext is usually chars (e.g. 2000), let's assume it's tokens if < 10000, else chars
+    const maxTokens = (env.lgMaxContext > 10000) ? Math.floor(env.lgMaxContext / 4) : env.lgMaxContext;
+
+    // Fetch recent items per node
+    const perNodeLim = Math.max(5, Math.floor(20 / nodes.length));
+
+    // Use concurrency control for context retrieval
     const resListResults = await Promise.allSettled(
         nodes.map((node) =>
             retrieveNodeMems({
@@ -520,8 +547,8 @@ export async function getGraphCtx(
                 namespace: ns,
                 graphId: gid,
                 limit: perNodeLim,
-                includeMetadata: true,
-                userId: normalizeUserId(p.userId),
+                includeMetadata: false, // Don't need full meta for context list
+                userId: normalizeUserId(p.userId) || getContext()?.userId || undefined,
             }),
         ),
     );
@@ -548,24 +575,28 @@ export async function getGraphCtx(
         );
     }
 
-    const flat = nodeCtxs.flatMap((e) =>
-        e.items.map((i) => ({
-            node: e.node,
-            content: trunc(i.content, summaryLineLimit),
-        })),
-    );
+    // Feed items into ContextManager with priorities
+    nodeCtxs.forEach(ctx => {
+        ctx.items.forEach(item => {
+            // Determine priority based on node type
+            let prio: "critical" | "high" | "normal" | "low" = "normal";
+            if (ctx.node === "plan" || ctx.node === "reflect") prio = "high";
+            if (ctx.node === "emotion") prio = "low";
 
-    const summ = flat.length
-        ? flat
-            .slice(0, lim)
-            .map((ln) => `- [${ln.node}] ${ln.content}`)
-            .join("\n")
-        : "";
+            cm.add("assistant", `[${ctx.node}] ${item.content}`, prio, {
+                node: ctx.node,
+                memoryId: item.id
+            });
+        });
+    });
+
+    const pruned = cm.prune({ maxTokens, strategy: "hybrid" });
+    const summ = pruned.map(i => i.content).join("\n");
 
     return {
         success: true,
         context: summ,
-        sources: Array.from(new Set(flat.map((f) => f.node))),
+        sources: Array.from(new Set(pruned.map((f) => f.metadata?.node as string).filter(Boolean))),
         nodes: nodeCtxs,
     };
 }
@@ -573,7 +604,19 @@ export async function getGraphCtx(
 /**
  * Get linear history of a graph execution thread.
  */
-export async function getThreadHistory(p: LgmRetrieveRequest) {
+export async function getThreadHistory(p: LgmRetrieveRequest): Promise<{
+    namespace: string;
+    graphId: string;
+    userId: string | null;
+    count: number;
+    history: {
+        id: string;
+        node: string;
+        content: string;
+        timestamp: string;
+        metadata: Record<string, unknown>;
+    }[];
+}> {
     const ns = resolveNs(p.namespace);
     if (!p.graphId)
         throw new AppError(400, "BAD_REQUEST", "graphId required for history");
@@ -585,7 +628,7 @@ export async function getThreadHistory(p: LgmRetrieveRequest) {
                 node,
                 namespace: ns,
                 graphId: p.graphId,
-                userId: normalizeUserId(p.userId),
+                userId: normalizeUserId(p.userId) || getContext()?.userId || undefined,
                 limit: 100,
             }),
         ),

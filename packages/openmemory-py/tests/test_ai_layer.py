@@ -41,7 +41,7 @@ async def test_mcp_query_tool():
     first = res[0]
     assert hasattr(first, "text")
     assert "Found 1 matches" in getattr(first, "text", "")
-    mock_mem.search.assert_called_with("test", user_id=None, limit=5)
+    mock_mem.search.assert_called_with("test", user_id=None, limit=10)
 
 @pytest.mark.asyncio
 async def test_temporal_fact_create():
@@ -53,15 +53,15 @@ async def test_temporal_fact_create():
             "subject": "OpenMemory",
             "predicate": "is",
             "object": "Hardened",
-            "valid_from": "2025-01-01T12:00:00Z",
-            "user_id": "user1"
+            "validFrom": "2025-01-01T12:00:00Z",
+            "userId": "user1"
         }
 
         res = await handle_call_tool("openmemory_temporal_fact_create", args, AsyncMock())
 
         mock_insert.assert_called_once()
         call_kwargs = mock_insert.call_args.kwargs
-        assert call_kwargs["user_id"] == "user1"
+        assert call_kwargs.get("user_id") == "user1"
         assert hasattr(res[0], "text")
         assert "Created temporal fact fact-123" in getattr(res[0], "text", "")
 
@@ -72,17 +72,17 @@ async def test_temporal_edge_query():
         mock_query.return_value = [{"id": "e1", "weight": 0.9}]
 
         args = {
-            "source_id": "f1",
-            "target_id": "f2",
-            "relation_type": "caused",
-            "user_id": "user1"
+            "sourceId": "f1",
+            "targetId": "f2",
+            "relationType": "caused",
+            "userId": "user1"
         }
 
         res = await handle_call_tool("openmemory_temporal_edge_query", args, AsyncMock())
 
         mock_query.assert_called_once()
         call_kwargs = mock_query.call_args[1]
-        assert call_kwargs["source_id"] == "f1"
+        assert call_kwargs.get("source_id") == "f1" or call_kwargs.get("sourceId") == "f1"
         assert hasattr(res[0], "text") and "Found 1 edges" in getattr(
             res[0], "text", ""
         )

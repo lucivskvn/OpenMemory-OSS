@@ -11,6 +11,7 @@ from .core.security import get_encryption
 from .ops.ingest import ingest_document
 from .openai_handler import OpenAIRegistrar
 from .core.types import MemoryItem
+from .ops.batch import delete_batch as _del_batch, update_batch as _upd_batch
 from .core.config import env
 from .core.constants import COGNITIVE_PARAMS
 from .utils.logger import setup_logging
@@ -298,17 +299,15 @@ class Memory:
         # Update memory fields
         import time
 
-        ts = int(time.time())
-        if content:
-            await q.upd_mem_with_sector(
-                memory_id,
-                content,
-                m.get("primary_sector", "general"),
-                json.dumps(tags) if tags else m.get("tags", "[]"),
-                json.dumps(metadata) if metadata else (m.get("metadata") or m.get("meta") or "{}"),
-                ts,
-                uid,
-            )
+        ts = int(time.time() * 1000)
+        
+        updates = {}
+        if content is not None: updates['content'] = content
+        if tags is not None: updates['tags'] = tags
+        if metadata is not None: updates['metadata'] = metadata
+        
+        if updates:
+            await q.upd_mems([memory_id], updates, user_id=uid)
 
         item = await self.get(memory_id, user_id=uid)
         if not item:
@@ -359,6 +358,20 @@ class Memory:
         if m and uid and m.get("user_id") and m.get("user_id") != uid:
             raise PermissionError("Access denied")
         await q.del_mem(memory_id, user_id=uid)
+
+    async def delete_batch(self, memory_ids: List[str], user_id: Optional[str] = None):
+        """
+        Delete multiple memories in batch.
+        """
+        uid = user_id or self.default_user
+        return await _del_batch(memory_ids, user_id=uid)
+
+    async def update_batch(self, items: List[Dict[str, Any]], user_id: Optional[str] = None):
+        """
+        Update multiple memories in batch.
+        """
+        uid = user_id or self.default_user
+        return await _upd_batch(items, user_id=uid)
 
     async def delete_all(self, user_id: Optional[str] = None):
         """
@@ -760,12 +773,20 @@ class Memory:
 
         return SourcesFacade(self.default_user, self)
 
-    async def ingest_url(self, url: str, user_id: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None):
+    async def ingest_url(
+        self,
+        url: str,
+        user_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        tags: Optional[List[str]] = None,
+        config: Optional[Dict[str, Any]] = None,
+    ):
         """Ingest content from a URL (Local Mode)."""
         from .ops.ingest import ingest_url
+
         uid = user_id or self.default_user
         # Delegate to ops.ingest
-        return await ingest_url(url, meta=metadata, user_id=uid)
+        return await ingest_url(url, meta=metadata, user_id=uid, tags=tags, cfg=config)
 
 
 def run_mcp():

@@ -1,11 +1,13 @@
 /**
- * Temporal Knowledge Graph Query Engine for OpenMemory.
- * Provides APIs for point-in-time retrieval, range queries, and relationship traversal.
+ * @file query.ts
+ * @description Temporal Knowledge Graph Query Engine for OpenMemory.
+ * @audited 2026-01-19
  */
 import { env } from "../core/cfg";
 import { q } from "../core/db";
 import { getEncryption } from "../core/security";
 import { normalizeUserId } from "../utils";
+import { hydrateMetadata } from "../utils/codec";
 import { SimpleCache } from "../utils/cache";
 import {
     TemporalEdge,
@@ -40,29 +42,7 @@ export async function rowToFact(
     const cached = factCache.get(cacheKey);
     if (cached) return cached;
 
-    const enc = getEncryption();
-    let meta: Record<string, unknown> = {};
-    if (row.metadata) {
-        // Optimization: Check if it's already an object (Bun SQLite driver might parse JSON columns automatically)
-        if (typeof row.metadata === 'object' && row.metadata !== null) {
-            meta = row.metadata as Record<string, unknown>;
-        } else if (typeof row.metadata === 'string') {
-            try {
-                // Priority 1: Decrypt if it looks encrypted (starts with "enc:")
-                // Or just try decrypting.
-                const asStr = row.metadata as string;
-                if (asStr.startsWith('{"iv":')) {
-                    const dec = await enc.decrypt(asStr);
-                    meta = JSON.parse(dec);
-                } else {
-                    meta = JSON.parse(asStr);
-                }
-            } catch {
-                // Fallback
-                meta = { _raw: row.metadata };
-            }
-        }
-    }
+    const meta = await hydrateMetadata(row.metadata, getEncryption());
     const fact: TemporalFact = {
         id: row.id,
         userId: row.userId,
@@ -95,23 +75,7 @@ export async function rowToEdge(
     const cached = edgeCache.get(cacheKey);
     if (cached) return cached;
 
-    const enc = getEncryption();
-    let meta: Record<string, unknown> = {};
-    if (row.metadata) {
-        try {
-            const dec = await enc.decrypt(row.metadata);
-            meta = JSON.parse(dec);
-        } catch {
-            try {
-                meta =
-                    typeof row.metadata === "string"
-                        ? JSON.parse(row.metadata)
-                        : row.metadata;
-            } catch {
-                meta = { _raw: row.metadata };
-            }
-        }
-    }
+    const meta = await hydrateMetadata(row.metadata, getEncryption());
     const edge: TemporalEdge = {
         id: row.id,
         userId: row.userId,
@@ -286,13 +250,13 @@ export const getRelatedFacts = async (
     const timestamp = at ? at.getTime() : Date.now();
     const uid = normalizeUserId(userId);
 
-    // Repo returns row plus relation_type and weight
-    const rows = await q.getRelatedFacts.all(factId, relationType, timestamp, uid) as (TemporalFactRow & { relation_type: string; weight: number })[];
+    // Repo returns row plus relationType and weight
+    const rows = await q.getRelatedFacts.all(factId, relationType, timestamp, uid) as (TemporalFactRow & { relationType: string; weight: number })[];
 
     return Promise.all(
         rows.map(async (row) => ({
             fact: await rowToFact(row),
-            relation: row.relation_type,
+            relation: row.relationType,
             weight: row.weight,
         })),
     );

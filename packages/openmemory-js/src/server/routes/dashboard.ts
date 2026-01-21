@@ -1,4 +1,6 @@
+import { Elysia } from "elysia";
 import { z } from "zod";
+import { ActivityEntry, MaintenanceStats, DashboardTimelineEntry, DashboardTopMemory, UserContext, AuthScope } from "../../core/types";
 
 import { env } from "../../core/cfg";
 import { allAsync, q, runAsync, SqlValue, TABLES } from "../../core/db";
@@ -6,8 +8,8 @@ import { getEncryption } from "../../core/security";
 import { getSystemStats } from "../../core/stats";
 import { normalizeUserId } from "../../utils";
 import { logger } from "../../utils/logger";
-import { sendError } from "../errors";
-import { validateBody, validateQuery } from "../middleware/validate";
+import { AppError } from "../errors";
+import { verifyUserAccess, getUser } from "../middleware/auth";
 
 /** Parameter for maintenance stats query (hours lookback) */
 interface MaintOp {
@@ -20,42 +22,6 @@ interface MaintTotal {
     total: number;
 }
 
-/** Represents a high-salience memory for the dashboard top list */
-interface TopMem {
-    id: string;
-    content: string;
-    primarySector: string;
-    salience: number;
-    lastSeenAt: number;
-}
-
-/** Entry for the activity timeline visualization */
-interface TimelineEntry {
-    primarySector: string;
-    label: string;
-    sortKey: string;
-    count: number;
-}
-
-/** Recent activity feed item */
-interface ActivityEntry {
-    id: string;
-    content: string;
-    primarySector: string;
-    salience: number;
-    createdAt: number;
-    updatedAt: number;
-    lastSeenAt: number;
-}
-
-/** Aggregated maintenance statistics for the dashboard charts */
-interface MaintenanceStats {
-    hour: string;
-    decay: number;
-    reflection: number;
-    consolidation: number;
-}
-
 // --- Validation Schemas ---
 
 const ActivityQuerySchema = z.object({
@@ -64,6 +30,7 @@ const ActivityQuerySchema = z.object({
         .optional()
         .transform((val) => parseInt(val || "50"))
         .pipe(z.number().min(1).max(100)),
+    userId: z.string().optional(),
 });
 const TimelineQuerySchema = z.object({
     hours: z
@@ -71,6 +38,7 @@ const TimelineQuerySchema = z.object({
         .optional()
         .transform((val) => parseInt(val || "24"))
         .pipe(z.number().min(1).max(720)), // Max 30 days
+    userId: z.string().optional(),
 });
 const TopMemoriesQuerySchema = z.object({
     limit: z
@@ -78,6 +46,7 @@ const TopMemoriesQuerySchema = z.object({
         .optional()
         .transform((val) => parseInt(val || "10"))
         .pipe(z.number().min(1).max(50)),
+    userId: z.string().optional(),
 });
 const MaintenanceQuerySchema = z.object({
     hours: z
@@ -127,12 +96,10 @@ export function trackReq(success: boolean) {
 
         // Log metrics to database every second
         logMetric("qps", qps).catch((err) =>
-            logger.error("[METRICS] Error logging QPS", { error: err }),
-        );
+            logger.error("[METRICS] Error logging QPS", { error: err }));
         if (!success)
             logMetric("error", 1).catch((err) =>
-                logger.error("[METRICS] Error logging failure", { error: err }),
-            );
+                logger.error("[METRICS] Error logging failure", { error: err }));
 
         reqz.winStart = now;
         reqz.winCnt = 1;
@@ -141,492 +108,464 @@ export function trackReq(success: boolean) {
     }
 }
 
-export function reqTrackerMw() {
-    return (req: AdvancedRequest, res: AdvancedResponse, next: () => void) => {
+/**
+ * Dashboard Routes Plugin
+ */
+export const dashboardRoutes = (app: Elysia) => app
+    // Metrics Tracking Hook
+    .onAfterHandle(({ request, set }) => {
         if (
-            req.url?.startsWith("/dashboard") ||
-            req.url?.startsWith("/health")
+            request.url?.includes("/dashboard") ||
+            request.url?.includes("/health")
         ) {
-            return next();
+            return;
         }
-        const orig = res.json.bind(res);
-        res.json = (data: unknown) => {
-            trackReq(res.statusCode < 400);
-            return orig(data);
-        };
-        next();
-    };
-}
+        // Basic success tracking based on status code
+        const status = typeof set.status === "number" ? set.status : 200;
+        trackReq(status < 400);
+    })
 
-import type { AdvancedRequest, AdvancedResponse, ServerApp } from "../server";
-
-export function dash(app: ServerApp) {
     /**
+     * GET /dashboard/stats
      * Get aggregated system stats including total memories, sector counts, and QPS.
-     * @route GET /dashboard/stats
      */
-    app.get(
-        "/dashboard/stats",
-        async (req: AdvancedRequest, res: AdvancedResponse) => {
-            try {
-                const isAdmin = (req.user?.scopes || []).includes("admin:all");
-                let userId = normalizeUserId(req.user?.id);
+    .get("/dashboard/stats", async ({ query, ...ctx }) => {
+        const queryUser = query.userId as string | undefined;
+        let targetUserId: string | undefined;
 
-                if (isAdmin) {
-                    const queryUser = req.query.userId as string | undefined;
-                    userId = queryUser ? normalizeUserId(queryUser) : undefined;
+        const user = getUser(ctx);
+
+        if (queryUser) {
+            targetUserId = normalizeUserId(queryUser) as string;
+        } else if (user?.id) {
+            targetUserId = normalizeUserId(user.id) as string;
+        } else {
+            // Implicit Global View intent if no user specified
+            targetUserId = undefined;
+        }
+
+        // Strictly enforce access control
+        verifyUserAccess(user, targetUserId);
+
+        const stats = await getSystemStats(
+            targetUserId || undefined,
+            reqz.qpsHist,
+        );
+
+        // Add classifier info if userId is present
+        if (targetUserId) {
+            const model = await q.getClassifierModel.get(targetUserId);
+            stats.classifier = model
+                ? {
+                    version: model.version,
+                    updatedAt: model.updatedAt,
+                    status: "trained",
                 }
+                : { status: "untrained" };
+        }
 
-                const stats = await getSystemStats(
-                    userId || undefined,
-                    reqz.qpsHist,
-                );
-
-                // Add classifier info if userId is present
-                if (userId) {
-                    const model = await q.getClassifierModel.get(userId);
-                    stats.classifier = model
-                        ? {
-                            version: model.version,
-                            updatedAt: model.updatedAt,
-                            status: "trained",
-                        }
-                        : { status: "untrained" };
-                }
-
-                res.json(stats);
-            } catch (e: unknown) {
-                sendError(res, e);
-            }
-        },
-    );
-
-
-
-    app.get(
-        "/dashboard/health",
-        async (_req: AdvancedRequest, res: AdvancedResponse) => {
-            try {
-                const memusg = process.memoryUsage();
-                const upt = process.uptime();
-                res.json({
-                    memory: {
-                        heapUsed: Math.round(memusg.heapUsed / 1024 / 1024),
-                        heapTotal: Math.round(memusg.heapTotal / 1024 / 1024),
-                        rss: Math.round(memusg.rss / 1024 / 1024),
-                        external: Math.round(memusg.external / 1024 / 1024),
-                    },
-                    uptime: {
-                        seconds: Math.floor(upt),
-                        days: Math.floor(upt / 86400),
-                        hours: Math.floor((upt % 86400) / 3600),
-                    },
-                    process: {
-                        pid: process.pid,
-                        version: process.version,
-                        platform: process.platform,
-                    },
-                });
-            } catch (e: unknown) {
-                sendError(res, e);
-            }
-        },
-    );
+        return stats;
+    })
 
     /**
+     * GET /dashboard/health
+     */
+    .get("/dashboard/health", () => {
+        const memusg = process.memoryUsage();
+        const upt = process.uptime();
+        return {
+            memory: {
+                heapUsed: Math.round(memusg.heapUsed / 1024 / 1024),
+                heapTotal: Math.round(memusg.heapTotal / 1024 / 1024),
+                rss: Math.round(memusg.rss / 1024 / 1024),
+                external: Math.round(memusg.external / 1024 / 1024),
+            },
+            uptime: {
+                seconds: Math.floor(upt),
+                days: Math.floor(upt / 86400),
+                hours: Math.floor((upt % 86400) / 3600),
+            },
+            process: {
+                pid: process.pid,
+                version: process.version,
+                platform: process.platform,
+            },
+        };
+    })
+
+    /**
+     * GET /dashboard/activity
      * Get recent activity feed (memory updates/creations).
-     * @route GET /dashboard/activity
      */
-    app.get(
-        "/dashboard/activity",
-        validateQuery(ActivityQuerySchema),
-        async (req: AdvancedRequest, res: AdvancedResponse) => {
-            try {
-                const isAdmin = (req.user?.scopes || []).includes("admin:all");
-                let userId = normalizeUserId(req.user?.id);
+    .get("/dashboard/activity", async ({ query, ...ctx }) => {
+        // Resolve target user
+        const { limit, userId: queryUser } = ActivityQuerySchema.parse(query);
+        const user = getUser(ctx);
 
-                // Admin Logic: Allow viewing specific user or global
-                if (isAdmin) {
-                    const queryUser = req.query.userId as string | undefined;
-                    if (queryUser) {
-                        userId = normalizeUserId(queryUser);
-                    } else {
-                        // Global View
-                        userId = undefined;
-                    }
-                } else if (!userId) {
-                    // Non-admin must have a user ID (or treated as specific 'null' user if anonymous, but strict auth implies we shouldn't be here without id unless anon admin)
+        let targetUserId: string | undefined;
+        if (queryUser) {
+            targetUserId = normalizeUserId(queryUser) as string;
+        } else if (user?.id) {
+            targetUserId = normalizeUserId(user.id) as string;
+        } else {
+            targetUserId = undefined; // Global
+        }
+
+        verifyUserAccess(user, targetUserId);
+
+        const memTable = getMemTable();
+
+        let clause = "";
+        const params: SqlValue[] = [limit];
+
+        if (targetUserId === undefined) {
+            clause = ""; // Global
+        } else {
+            clause = isPg ? "WHERE user_id = $2" : "WHERE user_id = ?";
+            params.push(targetUserId);
+        }
+
+        interface ActivityRow {
+            id: string;
+            content: string;
+            primarySector: string;
+            salience: number;
+            createdAt: number;
+            updatedAt: number;
+            lastSeenAt: number;
+        }
+
+        const recmem = await allAsync<ActivityRow>(
+            `SELECT id, content, primary_sector as "primarySector", salience, created_at as "createdAt", updated_at as "updatedAt", last_seen_at as "lastSeenAt"
+             FROM ${memTable} ${clause} ORDER BY updated_at DESC LIMIT ${isPg ? "$1" : "?"}`,
+            params,
+        );
+        const activities = await Promise.all(
+            recmem.map(async (m) => {
+                const isNew =
+                    m.createdAt >= (m.updatedAt || 0) ||
+                    !m.updatedAt ||
+                    Math.abs(m.createdAt - m.updatedAt) < 1000;
+                let content = m.content || "";
+                try {
+                    const enc = getEncryption();
+                    content = await enc.decrypt(content);
+                } catch (e) {
+                    logger.warn(
+                        `[DASHBOARD] Decryption failed for memory ${m.id}`,
+                        { error: e },
+                    );
+                    content = "[Encrypted Content]";
                 }
+                const isReflective = m.primarySector === "reflective";
 
-                const memTable = getMemTable();
-                const { limit } = req.query as unknown as z.infer<
-                    typeof ActivityQuerySchema
-                >;
-
-                let clause = "";
-                const params: SqlValue[] = [limit];
-
-                if (userId === undefined) {
-                    clause = ""; // Global
-                } else if (userId === null) {
-                    clause = "WHERE user_id IS NULL";
-                } else {
-                    clause = isPg ? "WHERE user_id = $2" : "WHERE user_id = ?";
-                    params.push(userId);
-                }
-
-                const recmem = await allAsync<ActivityEntry>(
-                    `SELECT id, content, primary_sector as "primarySector", salience, created_at as "createdAt", updated_at as "updatedAt", last_seen_at as "lastSeenAt"
-                 FROM ${memTable} ${clause} ORDER BY updated_at DESC LIMIT ${isPg ? "$1" : "?"}`,
-                    params,
-                );
-                const activities = await Promise.all(
-                    recmem.map(async (m) => {
-                        const isNew =
-                            m.createdAt >= (m.updatedAt || 0) ||
-                            !m.updatedAt ||
-                            Math.abs(m.createdAt - m.updatedAt) < 1000;
-                        let content = m.content || "";
-                        try {
-                            const enc = getEncryption();
-                            content = await enc.decrypt(content);
-                        } catch (e) {
-                            logger.warn(
-                                `[DASHBOARD] Decryption failed for memory ${m.id}`,
-                                { error: e },
-                            );
-                            content = "[Encrypted Content]";
-                        }
-                        const isReflective = m.primarySector === "reflective";
-
-                        return {
-                            id: m.id,
-                            type: isReflective
-                                ? "reflection"
-                                : isNew
-                                    ? "memory_created"
-                                    : "memory_updated",
-                            sector: m.primarySector,
-                            content:
-                                content.substring(0, 100) +
-                                (content.length > 100 ? "..." : ""),
-                            salience: m.salience,
-                            timestamp: m.updatedAt || m.createdAt,
-                        };
-                    }),
-                );
-                res.json({ activities });
-            } catch (e: unknown) {
-                sendError(res, e);
-            }
-        },
-    );
+                return {
+                    id: m.id,
+                    type: isReflective
+                        ? "reflection"
+                        : isNew
+                            ? "memory_created"
+                            : "memory_updated",
+                    sector: m.primarySector,
+                    content:
+                        content.substring(0, 100) +
+                        (content.length > 100 ? "..." : ""),
+                    salience: m.salience,
+                    timestamp: m.updatedAt || m.createdAt,
+                };
+            }),
+        );
+        return { activities };
+    })
 
     /**
+     * GET /dashboard/sectors/timeline
      * Get memory creation timeline grouped by hour/day.
-     * @route GET /dashboard/sectors/timeline
      */
-    app.get(
-        "/dashboard/sectors/timeline",
-        validateQuery(TimelineQuerySchema),
-        async (req: AdvancedRequest, res: AdvancedResponse) => {
-            try {
-                const memTable = getMemTable();
-                const { hours } = req.query as unknown as z.infer<
-                    typeof TimelineQuerySchema
-                >;
-                const strt = Date.now() - hours * 60 * 60 * 1000;
+    .get("/dashboard/sectors/timeline", async ({ query, ...ctx }) => {
+        const memTable = getMemTable();
+        const { hours, userId: queryUser } = TimelineQuerySchema.parse(query);
+        const user = getUser(ctx);
 
-                // Use different grouping based on time range
-                let displayFormat: string;
-                let sortFormat: string;
-                let timeKey: string;
-                if (hours <= 24) {
-                    // For 24 hours or less, group by date+hour for sorting, display only hour
-                    displayFormat = isPg
-                        ? "to_char(to_timestamp(created_at/1000), 'HH24:00')"
-                        : "strftime('%H:00', datetime(created_at/1000, 'unixepoch', 'localtime'))";
-                    sortFormat = isPg
-                        ? "to_char(to_timestamp(created_at/1000), 'YYYY-MM-DD HH24:00')"
-                        : "strftime('%Y-%m-%d %H:00', datetime(created_at/1000, 'unixepoch', 'localtime'))";
-                    timeKey = "hour";
-                } else if (hours <= 168) {
-                    // For up to 7 days, group by day
-                    displayFormat = isPg
-                        ? "to_char(to_timestamp(created_at/1000), 'MM-DD')"
-                        : "strftime('%m-%d', datetime(created_at/1000, 'unixepoch', 'localtime'))";
-                    sortFormat = isPg
-                        ? "to_char(to_timestamp(created_at/1000), 'YYYY-MM-DD')"
-                        : "strftime('%Y-%m-%d', datetime(created_at/1000, 'unixepoch', 'localtime'))";
-                    timeKey = "day";
-                } else {
-                    // For longer periods (30 days), group by day showing month-day
-                    displayFormat = isPg
-                        ? "to_char(to_timestamp(created_at/1000), 'MM-DD')"
-                        : "strftime('%m-%d', datetime(created_at/1000, 'unixepoch', 'localtime'))";
-                    sortFormat = isPg
-                        ? "to_char(to_timestamp(created_at/1000), 'YYYY-MM-DD')"
-                        : "strftime('%Y-%m-%d', datetime(created_at/1000, 'unixepoch', 'localtime'))";
-                    timeKey = "day";
-                }
+        const strt = Date.now() - hours * 60 * 60 * 1000;
 
-                const isAdmin = (req.user?.scopes || []).includes("admin:all");
-                let userId = normalizeUserId(req.user?.id);
+        // Resolve User
+        let targetUserId: string | undefined;
+        if (queryUser) {
+            targetUserId = normalizeUserId(queryUser) as string;
+        } else if (user?.id) {
+            targetUserId = normalizeUserId(user.id) as string;
+        } else {
+            targetUserId = undefined;
+        }
 
-                if (isAdmin) {
-                    const queryUser = req.query.userId as string | undefined;
-                    userId = queryUser ? normalizeUserId(queryUser) : undefined;
-                }
+        verifyUserAccess(user, targetUserId);
 
-                let userSubClause = "";
-                const params: SqlValue[] = [strt];
-                if (userId === undefined) {
-                    userSubClause = "";
-                } else if (userId === null) {
-                    userSubClause = "AND user_id IS NULL";
-                } else {
-                    userSubClause = isPg
-                        ? "AND user_id = $2"
-                        : "AND user_id = ?";
-                    params.push(userId);
-                }
+        // Use different grouping based on time range
+        let displayFormat: string;
+        let sortFormat: string;
+        let timeKey: string;
+        if (hours <= 24) {
+            // For 24 hours or less, group by date+hour for sorting, display only hour
+            displayFormat = isPg
+                ? "to_char(to_timestamp(created_at/1000), 'HH24:00')"
+                : "strftime('%H:00', datetime(created_at/1000, 'unixepoch', 'localtime'))";
+            sortFormat = isPg
+                ? "to_char(to_timestamp(created_at/1000), 'YYYY-MM-DD HH24:00')"
+                : "strftime('%Y-%m-%d %H:00', datetime(created_at/1000, 'unixepoch', 'localtime'))";
+            timeKey = "hour";
+        } else if (hours <= 168) {
+            // For up to 7 days, group by day
+            displayFormat = isPg
+                ? "to_char(to_timestamp(created_at/1000), 'MM-DD')"
+                : "strftime('%m-%d', datetime(created_at/1000, 'unixepoch', 'localtime'))";
+            sortFormat = isPg
+                ? "to_char(to_timestamp(created_at/1000), 'YYYY-MM-DD')"
+                : "strftime('%Y-%m-%d', datetime(created_at/1000, 'unixepoch', 'localtime'))";
+            timeKey = "day";
+        } else {
+            // For longer periods (30 days), group by day showing month-day
+            displayFormat = isPg
+                ? "to_char(to_timestamp(created_at/1000), 'MM-DD')"
+                : "strftime('%m-%d', datetime(created_at/1000, 'unixepoch', 'localtime'))";
+            sortFormat = isPg
+                ? "to_char(to_timestamp(created_at/1000), 'YYYY-MM-DD')"
+                : "strftime('%Y-%m-%d', datetime(created_at/1000, 'unixepoch', 'localtime'))";
+            timeKey = "day";
+        }
 
-                const tl = await allAsync<TimelineEntry>(
-                    `SELECT primary_sector as "primarySector", ${displayFormat} as label, ${sortFormat} as "sortKey", COUNT(*) as count
-                 FROM ${memTable} WHERE created_at > $1 ${userSubClause} GROUP BY primary_sector, ${sortFormat} ORDER BY "sortKey"`.replace(
-                        "$1",
-                        isPg ? "$1" : "?",
-                    ),
-                    params,
-                );
-                res.json({
-                    timeline: tl.map((row) => ({ ...row, hour: row.label })),
-                    grouping: timeKey,
-                });
-            } catch (e: unknown) {
-                sendError(res, e);
-            }
-        },
-    );
+        let userSubClause = "";
+        const params: SqlValue[] = [strt];
+        if (targetUserId === undefined) {
+            userSubClause = "";
+        } else {
+            userSubClause = isPg
+                ? "AND user_id = $2"
+                : "AND user_id = ?";
+            params.push(targetUserId);
+        }
+
+        const tl = await allAsync<DashboardTimelineEntry>(
+            `SELECT primary_sector as "primarySector", ${displayFormat} as label, ${sortFormat} as "sortKey", COUNT(*) as count
+             FROM ${memTable} WHERE created_at > $1 ${userSubClause} GROUP BY primary_sector, ${sortFormat} ORDER BY "sortKey"`.replace(
+                "$1",
+                isPg ? "$1" : "?",
+            ),
+            params,
+        );
+        return {
+            timeline: tl.map((row) => ({ ...row, hour: row.label })),
+            grouping: timeKey,
+        };
+    })
 
     /**
+     * GET /dashboard/top-memories
      * Get memories with highest salience scores.
-     * @route GET /dashboard/top-memories
      */
-    app.get(
-        "/dashboard/top-memories",
-        validateQuery(TopMemoriesQuerySchema),
-        async (req: AdvancedRequest, res: AdvancedResponse) => {
-            try {
-                const isAdmin = (req.user?.scopes || []).includes("admin:all");
-                let userId = normalizeUserId(req.user?.id);
+    .get("/dashboard/top-memories", async ({ query, ...ctx }) => {
+        const { limit, userId: queryUser } = TopMemoriesQuerySchema.parse(query);
+        const user = getUser(ctx);
 
-                if (isAdmin) {
-                    const queryUser = req.query.userId as string | undefined;
-                    userId = queryUser ? normalizeUserId(queryUser) : undefined;
+        // Resolve User
+        let targetUserId: string | undefined;
+        if (queryUser) {
+            targetUserId = normalizeUserId(queryUser) as string;
+        } else if (user?.id) {
+            targetUserId = normalizeUserId(user.id) as string;
+        } else {
+            targetUserId = undefined;
+        }
+
+        verifyUserAccess(user, targetUserId);
+
+        const memTable = getMemTable();
+
+        let clause = "";
+        const params: SqlValue[] = [limit];
+
+        if (targetUserId === undefined) {
+            clause = "";
+        } else {
+            clause = isPg ? "WHERE user_id = $2" : "WHERE user_id = ?";
+            params.push(targetUserId);
+        }
+
+        const topm = await allAsync<DashboardTopMemory>(
+            `SELECT id, content, primary_sector as "primarySector", salience, last_seen_at as "lastSeenAt"
+             FROM ${memTable} ${clause} ORDER BY salience DESC LIMIT ${isPg ? "$1" : "?"}`,
+            params,
+        );
+        const memories = await Promise.all(
+            topm.map(async (m) => {
+                let content = m.content || "";
+                try {
+                    const enc = getEncryption();
+                    content = await enc.decrypt(content);
+                } catch (e) {
+                    logger.warn(
+                        `[DASHBOARD] Decryption failed for top memory ${m.id}`,
+                        { error: e },
+                    );
+                    content = "[Encrypted Content]";
                 }
-
-                const memTable = getMemTable();
-                const { limit } = req.query as unknown as z.infer<
-                    typeof TopMemoriesQuerySchema
-                >;
-
-                let clause = "";
-                const params: SqlValue[] = [limit];
-
-                if (userId === undefined) {
-                    clause = "";
-                } else if (userId === null) {
-                    clause = "WHERE user_id IS NULL";
-                } else {
-                    clause = isPg ? "WHERE user_id = $2" : "WHERE user_id = ?";
-                    params.push(userId);
-                }
-
-                const topm = await allAsync<TopMem>(
-                    `SELECT id, content, primary_sector as "primarySector", salience, last_seen_at as "lastSeenAt"
-                 FROM ${memTable} ${clause} ORDER BY salience DESC LIMIT ${isPg ? "$1" : "?"}`,
-                    params,
-                );
-                const memories = await Promise.all(
-                    topm.map(async (m) => {
-                        let content = m.content || "";
-                        try {
-                            const enc = getEncryption();
-                            content = await enc.decrypt(content);
-                        } catch (e) {
-                            logger.warn(
-                                `[DASHBOARD] Decryption failed for top memory ${m.id}`,
-                                { error: e },
-                            );
-                            content = "[Encrypted Content]";
-                        }
-                        return {
-                            id: m.id,
-                            content: content,
-                            sector: m.primarySector,
-                            salience: m.salience,
-                            lastSeen: m.lastSeenAt,
-                        };
-                    }),
-                );
-                res.json({ memories });
-            } catch (e: unknown) {
-                sendError(res, e);
-            }
-        },
-    );
+                return {
+                    id: m.id,
+                    content: content,
+                    sector: m.primarySector,
+                    salience: m.salience,
+                    lastSeen: m.lastSeenAt,
+                };
+            }),
+        );
+        return { memories };
+    })
 
     /**
+     * GET /dashboard/maintenance
      * Get maintenance operation stats (decay, reflection, consolidation).
-     * @route GET /dashboard/maintenance
      */
-    app.get(
-        "/dashboard/maintenance",
-        validateQuery(MaintenanceQuerySchema),
-        async (req: AdvancedRequest, res: AdvancedResponse) => {
-            try {
-                const { hours } = req.query as unknown as z.infer<
-                    typeof MaintenanceQuerySchema
-                >;
-                const strt = Date.now() - hours * 60 * 60 * 1000;
-                const sc = env.pgSchema || "public";
+    .get("/dashboard/maintenance", async ({ query, ...ctx }) => {
+        // Maintenance stats are global system stats, but often useful for admins.
+        // Standard users might not need this, but it's not sensitive user data per se.
+        // However, let's restrict to Admin for now as it exposes system load.
 
-                const ops = await allAsync<MaintOp>(
-                    isPg
-                        ? `SELECT type, to_char(to_timestamp(ts/1000), 'HH24:00') as hour, SUM(count) as cnt
-                       FROM "${sc}"."stats" WHERE ts > $1 GROUP BY type, hour ORDER BY hour`
-                        : `SELECT type, strftime('%H:00', datetime(ts/1000, 'unixepoch', 'localtime')) as hour, SUM(count) as cnt
-                       FROM stats WHERE ts > ? GROUP BY type, hour ORDER BY hour`,
-                    [strt],
-                );
+        const user = getUser(ctx);
+        // Explicitly require Admin scope
+        if (!user?.scopes.includes("admin:all")) {
+            throw new AppError(403, "FORBIDDEN", "Admin access required");
+        }
 
-                const totals = await allAsync<MaintTotal>(
-                    isPg
-                        ? `SELECT type, SUM(count) as total FROM "${sc}"."stats" WHERE ts > $1 GROUP BY type`
-                        : `SELECT type, SUM(count) as total FROM stats WHERE ts > ? GROUP BY type`,
-                    [strt],
-                );
+        const { hours } = MaintenanceQuerySchema.parse(query);
+        const strt = Date.now() - hours * 60 * 60 * 1000;
+        const sc = env.pgSchema || "public";
 
-                const byHr: Record<string, MaintenanceStats> = {};
-                for (const op of ops) {
-                    if (!byHr[op.hour])
-                        byHr[op.hour] = {
-                            hour: op.hour,
-                            decay: 0,
-                            reflection: 0,
-                            consolidation: 0,
-                        };
-                    if (op.type === "decay") byHr[op.hour].decay = op.cnt;
-                    else if (op.type === "reflect")
-                        byHr[op.hour].reflection = op.cnt;
-                    else if (op.type === "consolidate")
-                        byHr[op.hour].consolidation = op.cnt;
-                }
+        const ops = await allAsync<MaintOp>(
+            isPg
+                ? `SELECT type, to_char(to_timestamp(ts/1000), 'HH24:00') as hour, SUM(count) as cnt
+                   FROM "${sc}"."stats" WHERE ts > $1 GROUP BY type, hour ORDER BY hour`
+                : `SELECT type, strftime('%H:00', datetime(ts/1000, 'unixepoch', 'localtime')) as hour, SUM(count) as cnt
+                   FROM stats WHERE ts > ? GROUP BY type, hour ORDER BY hour`,
+            [strt],
+        );
 
-                const totalArr = totals as MaintTotal[];
-                const totDecay =
-                    totalArr.find((t) => t.type === "decay")?.total || 0;
-                const totReflect =
-                    totalArr.find((t) => t.type === "reflect")?.total || 0;
-                const totConsol =
-                    totalArr.find((t) => t.type === "consolidate")?.total || 0;
-                const totOps = totDecay + totReflect + totConsol;
-                const efficiency =
-                    totOps > 0
-                        ? Math.round(((totReflect + totConsol) / totOps) * 100)
-                        : 0;
+        const totals = await allAsync<MaintTotal>(
+            isPg
+                ? `SELECT type, SUM(count) as total FROM "${sc}"."stats" WHERE ts > $1 GROUP BY type`
+                : `SELECT type, SUM(count) as total FROM stats WHERE ts > ? GROUP BY type`,
+            [strt],
+        );
 
-                res.json({
-                    operations: Object.values(byHr),
-                    totals: {
-                        cycles: totDecay,
-                        reflections: totReflect,
-                        consolidations: totConsol,
-                        efficiency,
-                    },
-                });
-            } catch (e: unknown) {
-                sendError(res, e);
-            }
-        },
-    );
+        const byHr: Record<string, import("../../core/types").MaintenanceOpStat> = {};
+        for (const op of ops) {
+            if (!byHr[op.hour])
+                byHr[op.hour] = {
+                    hour: op.hour,
+                    decay: 0,
+                    reflection: 0,
+                    consolidation: 0,
+                };
+            if (op.type === "decay") byHr[op.hour].decay = op.cnt;
+            else if (op.type === "reflect")
+                byHr[op.hour].reflection = op.cnt;
+            else if (op.type === "consolidate")
+                byHr[op.hour].consolidation = op.cnt;
+        }
+
+        const totalArr = totals as MaintTotal[];
+        const totDecay =
+            totalArr.find((t) => t.type === "decay")?.total || 0;
+        const totReflect =
+            totalArr.find((t) => t.type === "reflect")?.total || 0;
+        const totConsol =
+            totalArr.find((t) => t.type === "consolidate")?.total || 0;
+        const totOps = totDecay + totReflect + totConsol;
+        const efficiency =
+            totOps > 0
+                ? Math.round(((totReflect + totConsol) / totOps) * 100)
+                : 0;
+
+        return {
+            operations: Object.values(byHr),
+            totals: {
+                cycles: totDecay,
+                reflections: totReflect,
+                consolidations: totConsol,
+                efficiency,
+            },
+        };
+    })
 
     /**
      * GET /dashboard/settings
      * Retrieves persisted configuration for the authenticated user.
      */
-    app.get(
-        "/dashboard/settings",
-        async (req: AdvancedRequest, res: AdvancedResponse) => {
-            try {
-                const userId = normalizeUserId(req.user?.id);
-                const { getPersistedConfig } =
-                    await import("../../core/persisted_cfg");
+    .get("/dashboard/settings", async (ctx) => {
+        const user = getUser(ctx);
+        const userId = normalizeUserId(user?.id);
+        // Verify access to OWN settings (must have ID)
+        if (!userId) throw new AppError(401, "UNAUTHORIZED", "User context required");
+        verifyUserAccess(user, userId);
 
-                // Fetch known config types
-                const openai = await getPersistedConfig(
-                    userId || null,
-                    "openai",
-                );
-                const gemini = await getPersistedConfig(
-                    userId || null,
-                    "gemini",
-                );
-                const anthropic = await getPersistedConfig(
-                    userId || null,
-                    "anthropic",
-                );
-                const ollama = await getPersistedConfig(
-                    userId || null,
-                    "ollama",
-                );
+        const { getPersistedConfig } =
+            await import("../../core/persisted_cfg");
 
-                res.json({
-                    openai: openai || {},
-                    gemini: gemini || {},
-                    anthropic: anthropic || {},
-                    ollama: ollama || {},
-                });
-            } catch (e: unknown) {
-                sendError(res, e);
-            }
-        },
-    );
+        // Fetch known config types
+        const openai = await getPersistedConfig(
+            userId,
+            "openai",
+        );
+        const gemini = await getPersistedConfig(
+            userId,
+            "gemini",
+        );
+        const anthropic = await getPersistedConfig(
+            userId,
+            "anthropic",
+        );
+        const ollama = await getPersistedConfig(
+            userId,
+            "ollama",
+        );
+
+        return {
+            openai: openai || {},
+            gemini: gemini || {},
+            anthropic: anthropic || {},
+            ollama: ollama || {},
+        };
+    })
 
     /**
      * POST /dashboard/settings
      * Updates persisted configuration for the authenticated user.
      */
-    app.post(
-        "/dashboard/settings",
-        validateBody(
-            z.object({
-                type: z.enum(["openai", "gemini", "anthropic", "ollama"]),
-                config: z.record(z.string(), z.unknown()),
-            }),
-        ),
-        async (req: AdvancedRequest, res: AdvancedResponse) => {
-            try {
-                const userId = normalizeUserId(req.user?.id);
-                const { type, config } = req.body as {
-                    type: string;
-                    config: Record<string, unknown>;
-                };
-                const { setPersistedConfig } =
-                    await import("../../core/persisted_cfg");
+    .post("/dashboard/settings", async ({ body, ...ctx }) => {
+        const user = getUser(ctx);
+        const userId = normalizeUserId(user?.id);
+        if (!userId) throw new AppError(401, "UNAUTHORIZED", "User context required");
+        verifyUserAccess(user, userId);
 
-                await setPersistedConfig(userId || null, type, config);
+        const schema = z.object({
+            type: z.enum(["openai", "gemini", "anthropic", "ollama"]),
+            config: z.record(z.string(), z.unknown()),
+        });
+        const { type, config } = schema.parse(body);
 
-                // Log for audit
-                logger.info(
-                    `[CONFIG] User ${userId || "system"} updated ${type} config`,
-                );
+        const { setPersistedConfig } =
+            await import("../../core/persisted_cfg");
+        const { flush_generator } =
+            await import("../../ai/adapters");
 
-                res.json({ success: true, type });
-            } catch (e: unknown) {
-                sendError(res, e);
-            }
-        },
-    );
-}
+        await setPersistedConfig(userId, type, config);
+
+        // Invalidate cached AI generator to ensure new config takes effect immediately
+        flush_generator(userId);
+
+        // Log for audit
+        logger.info(
+            `[CONFIG] User ${userId} updated ${type} config`,
+        );
+
+        return { success: true, type };
+    });

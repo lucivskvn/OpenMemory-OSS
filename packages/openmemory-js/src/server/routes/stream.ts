@@ -1,17 +1,9 @@
+import { Elysia } from "elysia";
 import { eventBus, EVENTS } from "../../core/events";
-import {
-    IdeSessionPayload,
-    IdeSuggestionPayload,
-    MemoryAddedPayload,
-    OpenMemoryEvent,
-} from "../../core/types";
 import { logger } from "../../utils/logger";
-import type { AdvancedRequest, AdvancedResponse, ServerApp } from "../server";
+import { getUser } from "../middleware/auth";
+import { UserContext } from "../../core/types";
 
-/**
- * Sets up the Server-Sent Events (SSE) streaming endpoint for real-time monitoring.
- * Ensures strict tenant isolation (Confidentiality) and robust cleanup (Sustainability).
- */
 /**
  * SSE Client representation for multiplexing.
  */
@@ -97,17 +89,22 @@ function initGlobalListeners() {
 /**
  * Sets up the Server-Sent Events (SSE) streaming endpoint for real-time monitoring.
  */
-export function setupStream(app: ServerApp) {
-    initGlobalListeners();
+export const streamPlugin = new Elysia()
+    .get("/stream", (ctx) => {
+        const { query, request } = ctx;
+        initGlobalListeners();
 
-    app.get("/stream", (req: AdvancedRequest, res: AdvancedResponse) => {
+        const user = getUser(ctx);
+        const requestId = crypto.randomUUID();
+
+        // Prepare client object (controller will be set in start)
         const client: SSEClient = {
-            id: req.requestId,
+            id: requestId,
             encoder: new TextEncoder(),
-            userId: req.user?.id,
-            isAdmin: (req.user?.scopes || []).includes("admin:all"),
-            subscribeTarget: req.query.subscribe as string | undefined,
-            controller: null as any // to be set in start
+            userId: user?.id,
+            isAdmin: (user?.scopes || []).includes("admin:all"),
+            subscribeTarget: query.subscribe as string | undefined, // Elysia query is typically an object
+            controller: null as any
         };
 
         const stream = new ReadableStream({
@@ -127,8 +124,8 @@ export function setupStream(app: ServerApp) {
                     } catch (_) { }
                 };
 
-                if (req.signal) {
-                    req.signal.addEventListener("abort", () => {
+                if (request.signal) {
+                    request.signal.addEventListener("abort", () => {
                         logger.info(`[STREAM] Client ${client.id} disconnected`);
                         cleanup();
                     }, { once: true });
@@ -139,13 +136,12 @@ export function setupStream(app: ServerApp) {
             }
         });
 
-        res.writeHead(200, {
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no" // Important for Nginx/Cloudflare
+        return new Response(stream, {
+            headers: {
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"
+            }
         });
-
-        res.send(stream);
     });
-}

@@ -18,28 +18,30 @@ export class StateManager {
     public client: MemoryClient;
     public fileCache: Map<string, string>;
 
-    private constructor(context: vscode.ExtensionContext) {
-        const config = vscode.workspace.getConfiguration('openmemory');
-        const userId = this.getUserId(context, config);
-
-        this.state = {
-            isEnabled: config.get('enabled') ?? true,
-            isTracking: false,
-            useMcp: config.get('useMCP') || false,
-            backendUrl: config.get('backendUrl') || 'http://localhost:8080',
-            apiKey: config.get('apiKey') || undefined,
-            mcpServerPath: config.get('mcpServerPath') || '',
-            userId,
-            sessionId: null
-        };
-
+    private constructor(private context: vscode.ExtensionContext) {
+        this.state = this.getInitialState(context);
         this.client = new MemoryClient({
             baseUrl: this.state.backendUrl,
             token: this.state.apiKey,
             defaultUser: this.state.userId
         });
-
         this.fileCache = new Map<string, string>();
+    }
+
+    private getInitialState(context: vscode.ExtensionContext): ExtensionState {
+        const config = vscode.workspace.getConfiguration('openmemory');
+        const userId = this.getUserId(context, config);
+
+        return {
+            isEnabled: config.get('enabled') ?? true,
+            isTracking: false,
+            useMcp: config.get('useMCP') || false,
+            backendUrl: config.get('backendUrl') || 'http://localhost:8080',
+            apiKey: undefined, // Loaded asynchronously
+            mcpServerPath: config.get('mcpServerPath') || '',
+            userId,
+            sessionId: null
+        };
     }
 
     public static getInstance(context?: vscode.ExtensionContext): StateManager {
@@ -49,13 +51,35 @@ export class StateManager {
         return StateManager.instance;
     }
 
+    public async initialize(): Promise<void> {
+        const secretKey = await this.context.secrets.get('openmemory.apiKey');
+        if (secretKey) {
+            this.updateState({ apiKey: secretKey });
+        }
+        // Also check legacy config for migration (optional, but good DX)
+        const legacyKey = vscode.workspace.getConfiguration('openmemory').get<string>('apiKey');
+        if (legacyKey && !secretKey) {
+            await this.storeApiKey(legacyKey);
+            // Optional: clear legacy config?
+        }
+    }
+
+    public async storeApiKey(key: string | undefined): Promise<void> {
+        if (key) {
+            await this.context.secrets.store('openmemory.apiKey', key);
+            this.updateState({ apiKey: key });
+        } else {
+            await this.context.secrets.delete('openmemory.apiKey');
+            this.updateState({ apiKey: undefined });
+        }
+    }
+
     public getState(): ExtensionState {
         return { ...this.state };
     }
 
     public updateState(updates: Partial<ExtensionState>) {
         this.state = { ...this.state, ...updates };
-        // Re-init client if auth/url changes
         if (updates.backendUrl || updates.apiKey || updates.userId) {
             this.client = new MemoryClient({
                 baseUrl: this.state.backendUrl,

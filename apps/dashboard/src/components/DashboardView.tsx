@@ -15,7 +15,7 @@ import { BrainCircuit, Filter, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export function DashboardView() {
-    const { stats, recent, activity, logs, graphData, timeline, loading, error } = useDashboardData();
+    const { stats, status, recent, activity, logs, graphData, timeline, loading, error } = useDashboardData();
     const [selectedNode, setSelectedNode] = useState<string | null>(null);
 
     const handleReinforce = (id: string) => {
@@ -96,7 +96,7 @@ export function DashboardView() {
                 <div className="lg:col-span-4 flex flex-col gap-8">
                     <ActivityFeed activities={filteredActivity} />
                     <Timeline data={timeline} isLoading={loading} />
-                    <MaintenanceFeed logs={logs} />
+                    <MaintenanceFeed logs={logs} status={status} />
                 </div>
             </main>
 

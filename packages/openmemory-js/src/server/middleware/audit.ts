@@ -1,74 +1,72 @@
+import { Elysia } from "elysia";
+import * as crypto from "crypto";
 import { env } from "../../core/cfg";
-import { insertFact } from "../../temporal_graph/store";
-import { logger } from "../../utils/logger";
-import { redact } from "../../utils/logger";
-import { AdvancedRequest, AdvancedResponse, NextFunction } from "../server";
+import { q } from "../../core/db";
+import { normalizeUserId } from "../../utils";
+import { logger, redact } from "../../utils/logger";
+import { getUser } from "./auth";
 
 /**
- * Middleware to log mutating actions (write/audit) to the Temporal Graph.
- * "Eating our own dogfood" - using the system to audit itself.
+ * Audit Plugin
+ * Logs mutating actions via `onResponse` (after handling).
  */
-export async function auditMiddleware(
-    req: AdvancedRequest,
-    res: AdvancedResponse,
-    next: NextFunction,
-) {
-    if (!env.logAuth) {
-        // Skip if auditing is disabled (though usually we want this enabled for security)
-        return await next();
-    }
+export const auditPlugin = new Elysia({ name: "audit" })
+    .onAfterResponse(async (ctx) => {
+        if (!env.logAuth) return;
 
-    // Only audit mutating methods
-    if (["GET", "HEAD", "OPTIONS"].includes(req.method)) {
-        return await next();
-    }
+        // Explicitly access context properties
+        const { request, set, path, body, query, params } = ctx;
 
-    const startTime = Date.now();
+        // Only audit mutating methods
+        // Elysia method is in request.method
+        if (["GET", "HEAD", "OPTIONS", "TRACE"].includes(request.method)) {
+            return;
+        }
 
-    // Proceed with request
-    await next();
+        // Check if `store` has user
+        const user = getUser(ctx);
+        const userId = user?.id ? normalizeUserId(user.id) : null;
+        const action = request.method;
+        const resource = path;
 
-    // After request completion (or error if next throws, but usually errors are caught)
-    // We only log successful actions (2xx) or explicit failures if relevant?
-    // Let's log if statusCode < 400.
-    if (res.statusCode >= 400) return;
+        // Resource Type mapping
+        let resourceType = "unknown";
+        let resourceId: string | null = null;
 
-    try {
-        const userId = req.user?.id || "anonymous";
-        const action = req.method;
-        const resource = req.path; // e.g., /memory/123
+        if (resource.startsWith("/memory")) {
+            resourceType = "memory";
+            const parts = resource.split("/");
+            if (parts.length > 2 && parts[2]?.length > 10) resourceId = parts[2];
+        } else if (resource.startsWith("/admin/users")) {
+            resourceType = "user";
+            const parts = resource.split("/");
+            if (parts.length > 3) resourceId = parts[3];
+        }
 
-        // Construct the fact
-        // Subject: user:{userId}
-        // Predicate: performed_POST
-        // Object: {resource}
+        const secureBody = redact(body);
+        const bodyStr = typeof secureBody === "string" ? secureBody : JSON.stringify(secureBody);
 
-        const body = redact(req.body);
-        const bodyStr = typeof body === "string" ? body : JSON.stringify(body);
-
-        const meta: Record<string, unknown> = {
-            ip: req.ip,
-            params: redact(req.params),
-            query: redact(req.query),
-            body:
-                bodyStr.length > 2000
-                    ? bodyStr.slice(0, 2000) + " [TRUNCATED]"
-                    : body,
-            statusCode: res.statusCode,
-            latency: Date.now() - startTime,
+        const metadata: Record<string, unknown> = {
+            params: redact(params),
+            query: redact(query),
+            body: bodyStr.length > 2000 ? bodyStr.slice(0, 2000) + " [TRUNCATED]" : secureBody,
+            statusCode: set.status,
         };
 
-        await insertFact(
-            `user:${userId}`,
-            `performed_${action}`,
-            resource,
-            new Date(startTime),
-            1.0,
-            meta,
-            userId === "anonymous" ? null : userId,
-        );
-    } catch (e: unknown) {
-        logger.error("[AUDIT] Failed to log audit fact:", { error: e });
-        // Do not fail the request if audit fails, but log it.
-    }
-}
+        // Fire and forget
+        q.auditLog.run({
+            id: crypto.randomUUID(),
+            userId: userId ?? null,
+            action: `${action} ${resource}`,
+            resourceType,
+            resourceId,
+            // Fallback to headers for IP since we don't have direct access to app.server in this context easily
+            // and usually x-forwarded-for is what we want in production anyway.
+            ipAddress: request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip") || null,
+            userAgent: request.headers.get("user-agent") || null,
+            metadata,
+            timestamp: Date.now(),
+        }).catch((err: any) => {
+            logger.error("[AUDIT] Background log failed:", { error: err });
+        });
+    });

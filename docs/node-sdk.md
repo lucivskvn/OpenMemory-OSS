@@ -57,7 +57,7 @@ Permanently deletes a memory by its ID.
 
 #### `mem.list(limit?, offset?)`
 
-List all memories for the current user (if `user_id` was set in constructor) or all memories in the system.
+List all memories for the current user (if `userId` was set in constructor) or all memories in the system.
 
 #### `mem.listUsers()`
 
@@ -69,8 +69,8 @@ Returns an array of all unique user IDs present in the memory store.
 
 - `content` (string)
 - `options`: Same as `add` plus:
-    - `id` (string): Force specific UUID.
-    - `createdAt` (number): Force creation timestamp.
+  - `id` (string): Force specific UUID.
+  - `createdAt` (number): Force creation timestamp.
 
 ```javascript
 await mem.importMemory("Historic event", {
@@ -102,13 +102,24 @@ const isHealthy = await client.health();
 
 #### Methods
 
-*   `add`, `search`, `get`, `update`, `delete`, `list`, `listUsers`, `ingestUrl`
-*   `importMemory(content, options)`: Admin import with forced ID.
-*   `ingest(contentType, data, options)`: Ingest raw documents.
-*   `reinforce(id, boost)`: Provide feedback on memory relevance.
-*   `health()`: Check server status.
+- `add`, `search`, `get`, `update`, `delete`, `list`, `listUsers`
+- `ingestUrl(url, options)`: Ingest content from a URL.
+  - `options.config.userAgent`: Custom User-Agent string.
+
+```typescript
+await client.ingestUrl("https://example.com", { 
+  config: { userAgent: "MyBot/1.0" } 
+});
+```
+
+- `importMemory(content, options)`: Admin import with forced ID.
+
+- `ingest(contentType, data, options)`: Ingest raw documents.
+- `reinforce(id, boost)`: Provide feedback on memory relevance.
+- `health()`: Check server status.
 
 ### Temporal Graph API
+
 Accessed via `mem.temporal` namespace.
 
 ```typescript
@@ -122,19 +133,22 @@ await mem.temporal.addEdge(factId1, factId2, "caused_by", { weight: 0.9 });
 const facts = await mem.temporal.search("Spicy%");
 ```
 
-*   `mem.temporal.add(sub, pred, obj, opts)`
-*   `mem.temporal.get(sub, pred)`
-*   `mem.temporal.search(pattern, opts)`
-*   `mem.temporal.history(subject)`
-*   `mem.temporal.addEdge(src, tgt, rel, opts)`
-*   `mem.temporal.getEdges(src, tgt, rel)`
+- `mem.temporal.add(sub, pred, obj, opts)`
+- `mem.temporal.get(sub, pred)`
+- `mem.temporal.search(pattern, opts)`
+- `mem.temporal.history(subject)`
+- `mem.temporal.addEdge(src, tgt, rel, opts)`
+- `mem.temporal.getEdges(src, tgt, rel)`
 
 ### Dashboard & Admin API
-*   `getStats()`: System-wide statistics.
-*   `getActivity(limit)`: Recent operations log.
-*   `getTopMemories(limit)`: High-salience memories.
-*   `getSectorTimeline(hours)`: Memory distribution over time.
-*   `getMaintenanceStats(hours)`: Decay and reflection metrics.
+
+- `getStats()`: System-wide statistics.
+
+- `getActivity(limit)`: Recent operations log.
+- `getTopMemories(limit)`: High-salience memories.
+- `getSectorTimeline(hours)`: Memory distribution over time.
+- `getMaintenanceStats(hours)`: Decay and reflection metrics.
+
 ## Server Mode
 
 The Node package also contains the API server.

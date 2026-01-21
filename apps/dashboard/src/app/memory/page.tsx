@@ -19,7 +19,7 @@ export default function MemoryStorePage() {
     const load = async () => {
         setLoading(true);
         try {
-            const m = await api.getMemories(50);
+            const m = await api.getMemories(50) as Memory[];
             setMemories(m);
         } catch (e) {
             console.error(e);
@@ -36,7 +36,7 @@ export default function MemoryStorePage() {
         }
         setIsSearching(true);
         try {
-            const m = await api.searchMemories(query);
+            const m = await api.searchMemories(query) as Memory[];
             setMemories(m);
         } catch (e) {
             console.error(e);

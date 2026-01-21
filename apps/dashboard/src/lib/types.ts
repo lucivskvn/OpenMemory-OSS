@@ -7,8 +7,55 @@
 export * from "openmemory-js/client";
 
 // Import specific types for aliasing/extending
-import type { TimelineBucket, MemoryRow, SectorType, MemoryItem, IngestRequest, IngestUrlRequest, SystemStats, ActivityItem, OpenMemoryEvent, MaintLogEntry, SourceRegistryEntry } from "openmemory-js/client";
-export type { SystemStats, ActivityItem, OpenMemoryEvent, MaintLogEntry, SourceRegistryEntry };
+// Import specific types for aliasing/extending
+import type {
+    TimelineBucket,
+    MemoryRow,
+    SectorType,
+    MemoryItem,
+    IngestRequest,
+    IngestUrlRequest,
+    SystemStats,
+    ActivityItem,
+    OpenMemoryEvent,
+    MaintLogEntry,
+    SourceRegistryEntry,
+    MaintenanceStatus,
+    AddMemoryRequest,
+    AuditLogEntry,
+    WaypointGraphResult,
+    ApiKey
+} from "openmemory-js/client";
+
+export interface UserProfile {
+    id: string;
+    username: string;
+    email?: string;
+    createdAt: number;
+    metadata?: Record<string, unknown>;
+    preferences?: Record<string, unknown>;
+}
+
+export interface AuditStats {
+    total: number;
+    totalEvents: number;
+    criticalEvents: number;
+    byAction: Record<string, number>;
+    byResourceType: Record<string, number>;
+    lastEntryAt: number;
+}
+
+export type {
+    SystemStats,
+    ActivityItem,
+    OpenMemoryEvent,
+    MaintLogEntry,
+    SourceRegistryEntry,
+    MaintenanceStatus,
+    AuditLogEntry,
+    WaypointGraphResult,
+    ApiKey
+};
 
 // --- Dashboard Specific (Legacy or UI) ---
 
@@ -23,7 +70,7 @@ export interface GraphLink {
     source: string;
     target: string;
     label: string;
-    confidence?: number;
+    weight?: number;
 }
 
 export interface GraphData {
@@ -46,9 +93,5 @@ export type MemRow = MemoryRow;
 export type IngestReq = IngestRequest;
 export type IngestUrlReq = IngestUrlRequest;
 
-// Ensure ClientMemoryOptions is available if not exported by *
-export interface ClientMemoryOptions {
-    userId?: string;
-    tags?: string[];
-    [key: string]: unknown;
-}
+// Match SDK exactly
+export type ClientMemoryOptions = Partial<AddMemoryRequest>;

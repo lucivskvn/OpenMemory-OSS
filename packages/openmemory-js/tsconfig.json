@@ -3,17 +3,29 @@
         "target": "ES2022",
         "module": "ESNext",
         "moduleResolution": "bundler",
-        "noEmit": true,
-        "allowImportingTsExtensions": true,
+        "noEmit": false,
+        "allowImportingTsExtensions": false,
         "strict": true,
         "skipLibCheck": true,
         "jsx": "react-jsx",
         "allowJs": true,
-        "esModuleInterop": true
+        "esModuleInterop": true,
+        "isolatedModules": true,
+        "incremental": true,
+        "tsBuildInfoFile": ".tsbuildinfo",
+        "types": [
+            "bun"
+        ]
     },
     "include": [
         "src",
-        "tests",
-        "scripts"
+        "scripts",
+        "verify_*.ts",
+        "test"
+    ],
+    "exclude": [
+        "node_modules",
+        "src/server/public/js/dashboard.js",
+        "dist"
     ]
 }
