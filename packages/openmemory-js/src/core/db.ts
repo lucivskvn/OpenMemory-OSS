@@ -7,14 +7,14 @@ import { SectorStat, MemoryRow } from "./types";
 import { logger as dbLogger } from "../utils/logger";
 import { env } from "./cfg";
 import { resetSecurity } from "./security";
-import { q, runAsync, getAsync, allAsync, iterateAsync, transaction, closeDb as closeDbAccess, getContextId } from "./db_access";
+import { q, runAsync, getAsync, allAsync, iterateAsync, transaction, closeDb as closeDbAccess, getContextId } from "./db/index";
 export { q, runAsync, getAsync, allAsync, iterateAsync, transaction, closeDbAccess, getContextId };
 import { closeRedis } from "./redis";
 import { cleanupVectorStores } from "./vector/manager";
 
-// Re-export everything from access layer
-export * from "./db_access";
-export * from "./db_utils";
+// Re-export everything from the new modular db structure
+export * from "./db/index";
+export * from "./dbUtils";
 export { toVectorString } from "../utils/vectors";
 export { vectorStore, getVectorStore, cleanupVectorStores } from "./vector/manager";
 
@@ -27,10 +27,10 @@ import type { ConfigRepository } from "./repository/config";
 import type { TemporalRepository } from "./repository/temporal";
 import type { AuditRepository } from "./repository/audit";
 import type { WebhookRepository } from "./repository/webhook";
-import type { RateLimitRepository } from "./repository/rate_limit";
+import type { RateLimitRepository } from "./repository/rateLimit";
 import type { EncryptionRepository } from "./repository/encryption";
 import type { IdeRepository } from "./repository/ide";
-import { TABLES } from "./db_access";
+import { TABLES } from "./db/index";
 
 export interface QType {
     transaction: { run: <T>(fn: () => Promise<T>) => Promise<T> };
@@ -66,6 +66,7 @@ export interface QType {
     searchMemsByKeyword: { all: MemoryRepository["searchByKeyword"] };
     hsgSearch: { all: MemoryRepository["hsgSearch"] };
     getSegments: { all: MemoryRepository["getSegments"] };
+    findMems: { all: (params: { userId?: string | null; sector?: string; tags?: string[]; metadata?: Record<string, unknown>; limit?: number; offset?: number }) => Promise<MemoryRow[]> };
 
     // Temporal Repo
     findActiveFact: { get: TemporalRepository["findActiveFact"] };
@@ -112,6 +113,7 @@ export interface QType {
     getLowSalienceMemories: { all: WaypointRepository["getLowSalienceMemories"] };
     getWaypointsForPairs: { all: WaypointRepository["getWaypointsForPairs"] };
     delOrphanWaypoints: { run: WaypointRepository["delOrphanWaypoints"] };
+    list: { all: WaypointRepository["list"] };
 
     insLog: { run: LogRepository["insLog"] };
     updLog: { run: LogRepository["updLog"] };
@@ -125,6 +127,8 @@ export interface QType {
     getUser: { get: (userId: string | null | undefined) => Promise<any> };
     updUserSummary: { run: UserRepository["updUserSummary"] };
     delUser: { run: UserRepository["delUser"] };
+    getUserById: { get: (userId: string | null | undefined) => Promise<any> };
+    getAllUsers: { all: (params: any) => Promise<any[]> };
     getActiveUsers: { all: UserRepository["getActiveUsers"] };
     getUsers: { all: UserRepository["getUsers"] };
 
@@ -138,7 +142,6 @@ export interface QType {
     delApiKey: { run: ConfigRepository["delApiKey"] };
     getApiKeysByUser: { all: ConfigRepository["getApiKeysByUser"] };
     getAllApiKeys: { all: ConfigRepository["getAllApiKeys"] };
-    delApiKeysByUser: { run: ConfigRepository["delApiKeysByUser"] };
     setSystemConfig: { run: ConfigRepository["setSystemConfig"] };
     getSystemConfig: { get: ConfigRepository["getSystemConfig"] };
     getAllSystemConfigs: { all: ConfigRepository["getAllSystemConfigs"] };
@@ -195,6 +198,7 @@ export interface QType {
     delStatsByUser: { run: (userId: string) => Promise<number> };
     delMemByUser: { run: (userId: string) => Promise<number> };
     delUserCascade: { run: (userId: string) => Promise<any> };
+    delApiKeysByUser: { run: (userId: string) => Promise<number> };
     pruneMemories: { run: (id: string, userId?: string | null) => Promise<number> };
 }
 
@@ -248,7 +252,7 @@ const getConfigRepo = async () => getRepo((await import("./repository/config")).
 const getTemporalRepo = async () => getRepo((await import("./repository/temporal")).TemporalRepository);
 const getAuditRepo = async () => getRepo((await import("./repository/audit")).AuditRepository);
 const getWebhookRepo = async () => getRepo((await import("./repository/webhook")).WebhookRepository);
-const getRateLimitRepo = async () => getRepo((await import("./repository/rate_limit")).RateLimitRepository);
+const getRateLimitRepo = async () => getRepo((await import("./repository/rateLimit")).RateLimitRepository);
 const getEncryptionRepo = async () => getRepo((await import("./repository/encryption")).EncryptionRepository);
 const getIdeRepo = async () => getRepo((await import("./repository/ide")).IdeRepository);
 
@@ -268,10 +272,12 @@ let isQPopulated = false;
  * @internal Exported for test setup to ensure q is populated after closeDb().
  */
 export function populateQ(): void {
-    if (isQPopulated && q.insMem) return; // Already populated
+    if (isQPopulated && q && q.insMem) return; // Already populated
     dbLogger.info("[DB] Populating q object...");
-    Object.assign(q, {
-        transaction: { run: <T>(fn: () => Promise<T>) => transaction.run(fn) },
+    const mapping: Partial<QType> = {
+        transaction: { run: (fn) => transaction.run(fn) },
+
+        // Memory
         insMem: { run: lazyRepo(getMemRepo, "insMem") },
         insMems: { run: lazyRepo(getMemRepo, "insMems") },
         updMeanVec: { run: lazyRepo(getMemRepo, "updMeanVec") },
@@ -290,25 +296,15 @@ export function populateQ(): void {
         getMem: { get: lazyRepo(getMemRepo, "getMem") },
         getMems: { all: lazyRepo(getMemRepo, "getMems") },
         getMemBySimhash: { get: lazyRepo(getMemRepo, "getMemBySimhash") },
-        clearAll: {
-            run: async () => {
-                const tables = [TABLES.memories, TABLES.vectors, TABLES.waypoints, TABLES.users, TABLES.temporal_facts, TABLES.temporal_edges, TABLES.source_configs, TABLES.embed_logs, TABLES.maint_logs, TABLES.stats, TABLES.learned_models];
-                for (const t of tables) await runAsync(`delete from ${t}`);
-                return 1;
-            },
-        },
         getStats: { get: lazyRepo(getMemRepo, "getStats") },
         getSectorStats: { all: lazyRepo(getMemRepo, "getSectorStats") },
         getRecentActivity: { all: lazyRepo(getMemRepo, "getRecentActivity") },
         getTopMemories: { all: lazyRepo(getMemRepo, "getTopMemories") },
         getSectorTimeline: { all: lazyRepo(getMemRepo, "getSectorTimeline") },
-        getMaintenanceLogs: { all: lazyRepo(getLogRepo, "getMaintenanceLogs") },
         getSegmentCount: { get: lazyRepo(getMemRepo, "getSegmentCount") },
         getSegments: { all: lazyRepo(getMemRepo, "getSegments") },
         getMemCount: { get: lazyRepo(getMemRepo, "getMemCount") },
         getVecCount: { get: lazyRepo(getMemRepo, "getVecCount") },
-        getFactCount: { get: lazyRepo(getTemporalRepo, "getFactCount") },
-        getEdgeCount: { get: lazyRepo(getTemporalRepo, "getEdgeCount") },
         allMemByUser: { all: lazyRepo(getMemRepo, "allMemByUser") },
         allMem: { all: lazyRepo(getMemRepo, "allMem") },
         allMemStable: { all: lazyRepo(getMemRepo, "allMemStable") },
@@ -316,72 +312,13 @@ export function populateQ(): void {
         allMemBySector: { all: lazyRepo(getMemRepo, "allMemBySector") },
         allMemBySectorAndTag: { all: lazyRepo(getMemRepo, "allMemBySectorAndTag") },
         searchMemsByKeyword: { all: lazyRepo(getMemRepo, "searchByKeyword") },
-        waypoints: {
-            insWaypoint: { run: lazyRepo(getWaypointRepo, "insWaypoint") },
-            insWaypoints: { run: lazyRepo(getWaypointRepo, "insWaypoints") },
-            getWaypoint: { get: lazyRepo(getWaypointRepo, "getWaypoint") },
-            getWaypointsBySrc: { all: lazyRepo(getWaypointRepo, "getWaypointsBySrc") },
-            getWaypointsBySrcs: { all: lazyRepo(getWaypointRepo, "getWaypointsBySrcs") },
-            getNeighbors: { all: lazyRepo(getWaypointRepo, "getNeighbors") },
-            updWaypoint: { run: lazyRepo(getWaypointRepo, "updWaypoint") },
-            pruneWaypoints: { run: lazyRepo(getWaypointRepo, "pruneWaypoints") },
-            getLowSalienceMemories: { all: lazyRepo(getWaypointRepo, "getLowSalienceMemories") },
-            getWaypointsForPairs: { all: lazyRepo(getWaypointRepo, "getWaypointsForPairs") },
-            list: { all: lazyRepo(getWaypointRepo, "list") },
-        },
-        insWaypoint: { run: lazyRepo(getWaypointRepo, "insWaypoint") },
-        insWaypoints: { run: lazyRepo(getWaypointRepo, "insWaypoints") },
-        getWaypoint: { get: lazyRepo(getWaypointRepo, "getWaypoint") },
-        getWaypointsBySrc: { all: lazyRepo(getWaypointRepo, "getWaypointsBySrc") },
-        getWaypointsBySrcs: { all: lazyRepo(getWaypointRepo, "getWaypointsBySrcs") },
-        getNeighbors: { all: lazyRepo(getWaypointRepo, "getNeighbors") },
-        updWaypoint: { run: lazyRepo(getWaypointRepo, "updWaypoint") },
-        pruneWaypoints: { run: lazyRepo(getWaypointRepo, "pruneWaypoints") },
-        getLowSalienceMemories: { all: lazyRepo(getWaypointRepo, "getLowSalienceMemories") },
-        getWaypointsForPairs: { all: lazyRepo(getWaypointRepo, "getWaypointsForPairs") },
-        delMemByUser: { run: lazyRepo(getMemRepo, "delMemByUser") },
-        pruneMemories: { run: lazyRepo(getMemRepo, "delMem") },
-        insMaintLog: { run: lazyRepo(getLogRepo, "insMaintLog") },
-        logMaintOp: { run: lazyRepo(getLogRepo, "logMaintOp") },
-        insLog: { run: lazyRepo(getLogRepo, "insLog") },
-        updLog: { run: lazyRepo(getLogRepo, "updLog") },
-        getPendingLogs: { all: lazyRepo(getLogRepo, "getPendingLogs") },
-        getFailedLogs: { all: lazyRepo(getLogRepo, "getFailedLogs") },
-        getUser: { get: lazyRepo(getUserRepo, "getById") },
-        insUser: { run: lazyRepo(getUserRepo, "insUser") },
-        updUserSummary: { run: lazyRepo(getUserRepo, "updUserSummary") },
-        getUserById: { get: lazyRepo(getUserRepo, "getById") },
-        getAllUsers: { all: lazyRepo(getUserRepo, "getUsers") },
-        delEdgesByUser: { run: lazyRepo(getTemporalRepo, "delEdgesByUser") },
-        delLearnedModel: { run: lazyRepo(getConfigRepo, "delLearnedModelByUser") },
-        delSourceConfigsByUser: { run: lazyRepo(getConfigRepo, "delSourceConfigsByUser") },
-        delWaypointsByUser: { run: lazyRepo(getWaypointRepo, "delWaypointsByUser") },
-        delEmbedLogsByUser: { run: lazyRepo(getLogRepo, "delEmbedLogsByUser") },
-        delMaintLogsByUser: { run: lazyRepo(getLogRepo, "delMaintLogsByUser") },
-        delStatsByUser: { run: lazyRepo(getUserRepo, "delStatsByUser") },
-        delUserCascade: { run: lazyRepo(getUserRepo, "deleteUserCascade") },
+        hsgSearch: { all: lazyRepo(getMemRepo, "hsgSearch") },
+        findMems: { all: lazyRepo(getMemRepo, "findMems") },
+        allMemIds: { all: lazyRepo(getMemRepo, "allMemIds") },
         getMemByMetadataLike: { all: lazyRepo(getMemRepo, "getMemByMetadataLike") },
         getTrainingData: { all: lazyRepo(getMemRepo, "getTrainingData") },
-        getClassifierModel: { get: lazyRepo(getConfigRepo, "getClassifierModel") },
-        insClassifierModel: { run: lazyRepo(getConfigRepo, "insClassifierModel") },
-        getActiveUsers: { all: lazyRepo(getUserRepo, "getActiveUsers") },
-        getUsers: { all: lazyRepo(getUserRepo, "getUsers") },
-        getTables: { all: () => allAsync(env.metadataBackend === "postgres" ? `SELECT table_name as name FROM information_schema.tables WHERE table_schema='${env.pgSchema}'` : "SELECT name FROM sqlite_master WHERE type='table'") },
-        insSourceConfig: { run: lazyRepo(getConfigRepo, "insSourceConfig") },
-        updSourceConfig: { run: lazyRepo(getConfigRepo, "updSourceConfig") },
-        getSourceConfig: { get: lazyRepo(getConfigRepo, "getSourceConfig") },
-        getSourceConfigsByUser: { all: lazyRepo(getConfigRepo, "getSourceConfigsByUser") },
-        delSourceConfig: { run: lazyRepo(getConfigRepo, "delSourceConfig") },
-        insApiKey: { run: lazyRepo(getConfigRepo, "insApiKey") },
-        getApiKey: { get: lazyRepo(getConfigRepo, "getApiKey") },
-        getAdminKeysCount: { get: lazyRepo(getConfigRepo, "getAdminCount") },
-        delApiKey: { run: lazyRepo(getConfigRepo, "delApiKey") },
-        getApiKeysByUser: { all: lazyRepo(getConfigRepo, "getApiKeysByUser") },
-        getAllApiKeys: { all: lazyRepo(getConfigRepo, "getAllApiKeys") },
-        getAdminCount: { get: lazyRepo(getConfigRepo, "getAdminCount") },
-        hsgSearch: { all: lazyRepo(getMemRepo, "hsgSearch") },
-        allMemIds: { all: lazyRepo(getMemRepo, "allMemIds") },
-        delOrphanWaypoints: { run: lazyRepo(getWaypointRepo, "delOrphanWaypoints") },
+        delMemByUser: { run: lazyRepo(getMemRepo, "delMemByUser") },
+        pruneMemories: { run: lazyRepo(getMemRepo, "delMem") },
 
         // Temporal
         findActiveFact: { get: lazyRepo(getTemporalRepo, "findActiveFact") },
@@ -400,6 +337,8 @@ export function populateQ(): void {
         applyConfidenceDecay: { run: lazyRepo(getTemporalRepo, "applyConfidenceDecay") },
         getFact: { get: lazyRepo(getTemporalRepo, "getFact") },
         getEdge: { get: lazyRepo(getTemporalRepo, "getEdge") },
+        getFactCount: { get: lazyRepo(getTemporalRepo, "getFactCount") },
+        getEdgeCount: { get: lazyRepo(getTemporalRepo, "getEdgeCount") },
         getActiveFactCount: { get: lazyRepo(getTemporalRepo, "getActiveFactCount") },
         getActiveEdgeCount: { get: lazyRepo(getTemporalRepo, "getActiveEdgeCount") },
         queryFactsAtTime: { all: lazyRepo(getTemporalRepo, "queryFactsAtTime") },
@@ -414,8 +353,51 @@ export function populateQ(): void {
         getChangesInWindow: { all: lazyRepo(getTemporalRepo, "getChangesInWindow") },
         delFactsByUser: { run: lazyRepo(getTemporalRepo, "delFactsByUser") },
         getVolatileFacts: { all: lazyRepo(getTemporalRepo, "getVolatileFacts") },
+        delEdgesByUser: { run: lazyRepo(getTemporalRepo, "delEdgesByUser") },
 
+        // Waypoints
+        insWaypoint: { run: lazyRepo(getWaypointRepo, "insWaypoint") },
+        insWaypoints: { run: lazyRepo(getWaypointRepo, "insWaypoints") },
+        getWaypoint: { get: lazyRepo(getWaypointRepo, "getWaypoint") },
+        getWaypointsBySrc: { all: lazyRepo(getWaypointRepo, "getWaypointsBySrc") },
+        getWaypointsBySrcs: { all: lazyRepo(getWaypointRepo, "getWaypointsBySrcs") },
+        getNeighbors: { all: lazyRepo(getWaypointRepo, "getNeighbors") },
+        updWaypoint: { run: lazyRepo(getWaypointRepo, "updWaypoint") },
+        pruneWaypoints: { run: lazyRepo(getWaypointRepo, "pruneWaypoints") },
+        getLowSalienceMemories: { all: lazyRepo(getWaypointRepo, "getLowSalienceMemories") },
+        getWaypointsForPairs: { all: lazyRepo(getWaypointRepo, "getWaypointsForPairs") },
+        delOrphanWaypoints: { run: lazyRepo(getWaypointRepo, "delOrphanWaypoints") },
+        delWaypointsByUser: { run: lazyRepo(getWaypointRepo, "delWaypointsByUser") },
+        list: { all: lazyRepo(getWaypointRepo, "list") },
+
+        // User & Config
+        getUser: { get: lazyRepo(getUserRepo, "getById") },
+        insUser: { run: lazyRepo(getUserRepo, "insUser") },
+        updUserSummary: { run: lazyRepo(getUserRepo, "updUserSummary") },
+        getUserById: { get: lazyRepo(getUserRepo, "getById") },
+        getAllUsers: { all: lazyRepo(getUserRepo, "getUsers") },
+        getActiveUsers: { all: lazyRepo(getUserRepo, "getActiveUsers") },
+        getUsers: { all: lazyRepo(getUserRepo, "getUsers") },
+        delUser: { run: lazyRepo(getUserRepo, "delUser") },
+        delStatsByUser: { run: lazyRepo(getUserRepo, "delStatsByUser") },
+        delUserCascade: { run: lazyRepo(getUserRepo, "deleteUserCascade") },
+
+        insSourceConfig: { run: lazyRepo(getConfigRepo, "insSourceConfig") },
+        updSourceConfig: { run: lazyRepo(getConfigRepo, "updSourceConfig") },
+        getSourceConfig: { get: lazyRepo(getConfigRepo, "getSourceConfig") },
+        getSourceConfigsByUser: { all: lazyRepo(getConfigRepo, "getSourceConfigsByUser") },
+        delSourceConfig: { run: lazyRepo(getConfigRepo, "delSourceConfig") },
+        delSourceConfigsByUser: { run: lazyRepo(getConfigRepo, "delSourceConfigsByUser") },
+        insApiKey: { run: lazyRepo(getConfigRepo, "insApiKey") },
+        getApiKey: { get: lazyRepo(getConfigRepo, "getApiKey") },
+        getAdminCount: { get: lazyRepo(getConfigRepo, "getAdminCount") },
+        delApiKey: { run: lazyRepo(getConfigRepo, "delApiKey") },
+        getApiKeysByUser: { all: lazyRepo(getConfigRepo, "getApiKeysByUser") },
+        getAllApiKeys: { all: lazyRepo(getConfigRepo, "getAllApiKeys") },
         delApiKeysByUser: { run: lazyRepo(getConfigRepo, "delApiKeysByUser") },
+        getClassifierModel: { get: lazyRepo(getConfigRepo, "getClassifierModel") },
+        insClassifierModel: { run: lazyRepo(getConfigRepo, "insClassifierModel") },
+        delLearnedModel: { run: lazyRepo(getConfigRepo, "delLearnedModelByUser") },
         setSystemConfig: { run: lazyRepo(getConfigRepo, "setSystemConfig") },
         getSystemConfig: { get: lazyRepo(getConfigRepo, "getSystemConfig") },
         getAllSystemConfigs: { all: lazyRepo(getConfigRepo, "getAllSystemConfigs") },
@@ -423,9 +405,20 @@ export function populateQ(): void {
         getFeatureFlag: { get: lazyRepo(getConfigRepo, "getFeatureFlag") },
         getAllFeatureFlags: { all: lazyRepo(getConfigRepo, "getAllFeatureFlags") },
 
+        // Logs & Audit
+        insLog: { run: lazyRepo(getLogRepo, "insLog") },
+        updLog: { run: lazyRepo(getLogRepo, "updLog") },
+        getPendingLogs: { all: lazyRepo(getLogRepo, "getPendingLogs") },
+        getFailedLogs: { all: lazyRepo(getLogRepo, "getFailedLogs") },
+        insMaintLog: { run: lazyRepo(getLogRepo, "insMaintLog") },
+        logMaintOp: { run: lazyRepo(getLogRepo, "logMaintOp") },
+        getMaintenanceLogs: { all: lazyRepo(getLogRepo, "getMaintenanceLogs") },
+        delEmbedLogsByUser: { run: lazyRepo(getLogRepo, "delEmbedLogsByUser") },
+        delMaintLogsByUser: { run: lazyRepo(getLogRepo, "delMaintLogsByUser") },
         auditLog: { run: lazyRepo(getAuditRepo, "log") },
         auditQuery: { all: lazyRepo(getAuditRepo, "query") },
 
+        // Webhooks & Rate Limits
         createWebhook: { run: lazyRepo(getWebhookRepo, "create") },
         listWebhooks: { all: lazyRepo(getWebhookRepo, "list") },
         deleteWebhook: { run: lazyRepo(getWebhookRepo, "delete") },
@@ -433,23 +426,39 @@ export function populateQ(): void {
         logWebhookDelivery: { run: lazyRepo(getWebhookRepo, "logDelivery") },
         updateWebhookLog: { run: lazyRepo(getWebhookRepo, "updateLog") },
         delWebhooksByUser: { run: lazyRepo(getWebhookRepo, "delWebhooksByUser") },
-
         getRateLimit: { get: lazyRepo(getRateLimitRepo, "get") },
         updateRateLimit: { run: lazyRepo(getRateLimitRepo, "update") },
         cleanupRateLimits: { run: lazyRepo(getRateLimitRepo, "cleanup") },
 
+        // Security & IDE
         logEncryptionRotation: { run: lazyRepo(getEncryptionRepo, "logRotation") },
         updateEncryptionStatus: { run: lazyRepo(getEncryptionRepo, "updateStatus") },
         getLatestEncryptionRotation: { get: lazyRepo(getEncryptionRepo, "getLatestRotation") },
-
         ideQuery: { getActiveSession: lazyRepo(getIdeRepo, "getActiveSession") },
-    });
+
+        // Specialized
+        clearAll: {
+            run: async () => {
+                const tables = [TABLES.memories, TABLES.vectors, TABLES.waypoints, TABLES.users, TABLES.temporal_facts, TABLES.temporal_edges, TABLES.source_configs, TABLES.embed_logs, TABLES.maint_logs, TABLES.stats, TABLES.learned_models];
+                for (const t of tables) await runAsync(`delete from ${t}`);
+                return 1;
+            },
+        },
+        getTables: {
+            all: () => allAsync(env.metadataBackend === "postgres"
+                ? `SELECT table_name as name FROM information_schema.tables WHERE table_schema='${env.pgSchema}'`
+                : "SELECT name FROM sqlite_master WHERE type='table'")
+        },
+    };
+
+    Object.assign(q, mapping);
     isQPopulated = true;
     dbLogger.info("[DB] q populated.");
 }
 
-// Call at module load
-populateQ();
+// Call at module load - but only if q is available
+// Note: Removed automatic population to avoid circular dependency issues
+// populateQ() will be called by waitForDb() when needed
 
 // ======================================
 // Lifecycle Management
@@ -459,9 +468,9 @@ export async function waitForDb(timeout = 5000) {
     populateQ();
 
     const start = Date.now();
-    while (!q.insMem) {
+    while (!q || !q.insMem) {
         if (Date.now() - start > timeout) {
-            dbLogger.error("[DB] Timeout waiting for DB q object population. Keys:", { keys: Object.keys(q) });
+            dbLogger.error("[DB] Timeout waiting for DB q object population. Keys:", { keys: q ? Object.keys(q) : [] });
             throw new Error("Timeout waiting for DB q object");
         }
         await new Promise(r => setTimeout(r, 100));

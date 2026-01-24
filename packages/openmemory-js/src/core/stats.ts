@@ -8,10 +8,8 @@ import { logger } from "../utils/logger";
 import { env } from "./cfg";
 import { allAsync, TABLES } from "./db";
 
-const isPg = env.metadataBackend === "postgres";
-
 const getMemTable = () => {
-    if (isPg) {
+    if (env.metadataBackend === "postgres") {
         const sc = env.pgSchema || "public";
         const tbl = env.pgTable || "openmemory_memories";
         return `"${sc}"."${tbl}"`;
@@ -106,7 +104,7 @@ export interface SystemStats {
 
 const getDbSz = async (): Promise<number> => {
     try {
-        if (isPg) {
+        if (env.metadataBackend === "postgres") {
             const dbName = env.pgDb || "openmemory";
             const result = await allAsync<DBSize>(
                 `SELECT pg_database_size('${dbName}') as size`,
@@ -150,6 +148,8 @@ export async function getSystemStats(
     // NOTE: These aggregate queries (COUNT, AVG, MIN, MAX) over the entire table 
     // can be slow on large datasets (>1M rows) without specific indexes or materialized views.
     // Acceptable for Admin Dashboard usage, but avoid calling in hot paths.
+
+    const isPg = env.metadataBackend === "postgres";
 
     // User-scoped memory stats
     const userClause = userId

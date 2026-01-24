@@ -1,7 +1,7 @@
 import { describe, expect, beforeAll, afterAll, spyOn, mock } from "bun:test";
 import { test, cleanupIfSuccess, waitForDb, getUniqueDbPath } from "../test_utils";
 import { runReflection } from "../../src/memory/reflect";
-import { genUserSummaryAsync, updateUserSummary } from "../../src/memory/user_summary";
+import { genUserSummaryAsync, updateUserSummary } from "../../src/memory/userSummary";
 import { q, closeDb } from "../../src/core/db";
 import { reloadConfig } from "../../src/core/cfg";
 import { Memory } from "../../src/core/memory";

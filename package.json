@@ -12,6 +12,14 @@
         "dev": "bun run --cwd packages/openmemory-js dev",
         "dev:dashboard": "bun run --cwd apps/dashboard dev",
         "typecheck": "bun run --filter '*' typecheck",
-        "test:js": "bun run --filter './packages/openmemory-js' --filter './apps/dashboard' test"
+        "test:js": "bun run --filter './packages/openmemory-js' --filter './apps/dashboard' test",
+        "audit:deps": "bun run scripts/dependency-audit.ts",
+        "audit:js": "bun run scripts/dependency-audit.ts javascript",
+        "audit:py": "bun run scripts/dependency-audit.ts python",
+        "audit:consistency": "bun run scripts/dependency-audit.ts consistency",
+        "security:scan": "bun run audit:deps && bun run --cwd packages/openmemory-py security:all"
+    },
+    "devDependencies": {
+        "bun-types": "1.3.6"
     }
 }

@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { mcpRoutes } from "../ai/mcp";
-import { env, tier } from "../core/cfg";
+import { env } from "../core/cfg";
 import { closeDb } from "../core/db";
 import { closeRedis } from "../core/redis";
 import {
@@ -8,7 +8,7 @@ import {
     stopAllMaintenance as stopAllSchedulerMaintenance,
 } from "../core/scheduler";
 import { startReflection } from "../memory/reflect";
-import { startUserSummaryReflection } from "../memory/user_summary";
+import { startUserSummaryReflection } from "../memory/userSummary";
 import { runMaintenanceRoutine, safeJob } from "../ops/maintenance";
 import { configureLogger, logger } from "../utils/logger";
 import { printBanner } from "../utils/banner";
@@ -16,7 +16,9 @@ import { printBanner } from "../utils/banner";
 // Middlewares (Plugins)
 import { auditPlugin } from "./middleware/audit";
 import { authPlugin } from "./middleware/auth";
-import { rateLimitPlugin } from "./middleware/rateLimit";
+import { contextPlugin } from "./middleware/context";
+import { rateLimitPlugin, createRateLimitPlugin } from "./middleware/rateLimit";
+import { apiVersioningMiddleware } from "./middleware/apiVersioning";
 
 
 import { adminRoutes } from "./routes/admin";
@@ -36,9 +38,9 @@ import { vercelRoutes } from "./routes/vercel";
 import { webhookRoutes } from "./routes/webhooks";
 import { setupRoutes } from "./routes/setup";
 import { securityRoutes } from "./routes/security";
+import { apiVersionRoutes } from "./routes/apiVersion";
 
 import server from "./server";
-
 export * from "./server";
 
 configureLogger({
@@ -59,11 +61,13 @@ const app = server({
 });
 
 // 1. Register Core Middleware Plugins
-app.use(authPlugin);      // Authentication & Context
-app.use(rateLimitPlugin()); // Rate Limiting
+app.use(apiVersioningMiddleware); // API versioning (first for proper header handling)
+app.use(authPlugin);      // Authentication
+app.use(contextPlugin);   // Establish Security Context (ALC)
+app.use(rateLimitPlugin()); // Global rate limiting (fallback)
 app.use(auditPlugin);     // Auditing
 
-// 2. Register Routes (Plugins)
+// 2. Register Routes (Plugins) with Endpoint-Specific Rate Limiting
 app.use(systemRoutes);
 app.use(temporalRoutes);
 app.use(memoryRoutes);
@@ -76,6 +80,7 @@ app.use(webhookRoutes);
 app.use(setupRoutes);
 app.use(homeRoutes);
 app.use(vercelRoutes);
+app.use(apiVersionRoutes);
 
 app.use(compressRoutes);
 app.use(dynamicsRoutes);
@@ -92,10 +97,10 @@ if (env.verbose) {
 }
 
 // Config Warnings
-if (env.embKind !== "synthetic" && (tier === "hybrid" || tier === "fast")) {
+if (env.embKind !== "synthetic" && (env.tier === "hybrid" || env.tier === "fast")) {
     logger.warn(
         `[CONFIG] ⚠️  WARNING: Embedding configuration mismatch detected!\n` +
-        `         OM_EMBEDDINGS=${env.embKind} but OM_TIER=${tier}\n` +
+        `         OM_EMBEDDINGS=${env.embKind} but OM_TIER=${env.tier}\n` +
         `         Storage will use ${env.embKind} embeddings, but queries will use synthetic embeddings.`
     );
 }

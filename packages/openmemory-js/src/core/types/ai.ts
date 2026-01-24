@@ -3,7 +3,7 @@
  */
 
 import { MemoryItem, IdePattern } from "./memory";
-import type { IdeSuggestionPayload, IdeSessionPayload, MemoryAddedPayload } from "./ai_events";
+import type { IdeSuggestionPayload, IdeSessionPayload, MemoryAddedPayload } from "./aiEvents";
 
 export type { IdeSuggestionPayload, IdeSessionPayload, MemoryAddedPayload };
 

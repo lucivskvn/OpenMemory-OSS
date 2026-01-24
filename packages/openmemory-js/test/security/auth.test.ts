@@ -34,18 +34,11 @@ describe("RBAC Authentication", () => {
         env.adminKey = "supersecret";
 
         const req = { path: "/api/protected", headers: {} } as any;
-        const res = {
-            writeHead: (code: number, headers: any) => {
-                expect(code).toBe(401);
-            },
-            end: (body: string) => {
-                const parsed = JSON.parse(body);
-                expect(parsed.error).toBe("authentication_required");
-            }
-        } as any;
+        const res = { status: 0 } as any;
         const next = () => { throw new Error("Should not call next"); };
 
-        await authenticateApiRequest(req, res, next);
+        await expect(authenticateApiRequest(req, res, next)).rejects.toThrow("Authentication required");
+        expect(res.status).toBe(401);
     });
 
     it("should grant memory:read/write scopes for standard key", async () => {
@@ -127,10 +120,9 @@ describe("Security: Auth Middleware Edge Cases", () => {
         env.adminKey = undefined;
         env.noAuth = false;
 
-        await authenticateApiRequest(req, res, next);
-
+        await expect(authenticateApiRequest(req, res, next)).rejects.toThrow("Authentication Configuration Error");
         expect(next).not.toHaveBeenCalled();
-        expect(res.status).toHaveBeenCalledWith(500);
+        expect(res.status).toBe(500);
     });
 
     it("ALLOWS request if NO keys set but OM_NO_AUTH=true", async () => {
@@ -150,9 +142,8 @@ describe("Security: Auth Middleware Edge Cases", () => {
         env.noAuth = false;
         req.headers["x-api-key"] = "wrong-key";
 
-        await authenticateApiRequest(req, res, next);
-
+        await expect(authenticateApiRequest(req, res, next)).rejects.toThrow("Invalid API Key");
         expect(next).not.toHaveBeenCalled();
-        expect(res.status).toHaveBeenCalledWith(403);
+        expect(res.status).toBe(403);
     });
 });

@@ -1,0 +1,40 @@
+FROM oven/bun:1.3.6-alpine
+
+# Install system dependencies for testing
+RUN apk add --no-cache \
+    curl \
+    git \
+    python3 \
+    py3-pip \
+    postgresql-client \
+    redis
+
+# Set working directory
+WORKDIR /usr/src/app
+
+# Copy package files
+COPY package.json bun.lock* ./
+
+# Install dependencies
+RUN bun install --frozen-lockfile
+
+# Copy source code
+COPY . .
+
+# Create test directories
+RUN mkdir -p test/results test/coverage test/reports
+
+# Set test environment
+ENV NODE_ENV=test
+ENV OM_TIER=local
+ENV OM_EMBEDDINGS=local
+ENV OM_DB_PATH=:memory:
+ENV OM_LOG_LEVEL=warn
+ENV OM_TELEMETRY_ENABLED=false
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Default command
+CMD ["bun", "test", "--timeout", "30000"]

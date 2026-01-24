@@ -46,6 +46,10 @@ export function registerInterval(
     ms: number,
     opts?: { timeoutMs?: number },
 ): string {
+    if (isNaN(ms) || ms <= 0) {
+        logger.warn(`[Scheduler] Attempted to register task '${id}' with invalid interval: ${ms}. Skipping.`);
+        return id;
+    }
     if (intervals.has(id)) {
         clearInterval(intervals.get(id));
     }

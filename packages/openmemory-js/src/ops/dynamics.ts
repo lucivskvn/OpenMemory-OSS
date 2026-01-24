@@ -321,7 +321,7 @@ export async function buildAssociativeWaypointGraphFromMemories(
     const graph = new Map<string, AssociativeWaypointGraphNode>();
     const safeLimit = Math.min(Math.max(1, limit), 50000); // Enforce max cap
 
-    const allWps = await q.waypoints.list.all(safeLimit, uid);
+    const allWps = await q.list.all(safeLimit, uid);
 
     if (allWps.length >= safeLimit) {
         logger.warn(

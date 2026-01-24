@@ -529,7 +529,7 @@ export async function getGraphCtx(
     const nodes = Object.keys(nodeSectorMap);
 
     // Use ContextManager for token-aware aggregation
-    const { ContextManager } = await import("./context_manager");
+    const { ContextManager } = await import("./contextManager");
     const cm = new ContextManager(p.userId);
 
     // Estimate token budget (approx 4 chars per token -> map char limit to token limit)

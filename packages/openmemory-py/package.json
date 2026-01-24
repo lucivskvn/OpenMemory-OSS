@@ -3,7 +3,16 @@
     "version": "0.1.0",
     "private": true,
     "scripts": {
+        "install": "pip install -e .[dev]",
         "test": "pytest",
-        "lint": "ruff check . --fix"
+        "test:async": "pytest -m asyncio",
+        "security:audit": "pip-audit --desc --format=json --output=security-audit.json",
+        "security:safety": "safety check --json --output=safety-report.json",
+        "security:bandit": "bandit -r src/ -f json -o bandit-report.json",
+        "security:all": "npm run security:audit && npm run security:safety && npm run security:bandit",
+        "lint": "ruff check . --fix",
+        "lint:security": "bandit -r src/",
+        "format": "black src/ tests/",
+        "typecheck": "mypy src/"
     }
 }

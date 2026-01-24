@@ -1,7 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import { app } from "../../src/server/index";
 import { q, runAsync, TABLES } from "../../src/core/db";
-import { setupTokenManager } from "../../src/server/setup_token";
+import { setupTokenManager } from "../../src/server/setupToken";
 
 describe("Admin Bootstrap (Console Token)", () => {
 

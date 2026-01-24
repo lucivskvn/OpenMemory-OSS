@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { getSystemStats } from "../../src/core/stats";
-import { q, closeDb, runAsync } from "../../src/core/db";
+import { q, closeDb, runAsync, waitForDb } from "../../src/core/db";
 import { env, reloadConfig } from "../../src/core/cfg";
 import * as path from "path";
 import fs from "node:fs";
@@ -24,6 +24,9 @@ describe("Stats Core", () => {
         const dir = path.dirname(DB_PATH);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
+        // Ensure DB is ready before running operations
+        await waitForDb();
+
         // Populate DB with some data using raw SQL to be safe and simple
         // First, insert with NULL user_id for the generic stats test
         await runAsync(`insert or replace into memories (id, content, primary_sector, tags, metadata, created_at, user_id, salience, decay_lambda, version) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -34,6 +37,7 @@ describe("Stats Core", () => {
         await runAsync(`insert or replace into memories (id, content, primary_sector, tags, metadata, created_at, user_id, salience, decay_lambda, version) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             ["stat_test_user", "stat_test_user", "stats_test_sector", "[]", "{}", Date.now(), "stat_user_1", 1, 0, 1]);
     });
+
 
     afterAll(async () => {
         process.env.OM_DB_PATH = originalEnv.OM_DB_PATH;

@@ -3,17 +3,25 @@
  * Handles normalization, similarity, and buffer conversions.
  */
 import { logger } from "./logger";
+import { createValidationError } from "./errors";
 
 /**
  * Normalizes a vector to unit length (L2 norm).
  */
-export function normalize(v: number[]): number[] {
+export function normalize(v: number[] | Float32Array): number[] {
     let n = 0;
     for (let i = 0; i < v.length; i++) n += v[i] * v[i];
-    if (n === 0) return v;
+    if (n === 0) return Array.from(v);
     const inv = 1 / Math.sqrt(n);
-    // Optimized map
     const len = v.length;
+
+    // Use Float32Array for internal calculation if input is large or already typed
+    if (v instanceof Float32Array) {
+        const res = new Float32Array(len);
+        for (let i = 0; i < len; i++) res[i] = v[i] * inv;
+        return Array.from(res);
+    }
+
     const res = new Array(len);
     for (let i = 0; i < len; i++) res[i] = v[i] * inv;
     return res;
@@ -23,8 +31,8 @@ export function normalize(v: number[]): number[] {
  * Resizes a vector to a target dimensionality using interpolation/averaging.
  * Ensures the output vector is normalized.
  */
-export function resizeVector(v: number[], targetDim: number): number[] {
-    if (v.length <= targetDim) return v;
+export function resizeVector(v: number[] | Float32Array, targetDim: number): number[] {
+    if (v.length <= targetDim) return normalize(Array.from(v));
     const resized = new Float32Array(targetDim);
     const blockSize = v.length / targetDim;
 
@@ -40,8 +48,7 @@ export function resizeVector(v: number[], targetDim: number): number[] {
         resized[i] = count > 0 ? sum / count : 0;
     }
 
-    // Convert to number array and normalize
-    return normalize(Array.from(resized));
+    return normalize(resized);
 }
 
 /**
@@ -79,12 +86,15 @@ export const vectorToBuffer = vectorToUint8Array;
 export const bufferToVector = (b: Uint8Array | string): number[] => {
     // Handle Postgres vector string format "[1,2,3]"
     if (typeof b === "string") {
-        try {
-            const parsed = JSON.parse(b);
-            if (Array.isArray(parsed)) return parsed;
-        } catch {
-            /* Fallback */
+        if (b.startsWith("[") && b.endsWith("]")) {
+            try {
+                const parsed = JSON.parse(b);
+                if (Array.isArray(parsed)) return parsed;
+            } catch {
+                /* Fallback */
+            }
         }
+        // If it's a raw string that was encoded, we continue to bytes
     }
 
     const buf = b instanceof Uint8Array
@@ -93,27 +103,23 @@ export const bufferToVector = (b: Uint8Array | string): number[] => {
             ? new TextEncoder().encode(b)
             : new Uint8Array(b as ArrayBuffer);
 
-    // Fast path: use Float32Array view if aligned
-    if (buf.byteLength % 4 === 0) {
+    // Fast path: use Float32Array view if aligned and length is multiple of 4
+    if (buf.byteLength > 0 && buf.byteLength % 4 === 0) {
         if (buf.byteOffset % 4 === 0) {
-            const f32 = new Float32Array(
-                buf.buffer,
-                buf.byteOffset,
-                buf.byteLength / 4,
-            );
-            return Array.from(f32);
+            return Array.from(new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4));
         }
-        // Copy if misaligned
+        // Copy if misaligned to ensure performance on certain architectures
         const aligned = new Uint8Array(buf.byteLength);
         aligned.set(buf);
         return Array.from(new Float32Array(aligned.buffer));
     }
 
     // Fallback for misaligned or strange lengths
-    const v: number[] = [];
+    const len = Math.floor(buf.byteLength / 4);
+    const v = new Array(len);
     const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-    for (let i = 0; i < buf.byteLength - 3; i += 4) {
-        v.push(view.getFloat32(i, true));
+    for (let i = 0; i < len; i++) {
+        v[i] = view.getFloat32(i * 4, true);
     }
     return v;
 };
@@ -124,7 +130,7 @@ export const bufferToVector = (b: Uint8Array | string): number[] => {
  */
 export const bufferToFloat32Array = (b: Uint8Array): Float32Array => {
     if (b.byteLength % 4 !== 0) {
-        throw new Error(`Invalid buffer length for Float32Array: ${b.byteLength}`);
+        throw createValidationError(`Invalid buffer length for Float32Array: ${b.byteLength}`);
     }
     if (b.byteOffset % 4 !== 0) {
         // Copy to ensure alignment
@@ -140,7 +146,7 @@ export const bufferToFloat32Array = (b: Uint8Array): Float32Array => {
  */
 export const aggregateVectors = (vecs: number[][]): number[] => {
     const n = vecs.length;
-    if (!n) throw new Error("no vectors to aggregate");
+    if (!n) throw createValidationError("no vectors to aggregate");
     if (n === 1) return vecs[0].slice();
 
     const d = vecs[0].length;

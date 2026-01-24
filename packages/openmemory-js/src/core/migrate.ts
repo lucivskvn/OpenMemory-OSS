@@ -23,6 +23,18 @@ interface Migration {
     desc: string;
     sqlite: string[];
     postgres: string[];
+    rollback?: {
+        sqlite: string[];
+        postgres: string[];
+    };
+    dataIntegrityChecks?: {
+        sqlite: string[];
+        postgres: string[];
+    };
+    preConditions?: {
+        sqlite: string[];
+        postgres: string[];
+    };
 }
 
 // Use placeholders {m}, {v}, {w}, {u}, {tf}, {te} for tables to ensure consistency with core/db.ts
@@ -839,5 +851,332 @@ export async function runMigrations() {
     } finally {
         await lock.release();
     }
+}
+
+/**
+ * Rollback database to a specific version
+ */
+export async function rollbackToVersion(targetVersion: string): Promise<void> {
+    log(`Rolling back database to version ${targetVersion}...`);
+
+    const lock = new DistributedLock("system:migrations");
+    const acquired = await lock.acquire(30000);
+    if (!acquired) {
+        throw new Error("Could not acquire migration lock for rollback");
+    }
+
+    try {
+        if (getIsPg()) {
+            const ssl =
+                env.pgSsl === "require"
+                    ? { rejectUnauthorized: false }
+                    : env.pgSsl === "disable"
+                        ? false
+                        : undefined;
+
+            const pool = new Pool({
+                host: env.pgHost,
+                port: env.pgPort,
+                database: env.pgDb,
+                user: env.pgUser,
+                password: env.pgPassword,
+                ssl,
+                connectionTimeoutMillis: 5000,
+            });
+
+            try {
+                await rollbackPgToVersion(pool, targetVersion);
+            } finally {
+                await pool.end();
+            }
+        } else {
+            const dbPath = env.dbPath || ":memory:";
+            if (dbPath === ":memory:") {
+                throw new Error("Cannot rollback in-memory database");
+            }
+
+            const db = new Database(dbPath);
+            try {
+                await rollbackSqliteToVersion(db, targetVersion);
+            } finally {
+                db.close();
+            }
+        }
+    } finally {
+        await lock.release();
+    }
+}
+
+async function rollbackSqliteToVersion(db: Database, targetVersion: string): Promise<void> {
+    const current = getDbVersionSqlite(db);
+    if (!current) {
+        throw new Error("No current version found, cannot rollback");
+    }
+
+    if (compareVersions(targetVersion, current) >= 0) {
+        log(`Target version ${targetVersion} is not older than current ${current}, no rollback needed`);
+        return;
+    }
+
+    // Find migrations to rollback (in reverse order)
+    const migrationsToRollback = migrations
+        .filter(m => compareVersions(m.version, targetVersion) > 0 && compareVersions(m.version, current) <= 0)
+        .reverse();
+
+    log(`Rolling back ${migrationsToRollback.length} migrations`);
+
+    const transaction = db.transaction(() => {
+        for (const m of migrationsToRollback) {
+            if (!m.rollback?.sqlite) {
+                throw new Error(`Migration ${m.version} does not support rollback`);
+            }
+
+            log(`Rolling back migration: ${m.version} - ${m.desc}`);
+            const replacements = getTableReplacements(false);
+
+            for (const rawSql of m.rollback.sqlite) {
+                const sql = applyReplacements(rawSql, replacements);
+                try {
+                    db.run(sql);
+                } catch (err: unknown) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    log(`ERROR during rollback: ${msg} in SQL: ${sql}`);
+                    throw err;
+                }
+            }
+        }
+    });
+
+    transaction();
+    setDbVersionSqlite(db, targetVersion);
+    log(`Rollback to version ${targetVersion} completed successfully`);
+}
+
+async function rollbackPgToVersion(pool: Pool, targetVersion: string): Promise<void> {
+    const current = await getDbVersionPg(pool);
+    if (!current) {
+        throw new Error("No current version found, cannot rollback");
+    }
+
+    if (compareVersions(targetVersion, current) >= 0) {
+        log(`Target version ${targetVersion} is not older than current ${current}, no rollback needed`);
+        return;
+    }
+
+    // Find migrations to rollback (in reverse order)
+    const migrationsToRollback = migrations
+        .filter(m => compareVersions(m.version, targetVersion) > 0 && compareVersions(m.version, current) <= 0)
+        .reverse();
+
+    log(`Rolling back ${migrationsToRollback.length} migrations`);
+
+    const client = await pool.connect();
+    try {
+        await client.query("BEGIN");
+
+        for (const m of migrationsToRollback) {
+            if (!m.rollback?.postgres) {
+                throw new Error(`Migration ${m.version} does not support rollback`);
+            }
+
+            log(`Rolling back migration: ${m.version} - ${m.desc}`);
+            const replacements = getTableReplacements(true);
+
+            for (const rawSql of m.rollback.postgres) {
+                const sql = applyReplacements(rawSql, replacements);
+                try {
+                    await client.query(sql);
+                } catch (e: unknown) {
+                    const msg = e instanceof Error ? e.message : String(e);
+                    log(`ERROR during rollback: ${msg} in SQL: ${sql}`);
+                    throw e;
+                }
+            }
+        }
+
+        await setDbVersionPg(pool, targetVersion);
+        await client.query("COMMIT");
+        log(`Rollback to version ${targetVersion} completed successfully`);
+    } catch (e) {
+        await client.query("ROLLBACK");
+        log(`ERROR: Rollback to ${targetVersion} failed, rolled back transaction.`);
+        throw e;
+    } finally {
+        client.release();
+    }
+}
+
+/**
+ * Validate data integrity after migration
+ */
+export async function validateDataIntegrity(): Promise<boolean> {
+    log("Validating data integrity...");
+
+    try {
+        if (getIsPg()) {
+            const ssl =
+                env.pgSsl === "require"
+                    ? { rejectUnauthorized: false }
+                    : env.pgSsl === "disable"
+                        ? false
+                        : undefined;
+
+            const pool = new Pool({
+                host: env.pgHost,
+                port: env.pgPort,
+                database: env.pgDb,
+                user: env.pgUser,
+                password: env.pgPassword,
+                ssl,
+                connectionTimeoutMillis: 5000,
+            });
+
+            try {
+                return await validatePgIntegrity(pool);
+            } finally {
+                await pool.end();
+            }
+        } else {
+            const dbPath = env.dbPath || ":memory:";
+            const db = new Database(dbPath);
+            try {
+                return validateSqliteIntegrity(db);
+            } finally {
+                db.close();
+            }
+        }
+    } catch (err) {
+        logger.error(`[Migrate] Data integrity validation failed`, { error: err });
+        return false;
+    }
+}
+
+function validateSqliteIntegrity(db: Database): boolean {
+    try {
+        // Run SQLite integrity check
+        const result = db.prepare("PRAGMA integrity_check").get() as { integrity_check: string };
+        if (result.integrity_check !== "ok") {
+            log(`SQLite integrity check failed: ${result.integrity_check}`);
+            return false;
+        }
+
+        // Check foreign key constraints
+        const fkResult = db.prepare("PRAGMA foreign_key_check").all();
+        if (fkResult.length > 0) {
+            log(`Foreign key constraint violations found: ${JSON.stringify(fkResult)}`);
+            return false;
+        }
+
+        // Run custom data integrity checks
+        const replacements = getTableReplacements(false);
+        const integrityChecks = [
+            // Check that all memories have valid user_id or NULL
+            `SELECT COUNT(*) as count FROM ${replacements["{m}"]} WHERE user_id = ''`,
+            // Check that all vectors have corresponding memories
+            `SELECT COUNT(*) as count FROM ${replacements["{v}"]} v LEFT JOIN ${replacements["{m}"]} m ON v.id = m.id WHERE m.id IS NULL`,
+            // Check that all waypoints reference existing memories
+            `SELECT COUNT(*) as count FROM ${replacements["{w}"]} w LEFT JOIN ${replacements["{m}"]} m ON w.src_id = m.id WHERE m.id IS NULL`,
+        ];
+
+        for (const check of integrityChecks) {
+            const result = db.prepare(check).get() as { count: number };
+            if (result.count > 0) {
+                log(`Data integrity violation found: ${check} returned ${result.count} violations`);
+                return false;
+            }
+        }
+
+        log("SQLite data integrity validation passed");
+        return true;
+    } catch (err) {
+        logger.error(`SQLite integrity validation error`, { error: err });
+        return false;
+    }
+}
+
+async function validatePgIntegrity(pool: Pool): Promise<boolean> {
+    try {
+        const replacements = getTableReplacements(true);
+        
+        // Run custom data integrity checks
+        const integrityChecks = [
+            // Check that all memories have valid user_id or NULL
+            `SELECT COUNT(*) as count FROM ${replacements["{m}"]} WHERE user_id = ''`,
+            // Check that all vectors have corresponding memories
+            `SELECT COUNT(*) as count FROM ${replacements["{v}"]} v LEFT JOIN ${replacements["{m}"]} m ON v.id = m.id WHERE m.id IS NULL`,
+            // Check that all waypoints reference existing memories
+            `SELECT COUNT(*) as count FROM ${replacements["{w}"]} w LEFT JOIN ${replacements["{m}"]} m ON w.src_id = m.id WHERE m.id IS NULL`,
+        ];
+
+        for (const check of integrityChecks) {
+            const result = await pool.query(check);
+            const count = parseInt(result.rows[0].count);
+            if (count > 0) {
+                log(`Data integrity violation found: ${check} returned ${count} violations`);
+                return false;
+            }
+        }
+
+        log("PostgreSQL data integrity validation passed");
+        return true;
+    } catch (err) {
+        logger.error(`PostgreSQL integrity validation error`, { error: err });
+        return false;
+    }
+}
+
+/**
+ * Get current database version
+ */
+export async function getCurrentVersion(): Promise<string | null> {
+    if (getIsPg()) {
+        const ssl =
+            env.pgSsl === "require"
+                ? { rejectUnauthorized: false }
+                : env.pgSsl === "disable"
+                    ? false
+                    : undefined;
+
+        const pool = new Pool({
+            host: env.pgHost,
+            port: env.pgPort,
+            database: env.pgDb,
+            user: env.pgUser,
+            password: env.pgPassword,
+            ssl,
+            connectionTimeoutMillis: 5000,
+        });
+
+        try {
+            return await getDbVersionPg(pool);
+        } finally {
+            await pool.end();
+        }
+    } else {
+        const dbPath = env.dbPath || ":memory:";
+        const db = new Database(dbPath);
+        try {
+            return getDbVersionSqlite(db);
+        } finally {
+            db.close();
+        }
+    }
+}
+
+/**
+ * List all available migrations
+ */
+export function listMigrations(): Array<{
+    version: string;
+    desc: string;
+    hasRollback: boolean;
+    hasIntegrityChecks: boolean;
+}> {
+    return migrations.map(m => ({
+        version: m.version,
+        desc: m.desc,
+        hasRollback: !!(m.rollback?.sqlite || m.rollback?.postgres),
+        hasIntegrityChecks: !!(m.dataIntegrityChecks?.sqlite || m.dataIntegrityChecks?.postgres),
+    }));
 }
 

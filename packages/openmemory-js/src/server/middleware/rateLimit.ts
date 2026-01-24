@@ -3,6 +3,7 @@ import { cache } from "../../core/cache";
 import { env } from "../../core/cfg";
 import { logger } from "../../utils/logger";
 import { AppError } from "../errors";
+import { getRateLimitConfig, type RateLimitConfig } from "./rateLimitConfig";
 
 import { getUser } from "./auth";
 
@@ -11,6 +12,7 @@ interface RateLimitOptions {
     max?: number;
     keyPrefix?: string;
     message?: string;
+    configType?: string; // New: allows specifying which config to use
 }
 
 export const rateLimitPlugin = (options: RateLimitOptions = {}) => (app: Elysia) => app.derive(async (ctx) => {
@@ -18,10 +20,24 @@ export const rateLimitPlugin = (options: RateLimitOptions = {}) => (app: Elysia)
 
     const { request, set, server } = ctx;
 
-    const windowMs = options.windowMs || env.rateLimitWindowMs || 60000;
-    const max = options.max || env.rateLimitMaxRequests || 100;
-    const prefix = options.keyPrefix || "rl";
-    const msg = options.message || "Too many requests. Please try again later.";
+    // Use endpoint-specific configuration if configType is provided
+    let config: RateLimitConfig;
+    if (options.configType) {
+        config = getRateLimitConfig(options.configType as any);
+    } else {
+        // Fallback to options or defaults
+        config = {
+            windowMs: options.windowMs || env.rateLimitWindowMs || 60000,
+            max: options.max || env.rateLimitMaxRequests || 100,
+            keyPrefix: options.keyPrefix || "rl",
+            message: options.message || "Too many requests. Please try again later.",
+        };
+    }
+
+    const windowMs = config.windowMs;
+    const max = config.max;
+    const prefix = config.keyPrefix;
+    const msg = config.message || "Too many requests. Please try again later.";
     const windowSecs = Math.ceil(windowMs / 1000);
 
     // Try to get user from context (Auth plugin should run before this)
@@ -64,7 +80,6 @@ export const rateLimitPlugin = (options: RateLimitOptions = {}) => (app: Elysia)
         if (env.isProd) {
             logger.error("[RateLimit] CRITICAL: Cache store unreachable.", { error: e });
             set.status = 503;
-            set.status = 503;
             throw new AppError(503, "SERVICE_UNAVAILABLE", "Service Unavailable");
         }
         logger.warn("[RateLimit] Cache store unreachable (Fail-Open).");
@@ -72,3 +87,13 @@ export const rateLimitPlugin = (options: RateLimitOptions = {}) => (app: Elysia)
 
     return {};
 });
+
+/**
+ * Create rate limiting plugin with specific endpoint configuration
+ */
+export const createRateLimitPlugin = (configType: string, overrides: Partial<RateLimitOptions> = {}) => {
+    return rateLimitPlugin({
+        configType,
+        ...overrides,
+    });
+};

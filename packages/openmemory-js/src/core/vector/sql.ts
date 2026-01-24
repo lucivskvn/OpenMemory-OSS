@@ -11,8 +11,8 @@ import {
     vectorToUint8Array,
 } from "../../utils/vectors";
 import { env } from "../cfg";
-import { applySqlUser, SqlValue } from "../db_utils";
-import { VectorStore } from "../vector_store";
+import { applySqlUser, SqlValue } from "../dbUtils";
+import { VectorStore } from "../vectorStore";
 import { vecCache } from "./cache";
 
 export interface DbOps {

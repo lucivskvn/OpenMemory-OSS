@@ -1,0 +1,118 @@
+version: 2
+updates:
+  # JavaScript/TypeScript dependencies - Main package
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "nullure"
+    assignees:
+      - "nullure"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "javascript"
+    
+  # JavaScript/TypeScript dependencies - OpenMemory JS package
+  - package-ecosystem: "npm"
+    directory: "/packages/openmemory-js"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "nullure"
+    assignees:
+      - "nullure"
+    commit-message:
+      prefix: "deps(js)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "javascript"
+      - "openmemory-js"
+    
+  # Python dependencies - OpenMemory Python package
+  - package-ecosystem: "pip"
+    directory: "/packages/openmemory-py"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "nullure"
+    assignees:
+      - "nullure"
+    commit-message:
+      prefix: "deps(py)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "python"
+      - "openmemory-py"
+    
+  # Dashboard app dependencies
+  - package-ecosystem: "npm"
+    directory: "/apps/dashboard"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "09:00"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "nullure"
+    assignees:
+      - "nullure"
+    commit-message:
+      prefix: "deps(dashboard)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "dashboard"
+      - "nextjs"
+    
+  # VSCode extension dependencies
+  - package-ecosystem: "npm"
+    directory: "/apps/vscode-extension"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "09:00"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "nullure"
+    assignees:
+      - "nullure"
+    commit-message:
+      prefix: "deps(vscode)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "vscode-extension"
+    
+  # GitHub Actions dependencies
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "wednesday"
+      time: "09:00"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "nullure"
+    assignees:
+      - "nullure"
+    commit-message:
+      prefix: "deps(actions)"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "github-actions"

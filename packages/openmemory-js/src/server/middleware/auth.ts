@@ -5,14 +5,11 @@ export type { UserContext };
 import { logger } from "../../utils/logger";
 import { AppError } from "../errors";
 import { normalizeUserId } from "../../utils";
+import { createAuthError, createAuthorizationError, createConfigError } from "../../utils/errors";
 
 function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
     if (a.length !== b.length) return false;
-    let mismatch = 0;
-    for (let i = 0; i < a.length; i++) {
-        mismatch |= (a[i] ^ b[i]);
-    }
-    return mismatch === 0;
+    return globalThis.crypto.timingSafeEqual(a, b);
 }
 
 const authConfig = {
@@ -36,20 +33,36 @@ function isPublicEndpoint(path: string): boolean {
 }
 
 // Helper to extract key from request
-function extractApiKey(req: Request): string | null {
+function extractApiKey(req: Request | any): string | null {
     const headers = req.headers;
-    const headerKey = headers.get(authConfig.apiKeyHeader);
+    
+    // Handle both Request objects (with headers.get) and plain objects (for tests)
+    const getHeader = (name: string): string | null => {
+        if (headers && typeof headers.get === 'function') {
+            return headers.get(name);
+        } else if (headers && typeof headers === 'object') {
+            return headers[name] || null;
+        }
+        return null;
+    };
+    
+    const headerKey = getHeader(authConfig.apiKeyHeader);
     if (headerKey) return headerKey;
 
-    const authHeader = headers.get("authorization");
+    const authHeader = getHeader("authorization");
     if (authHeader) {
         if (authHeader.startsWith("Bearer ")) return authHeader.slice(7);
         if (authHeader.startsWith("ApiKey ")) return authHeader.slice(7);
     }
 
-    const url = new URL(req.url);
-    const queryToken = url.searchParams.get("token") || url.searchParams.get("apiKey");
-    if (queryToken) return queryToken;
+    // Handle URL parsing safely
+    try {
+        const url = new URL(req.url || req.path || "http://localhost/");
+        const queryToken = url.searchParams.get("token") || url.searchParams.get("apiKey");
+        if (queryToken) return queryToken;
+    } catch {
+        // Ignore URL parsing errors for test objects
+    }
 
     return null;
 }
@@ -107,11 +120,11 @@ export const authPlugin = (app: Elysia) => app.derive(async (ctx) => {
             if (env.isProd) {
                 logger.error("[AUTH] 🚨 FATAL: No API keys configured in PRODUCTION mode. Request blocked.");
                 set.status = 500;
-                throw new Error("Authentication Configuration Error");
+                throw createConfigError("Authentication Configuration Error");
             }
             logger.error("[AUTH] 🛑 Security Block: No API Keys set.");
             set.status = 500;
-            throw new Error("Authentication Configuration Error");
+            throw createConfigError("Authentication Configuration Error");
         }
 
         // Anonymous Admin Mode
@@ -126,7 +139,7 @@ export const authPlugin = (app: Elysia) => app.derive(async (ctx) => {
 
     if (!provided) {
         set.status = 401;
-        throw new Error("Authentication required");
+        throw createAuthError("Authentication required");
     }
 
     let scopes: AuthScope[] = [];
@@ -166,7 +179,7 @@ export const authPlugin = (app: Elysia) => app.derive(async (ctx) => {
 
     if (!isValid) {
         set.status = 403;
-        throw new Error("Invalid API Key");
+        throw createAuthorizationError("Invalid API Key");
     }
 
     // Final User ID Resolution
@@ -197,13 +210,127 @@ export const authPlugin = (app: Elysia) => app.derive(async (ctx) => {
 
 
 /**
+ * Legacy middleware function for Express-style authentication
+ * @deprecated Use authPlugin instead for Elysia applications
+ */
+export async function authenticateApiRequest(req: any, res: any, next: () => void): Promise<void> {
+    try {
+        // Extract API key from request
+        const provided = extractApiKey(req);
+        
+        // Check if endpoint is public
+        const path = req.url || req.path || "";
+        if (isPublicEndpoint(path)) {
+            return next();
+        }
+
+        const currentApiKey = env.apiKey || "";
+        const currentAdminKey = env.adminKey || "";
+
+        // Security Block if no keys
+        if (currentApiKey === "" && currentAdminKey === "") {
+            if (!provided && Bun.env.OM_NO_AUTH !== "true" && !env.noAuth) {
+                if (env.isProd) {
+                    logger.error("[AUTH] 🚨 FATAL: No API keys configured in PRODUCTION mode. Request blocked.");
+                    res.status = 500;
+                    throw new Error("Authentication Configuration Error");
+                }
+                logger.error("[AUTH] 🛑 Security Block: No API Keys set.");
+                res.status = 500;
+                throw new Error("Authentication Configuration Error");
+            }
+
+            // Anonymous Admin Mode
+            if (!provided && (Bun.env.OM_NO_AUTH === "true" || env.noAuth)) {
+                req.user = {
+                    id: "anonymous",
+                    scopes: ["admin:all"] as AuthScope[],
+                };
+                return next();
+            }
+        }
+
+        if (!provided) {
+            res.status = 401;
+            throw new Error("Authentication required");
+        }
+
+        let scopes: AuthScope[] = [];
+        let isValid = false;
+        let dbUserId: string | undefined;
+
+        // 1. Check Admin Key
+        if (currentAdminKey && await validateApiKey(provided, currentAdminKey)) {
+            scopes = ["admin:all"];
+            isValid = true;
+        }
+        // 2. Check Standard Key
+        else if (currentApiKey && await validateApiKey(provided, currentApiKey)) {
+            scopes = ["memory:read", "memory:write"];
+            isValid = true;
+        }
+        // 3. Check DB
+        else {
+            const enc = new TextEncoder();
+            const hashBuffer = await globalThis.crypto.subtle.digest("SHA-256", enc.encode(provided));
+            const hash = Buffer.from(hashBuffer).toString("hex");
+
+            // Lazy load DB query
+            const { q } = await import("../../core/db");
+            const dbKey = await q.getApiKey.get(hash);
+
+            if (dbKey) {
+                isValid = true;
+                dbUserId = dbKey.userId;
+                scopes = dbKey.role === "admin"
+                    ? ["admin:all"]
+                    : dbKey.role === "read_only"
+                        ? ["memory:read"]
+                        : ["memory:read", "memory:write"];
+            }
+        }
+
+        if (!isValid) {
+            res.status = 403;
+            throw new Error("Invalid API Key");
+        }
+
+        // Final User ID Resolution
+        let clientId = dbUserId;
+        if (!clientId) {
+            clientId = await getClientId(null, provided);
+        }
+
+        req.user = {
+            id: clientId,
+            scopes
+        };
+
+        // Log Auth if enabled
+        if (env.logAuth) {
+            const hash = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(provided));
+            const hex = Buffer.from(hash).toString("hex").slice(0, 8);
+            logger.info(`[AUTH] Authenticated ${req.user.id} scopes=[${scopes.join(',')}] key=${hex}`);
+        }
+
+        next();
+    } catch (error) {
+        logger.error("[AUTH] Authentication failed", { error });
+        if (!res.status) res.status = 500;
+        throw error;
+    }
+}
+
+/**
  * Legacy RBAC Helper for manual checks inside handlers
+ * Fixed to handle null returns properly and provide consistent behavior
  */
 export function verifyUserAccess(user: UserContext | undefined, targetUserId: string | null | undefined): string | null {
     const authUserId = user?.id;
     const nAuth = authUserId ? authUserId.trim() : null;
     let nTarget = targetUserId ? targetUserId.trim() : null;
 
+    // Handle "me" alias - resolve to authenticated user ID
     if (nTarget === "me" && nAuth) {
         nTarget = nAuth;
     }
@@ -212,11 +339,23 @@ export function verifyUserAccess(user: UserContext | undefined, targetUserId: st
 
     if (!isAdmin) {
         if (!nAuth) {
-            if (nTarget) throw new AppError(401, "UNAUTHORIZED", "Authentication required for user access");
+            // No authentication - only allow if no target is specified (global access)
+            if (nTarget) {
+                throw new AppError(401, "UNAUTHORIZED", "Authentication required for user access");
+            }
+            return null; // No auth, no target - return null for global access
         } else {
-            if (nAuth !== nTarget) throw new AppError(403, "FORBIDDEN", "Access denied");
+            // For non-admin users, they can only access their own data
+            if (nTarget && nAuth !== nTarget) {
+                throw new AppError(403, "FORBIDDEN", "Access denied: users can only access their own data");
+            }
+            // If no target specified, default to authenticated user
+            return nTarget || nAuth;
         }
     }
+    
+    // Admin can access any user or return the target as-is
+    // If admin specifies no target, return null for global access
     return nTarget;
 }
 

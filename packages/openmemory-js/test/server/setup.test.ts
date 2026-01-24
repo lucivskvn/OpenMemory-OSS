@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeAll, afterAll } from "bun:test";
 import { setupRoutes } from "../../src/server/routes/setup";
-import { setupTokenManager } from "../../src/server/setup_token";
+import { setupTokenManager } from "../../src/server/setupToken";
 import { waitForDb, closeDb } from "../../src/core/db";
 import { env } from "../../src/core/cfg";
 import server from "../../src/server/server";

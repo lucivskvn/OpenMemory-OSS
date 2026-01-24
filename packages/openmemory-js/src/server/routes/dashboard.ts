@@ -10,6 +10,7 @@ import { normalizeUserId } from "../../utils";
 import { logger } from "../../utils/logger";
 import { AppError } from "../errors";
 import { verifyUserAccess, getUser } from "../middleware/auth";
+import { healthChecker } from "../../utils/healthChecker";
 
 /** Parameter for maintenance stats query (hours lookback) */
 interface MaintOp {
@@ -170,10 +171,17 @@ export const dashboardRoutes = (app: Elysia) => app
     /**
      * GET /dashboard/health
      */
-    .get("/dashboard/health", () => {
+    .get("/dashboard/health", async () => {
         const memusg = process.memoryUsage();
         const upt = process.uptime();
+        
+        // Get quick health status
+        const quickHealth = await healthChecker.quickHealthCheck();
+        
         return {
+            success: quickHealth.healthy,
+            status: quickHealth.healthy ? 'healthy' : 'unhealthy',
+            message: quickHealth.message,
             memory: {
                 heapUsed: Math.round(memusg.heapUsed / 1024 / 1024),
                 heapTotal: Math.round(memusg.heapTotal / 1024 / 1024),
@@ -508,7 +516,7 @@ export const dashboardRoutes = (app: Elysia) => app
         verifyUserAccess(user, userId);
 
         const { getPersistedConfig } =
-            await import("../../core/persisted_cfg");
+            await import("../../core/persistedCfg");
 
         // Fetch known config types
         const openai = await getPersistedConfig(
@@ -553,7 +561,7 @@ export const dashboardRoutes = (app: Elysia) => app
         const { type, config } = schema.parse(body);
 
         const { setPersistedConfig } =
-            await import("../../core/persisted_cfg");
+            await import("../../core/persistedCfg");
         const { flush_generator } =
             await import("../../ai/adapters");
 

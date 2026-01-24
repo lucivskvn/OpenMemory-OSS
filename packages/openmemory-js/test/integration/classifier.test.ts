@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll, mock } from "bun:test";
-import { LearnedClassifier, ClassifierModel } from "../../src/core/learned_classifier";
+import { LearnedClassifier, ClassifierModel } from "../../src/core/learnedClassifier";
 import { q, closeDb } from "../../src/core/db";
 import { reloadConfig } from "../../src/core/cfg";
 import { env } from "../../src/core/cfg";
@@ -117,7 +117,7 @@ describe("Learned Classifier Deep Dive", () => {
 
         // Manually insert into DB using stricter `q` if available
         // Or if not available, we need to add it or use raw query.
-        // `classifier.test.ts` attempted to import `get_sq_db` which failed.
+        // `learnedClassifier.ts` attempted to import `get_sq_db` which failed.
         // We should use `runAsync` from `db`.
 
         const { runAsync, TABLES } = await import("../../src/core/db");

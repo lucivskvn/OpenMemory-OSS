@@ -9,6 +9,7 @@ import TurndownService from "turndown";
 
 import { env } from "../core/cfg";
 import { logger } from "../utils/logger";
+import { createFileSizeError, createUnsupportedTypeError, createExternalServiceError, createConfigError, wrapError } from "../utils/errors";
 import { validateUrl } from "../utils/security";
 import { ExtractionConfig, ExtractionResult } from "../core/types";
 
@@ -36,9 +37,7 @@ export async function extractPDF(
 ): Promise<ExtractionResult> {
     const maxSize = config?.maxSizeBytes || 50 * 1024 * 1024; // Default 50MB
     if (buffer.byteLength > maxSize) {
-        throw new Error(
-            `PDF file too large: ${(buffer.byteLength / 1024 / 1024).toFixed(2)}MB. Limit is ${(maxSize / 1024 / 1024).toFixed(2)}MB.`,
-        );
+        throw createFileSizeError("PDF", buffer.byteLength, maxSize);
     }
     const pdfImport = await import("pdf-parse");
     const pdf = (pdfImport as any).default || pdfImport;
@@ -72,9 +71,7 @@ export async function extractDOCX(
 ): Promise<ExtractionResult> {
     const maxSize = config?.maxSizeBytes || 20 * 1024 * 1024; // Default 20MB
     if (buffer.byteLength > maxSize) {
-        throw new Error(
-            `DOCX file too large: ${(buffer.byteLength / 1024 / 1024).toFixed(2)}MB. Limit is ${(maxSize / 1024 / 1024).toFixed(2)}MB.`,
-        );
+        throw createFileSizeError("DOCX", buffer.byteLength, maxSize);
     }
     // mammoth expects Buffer node-style
     const buf = Buffer.from(buffer);
@@ -172,10 +169,10 @@ export async function extractURL(
         });
 
         if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            throw createExternalServiceError("Web content", response.status, response.statusText);
         }
 
-        if (!response.body) throw new Error("Response body is empty");
+        if (!response.body) throw createExternalServiceError("Web content", 0, "Response body is empty");
 
         const chunks: string[] = [];
         let totalBytes = 0;
@@ -185,14 +182,14 @@ export async function extractURL(
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
-            totalBytes += value.byteLength;
+            totalBytes += (value as Uint8Array).byteLength;
             if (totalBytes > MAX_SIZE) {
                 await reader.cancel();
                 throw new Error(
                     `Response size exceeds limit of ${MAX_SIZE} bytes`,
                 );
             }
-            chunks.push(decoder.decode(value, { stream: true }));
+            chunks.push(decoder.decode(value as Uint8Array, { stream: true }));
         }
         chunks.push(decoder.decode()); // Flush
         const html = chunks.join("");
@@ -204,7 +201,7 @@ export async function extractURL(
             metadata: {
                 ...result.metadata,
                 contentType: "url",
-                extractionMethod: "node-fetch+turndown",
+                extractionMethod: "cheerio+turndown",
                 url: safeUrl,
                 originalUrl,
                 fetchedAt: new Date().toISOString(),
@@ -230,17 +227,15 @@ export async function extractAudio(
 ): Promise<ExtractionResult> {
     const apiKey = env.openaiKey;
     if (!apiKey) {
-        throw new Error(
-            "OpenAI API key required for audio transcription. Set OPENAI_API_KEY in .env",
+        throw createConfigError(
+            "OpenAI API key required for audio transcription. Set OPENAI_API_KEY in .env"
         );
     }
 
     // Check file size (Whisper API limit is 25MB effectively, but we allow config override)
     const maxSize = config?.maxSizeBytes || 25 * 1024 * 1024; // Default 25MB
     if (buffer.byteLength > maxSize) {
-        throw new Error(
-            `Audio file too large: ${(buffer.byteLength / 1024 / 1024).toFixed(2)}MB. Limit is ${(maxSize / 1024 / 1024).toFixed(2)}MB.`,
-        );
+        throw createFileSizeError("Audio", buffer.byteLength, maxSize);
     }
 
     // Create temporary file for Whisper API
@@ -283,8 +278,7 @@ export async function extractAudio(
         };
     } catch (error: unknown) {
         logger.error("[EXTRACT] Audio transcription failed:", { error });
-        const msg = error instanceof Error ? error.message : String(error);
-        throw new Error(`Audio transcription failed: ${msg}`);
+        throw wrapError(error, "Audio transcription");
     } finally {
         // Clean up temp file
         try {
@@ -512,6 +506,6 @@ export async function extractText(
         }
 
         default:
-            throw new Error(`Unsupported content type: ${contentType}`);
+            throw createUnsupportedTypeError(contentType);
     }
 }

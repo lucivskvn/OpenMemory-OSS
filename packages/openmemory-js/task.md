@@ -10,10 +10,11 @@
   - [x] Audit encryption logic (Strict AES-256-GCM)
   - [x] Refactor for Bun Native Crypto (SubtleCrypto)
   - [x] Verified with new Unit Tests
-- [x] **Database (`src/core/db.ts`)**
+- [x] **Database (`src/core/db.ts` & `src/core/db_access.ts`)**
   - [x] Audit connection management (Singleton patterns)
   - [x] Verify migration robustness
   - [x] Check support for Bun Native SQLite (`bun:sqlite`)
+  - [x] Optimized `mapRow` and fixed stale caches
 - [x] **Stats & Telemetry**
   - [x] Verified `stats.ts` functionality against new config
   - [ ] Performance Review
@@ -51,10 +52,10 @@
   - [ ] Debug `vectorStore.searchSimilar` failure in `hsg.ts`
   - [ ] Fix `q.getMem` and `q.allMemByUser` undefined issues in `memory.ts`
 - [ ] Systematic Line-by-Line Audit [/]
-  - [ ] `src/core/db.ts` & `src/core/db_access.ts` (Population & Initialization)
-  - [ ] `src/core/memory.ts` (Core Logic & Lifecycle)
-  - [ ] `src/core/repository/` (SQL Consistency & Performance)
-  - [ ] `src/client.ts` & `src/clients/` (SDK Interface & Consistency)
+  - [x] `src/core/db.ts` & `src/core/db_access.ts` (Population & Initialization)
+  - [x] `src/core/memory.ts` (Optimized Hydration, Unified UserID, Filter API)
+  - [x] `src/core/repository/memory.ts` (Optimized SQL, findMems implementation)
+  - [/] `src/client.ts` & `src/clients/` (SDK Interface & Consistency)
   - [ ] `src/server/` (Elysia Routes & Middleware)
 - [ ] Backend-Frontend Sync Check (Types & API Consistency)
 - [ ] Verify LangGraph memory consistency in `src/ai/graph.ts`

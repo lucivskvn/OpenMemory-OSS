@@ -18,8 +18,8 @@ describe("Migration v1.11.0", () => {
         await closeDb();
     });
 
-    test("Should run all migrations including v1.11.0 successfully", () => {
-        const db = get_sq_db();
+    test("Should run all migrations including v1.11.0 successfully", async () => {
+        const db = await get_sq_db();
         // Verify schema version
         const ver = db.prepare("SELECT version FROM schema_version ORDER BY applied_at DESC LIMIT 1").get() as any;
         // 1.11.0 should have run (along with 1.12.0 if still in list)
@@ -27,8 +27,8 @@ describe("Migration v1.11.0", () => {
         expect(ver.version).toBeDefined();
     });
 
-    test("Should have created new tables", () => {
-        const db = get_sq_db();
+    test("Should have created new tables", async () => {
+        const db = await get_sq_db();
         const tables = ["encryption_keys", "audit_logs", "webhooks", "webhook_logs", "rate_limits", "config", "feature_flags"];
         for (const t of tables) {
             const exists = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='${t}'`).get();
@@ -36,8 +36,8 @@ describe("Migration v1.11.0", () => {
         }
     });
 
-    test("Should have added encryption_key_version to memories", () => {
-        const db = get_sq_db();
+    test("Should have added encryption_key_version to memories", async () => {
+        const db = await get_sq_db();
         const info = db.prepare("PRAGMA table_info(memories)").all() as any[];
         const col = info.find(c => c.name === "encryption_key_version");
         expect(col).toBeDefined();
@@ -47,7 +47,7 @@ describe("Migration v1.11.0", () => {
     test("Should be idempotent", async () => {
         // Run migrations again - should not throw
         await runMigrations();
-        const db = get_sq_db();
+        const db = await get_sq_db();
         const ver = db.prepare("SELECT version FROM schema_version ORDER BY applied_at DESC LIMIT 1").get() as any;
         expect(ver).toBeDefined();
     });

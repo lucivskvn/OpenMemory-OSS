@@ -2,11 +2,12 @@
  * @file Memory utilities for consistent hydration and processing.
  */
 import { env } from "../core/cfg";
-import { sectorConfigs, hybridParams, scoringWeights } from "../core/hsg_config";
+import { sectorConfigs, hybridParams, scoringWeights } from "../core/hsgConfig";
 import { MemoryRow, MemoryItem, EmbeddingResult, SectorClassification } from "../core/types";
 import { normalizeUserId, parseJSON } from "../utils";
 import { logger } from "../utils/logger";
 import { canonicalTokenSet } from "../utils/text";
+import { aggregateVectorsOptimized, VectorOperationStats } from "../utils/vectorsOptimized";
 
 /**
  * Hydrates a raw DB MemoryRow into a usable MemoryItem.
@@ -115,30 +116,138 @@ export function computeTokenOverlap(
 
 /**
  * Calculates the weighted mean vector for a set of multi-sector embeddings.
+ * Uses optimized vector operations with selective SIMD-like processing for better performance.
  */
 export function calcMeanVec(
     embRes: EmbeddingResult[],
 ): number[] {
     if (embRes.length === 0) return [];
+    
+    const stats = VectorOperationStats.getInstance();
+    const startTime = performance.now();
+    
     const dim = embRes[0].vector.length;
-    const wsum = new Array(dim).fill(0);
     const secWeights = getSectorWeights();
-
     const beta = hybridParams.beta;
-    const expSum = embRes.reduce(
-        (sum, r) => sum + Math.exp(beta * (secWeights[r.sector] || 1.0)),
-        0,
-    );
+    
+    // Pre-calculate exponential weights for better performance
+    const expWeights: number[] = [];
+    let expSum = 0;
+    
     for (const result of embRes) {
-        const smWt =
-            Math.exp(beta * (secWeights[result.sector] || 1.0)) /
-            expSum;
-        for (let i = 0; i < dim; i++) wsum[i] += result.vector[i] * smWt;
+        const expWeight = Math.exp(beta * (secWeights[result.sector] || 1.0));
+        expWeights.push(expWeight);
+        expSum += expWeight;
     }
-    const norm =
-        Math.sqrt(wsum.reduce((sum, v) => sum + v * v, 0)) +
-        hybridParams.epsilon;
-    return wsum.map((v) => v / norm);
+    
+    // Use optimized aggregation with pre-computed weights
+    const weightedVectors: number[][] = [];
+    
+    for (let i = 0; i < embRes.length; i++) {
+        const result = embRes[i];
+        const smWt = expWeights[i] / expSum;
+        
+        // Create weighted vector - use simple approach for small vectors, optimized for large
+        const weightedVec = new Array(dim);
+        const sourceVec = result.vector;
+        
+        if (dim >= 1000) {
+            // SIMD-like processing for large vectors only
+            let j = 0;
+            const chunks = Math.floor(dim / 8);
+            
+            // Process 8 elements at a time for better CPU cache utilization
+            for (let chunk = 0; chunk < chunks; chunk++) {
+                const base = chunk * 8;
+                weightedVec[base] = sourceVec[base] * smWt;
+                weightedVec[base + 1] = sourceVec[base + 1] * smWt;
+                weightedVec[base + 2] = sourceVec[base + 2] * smWt;
+                weightedVec[base + 3] = sourceVec[base + 3] * smWt;
+                weightedVec[base + 4] = sourceVec[base + 4] * smWt;
+                weightedVec[base + 5] = sourceVec[base + 5] * smWt;
+                weightedVec[base + 6] = sourceVec[base + 6] * smWt;
+                weightedVec[base + 7] = sourceVec[base + 7] * smWt;
+            }
+            
+            // Handle remaining elements
+            for (j = chunks * 8; j < dim; j++) {
+                weightedVec[j] = sourceVec[j] * smWt;
+            }
+        } else {
+            // Simple approach for smaller vectors
+            for (let j = 0; j < dim; j++) {
+                weightedVec[j] = sourceVec[j] * smWt;
+            }
+        }
+        
+        weightedVectors.push(weightedVec);
+    }
+    
+    // Use optimized aggregation
+    const aggregated = aggregateVectorsOptimized(weightedVectors);
+    
+    // Optimized normalization with selective SIMD processing
+    let normSquared = 0;
+    
+    if (dim >= 1000) {
+        const chunks = Math.floor(dim / 8);
+        
+        // Calculate norm using chunked processing for large vectors
+        for (let chunk = 0; chunk < chunks; chunk++) {
+            const base = chunk * 8;
+            let chunkSum = 0;
+            chunkSum += aggregated[base] * aggregated[base];
+            chunkSum += aggregated[base + 1] * aggregated[base + 1];
+            chunkSum += aggregated[base + 2] * aggregated[base + 2];
+            chunkSum += aggregated[base + 3] * aggregated[base + 3];
+            chunkSum += aggregated[base + 4] * aggregated[base + 4];
+            chunkSum += aggregated[base + 5] * aggregated[base + 5];
+            chunkSum += aggregated[base + 6] * aggregated[base + 6];
+            chunkSum += aggregated[base + 7] * aggregated[base + 7];
+            normSquared += chunkSum;
+        }
+        
+        // Handle remaining elements
+        for (let i = chunks * 8; i < dim; i++) {
+            normSquared += aggregated[i] * aggregated[i];
+        }
+    } else {
+        // Simple approach for smaller vectors
+        for (let i = 0; i < dim; i++) {
+            normSquared += aggregated[i] * aggregated[i];
+        }
+    }
+    
+    const norm = Math.sqrt(normSquared) + hybridParams.epsilon;
+    const invNorm = 1 / norm;
+    
+    // Optimized normalization with selective chunking
+    const result = new Array(dim);
+    if (dim >= 1000) {
+        const chunks = Math.floor(dim / 8);
+        for (let chunk = 0; chunk < chunks; chunk++) {
+            const base = chunk * 8;
+            result[base] = aggregated[base] * invNorm;
+            result[base + 1] = aggregated[base + 1] * invNorm;
+            result[base + 2] = aggregated[base + 2] * invNorm;
+            result[base + 3] = aggregated[base + 3] * invNorm;
+            result[base + 4] = aggregated[base + 4] * invNorm;
+            result[base + 5] = aggregated[base + 5] * invNorm;
+            result[base + 6] = aggregated[base + 6] * invNorm;
+            result[base + 7] = aggregated[base + 7] * invNorm;
+        }
+        
+        for (let i = chunks * 8; i < dim; i++) {
+            result[i] = aggregated[i] * invNorm;
+        }
+    } else {
+        for (let i = 0; i < dim; i++) {
+            result[i] = aggregated[i] * invNorm;
+        }
+    }
+    
+    stats.recordAggregation(performance.now() - startTime);
+    return result;
 }
 
 /**

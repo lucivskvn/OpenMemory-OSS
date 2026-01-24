@@ -3,7 +3,7 @@ import { z } from "zod";
 import { logger } from "../../utils/logger";
 import { AppError } from "../errors";
 import { toHex } from "../../utils";
-import { setupTokenManager } from "../setup_token";
+import { setupTokenManager } from "../setupToken";
 
 const VerifySetupSchema = z.object({
     userId: z.string().min(3),

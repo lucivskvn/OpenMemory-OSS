@@ -101,5 +101,20 @@ export const systemCommands = {
         const api = await ensureClient(flags);
         await api.wipe();
         console.log("Database wiped.");
+    },
+
+    reflect: async (args: string[], flags: CliFlags) => {
+        const api = await ensureClient(flags);
+        const userId = flags.userId;
+        if (!userId && !flags.host) {
+            console.warn("\x1b[33m[WARN] No userId provided for reflection. Defaulting to system-wide if admin.\x1b[0m");
+        }
+        console.log(`Triggering memory reflection for ${userId || "all"}...`);
+        const res = await api.train(userId || "system");
+        if (res) {
+            console.log("\x1b[32m✔\x1b[0m Reflection triggered successfully.");
+        } else {
+            console.error("Failed to trigger reflection.");
+        }
     }
 };

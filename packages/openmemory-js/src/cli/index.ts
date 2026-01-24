@@ -13,6 +13,19 @@ import { systemCommands } from "./commands/system";
 import { temporalCommands } from "./commands/temporal";
 import { ingestCommands } from "./commands/ingest";
 import { runMigrations } from "../core/migrate";
+
+// Semver comparator: 1 if a > b, -1 if a < b, 0 if equal
+function compareVersions(a: string, b: string): number {
+    const pa = a.split(".").map(Number);
+    const pb = b.split(".").map(Number);
+    for (let i = 0; i < 3; i++) {
+        const na = pa[i] || 0;
+        const nb = pb[i] || 0;
+        if (na > nb) return 1;
+        if (na < nb) return -1;
+    }
+    return 0;
+}
 import { closeDb } from "../core/db";
 import { CliFlags } from "./types";
 
@@ -40,8 +53,66 @@ export async function main() {
     // Migration is special (local maintenance)
     if (command === "migrate") {
         if (flags.host) throw new Error("Migrations can only be run locally.");
-        await runMigrations();
-        console.log("Migrations completed.");
+        
+        const subCommand = args[0];
+        
+        if (subCommand === "rollback") {
+            const targetVersion = args[1];
+            if (!targetVersion) {
+                console.error("Usage: migrate rollback <version>");
+                process.exit(1);
+            }
+            
+            const { rollbackToVersion } = await import("../core/migrate");
+            await rollbackToVersion(targetVersion);
+            console.log(`Rollback to version ${targetVersion} completed.`);
+        } else if (subCommand === "validate") {
+            const { validateDataIntegrity } = await import("../core/migrate");
+            const isValid = await validateDataIntegrity();
+            if (isValid) {
+                console.log("✅ Data integrity validation passed.");
+            } else {
+                console.error("❌ Data integrity validation failed.");
+                process.exit(1);
+            }
+        } else if (subCommand === "status") {
+            const { getCurrentVersion, listMigrations } = await import("../core/migrate");
+            const currentVersion = await getCurrentVersion();
+            const migrations = listMigrations();
+            
+            console.log(`Current database version: ${currentVersion || "none"}`);
+            console.log("\nAvailable migrations:");
+            for (const m of migrations) {
+                const status = currentVersion && compareVersions(m.version, currentVersion) <= 0 ? "✅" : "⏳";
+                const rollback = m.hasRollback ? "🔄" : "❌";
+                const integrity = m.hasIntegrityChecks ? "🔍" : "❌";
+                console.log(`  ${status} ${m.version} - ${m.desc} (Rollback: ${rollback}, Integrity: ${integrity})`);
+            }
+        } else if (subCommand === "list") {
+            const { listMigrations } = await import("../core/migrate");
+            const migrations = listMigrations();
+            
+            console.log("Available migrations:");
+            for (const m of migrations) {
+                console.log(`  ${m.version} - ${m.desc}`);
+                console.log(`    Rollback support: ${m.hasRollback ? "Yes" : "No"}`);
+                console.log(`    Integrity checks: ${m.hasIntegrityChecks ? "Yes" : "No"}`);
+            }
+        } else {
+            // Default: run migrations
+            await runMigrations();
+            console.log("Migrations completed.");
+            
+            // Validate integrity after migration
+            const { validateDataIntegrity } = await import("../core/migrate");
+            const isValid = await validateDataIntegrity();
+            if (isValid) {
+                console.log("✅ Data integrity validation passed.");
+            } else {
+                console.warn("⚠️  Data integrity validation failed after migration.");
+            }
+        }
+        
         process.exit(0);
     }
 
@@ -67,7 +138,7 @@ export async function main() {
     // Security - Rotate Keys
     if (command === "security" && args[0] === "rotate-keys") {
         if (flags.host) throw new Error("Key rotation is a server-side maintenance operation. Run locally.");
-        const { rotateKeys } = await import("../ops/key-rotation");
+        const { rotateKeys } = await import("../ops/keyRotation");
         console.log("[SECURITY] Initiating key rotation...");
         // We need to resolve userId if not provided? rotateKeys handles that internally or we pass flags
         const res = await rotateKeys({
@@ -124,18 +195,15 @@ export async function main() {
     } finally {
         // If we get here and we are not in a long-running process (like listen/start/mcp),
         // we should try to close the DB if it was opened locally.
-        // The individual commands don't close the DB themselves usually.
-        // But `ensureClient` might have opened it.
-        // We can check if we are in local mode by checking if flags.host is NOT set.
-        // However, `isRemote` state was tracked in the old CLI.
-        // Here we can be defensive.
         if (!flags.host) {
-            // We can't easily know if DB is open without checking `db` state or similar.
-            // But calling closeDb() is safe even if not open (usually, or we wrap it).
             try {
                 await closeDb();
             } catch { }
         }
-        process.exit(0);
+        
+        // Force exit for commands that should terminate
+        if (!["start", "listen", "mcp"].includes(command)) {
+            process.exit(0);
+        }
     }
 }

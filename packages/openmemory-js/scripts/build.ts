@@ -87,6 +87,10 @@ try {
         cwd: import.meta.dir + "/..",
         stdout: "inherit",
         stderr: "inherit",
+        env: {
+            ...process.env,
+            NODE_OPTIONS: "--max-old-space-size=12288"
+        }
     });
 
     const dtsExit = await dtsProc.exited;

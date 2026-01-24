@@ -3,7 +3,7 @@
  * Scans local environment for AI capabilities (e.g., Ollama) and auto-configures the system.
  */
 import { env } from "../core/cfg";
-import { getPersistedConfig, setPersistedConfig } from "../core/persisted_cfg";
+import { getPersistedConfig, setPersistedConfig } from "../core/persistedCfg";
 /**
  * @file discovery.ts
  * @description Automated discovery and indexing of knowledge domains.

@@ -10,5 +10,5 @@ export * from "./ai";
 export * from "./admin";
 
 // Keep legacy Event types in index for simple SSE handling
-import type { OpenMemoryEvent } from "./ai_events";
+import type { OpenMemoryEvent } from "./aiEvents";
 export type { OpenMemoryEvent };

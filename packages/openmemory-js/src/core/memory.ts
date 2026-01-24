@@ -2,11 +2,12 @@
  * Memory Facade for OpenMemory.
  * Provides a high-level API for managing memories, temporal graphs, and source ingestion.
  * 
- * @audited 2026-01-19
+ * @audited 2026-01-21
  */
 import * as crypto from "crypto";
 import {
     addHsgMemory,
+    addHsgMemories,
     hsgQuery,
     reinforceMemory,
     updateMemory,
@@ -22,7 +23,7 @@ import { SimpleCache } from "../utils/cache";
 import { logger } from "../utils/logger";
 import { env } from "./cfg";
 import { q, transaction, vectorStore } from "./db";
-import { eventBus } from "./events";
+import { eventBus, EVENTS } from "./events";
 import { getContext } from "./context";
 import { getEncryption } from "./security";
 import {
@@ -40,6 +41,7 @@ import {
 export interface MemoryOptions {
     userId?: string | null;
     tags?: string[];
+    metadata?: Record<string, unknown>;
     id?: string;
     createdAt?: number;
     [key: string]: unknown;
@@ -57,8 +59,9 @@ export const parseMemory = async (row: MemoryRow): Promise<MemoryItem> => {
     return {
         ...rest,
         content: await enc.decrypt(row.content),
-        tags: Array.isArray(row.tags) ? row.tags : (typeof row.tags === 'string' ? (() => { try { return JSON.parse(row.tags || '[]'); } catch { return []; } })() : []),
-        metadata: (typeof row.metadata === "object" && row.metadata !== null) ? row.metadata : (typeof row.metadata === 'string' ? (() => { try { return JSON.parse(row.metadata || '{}'); } catch { return {}; } })() : {}),
+        // Optimized: row already contains parsed objects from db_access.ts mapRow
+        tags: Array.isArray(row.tags) ? row.tags : [],
+        metadata: (typeof row.metadata === "object" && row.metadata !== null) ? row.metadata : {},
         compressedVecStr: row.compressedVec
             ? toBase64(new Uint8Array(row.compressedVec))
             : undefined,
@@ -109,11 +112,11 @@ export class Memory {
             throw new Error("Tags must be an array of strings.");
         }
 
-        const { userId, tags = [], id, createdAt, ...extra } = opts || {};
+        const { userId, tags = [], id, createdAt, metadata: metaInOpts, ...extra } = opts || {};
         const normalizedUserId = getUid(userId, this.defaultUserId);
 
         // Ensure we don't carry over known keys into metadata if they were in opts
-        const metadata: Record<string, unknown> = { ...extra };
+        const metadata: Record<string, unknown> = { ...extra, ...(metaInOpts || {}) };
 
         const tagsStr = JSON.stringify(tags);
 
@@ -126,8 +129,6 @@ export class Memory {
             { id: id as string, createdAt: createdAt as number },
         );
 
-        eventBus.emit("memory_added", item);
-
         // Audit Log
         try {
             const ctx = getContext();
@@ -139,6 +140,7 @@ export class Memory {
                 resourceId: item.id,
                 ipAddress: ctx?.ip || null,
                 userAgent: ctx?.userAgent || null,
+                // Redact metadata for audit log safety
                 metadata: { primarySector: item.primarySector },
                 timestamp: Date.now()
             }).catch((e: unknown) => logger.error("[Audit] Log failed", { error: e }));
@@ -149,41 +151,54 @@ export class Memory {
 
     /**
      * Batch add memories.
-     * Currently iterates sequentially, but poised for batch optimization.
+     * Supports concurrency control and per-item error reporting.
+     * 
      * @param items List of memory contents and options.
+     * @param opts.userId Optional user override.
+     * @param opts.concurrency Maximum parallel executions (default: 5).
+     * @returns Array of MemoryItem objects. If an item fails, it will contain an 'error' property.
      */
-    async addBatch(items: Array<{ content: string; tags?: string[]; metadata?: Record<string, unknown> }>, opts?: { userId?: string | null; concurrency?: number }): Promise<Array<MemoryItem | { error: string }>> {
+    async addBatch(
+        items: Array<{ content: string; tags?: string[]; metadata?: Record<string, unknown> }>,
+        opts?: { userId?: string | null; concurrency?: number }
+    ): Promise<Array<MemoryItem & { error?: string }>> {
+        if (!items.length) return [];
+        const userId = getUid(opts?.userId, this.defaultUserId);
         const concurrency = opts?.concurrency || 5;
-        const results: Array<Promise<MemoryItem | { error: string }>> = new Array(items.length);
-        const pool = new Set<Promise<MemoryItem | { error: string }>>();
 
-        for (let i = 0; i < items.length; i++) {
-            const item = items[i];
-            const promise = (async () => {
+        // If no concurrency control is needed and we are in a high-performance environment,
+        // we could use addHsgMemories for a fast path. 
+        // However, the current test suite expects per-item error handling and validation.
+
+        const results: Array<MemoryItem & { error?: string }> = new Array(items.length);
+        const queue = [...items.keys()];
+
+        const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+            while (queue.length > 0) {
+                const idx = queue.shift()!;
+                const item = items[idx];
                 try {
-                    return await this.add(item.content, {
-                        ...item.metadata,
-                        userId: opts?.userId,
-                        tags: item.tags
+                    // Validation (as expected by tests)
+                    if (item.tags && (!Array.isArray(item.tags) || !item.tags.every(t => typeof t === 'string'))) {
+                        throw new Error("Tags must be an array of strings.");
+                    }
+
+                    results[idx] = await this.add(item.content, {
+                        userId,
+                        tags: item.tags,
+                        metadata: item.metadata
                     });
-                } catch (error) {
-                    return { error: error instanceof Error ? error.message : String(error) };
+                } catch (e: any) {
+                    results[idx] = {
+                        content: item.content,
+                        error: e.message
+                    } as any;
                 }
-            })();
-
-            results[i] = promise;
-            if (concurrency > 1) {
-                pool.add(promise);
-                promise.finally(() => pool.delete(promise));
-                if (pool.size >= concurrency) {
-                    await Promise.race(pool);
-                }
-            } else {
-                await promise;
             }
-        }
+        });
 
-        return await Promise.all(results);
+        await Promise.all(workers);
+        return results;
     }
 
     /**
@@ -328,6 +343,8 @@ export class Memory {
         }
 
         this.invalidateCache(id);
+        eventBus.emit(EVENTS.MEMORY_UPDATED, { id, ...updates });
+
         return { id: res.id, ok: true };
     }
 
@@ -338,6 +355,10 @@ export class Memory {
         id: string,
         userId?: string | null,
     ): Promise<MemoryItem | undefined> {
+        // Ensure database is initialized
+        const { waitReady } = await import("./db");
+        await waitReady();
+        
         const uid = getUid(userId, this.defaultUserId);
 
         const cached = memCache.get(id);
@@ -500,6 +521,36 @@ export class Memory {
     }
 
     /**
+     * Non-semantic filter for memories.
+     * Supports filtering by sector, tags (any), or metadata key-value pairs.
+     * 
+     * @param filter.userId Optional user override.
+     * @param filter.sector Primary sector to match exactly.
+     * @param filter.tags Array of tags - matches if memory has ANY of these tags.
+     * @param filter.metadata Key-value pairs to match in metadata JSON.
+     * @param limit Max results (default 100).
+     */
+    async filter(
+        filters: {
+            userId?: string | null;
+            sector?: string;
+            tags?: string[];
+            metadata?: Record<string, unknown>;
+        },
+        limit = 100,
+        offset = 0
+    ): Promise<MemoryItem[]> {
+        const userId = getUid(filters.userId, this.defaultUserId);
+        const rows = await q.findMems.all({
+            ...filters,
+            userId,
+            limit,
+            offset
+        });
+        return await Promise.all(rows.map(parseMemory));
+    }
+
+    /**
      * Updates memory statistics (lastSeen, salience) directly.
      * Useful for reflection and maintenance tasks where content doesn't change.
      */
@@ -652,27 +703,6 @@ export class Memory {
 
 
 
-    /**
-     * Get system-wide statistics.
-     */
-    async stats(): Promise<{
-        memories: number;
-        vectors: number;
-        facts: number;
-        relations: number;
-    }> {
-        const memories = await q.getMemCount.get(this.defaultUserId);
-        const vectors = await q.getVecCount.get(this.defaultUserId);
-        const facts = await q.getFactCount.get(this.defaultUserId);
-        const relations = await q.getEdgeCount.get(this.defaultUserId);
-
-        return {
-            memories: memories?.c || 0,
-            vectors: vectors?.c || 0,
-            facts: facts?.c || 0,
-            relations: relations?.c || 0,
-        };
-    }
 
     private _temporal?: TemporalAccess;
 
@@ -948,11 +978,11 @@ export class Memory {
         const sources: Record<string, () => Promise<BaseSource<unknown, unknown>>> = {
             github: () => import("../sources/github").then((m) => new m.GithubSource(this.defaultUserId ?? undefined)),
             notion: () => import("../sources/notion").then((m) => new m.NotionSource(this.defaultUserId ?? undefined)),
-            google_drive: () => import("../sources/google_drive").then((m) => new m.GoogleDriveSource(this.defaultUserId ?? undefined)),
-            google_sheets: () => import("../sources/google_sheets").then((m) => new m.GoogleSheetsSource(this.defaultUserId ?? undefined)),
-            google_slides: () => import("../sources/google_slides").then((m) => new m.GoogleSlidesSource(this.defaultUserId ?? undefined)),
+            google_drive: () => import("../sources/googleDrive").then((m) => new m.GoogleDriveSource(this.defaultUserId ?? undefined)),
+            google_sheets: () => import("../sources/googleSheets").then((m) => new m.GoogleSheetsSource(this.defaultUserId ?? undefined)),
+            google_slides: () => import("../sources/googleSlides").then((m) => new m.GoogleSlidesSource(this.defaultUserId ?? undefined)),
             onedrive: () => import("../sources/onedrive").then((m) => new m.OneDriveSource(this.defaultUserId ?? undefined)),
-            web_crawler: () => import("../sources/web_crawler").then((m) => new m.WebCrawlerSource(this.defaultUserId ?? undefined)),
+            web_crawler: () => import("../sources/webCrawler").then((m) => new m.WebCrawlerSource(this.defaultUserId ?? undefined)),
         };
 
         if (!(name in sources)) {
@@ -960,6 +990,32 @@ export class Memory {
         }
 
         return await sources[name]();
+    }
+
+    /**
+     * Get system statistics including memory counts, vector counts, and temporal graph stats.
+     */
+    async stats(): Promise<{ memories: number; vectors: number; facts: number; relations: number }> {
+        const uid = this.defaultUserId;
+        
+        // Ensure database is initialized
+        const { waitReady, q } = await import("./db");
+        await waitReady();
+        
+        // Get memory and vector counts
+        const memoryStats = await q.getStats.get(uid);
+        const vectorCount = await q.getVecCount.get(uid);
+        
+        // Get temporal graph stats
+        const factCount = await q.getFactCount?.get?.(uid) || { c: 0 };
+        const edgeCount = await q.getEdgeCount?.get?.(uid) || { c: 0 };
+        
+        return {
+            memories: memoryStats?.count || 0,
+            vectors: vectorCount?.c || 0,
+            facts: factCount?.c || 0,
+            relations: edgeCount?.c || 0
+        };
     }
 }
 

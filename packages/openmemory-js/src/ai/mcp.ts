@@ -11,7 +11,7 @@ import { z } from "zod";
 
 import { env, VERSION } from "../core/cfg";
 import { Memory } from "../core/memory";
-import { sectorConfigs } from "../core/hsg_config";
+import { sectorConfigs } from "../core/hsgConfig";
 import { type RpcErrorCode } from "../core/types";
 import { getEmbeddingInfo } from "../memory/embed";
 import { AppError } from "../server/errors";
@@ -19,10 +19,10 @@ import { logger } from "../utils/logger";
 import {
     registerCoreMemoryTools,
     registerIngestTools,
-} from "./mcp_tools_core";
-import { registerTemporalGraphTools } from "./mcp_tools_temporal";
-import { registerLangGraphTools, registerIdeTools } from "./mcp_tools_graph";
-import { registerAdminTools } from "./mcp_tools_admin";
+} from "./mcpToolsCore";
+import { registerTemporalGraphTools } from "./mcpToolsTemporal";
+import { registerLangGraphTools, registerIdeTools } from "./mcpToolsGraph";
+import { registerAdminTools } from "./mcpToolsAdmin";
 
 /**
  * MCP Server version - synchronized with package.json version via core/cfg.

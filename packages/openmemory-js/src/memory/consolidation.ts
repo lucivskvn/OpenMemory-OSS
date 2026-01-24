@@ -7,7 +7,7 @@
 
 import { env } from "../core/cfg";
 import { q, vectorStore } from "../core/db";
-import { sectorConfigs } from "../core/hsg_config";
+import { sectorConfigs } from "../core/hsgConfig";
 import { getEncryption } from "../core/security";
 import { MemoryRow } from "../core/types";
 import { normalizeUserId } from "../utils";
@@ -47,7 +47,10 @@ const clampF = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
 const clampI = (v: number, a: number, b: number) =>
     Math.min(b, Math.max(a, Math.floor(v)));
 const tick = () => new Promise<void>((r) => setImmediate(r));
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number) => 
+    typeof Bun !== "undefined" && Bun.sleep
+        ? Bun.sleep(ms)
+        : new Promise((r) => setTimeout(r, ms));
 
 let lastConsolidation = 0;
 
@@ -115,6 +118,10 @@ export const consolidateStructuralMemory = async (
     userId?: string | null,
 ): Promise<{ decayed: number; processed: number }> => {
     const uid = normalizeUserId(userId);
+
+    // Ensure database is ready before accessing q object
+    const { waitForDb } = await import("../core/db/population");
+    await waitForDb();
 
     const now = Date.now();
     if (now - lastConsolidation < cfg.cooldown) {

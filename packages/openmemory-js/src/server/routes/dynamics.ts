@@ -63,7 +63,10 @@ const WaypointWeightSchema = z.object({
 });
 
 const WaypointGraphSchema = z.object({
-    limit: z.number().optional().default(1000),
+    limit: z.preprocess((val) => {
+        if (typeof val === 'string') return parseInt(val, 10);
+        return val;
+    }, z.number().optional().default(1000)),
     userId: z.string().optional(),
 });
 

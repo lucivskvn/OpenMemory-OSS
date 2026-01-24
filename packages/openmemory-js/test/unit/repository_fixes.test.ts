@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, spyOn, mock } from "bun:test";
 import { WebhookRepository } from "../../src/core/repository/webhook";
-import { RateLimitRepository } from "../../src/core/repository/rate_limit";
+import { RateLimitRepository } from "../../src/core/repository/rateLimit";
 import { MemoryRepository } from "../../src/core/repository/memory";
 import { TABLES } from "../../src/core/db_access";
 

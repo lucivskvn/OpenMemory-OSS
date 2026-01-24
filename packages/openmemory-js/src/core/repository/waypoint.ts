@@ -1,7 +1,7 @@
 import { BaseRepository } from "./base";
 import { Waypoint, BatchWaypointInsertItem } from "../types";
-import { getIsPg, transaction } from "../db_access";
-import { SqlValue } from "../db_utils";
+import { getIsPg, transaction } from "../db";
+import { SqlValue } from "../dbUtils";
 
 export class WaypointRepository extends BaseRepository {
     /**

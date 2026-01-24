@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeAll, afterAll, beforeEach } from "bun:test";
 import { app } from "../../src/server/index";
-import { q, closeDb, runAsync } from "../../src/core/db";
+import { q, closeDb, runAsync, waitForDb } from "../../src/core/db";
 import { stopAllMaintenance } from "../../src/core/scheduler";
 import { reloadConfig } from "../../src/core/cfg";
 import { Memory } from "../../src/core/memory";
@@ -27,8 +27,12 @@ describe("API Hardening & Standardization", () => {
         process.env.OM_ADMIN_KEY = adminKey;
         reloadConfig();
 
+        // Ensure DB is ready before server operations
+        await waitForDb();
+
         server = app;
     });
+
 
     afterAll(async () => {
         await stopAllMaintenance();

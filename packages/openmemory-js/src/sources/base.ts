@@ -225,7 +225,7 @@ export abstract class BaseSource<
         logger.info(`[${this.name}] Connecting (centralized auth)...`);
         try {
             // 1. Try to hydrate from DB first (Dashboard-First Integration Strategy)
-            const { getPersistedConfig } = await import("../core/persisted_cfg");
+            const { getPersistedConfig } = await import("../core/persistedCfg");
             const persisted = await getPersistedConfig<TCreds>(
                 this.userId ?? null,
                 this.name,

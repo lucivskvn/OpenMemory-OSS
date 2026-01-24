@@ -149,6 +149,10 @@ export const runReflection = async () => {
     if (env.verbose) logger.info("[REFLECT] Starting reflection job...");
     const minThreshold = env.reflectMin || 20;
 
+    // Ensure database is ready before accessing q object
+    const { waitForDb } = await import("../core/db/population");
+    await waitForDb();
+
     const users = await q.getActiveUsers.all();
     if (env.verbose)
         logger.info(`[REFLECT] Found ${users.length} active users`);

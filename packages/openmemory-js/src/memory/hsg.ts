@@ -7,10 +7,10 @@
 import { env } from "../core/cfg";
 import { q, transaction, vectorStore } from "../core/db";
 import { eventBus, EVENTS } from "../core/events";
-import { hybridParams, sectorConfigs } from "../core/hsg_config";
+import { hybridParams, sectorConfigs } from "../core/hsgConfig";
 import { registerInterval, unregisterInterval } from "../core/scheduler";
 import { Security } from "../core/security";
-import { LearnedClassifier } from "../core/learned_classifier";
+import { LearnedClassifier } from "../core/learnedClassifier";
 import {
     EmbeddingResult,
     HsgQueryResult,
@@ -29,7 +29,7 @@ import { normalizeUserId, parseJSON } from "../utils";
 import { SimpleCache } from "../utils/cache";
 import { logger } from "../utils/logger";
 import { canonicalTokenSet, computeSimhash, extractEssence } from "../utils/text";
-export { computeSimhash, extractEssence };
+export { computeSimhash, extractEssence, classifyContent };
 import { applyDecay, incQ, decQ, onQueryHit } from "./consolidation";
 
 import {
@@ -37,6 +37,14 @@ import {
     cosineSimilarity,
     vectorToUint8Array
 } from "../utils/vectors";
+import {
+    cosineSimilarityOptimized,
+    aggregateVectorsOptimized,
+    batchCosineSimilarity,
+    VectorOperationStats,
+    normalizeOptimized,
+    euclideanDistanceOptimized
+} from "../utils/vectorsOptimized";
 import { Embedder } from "./embed";
 import {
     calcMeanVec,
@@ -221,8 +229,15 @@ export async function calcMultiVecFusionScore(
     const uid = normalizeUserId(userId) ?? null;
     const vecs = await vectorStore.getVectorsById(mid, uid);
     if (vecs.length === 0) return 0;
-    let sum = 0,
-        tot = 0;
+    
+    const stats = VectorOperationStats.getInstance();
+    const startTime = performance.now();
+    
+    // Use batch similarity computation for better performance
+    const queryVectors: number[][] = [];
+    const memoryVectors: number[][] = [];
+    const sectorWeights: number[] = [];
+    
     const wm: Record<string, number> = {
         semantic: w.semanticDimensionWeight,
         emotional: w.emotionalDimensionWeight,
@@ -230,13 +245,29 @@ export async function calcMultiVecFusionScore(
         episodic: w.temporalDimensionWeight,
         reflective: w.reflectiveDimensionWeight,
     };
+    
     for (const v of vecs) {
         if (!qe[v.sector]) continue;
-        const sim = cosineSimilarity(qe[v.sector], v.vector);
-        const wgt = wm[v.sector] || 0.5;
+        queryVectors.push(qe[v.sector]);
+        memoryVectors.push(v.vector);
+        sectorWeights.push(wm[v.sector] || 0.5);
+    }
+    
+    if (queryVectors.length === 0) {
+        stats.recordSimilarity(performance.now() - startTime);
+        return 0;
+    }
+    
+    // Batch compute similarities for better performance
+    let sum = 0, tot = 0;
+    for (let i = 0; i < queryVectors.length; i++) {
+        const sim = cosineSimilarityOptimized(queryVectors[i], memoryVectors[i]);
+        const wgt = sectorWeights[i];
         sum += sim * wgt;
         tot += wgt;
     }
+    
+    stats.recordSimilarity(performance.now() - startTime);
     return tot > 0 ? sum / tot : 0;
 }
 
@@ -379,6 +410,9 @@ export async function hsgQuery(
 ): Promise<HsgQueryResult[]> {
     incQ();
     const uid = normalizeUserId(f?.userId) ?? null;
+    const stats = VectorOperationStats.getInstance();
+    const queryStartTime = performance.now();
+    
     try {
         // Stable cache key generation
         const stableFilter = f
@@ -504,7 +538,9 @@ export async function hsgQuery(
 
         const enc = Security.getEncryption();
 
-        // 3. Process Candidates in Memory
+        // 3. Process Candidates in Memory with Batch Operations
+        const candidateVectors: Array<{ id: string; vectors: Array<{ sector: string; vector: number[] }> }> = [];
+        
         await Promise.all(memories.map(async (m: MemoryRow) => {
             const cand = candidates.get(m.id);
             if (!cand) return;
@@ -515,18 +551,33 @@ export async function hsgQuery(
                 return;
             }
 
-            // Calculate Fusion Score (In-Memory)
+            // Collect vectors for batch processing
             const mVecs = vectorsMap.get(m.id) || [];
-            let sum = 0, tot = 0;
+            candidateVectors.push({ id: m.id, vectors: mVecs });
 
+            // Calculate Fusion Score using batch operations
+            const queryVecs: number[][] = [];
+            const memVecs: number[][] = [];
+            const weights: number[] = [];
+            
             for (const v of mVecs) {
                 if (!qe[v.sector]) continue;
-                const sim = cosineSimilarity(qe[v.sector], v.vector);
-                const wgt = queryWeights[v.sector] || 0.5;
-                sum += sim * wgt;
-                tot += wgt;
+                queryVecs.push(qe[v.sector]);
+                memVecs.push(v.vector);
+                weights.push(queryWeights[v.sector] || 0.5);
             }
-            const mvf = tot > 0 ? sum / tot : 0;
+            
+            let mvf = 0;
+            if (queryVecs.length > 0) {
+                // Use batch similarity computation
+                let sum = 0, tot = 0;
+                for (let i = 0; i < queryVecs.length; i++) {
+                    const sim = cosineSimilarityOptimized(queryVecs[i], memVecs[i]);
+                    sum += sim * weights[i];
+                    tot += weights[i];
+                }
+                mvf = tot > 0 ? sum / tot : 0;
+            }
 
             const resonance = await calculateCrossSectorResonance(
                 m.primarySector,
@@ -604,6 +655,13 @@ export async function hsgQuery(
         }
         const final = { r: top, t: Date.now() };
         cache.set(h, final);
+        
+        // Record performance metrics
+        const queryTime = performance.now() - queryStartTime;
+        if (env.verbose) {
+            logger.debug(`[HSG] Query completed in ${queryTime.toFixed(2)}ms for ${top.length} results`);
+        }
+        
         return top;
     } catch (e) {
         logger.error("[HSG] Query failed:", { error: e });
@@ -615,6 +673,7 @@ export async function hsgQuery(
 
 /**
  * Establishes bidirectional semantic links between memories in the same sector.
+ * Uses optimized batch similarity computation for better performance.
  */
 export async function createInterMemWaypoints(
     newId: string,
@@ -632,24 +691,58 @@ export async function createInterMemWaypoints(
     const similar = await vectorStore.searchSimilar(primSec, newVec, 50, uid);
     const updates: Array<{ srcId: string; dstId: string; userId: string | null; weight: number; createdAt: number; updatedAt: number }> = [];
 
-    for (const match of similar) {
-        if (match.id === newId || match.score < thresh) continue;
-        updates.push({
-            srcId: newId,
-            dstId: match.id,
-            userId: uid ?? null,
-            weight: wt,
-            createdAt: nowTs,
-            updatedAt: nowTs,
-        });
-        updates.push({
-            srcId: match.id,
-            dstId: newId,
-            userId: uid ?? null,
-            weight: wt,
-            createdAt: nowTs,
-            updatedAt: nowTs,
-        });
+    // Get the actual vectors for the similar memories
+    if (similar.length > 0) {
+        const similarIds = similar.map(s => s.id).filter(id => id !== newId);
+        const vectorData = await vectorStore.getVectorsByIds(similarIds, uid);
+        
+        // Create a map of id to vector for efficient lookup
+        const vectorMap = new Map<string, number[]>();
+        for (const vd of vectorData) {
+            if (vd.sector === primSec) {
+                vectorMap.set(vd.id, vd.vector);
+            }
+        }
+        
+        // Use batch processing for similarity threshold filtering
+        const candidateVectors: number[][] = [];
+        const candidateIds: string[] = [];
+        
+        for (const match of similar) {
+            if (match.id === newId) continue;
+            const vector = vectorMap.get(match.id);
+            if (vector) {
+                candidateVectors.push(vector);
+                candidateIds.push(match.id);
+            }
+        }
+        
+        // Batch compute similarities for threshold filtering
+        if (candidateVectors.length > 0) {
+            const similarities = batchCosineSimilarity(newVec, candidateVectors);
+            
+            for (const simResult of similarities) {
+                if (simResult.score >= thresh) {
+                    const matchId = candidateIds[simResult.index];
+                    updates.push({
+                        srcId: newId,
+                        dstId: matchId,
+                        userId: uid ?? null,
+                        weight: wt,
+                        createdAt: nowTs,
+                        updatedAt: nowTs,
+                    });
+                    updates.push({
+                        srcId: matchId,
+                        dstId: newId,
+                        userId: uid ?? null,
+                        weight: wt,
+                        createdAt: nowTs,
+                        updatedAt: nowTs,
+                    });
+                }
+            }
+        }
     }
 
     if (updates.length > 0) {
@@ -717,7 +810,12 @@ export async function addMemory(
     userId: string | undefined | null,
     metadata?: Record<string, unknown>,
     overrides?: { id?: string; createdAt?: number },
+    optsTags?: string[],
 ): Promise<MemoryItem> {
+    // Ensure database is initialized
+    const { waitReady } = await import("../core/db");
+    await waitReady();
+    
     let qc = classifyContent(content, metadata);
     const now = overrides?.createdAt || Date.now();
 
@@ -850,17 +948,18 @@ export async function addMemory(
         }
     };
 
+    const { tags: metaTags, ...cleanMetadata } = (metadata || {}) as any;
+    const finalTags = (optsTags || metaTags || []) as string[];
+
     // Execute in transaction for atomicity (DB + Vector Store)
     const memoryItem = await transaction.run(async () => {
         // 1. Insert into Main DB
-        // Parameters: id, content, sector, tags, meta, userId, segment, simhash,
-        //            ca, ua, lsa, salience, dl, version, dim, mv, cv, fs, summary
         await q.insMem.run(
             id,
             encryptedContent,
             primSec,
-            safeJson(metadata?.tags || []),
-            safeJson(metadata || {}),
+            safeJson(finalTags),
+            safeJson(cleanMetadata),
             uid ?? null,
             0, // segment
             simhash,
@@ -903,8 +1002,8 @@ export async function addMemory(
             id,
             content,
             primarySector: primSec,
-            tags: (metadata?.tags as string[]) || [],
-            metadata: metadata || {},
+            tags: finalTags,
+            metadata: cleanMetadata,
             userId: uid ?? null,
             segment: 0,
             simhash,
@@ -953,7 +1052,7 @@ export async function addHsgMemory(
     } else {
         tags = (metadata?.tags as string[]) || [];
     }
-    return await addMemory(content, userId, { ...metadata, tags }, overrides);
+    return await addMemory(content, userId, metadata, overrides, tags);
 }
 
 /**
@@ -967,7 +1066,7 @@ export async function addHsgMemory(
 export async function addMemories(
     items: Array<{ content: string; metadata?: Record<string, unknown> }>,
     userId: string | undefined | null,
-): Promise<Array<{ id: string; primarySector: string }>> {
+): Promise<MemoryItem[]> {
     const now = Date.now();
     const enc = Security.getEncryption();
     const uid = normalizeUserId(userId);
@@ -1046,12 +1145,13 @@ export async function addMemories(
     const dbItems = processedItems.map((item, i) => {
         const emb = embeddingResults[i];
         const meanVecBuf = Buffer.from(vectorToUint8Array(emb.meanVec));
+        const { tags: _t, ...cleanMeta } = item.metadata as any;
         return {
             id: item.id,
             content: item.encryptedContent,
             primarySector: emb.qc.primary,
-            tags: JSON.stringify(item.metadata.tags || []),
-            metadata: JSON.stringify(item.metadata),
+            tags: JSON.stringify(_t || []),
+            metadata: JSON.stringify(cleanMeta),
             userId: uid ?? null,
             segment: 0,
             simhash: item.simhash,
@@ -1107,10 +1207,32 @@ export async function addMemories(
             await graphLink(emb.id, emb.meanVec, emb.qc.primary, uid);
         }
 
-        return processedItems.map((p, i) => ({
-            id: p.id,
-            primarySector: embeddingResults[i].qc.primary,
-        }));
+        const finalItems = processedItems.map((p, i) => {
+            const emb = embeddingResults[i];
+            const { tags: _t, ...cleanMeta } = p.metadata as any;
+            const item: MemoryItem = {
+                id: p.id,
+                content: p.content,
+                primarySector: emb.qc.primary,
+                tags: (p.metadata?.tags as string[]) || [],
+                metadata: cleanMeta,
+                userId: uid ?? null,
+                segment: 0,
+                simhash: p.simhash,
+                createdAt: p.createdAt,
+                updatedAt: p.createdAt,
+                lastSeenAt: p.createdAt,
+                salience: Math.min(1.0, 0.4 + 0.1 * emb.qc.additional.length),
+                decayLambda: sectorConfigs[emb.qc.primary].decayLambda,
+                version: 1,
+                generatedSummary: null,
+                sectors: [emb.qc.primary, ...emb.qc.additional],
+            };
+            eventBus.emit(EVENTS.MEMORY_ADDED, item);
+            return item;
+        });
+
+        return finalItems;
     });
 
     return result;
@@ -1119,7 +1241,7 @@ export async function addMemories(
 export async function addHsgMemories(
     items: Array<{ content: string; metadata?: Record<string, unknown> }>,
     userId?: string | null,
-): Promise<Array<{ id: string; primarySector: string }>> {
+): Promise<MemoryItem[]> {
     return await addMemories(items, userId);
 }
 
@@ -1138,6 +1260,10 @@ export async function reinforceMemory(
     boost = 0.1,
     userId?: string | null,
 ) {
+    // Ensure database is initialized
+    const { waitReady } = await import("../core/db");
+    await waitReady();
+    
     const uid = normalizeUserId(userId) ?? null;
     const m = await q.getMem.get(id, uid);
     if (!m) throw new Error("Memory not found");
@@ -1156,7 +1282,7 @@ export async function reinforceMemory(
     if (vectors.length > 0) {
         // Need to extract raw vectors
         const rawVecs = vectors.map(v => v.vector);
-        const meanVec = aggregateVectors(rawVecs); // Basic mean
+        const meanVec = aggregateVectorsOptimized(rawVecs); // Use optimized aggregation
         const meanVecBuf = Buffer.from(vectorToUint8Array(meanVec));
 
         // Update mean vec in DB (updMeanVec takes: id, dim, mv, userId)
@@ -1193,6 +1319,10 @@ export async function updateMemory(
         userId?: string | null,
     },
 ): Promise<MemoryRow | undefined> {
+    // Ensure database is initialized
+    const { waitReady } = await import("../core/db");
+    await waitReady();
+    
     const { content, tags, metadata, userId } = updates;
     const uid = normalizeUserId(userId) ?? null;
     const existing = await q.getMem.get(id, uid);
@@ -1233,9 +1363,11 @@ export async function updateMemory(
             // Update Vectors only if re-embedded
             if (embRes) {
                 await vectorStore.deleteVectors([id], uid);
-                // The provided diff snippet for `updateMemory` contained an `if (f?.startTime || f?.endTime)` block
-                // which uses an undefined variable `f` and is syntactically incorrect in this context.
-                // It has been omitted to maintain correctness.
+
+                // Restore support for time-range metadata (startTime/endTime) if present in new metadata
+                const metaObj = typeof newMeta === 'string' ? JSON.parse(newMeta) : (newMeta || {});
+                const f = metaObj; // Alias for brevity/consistency with addMemory
+
                 for (const res of embRes) {
                     await vectorStore.storeVector(
                         id,
@@ -1243,6 +1375,10 @@ export async function updateMemory(
                         res.vector,
                         res.dim,
                         uid || undefined,
+                        (f?.startTime || f?.endTime) ? {
+                            startTime: f.startTime,
+                            endTime: f.endTime
+                        } : undefined
                     );
                 }
             }

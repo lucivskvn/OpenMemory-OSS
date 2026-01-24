@@ -4,16 +4,15 @@
  * Extracted from db.ts to resolve circular dependencies with repositories.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { dirname } from "node:path";
-import { mkdirSync, unlinkSync } from "node:fs";
-
+import path from "node:path";
 import { Database } from "bun:sqlite";
 import { Pool, PoolClient } from "pg";
 
 import { logger as dbLogger } from "../utils/logger";
 import { env } from "./cfg";
 import { validateTableName } from "./security";
-import { applySqlUser, type SqlParams, type SqlValue } from "./db_utils";
+import { applySqlUser, type SqlParams, type SqlValue } from "./dbUtils";
+import { queryPerformanceMonitor, withQueryMonitoring } from "./queryOptimizer";
 
 // Validate table names on module load to prevent SQL injection via config
 try {
@@ -105,7 +104,8 @@ const tx_locks = new Map<string, Promise<void>>();
  * Used for connection isolation and caching.
  */
 export const getContextId = () => {
-    return Bun.env.TEST_WORKER_ID || (typeof process !== "undefined" ? String(process.pid) : "0");
+    // Priority: Explicit worker ID > Bun worker ID > Process PID
+    return Bun.env.TEST_WORKER_ID || (globalThis as any).Bun?.workerId?.toString() || (typeof process !== "undefined" ? String(process.pid) : "0");
 };
 
 const get_lifecycle_lock = () => {
@@ -166,37 +166,36 @@ const toCamel = (s: string) => {
     let cached = CAMEL_CACHE.get(s);
     if (cached) return cached;
     cached = s.replace(/([-_][a-z])/ig, ($1) => $1.toUpperCase().replace('-', '').replace('_', ''));
-    CAMEL_CACHE.set(s, cached);
+    if (CAMEL_CACHE.size < 1000) CAMEL_CACHE.set(s, cached);
     return cached;
 };
 
 const DIRECT_KEYS = new Set(["id", "uid", "sid", "tid", "tag", "key", "val", "type", "ok", "success", "status", "data", "count", "cnt", "gpu", "tier", "dim", "cache", "version", "role", "note", "segment", "simhash", "salience", "err", "model", "confidence", "weight"]);
 
-const JSON_COL_INDICATORS = ["metadata", "tags", "details", "config", "payload"];
-const TIMESTAMP_COL_INDICATORS = ["_at", "valid_", "last_updated", "next_retry", "last_triggered", "window_start", "last_request", "timestamp", "ts"];
+const JSON_COL_SET = new Set(["metadata", "tags", "details", "config", "payload", "weights", "biases", "events", "conditions"]);
+const TIMESTAMP_COL_SET = new Set(["_at", "valid_", "last_updated", "next_retry", "last_triggered", "window_start", "last_request", "timestamp", "ts", "created_at", "updated_at", "last_seen_at"]);
 
 /**
- * Maps a database row to a JavaScript object with camelCase keys and parsed JSON.
- * High-performance implementation using pre-computed lookups.
- * 
- * @param row - The raw database row from SQLite or PostgreSQL.
- * @returns A normalized object with camelCase keys and parsed JSON fields.
+ * High-performance row mapper. 
+ * Converts DB rows to camelCase objects and parses JSON/Timestamps.
  */
 export const mapRow = (row: Record<string, any> | null): any => {
     if (!row) return row;
 
     const mapped: any = {};
-    const keys = Object.keys(row);
+    const entries = Object.entries(row);
 
-    for (let i = 0; i < keys.length; i++) {
-        const k = keys[i];
-        let val = row[k];
+    for (let i = 0; i < entries.length; i++) {
+        const [k, val] = entries[i];
+        let finalizedVal = val;
 
-        // Parse JSON for specific columns - check suffix/indicator
+        // Optimized column type detection
         if (typeof val === "string" && val.length > 0) {
-            // Check for JSON columns
+            // Check for JSON - O(1) lookup via Set by checking if column contains any indicator
+            // Since Set check is fast, we can check a few common indicators or the whole key
             let isJson = false;
-            for (const indicator of JSON_COL_INDICATORS) {
+            // Iterate Set once
+            for (const indicator of JSON_COL_SET) {
                 if (k.includes(indicator)) {
                     isJson = true;
                     break;
@@ -204,41 +203,32 @@ export const mapRow = (row: Record<string, any> | null): any => {
             }
 
             if (isJson) {
-                try {
-                    // Quick check for JSON-like start character to avoid unnecessary parse calls
-                    const firstChar = val[0];
-                    if (firstChar === "{" || firstChar === "[") {
-                        val = JSON.parse(val);
-                    }
-                } catch {
-                    // Keep original value if parsing fails
+                const firstChar = val[0];
+                if (firstChar === "{" || firstChar === "[") {
+                    try { finalizedVal = JSON.parse(val); } catch { /* ignore */ }
                 }
             } else {
-                // Check for Timestamps/Dates only if not JSON
                 let isTimestamp = false;
-                for (const indicator of TIMESTAMP_COL_INDICATORS) {
+                for (const indicator of TIMESTAMP_COL_SET) {
                     if (k.includes(indicator)) {
                         isTimestamp = true;
                         break;
                     }
                 }
-
                 if (isTimestamp && val.length > 5) {
                     const num = Number(val);
-                    if (!Number.isNaN(num)) {
-                        val = num;
-                    }
+                    if (!Number.isNaN(num)) finalizedVal = num;
                 }
             }
         }
 
-        // Direct key mapping or CamelCase conversion
+        // Key mapping
         if (DIRECT_KEYS.has(k)) {
-            mapped[k] = val;
-        } else if (k.includes("_")) {
-            mapped[toCamel(k)] = val;
+            mapped[k] = finalizedVal;
+        } else if (k.indexOf("_") !== -1) {
+            mapped[toCamel(k)] = finalizedVal;
         } else {
-            mapped[k] = val;
+            mapped[k] = finalizedVal;
         }
     }
 
@@ -248,16 +238,17 @@ export const mapRow = (row: Record<string, any> | null): any => {
 const normalizeParams = (params: SqlParams, isPg: boolean): any[] => {
     return params.map((v) => {
         if (v === undefined) return null;
+        if (v instanceof Uint8Array || Buffer.isBuffer(v)) return v;
+
         // SQLite only accepts Uint8Array/Buffer for blobs. 
-        // If we get an array and we're in SQLite, it's likely a vector if it's all numbers.
         if (!isPg && Array.isArray(v)) {
-            if (v.length > 0 && typeof v[0] === "number") {
+            if (v.length > 0 && typeof v[0] === "number" && v.some(n => !Number.isInteger(n))) {
+                // Heuristic for vectors (floats)
                 return new Uint8Array(new Float32Array(v).buffer);
             }
-            // For other arrays (like tags/metadata), we should stringify them? 
-            // In OpenMemory, tags/metadata are usually strings in the DB anyway.
             return JSON.stringify(v);
         }
+        if (!isPg && typeof v === "object" && v !== null) return JSON.stringify(v);
         return v;
     });
 };
@@ -276,7 +267,7 @@ async function execRes(sql: string, params: SqlParams) {
         if (!client) throw new Error("PG accessible but client is null");
         return await client.query(finalSql, strictP as any[]);
     } else {
-        const db = get_sq_db();
+        const db = await get_sq_db();
         const stmt_cache = get_stmt_cache();
         let cached = stmt_cache.get(sql);
         if (!cached) {
@@ -302,7 +293,7 @@ async function execAll<T>(sql: string, params: SqlParams): Promise<T[]> {
         const res = await client.query(finalSql, strictP as any[]);
         return res.rows.map(mapRow) as T[];
     } else {
-        const db = get_sq_db();
+        const db = await get_sq_db();
         const stmt_cache = get_stmt_cache();
         let cached = stmt_cache.get(sql);
         if (!cached) {
@@ -327,27 +318,30 @@ async function execAll<T>(sql: string, params: SqlParams): Promise<T[]> {
  */
 export async function runAsync(sql: string, params: SqlParams = []): Promise<number> {
     await waitReady();
-    const start = Date.now();
-    try {
-        const res = await execRes(sql, params);
-        const duration = Date.now() - start;
-        if (duration > 1000) {
-            dbLogger.warn("[DB] Slow query detected", {
-                sql: sql.substring(0, 100),
-                duration,
-                params: params.length,
+    
+    return withQueryMonitoring(sql, params, async () => {
+        const start = Date.now();
+        try {
+            const res = await execRes(sql, params);
+            const duration = Date.now() - start;
+            if (duration > 1000) {
+                dbLogger.warn("[DB] Slow query detected", {
+                    sql: sql.substring(0, 100),
+                    duration,
+                    params: params.length,
+                });
+            }
+            return res.rowCount || 0;
+        } catch (err) {
+            dbLogger.error("[DB] Query failed", {
+                sql,
+                params,
+                error: err,
+                dbPath: env.dbPath,
             });
+            throw err;
         }
-        return res.rowCount || 0;
-    } catch (err) {
-        dbLogger.error("[DB] Query failed", {
-            sql,
-            params,
-            error: err,
-            dbPath: env.dbPath,
-        });
-        throw err;
-    }
+    });
 }
 
 /**
@@ -398,8 +392,11 @@ export async function upsertAsync(table: string, idColumns: string[], row: Recor
  */
 export async function getAsync<T = unknown>(sql: string, params: SqlParams = []): Promise<T | undefined> {
     await waitReady();
-    const rows = await execAll<T>(sql, params);
-    return rows[0] as T;
+    
+    return withQueryMonitoring(sql, params, async () => {
+        const rows = await execAll<T>(sql, params);
+        return rows[0] as T;
+    });
 }
 
 /**
@@ -411,7 +408,10 @@ export async function getAsync<T = unknown>(sql: string, params: SqlParams = [])
  */
 export async function allAsync<T = unknown>(sql: string, params: SqlParams = []): Promise<T[]> {
     await waitReady();
-    return await execAll<T>(sql, params);
+    
+    return withQueryMonitoring(sql, params, async () => {
+        return await execAll<T>(sql, params);
+    });
 }
 
 /**
@@ -432,7 +432,7 @@ export async function* iterateAsync<T = unknown>(sql: string, p: SqlParams = [])
         const rows = (await allAsync(sql, p)) as T[];
         for (const row of rows) yield row;
     } else {
-        const d = get_sq_db();
+        const d = await get_sq_db();
         const strictP = normalizeParams(p, false);
 
         try {
@@ -573,25 +573,31 @@ export const TABLES = {
 let pg: Pool | null = null;
 export let hasVector = false;
 
-const pool = (dbOverride?: string) =>
-    new Pool({
+import { connectionPoolOptimizer } from "./queryOptimizer";
+import { initializeIndexes } from "./indexOptimizer";
+
+const pool = (dbOverride?: string) => {
+    const optimizedConfig = connectionPoolOptimizer.getOptimizedPoolConfig();
+    
+    return new Pool({
         user: env.pgUser,
         host: env.pgHost,
         database: dbOverride || env.pgDb,
         password: env.pgPassword,
         port: env.pgPort,
         ssl: env.pgSsl === "require" ? { rejectUnauthorized: false } : env.pgSsl === "disable" ? false : undefined,
-        max: env.pgMax || 20,
-        idleTimeoutMillis: env.pgIdleTimeout || 30000,
-        connectionTimeoutMillis: env.pgConnTimeout || 2000,
+        max: optimizedConfig.maxConnections,
+        idleTimeoutMillis: optimizedConfig.idleTimeout,
+        connectionTimeoutMillis: optimizedConfig.connectionTimeout,
     });
+};
 
 if (getIsPg()) {
     pg = pool();
     pg.on("error", (err) => dbLogger.error("[DB] Unexpected PG error", { error: err }));
 }
 
-export const get_sq_db = () => {
+export const get_sq_db = async () => {
     const db_path = env.dbPath || ":memory:";
     const cacheKey = `${db_path}_${getContextId()}`;
 
@@ -600,12 +606,22 @@ export const get_sq_db = () => {
     dbLogger.info(`[DB] Opening connection to: ${db_path} (Context: ${getContextId()})`);
 
     if (db_path !== ":memory:") {
-        // Bun automatically creates directories if we use Bun.write, 
-        // but for sqlite we might need to ensure the dir exists.
-        // We'll use node:path's dirname but keep it simple.
-        const dir = dirname(db_path);
+        const dir = path.dirname(db_path);
+        // Bun native way to ensure directory exists
         try {
-            mkdirSync(dir, { recursive: true });
+            // Use mkdir command for cross-platform directory creation
+            const isWindows = process.platform === "win32";
+            if (isWindows) {
+                const proc = Bun.spawn(["cmd", "/c", "mkdir", dir.replace(/\//g, "\\")], {
+                    stderr: "ignore"
+                });
+                await proc.exited;
+            } else {
+                const proc = Bun.spawn(["mkdir", "-p", dir], {
+                    stderr: "ignore"
+                });
+                await proc.exited;
+            }
         } catch { /* ignore */ }
     }
     d = new Database(db_path, { create: true });
@@ -650,6 +666,9 @@ export const init = async () => {
 
     try {
         if (readyStates.get(cid)) return;
+
+        // Reset local caches to avoid stale table names or state
+        _tableCache = null;
 
         if (getIsPg()) {
             const client = await pg!.connect();
@@ -705,7 +724,7 @@ export const init = async () => {
                 client.release();
             }
         } else {
-            const d = get_sq_db();
+            const d = await get_sq_db();
             const dbPath = env.dbPath || ":memory:";
             dbLogger.info(`[DB] Init SQLite at ${dbPath} (isPg: ${getIsPg()})`);
             const tx = d.transaction(() => {
@@ -750,6 +769,13 @@ export const init = async () => {
             tx();
         }
         readyStates.set(cid, true);
+        
+        // Initialize optimized indexes after tables are created
+        try {
+            await initializeIndexes();
+        } catch (e) {
+            dbLogger.warn("[DB] Index initialization failed:", { error: e });
+        }
     } catch (e) {
         dbLogger.error("[DB] Init failed", { error: e });
         throw e;
@@ -811,7 +837,7 @@ export const transaction = {
                         client.release();
                     }
                 } else {
-                    const db = get_sq_db();
+                    const db = await get_sq_db();
                     db.exec("BEGIN IMMEDIATE");
                     try {
                         const res = await fn();
@@ -841,7 +867,17 @@ export async function closeDb() {
                     // If in test mode and not explicitly keeping the DB, delete the file to prevent pollution
                     const [dbPath] = key.split(`_${cid}`);
                     if (env.isTest && !env.OM_KEEP_DB && dbPath !== ":memory:") {
-                        try { unlinkSync(dbPath); } catch { }
+                        try {
+                            // Use Bun native file deletion for cross-platform compatibility
+                            const isWindows = process.platform === "win32";
+                            if (isWindows) {
+                                const proc = Bun.spawn(["del", dbPath]);
+                                await proc.exited;
+                            } else {
+                                const proc = Bun.spawn(["rm", dbPath]);
+                                await proc.exited;
+                            }
+                        } catch { }
                     }
                 } catch (e) {
                     dbLogger.warn(`[DB] Error closing ${key}`, { error: e });
@@ -855,6 +891,7 @@ export async function closeDb() {
     readyPromises.set(cid, null);
     lifecycle_locks.delete(cid);
     tx_locks.delete(cid);
+    _tableCache = null; // Clear table name cache
     dbLogger.info(`[DB] Closed and cleaned up. (Worker: ${cid})`);
 }
 

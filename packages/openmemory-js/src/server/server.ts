@@ -8,6 +8,7 @@ import { UserContext } from "../core/types";
 import { rid } from "../utils";
 import { extractClientIp } from "../utils/ip";
 import { logger } from "../utils/logger";
+import { tracingMiddleware } from "./middleware/tracing";
 
 export interface Route {
     method: string;
@@ -90,21 +91,22 @@ export default function server(config: ServerConfig = {}) {
         };
     });
 
-    // 2. Middleware: Request ID & Logger
+    // 2. Tracing Middleware (before other middleware for proper context)
+    app.use(tracingMiddleware({
+        generateTraceIds: true,
+        logRequests: config.logging !== false,
+        includeResponseTime: true,
+        excludePaths: ['/health', '/favicon.ico', '/api/system/health']
+    }));
+
+    // 3. Middleware: Request ID & Logger (simplified since tracing handles most of this)
     app.onRequest(async (ctx) => {
-        // Attach Request ID
+        // Attach Request ID for backward compatibility
         const requestId = rid();
         ctx.store = { ...ctx.store, requestId };
-
-        if (config.logging !== false) {
-            const ip = app.server?.requestIP(ctx.request);
-            // We can't easily get response status *before* it happens, 
-            // but we log the incoming request
-            logger.info(`[HTTP] ${ctx.request.method} ${ctx.request.url} from ${ip?.address}`);
-        }
     });
 
-    // 3. CORS
+    // 4. CORS
     if (config.cors) {
         const origin = Array.isArray(config.cors) ? config.cors : true; // true = reflect origin
         app.use(cors({
@@ -115,7 +117,7 @@ export default function server(config: ServerConfig = {}) {
         }));
     }
 
-    // 4. Static Files (if needed helper)
+    // 5. Static Files (if needed helper)
     // Elysia's static plugin handles specific folders. 
     // The previous implementation had a custom `serverStatic` method.
     // We can expose a helper or register it directly.

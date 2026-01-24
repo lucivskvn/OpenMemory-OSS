@@ -41,7 +41,7 @@ mock.module("../../src/core/memory", () => ({
 }));
 
 // Mock user summary functions
-mock.module("../../src/memory/user_summary", () => ({
+mock.module("../../src/memory/userSummary", () => ({
     autoUpdateUserSummaries: mock(async () => ({ updated: 3 })),
     updateUserSummary: mock(async () => { })
 }));

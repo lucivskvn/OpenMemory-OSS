@@ -12,7 +12,7 @@ mock.module("../../src/utils/logger", () => ({
     configureLogger: mock(),
 }));
 
-mock.module("../../src/memory/user_summary", () => ({
+mock.module("../../src/memory/userSummary", () => ({
     updateUserSummary: mock(async (userId: string) => {
         const { q } = await import("../../src/core/db");
         await q.updUserSummary.run(userId, "Regenerated Summary Mock", Date.now());

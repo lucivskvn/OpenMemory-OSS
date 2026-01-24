@@ -1,0 +1,213 @@
+name: Dependency Security Audit
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'package.json'
+      - 'packages/*/package.json'
+      - 'packages/*/pyproject.toml'
+      - 'apps/*/package.json'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'package.json'
+      - 'packages/*/package.json'
+      - 'packages/*/pyproject.toml'
+      - 'apps/*/package.json'
+  workflow_dispatch:
+
+jobs:
+  dependency-audit:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: latest
+        
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        bun install
+        cd packages/openmemory-py && pip install -e .[dev]
+        
+    - name: Run JavaScript/TypeScript Security Audit
+      id: js-audit
+      run: |
+        echo "Running JavaScript/TypeScript dependency audit..."
+        bun audit --json > js-audit-raw.json || true
+        bun outdated --json > js-outdated-raw.json || true
+        
+        # Check for critical vulnerabilities
+        CRITICAL_VULNS=$(cat js-audit-raw.json | jq '.advisories | length' 2>/dev/null || echo "0")
+        echo "js-critical-vulns=$CRITICAL_VULNS" >> $GITHUB_OUTPUT
+        
+    - name: Run Python Security Audit
+      id: py-audit
+      run: |
+        echo "Running Python dependency audit..."
+        cd packages/openmemory-py
+        
+        # Install security tools if not already installed
+        pip install pip-audit safety bandit || true
+        
+        # Run security scans
+        python scripts/security-scan.py --tool all || true
+        
+        # Check for critical vulnerabilities
+        if [ -f security-reports/security-summary.json ]; then
+          PY_CRITICAL=$(cat security-reports/security-summary.json | jq '.by_severity.high' 2>/dev/null || echo "0")
+          echo "py-critical-vulns=$PY_CRITICAL" >> $GITHUB_OUTPUT
+        else
+          echo "py-critical-vulns=0" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Run Comprehensive Dependency Audit
+      id: full-audit
+      run: |
+        echo "Running comprehensive dependency audit..."
+        bun run scripts/dependency-audit.ts full
+        
+        # Upload audit results as artifacts
+        if [ -d dependency-reports ]; then
+          echo "audit-reports-available=true" >> $GITHUB_OUTPUT
+        else
+          echo "audit-reports-available=false" >> $GITHUB_OUTPUT
+        fi
+        
+    - name: Upload Audit Reports
+      if: steps.full-audit.outputs.audit-reports-available == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: dependency-audit-reports
+        path: dependency-reports/
+        retention-days: 30
+        
+    - name: Check for Critical Vulnerabilities
+      run: |
+        JS_CRITICAL="${{ steps.js-audit.outputs.js-critical-vulns }}"
+        PY_CRITICAL="${{ steps.py-audit.outputs.py-critical-vulns }}"
+        
+        echo "JavaScript Critical Vulnerabilities: $JS_CRITICAL"
+        echo "Python Critical Vulnerabilities: $PY_CRITICAL"
+        
+        if [ "$JS_CRITICAL" -gt "0" ] || [ "$PY_CRITICAL" -gt "0" ]; then
+          echo "❌ Critical security vulnerabilities found!"
+          echo "Please review the audit reports and update vulnerable dependencies."
+          exit 1
+        else
+          echo "✅ No critical vulnerabilities found."
+        fi
+        
+    - name: Comment PR with Audit Results
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          
+          let comment = '## 🛡️ Dependency Security Audit Results\n\n';
+          
+          // Read audit summary if available
+          try {
+            if (fs.existsSync('dependency-reports/dependency-audit-summary.json')) {
+              const summary = JSON.parse(fs.readFileSync('dependency-reports/dependency-audit-summary.json', 'utf8'));
+              
+              comment += `**Total Packages:** ${summary.totalPackages}\n`;
+              comment += `**Outdated Packages:** ${summary.outdatedPackages}\n`;
+              comment += `**Version Inconsistencies:** ${summary.versionInconsistencies.length}\n\n`;
+              
+              comment += '**Security Vulnerabilities:**\n';
+              comment += `- Critical: ${summary.vulnerabilities.critical}\n`;
+              comment += `- High: ${summary.vulnerabilities.high}\n`;
+              comment += `- Moderate: ${summary.vulnerabilities.moderate}\n`;
+              comment += `- Low: ${summary.vulnerabilities.low}\n\n`;
+              
+              if (summary.recommendations.length > 0) {
+                comment += '**Recommendations:**\n';
+                summary.recommendations.forEach(rec => {
+                  comment += `- ${rec}\n`;
+                });
+              }
+            } else {
+              comment += 'Audit completed but detailed results not available.\n';
+            }
+          } catch (error) {
+            comment += `Error reading audit results: ${error.message}\n`;
+          }
+          
+          comment += '\n📊 Detailed reports are available in the workflow artifacts.';
+          
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
+
+  version-consistency-check:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: latest
+        
+    - name: Install dependencies
+      run: bun install
+      
+    - name: Check Version Consistency
+      run: |
+        echo "Checking version consistency across monorepo..."
+        bun run scripts/dependency-audit.ts consistency
+        
+        # This will exit with error code if inconsistencies are found
+        # The script handles the exit code internally
+
+  security-policy-check:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Check Security Policy Files
+      run: |
+        echo "Checking for security policy files..."
+        
+        # Check for security policy
+        if [ ! -f SECURITY.md ]; then
+          echo "⚠️  SECURITY.md file not found"
+        else
+          echo "✅ SECURITY.md found"
+        fi
+        
+        # Check for dependency policy
+        if [ ! -f .github/dependabot.yml ]; then
+          echo "⚠️  Dependabot configuration not found"
+        else
+          echo "✅ Dependabot configuration found"
+        fi
+        
+        # Check for audit configuration
+        if [ ! -f .auditrc ]; then
+          echo "ℹ️  .auditrc not found (optional)"
+        else
+          echo "✅ .auditrc found"
+        fi

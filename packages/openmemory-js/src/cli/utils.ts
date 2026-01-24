@@ -58,6 +58,10 @@ Temporal Commands:
 
 Maintenance (Local Only):
   \x1b[33mmigrate\x1b[0m             Run DB migrations
+  \x1b[33mmigrate status\x1b[0m      Show migration status
+  \x1b[33mmigrate list\x1b[0m        List all migrations
+  \x1b[33mmigrate rollback <ver>\x1b[0m Rollback to version
+  \x1b[33mmigrate validate\x1b[0m    Validate data integrity
   \x1b[33mstart\x1b[0m               Start API Server
   \x1b[33mmcp start\x1b[0m           Start MCP Server (Stdio)
   \x1b[33msetup\x1b[0m <token>       Init Admin Key

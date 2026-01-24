@@ -2,6 +2,8 @@
  * Text Chunking Utilities for OpenMemory.
  * Provides strategies for splitting large documents while preserving semantic boundaries (paragraphs, sentences).
  */
+import { validatePositive, validateNonNegative } from "./errors";
+
 const DEFAULT_CHAR_PER_TOKEN = 4;
 /**
  * Estimates the number of tokens in a given text.
@@ -26,8 +28,8 @@ export const splitText = (
     size: number,
     overlap: number = 0,
 ): string[] => {
-    if (size <= 0) throw new Error("Chunk size must be positive");
-    if (overlap < 0) throw new Error("Overlap must be non-negative");
+    validatePositive(size, "Chunk size");
+    validateNonNegative(overlap, "Overlap");
     if (overlap >= size) overlap = size - 1; // Enforce distinct progress
 
     if (text.length <= size) return [text];

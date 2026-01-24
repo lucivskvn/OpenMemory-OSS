@@ -2,6 +2,7 @@ import eslint from "@eslint/js";
 import tseslint from "typescript-eslint";
 import unusedImports from "eslint-plugin-unused-imports";
 import simpleImportSort from "eslint-plugin-simple-import-sort";
+import bunNativeEnforcement from "./eslint-plugins/bun-native-enforcement.mjs";
 
 export default tseslint.config(
     eslint.configs.recommended,
@@ -10,6 +11,7 @@ export default tseslint.config(
         plugins: {
             "unused-imports": unusedImports,
             "simple-import-sort": simpleImportSort,
+            "bun-native": bunNativeEnforcement,
         },
         languageOptions: {
             parserOptions: {
@@ -37,6 +39,18 @@ export default tseslint.config(
             "simple-import-sort/imports": "error",
             "simple-import-sort/exports": "error",
 
+            // Bun Native API Enforcement Rules
+            "bun-native/no-node-fs": ["error", {
+                "allowExceptions": [
+                    "src/utils/compat", // Compatibility layer
+                    "test/", // Allow in tests if needed for mocking
+                    "scripts/" // Allow in build scripts
+                ]
+            }],
+            "bun-native/prefer-bun-spawn": "error",
+            "bun-native/prefer-bun-env": "warn",
+            "bun-native/enforce-bun-file-patterns": "warn",
+
             "@typescript-eslint/no-floating-promises": "error",
             "no-console": ["warn", { allow: ["warn", "error"] }], // Prefer logger
 
@@ -46,6 +60,6 @@ export default tseslint.config(
             "no-empty": "off",
             "no-useless-escape": "off"
         },
-        ignores: ["dist/**", "node_modules/**"]
+        ignores: ["dist/**", "node_modules/**", "eslint-plugins/**"]
     }
 );

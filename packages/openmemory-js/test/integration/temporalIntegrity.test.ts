@@ -1,7 +1,7 @@
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { Memory } from "../../src/core/memory";
 import { insertFact, invalidateFact, insertEdge, invalidateEdge } from "../../src/temporal_graph/store";
-import { closeDb } from "../../src/core/db";
+import { closeDb, waitForDb } from "../../src/core/db";
 import { reloadConfig } from "../../src/core/cfg";
 
 import path from "node:path";
@@ -14,17 +14,18 @@ describe("Temporal Integrity: Range Validation & Constraints", () => {
     beforeAll(async () => {
         await closeDb();
         process.env.OM_DB_PATH = DB_PATH;
-        reloadConfig();
-        // Ensure we are using SQLite for these integrated range tests
         process.env.OM_METADATA_BACKEND = "sqlite";
+        reloadConfig();
 
         const dir = path.dirname(DB_PATH);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
+        // Properly wait for DB to be initialized
+        await waitForDb();
+
         mem = new Memory();
-        // Wait for potential migrations (Memory constructor calls init)
-        await new Promise(r => setTimeout(r, 100));
     });
+
 
     afterAll(async () => {
         await closeDb();

@@ -2,9 +2,9 @@
  * @file Multi-provider embedding logic for OpenMemory.
  * Handles semantic vector generation with robust fallback chains and batching support.
  */
-import { env, tier } from "../core/cfg";
+import { env } from "../core/cfg";
 import { q } from "../core/db";
-import { sectorConfigs, syntheticWeights } from "../core/hsg_config";
+import { sectorConfigs, syntheticWeights } from "../core/hsgConfig";
 import { getModel } from "../core/models";
 import { normalizeUserId, retry } from "../utils";
 import { addSynonymTokens, canonicalTokensFromText } from "../utils/text";
@@ -140,15 +140,15 @@ const EXPECTED_DIMENSIONS: Record<string, number> = {
 export async function embedForSector(t: string, s: string): Promise<number[]> {
     if (env.verbose)
         logger.debug(
-            `[EMBED] Provider: ${env.embKind}, Tier: ${tier}, Sector: ${s}`,
+            `[EMBED] Provider: ${env.embKind}, Tier: ${env.tier}, Sector: ${s}`,
         );
     if (!sectorConfigs[s]) throw new Error(`Unknown sector: ${s}`);
 
     // Synthetic only
-    if (tier === "hybrid") return genSynEmb(t, s);
+    if (env.tier === "hybrid") return genSynEmb(t, s);
 
     // Smart tier: Fuse synthetic + semantic
-    if (tier === "smart" && env.embKind !== "synthetic") {
+    if (env.tier === "smart" && env.embKind !== "synthetic") {
         const syn = genSynEmb(t, s);
         let sem = await getSemEmb(t, s);
 
@@ -177,7 +177,7 @@ export async function embedForSector(t: string, s: string): Promise<number[]> {
         return fuseVecs([syn, sem], [0.4, 0.6]);
     }
 
-    if (tier === "fast") return genSynEmb(t, s);
+    if (env.tier === "fast") return genSynEmb(t, s);
 
     // Default: just semantic
     const sem = await getSemEmb(t, s);
@@ -209,7 +209,7 @@ export async function embedQueryForAllSectors(
     sectors: string[],
 ): Promise<EmbeddingResult[]> {
     // For hybrid/fast tiers, use synthetic embeddings (already fast)
-    if (tier === "hybrid" || tier === "fast") {
+    if (env.tier === "hybrid" || env.tier === "fast") {
         return sectors.map((s) => ({
             sector: s,
             vector: genSynEmb(query, s),
@@ -570,7 +570,7 @@ async function embGemini(
  */
 async function resolveOllamaModel(t: string, s: string, userId?: string | null): Promise<string> {
     // 1. Try Persistent Config (populated by discovery or manually)
-    const { getPersistedConfig } = await import("../core/persisted_cfg.js");
+    const { getPersistedConfig } = await import("../core/persistedCfg.js");
 
     // 2. Try Env Config (OM_OLLAMA_EMBED_MODELS)
     const eConfig = env.ollamaEmbedModels as Record<string, string>;
@@ -743,7 +743,7 @@ const addPosFeat = (vec: Float32Array, dim: number, pos: number, w: number) => {
     vec[idx] += w * Math.sin(ang);
     vec[(idx + 1) % dim] += w * Math.cos(ang);
 };
-// Synthetic weights centralized in hsg_config.ts
+// Synthetic weights centralized in hsgConfig.ts
 const normV = (v: Float32Array) => {
     let n = 0;
     for (let i = 0; i < v.length; i++) n += v[i] * v[i];
@@ -845,7 +845,7 @@ export async function embedMultiSector(
     // If no chunks, we can use the text + provider + tier as reasonable key.
     // NOTE: We don't have sector here easily without iterating, but `embedMultiSector` implies all requested sectors?
     // Actually the function takes `secs` array.
-    const cacheKey = `${env.embKind}:${tier}:${secs.sort().join(',')}:${txt.substring(0, 100)}`;
+    const cacheKey = `${env.embKind}:${env.tier}:${secs.sort().join(',')}:${txt.substring(0, 100)}`;
 
     if ((!chunks || chunks.length <= 1) && CACHE.has(cacheKey)) {
         const c = CACHE.get(cacheKey)!;
@@ -932,7 +932,7 @@ export async function embedMultiSector(
 
             // Update Cache
             if ((!chunks || chunks.length <= 1) && r.length > 0) {
-                const cacheKey = `${env.embKind}:${tier}:${secs.sort().join(',')}:${txt.substring(0, 100)}`;
+                const cacheKey = `${env.embKind}:${env.tier}:${secs.sort().join(',')}:${txt.substring(0, 100)}`;
                 if (CACHE.size >= CACHE_SIZE) {
                     const first = CACHE.keys().next().value;
                     if (first) CACHE.delete(first);

@@ -7,7 +7,7 @@ import { retry } from "../../utils/index";
 import { logger } from "../../utils/logger";
 import { bufferToVector, vectorToUint8Array } from "../../utils/vectors";
 import { getRedisClient } from "../redis";
-import { VectorStore } from "../vector_store";
+import { VectorStore } from "../vectorStore";
 
 export class ValkeyVectorStore implements VectorStore {
     // Shared client managed by core/redis

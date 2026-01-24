@@ -7,7 +7,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 
 import { env, USER_AGENT } from "../core/cfg";
-import { getPersistedConfig } from "../core/persisted_cfg";
+import { getPersistedConfig } from "../core/persistedCfg";
 import { embed, getEmbeddingInfo, getEmbeddingProvider } from "../memory/embed";
 import { logger, redact } from "../utils/logger";
 import { CircuitBreaker, withResilience } from "../utils/retry";

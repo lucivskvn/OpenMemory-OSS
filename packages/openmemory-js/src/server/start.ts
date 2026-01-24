@@ -10,7 +10,7 @@ import { runMigrations } from "../core/migrate";
 import { sendTelemetry } from "../core/telemetry";
 import { configureLogger, logger } from "../utils/logger";
 import { app, startBackgroundProcess, stopServer } from "./index";
-import { setupTokenManager } from "./setup_token";
+import { setupTokenManager } from "./setupToken";
 import { WebhookService } from "../core/services/webhooks";
 
 const SHUTDOWN_TIMEOUT = 5000;
@@ -52,6 +52,10 @@ logger.info(`[SERVER] Running on http://localhost:${serverInstance.port}`);
 // Setup Check
 void (async () => {
     try {
+        // Ensure database is ready before accessing q object
+        const { waitForDb } = await import("../core/db/population");
+        await waitForDb();
+
         const count = await q.getAdminCount.get();
         if ((count?.count || 0) === 0) {
             const token = setupTokenManager.generate();

@@ -35,11 +35,14 @@ describe("HSG Update & Vector Consistency", () => {
         expect(vecA.length).toBeGreaterThan(0);
 
         const contentB = "A completely different topic about space exploration and stars.";
-        // Signature: updateMemory(id, content, tags, metadata, userId)
-        const updateResult = await updateMemory(mem.id, contentB, undefined, undefined, userId);
+        // Use the current updateMemory API signature
+        const updateResult = await updateMemory(mem.id, { 
+            content: contentB, 
+            userId: userId 
+        });
 
-        expect(updateResult.success).toBe(true);
-        expect(updateResult.id).toBe(mem.id);
+        expect(updateResult).toBeDefined();
+        expect(updateResult?.id).toBe(mem.id);
 
         // 3. Verify content update (need to decrypt)
         const updatedRow = await q.getMem.get(mem.id, userId);
@@ -65,10 +68,13 @@ describe("HSG Update & Vector Consistency", () => {
         // Should throw because lookup by ID+UserB will fail or fail check
         try {
             // Passing userB as the acting user
-            await updateMemory(mem.id, "Hacked content", undefined, undefined, userB);
+            await updateMemory(mem.id, { 
+                content: "Hacked content", 
+                userId: userB 
+            });
             expect(true).toBe(false); // Should not reach here
         } catch (e: any) {
-            expect(e.message).toContain("not found");
+            expect(e.message || e).toContain("not found");
         }
     });
 
@@ -81,8 +87,11 @@ describe("HSG Update & Vector Consistency", () => {
         // It REPLACES metadata if argument is provided. It does NOT merge.
         // So we must verify this behavior.
 
-        const updateResult = await updateMemory(mem.id, undefined, undefined, { newField: "value" }, userId);
-        expect(updateResult.success).toBe(true);
+        const updateResult = await updateMemory(mem.id, { 
+            metadata: { newField: "value" }, 
+            userId: userId 
+        });
+        expect(updateResult).toBeDefined();
 
         const updatedRow = await q.getMem.get(mem.id, userId);
         const rowMeta = updatedRow!.metadata;

@@ -11,9 +11,9 @@
 
 export * from "./base";
 export * from "./github";
-export * from "./google_drive";
-export * from "./google_sheets";
-export * from "./google_slides";
+export * from "./googleDrive";
+export * from "./googleSheets";
+export * from "./googleSlides";
 export * from "./notion";
 export * from "./onedrive";
-export * from "./web_crawler";
+export * from "./webCrawler";

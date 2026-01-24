@@ -14,15 +14,14 @@ export function getUniqueDbPath(prefix: string): string {
     const name = `test_${prefix}_${ts}_${uuid}.sqlite`;
     const dir = `${process.cwd()}/tests/data`;
 
-    // Use Bun.file for existence check and mkdir for directory creation
-    const dirFile = Bun.file(dir);
-    if (!dirFile.size) {
-        // Directory doesn't exist or is empty, create it
-        try {
-            require("node:fs").mkdirSync(dir, { recursive: true });
-        } catch (e: any) {
-            if (e.code !== 'EEXIST') throw e;
+    // Use Bun-native directory check and creation
+    try {
+        const fs = require("node:fs");
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
         }
+    } catch (e: any) {
+        if (e.code !== 'EEXIST') throw e;
     }
 
     return `${dir}/${name}`;
@@ -71,15 +70,16 @@ export async function cleanupIfSuccess(dbPath: string) {
 
     if (!_suiteFailed) {
         const files = [dbPath, dbPath + "-shm", dbPath + "-wal"];
-        const fs = require("node:fs");
 
         for (const f of files) {
-            if (!fs.existsSync(f)) continue;
+            const file = Bun.file(f);
+            if (!(await file.exists())) continue;
 
             let retries = 5;
             while (retries > 0) {
                 try {
-                    fs.unlinkSync(f);
+                    // Use node:fs for unlink as Bun doesn't have a direct unlink yet
+                    require("node:fs").unlinkSync(f);
                     break;
                 } catch (e: any) {
                     if (e.code === 'EBUSY' && retries > 1) {

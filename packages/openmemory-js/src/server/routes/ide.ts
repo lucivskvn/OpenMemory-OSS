@@ -4,7 +4,7 @@ import { z } from "zod";
 import { q } from "../../core/db";
 import { eventBus, EVENTS } from "../../core/events";
 import { addHsgMemory } from "../../memory/hsg";
-import { updateUserSummary } from "../../memory/user_summary";
+import { updateUserSummary } from "../../memory/userSummary";
 import { parseJSON, stringifyJSON } from "../../utils";
 import { env } from "../../core/cfg";
 import { normalizeUserId } from "../../utils";

@@ -5,10 +5,10 @@
  */
 
 import { env } from "../cfg";
-import { runAsync, getAsync, allAsync, iterateAsync, transaction, TABLES, hasVector, getContextId } from "../db_access";
+import { runAsync, getAsync, allAsync, iterateAsync, transaction, TABLES, hasVector, getContextId } from "../db";
 import { SqlVectorStore } from "./sql";
 import { ValkeyVectorStore } from "./valkey";
-import { VectorStore } from "../vector_store";
+import { VectorStore } from "../vectorStore";
 
 const vectorStores = new Map<string, VectorStore>();
 const vectorStoreInitLocks = new Map<string, Promise<VectorStore>>();

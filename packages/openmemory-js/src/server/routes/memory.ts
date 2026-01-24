@@ -6,48 +6,55 @@ import { env } from "../../core/cfg";
 import { vectorStore } from "../../core/db";
 import { Memory } from "../../core/memory";
 import { UserContext } from "../../core/types";
-import { updateUserSummary } from "../../memory/user_summary";
+import { updateUserSummary } from "../../memory/userSummary";
 import { normalizeUserId } from "../../utils";
 import { logger } from "../../utils/logger";
 import { AppError } from "../errors";
 import { verifyUserAccess, getUser, getEffectiveUserId } from "../middleware/auth";
+import {
+    ContentValidationSchema,
+    MetadataValidationSchema,
+    TagsValidationSchema,
+    UserIdValidationSchema,
+    createInputValidator,
+} from "../../utils/inputSanitization";
 
-// --- Schemas ---
+// --- Enhanced Schemas with Security Validation ---
 
 const AddMemorySchema = z.object({
-    content: z.string().min(1).max(MAX_CONTENT_LENGTH),
-    tags: z.array(z.string()).optional().default([]),
-    metadata: z.record(z.string(), z.unknown()).optional().default({}),
-    userId: z.string().optional(),
+    content: ContentValidationSchema,
+    tags: TagsValidationSchema,
+    metadata: MetadataValidationSchema,
+    userId: UserIdValidationSchema.optional(),
     id: z.string().optional(),
     createdAt: z.number().int().optional(),
 });
 
 const IngestSchema = z.object({
-    contentType: z.string().min(1),
+    contentType: z.string().min(1).max(100),
     data: z.unknown(), // Can be any serializable data
-    metadata: z.record(z.string(), z.unknown()).optional().default({}),
+    metadata: MetadataValidationSchema,
     config: z.record(z.string(), z.unknown()).optional().default({}),
-    userId: z.string().optional(),
+    userId: UserIdValidationSchema.optional(),
     id: z.string().optional(),
     createdAt: z.number().int().optional(),
-    source: z.string().optional(),
+    source: z.string().max(255).optional(),
 });
 
 const IngestUrlSchema = z.object({
-    url: z.string().url(),
-    metadata: z.record(z.string(), z.unknown()).optional().default({}),
+    url: z.string().url().max(2048),
+    metadata: MetadataValidationSchema,
     config: z.record(z.string(), z.unknown()).optional().default({}),
-    userId: z.string().optional(),
+    userId: UserIdValidationSchema.optional(),
     id: z.string().optional(),
     createdAt: z.number().int().optional(),
 });
 
 const BatchAddSchema = z.object({
     items: z.array(z.object({
-        content: z.string().min(1).max(MAX_CONTENT_LENGTH),
-        tags: z.array(z.string()).optional(),
-        metadata: z.record(z.string(), z.unknown()).optional(),
+        content: ContentValidationSchema,
+        tags: TagsValidationSchema.optional(),
+        metadata: MetadataValidationSchema.optional(),
     })),
     userId: z.string().optional(),
 });
@@ -119,10 +126,10 @@ export const memoryRoutes = (app: Elysia) => app.group("/memory", (app) => {
 
             const m = new Memory(normalizedUid);
             const item = await m.add(b.content, {
-                tags: b.tags,
+                ...b.metadata,
+                tags: b.tags,  // Ensure tags from body take precedence over metadata
                 id: b.id,
                 createdAt: b.createdAt,
-                ...b.metadata,
             });
 
             if (normalizedUid) {

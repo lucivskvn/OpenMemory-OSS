@@ -1,6 +1,6 @@
 import { describe, test, expect, spyOn, mock } from "bun:test";
 import { classifyContent, computeSimhash, extractEssence } from "../../src/memory/hsg";
-import { sectorConfigs } from "../../src/core/hsg_config";
+import { sectorConfigs } from "../../src/core/hsgConfig";
 
 describe("HSG Strict Typing & Logic", () => {
     test("classifyContent should return valid structure", () => {

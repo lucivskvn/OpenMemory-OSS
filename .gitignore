@@ -23,9 +23,12 @@ extra/
 
 # --- Testing & Artifacts ---
 coverage/
+.nyc_output/
+.c8rc.json
 test_output/
 test_migrations/
 test_phase/
+test-cleanup-validation/
 test-sdk.db*
 *.sqlite
 *.sqlite-shm
@@ -41,6 +44,8 @@ final_test_output.txt
 omnibus_debug.txt
 tsc_final.txt
 tsc_real.txt
+.test_*.db*
+*_test_*.db*
 
 # --- IDE & OS ---
 .vscode/
@@ -48,6 +53,7 @@ tsc_real.txt
 .DS_Store
 Thumbs.db
 *.swp
+.kiro/
 
 # --- Language Specific (JS/TS) ---
 *.tsbuildinfo

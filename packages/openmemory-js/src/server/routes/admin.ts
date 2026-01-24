@@ -18,6 +18,21 @@ const ListUsersQuerySchema = z.object({ l: z.coerce.number().max(1000).default(1
 const KeyHashParamSchema = z.object({ keyHash: z.string().min(1) });
 const SourceParamSchema = z.object({ userId: z.string().min(1), type: z.string().min(1) });
 const TrainParamSchema = z.object({ userId: z.string().min(1) });
+const AuditQuerySchema = z.object({
+    userId: z.string().optional(),
+    action: z.string().optional(),
+    from: z.coerce.number().optional(),
+    to: z.coerce.number().optional(),
+    limit: z.coerce.number().max(1000).default(100),
+    offset: z.coerce.number().default(0),
+});
+const PurgeAuditSchema = z.object({ before: z.coerce.number().optional() });
+const SummaryRegenSchema = z.object({ userId: z.string().min(1) });
+const TrainSchema = z.object({
+    userId: z.string().optional(),
+    model: z.string().optional(),
+    dataType: z.enum(["temporal", "associative", "all"]).optional().default("all"),
+});
 
 // --- Export Helper ---
 const handleExport = async ({ query, set }: { query: Record<string, any>; set: any }) => {
@@ -179,7 +194,7 @@ export const adminRoutes = (app: Elysia) => app.group("/admin", (app) => {
                         }
                     } catch { /* keep as string */ }
 
-                    const { setPersistedConfig } = await import("../../core/persisted_cfg");
+                    const { setPersistedConfig } = await import("../../core/persistedCfg");
                     await setPersistedConfig(p.userId, b.type, parsedConfig, b.status as "enabled" | "disabled");
                     return { success: true, type: b.type };
                 })
@@ -187,19 +202,99 @@ export const adminRoutes = (app: Elysia) => app.group("/admin", (app) => {
                 .delete("/users/:userId/sources/:type", async ({ params }) => {
                     // Manually parse since we have 2 params
                     const p = SourceParamSchema.parse(params);
-                    const { deletePersistedConfig } = await import("../../core/persisted_cfg");
+                    const { deletePersistedConfig } = await import("../../core/persistedCfg");
                     await deletePersistedConfig(p.userId, p.type);
                     return { success: true };
                 })
 
-                // --- Training ---
+                // --- Maintenance ---
+
+                .post("/maintenance/run", async ({ query }) => {
+                    const { runMaintenanceRoutine } = await import("../../ops/maintenance");
+                    const userId = (query as any).userId as string | undefined;
+                    // Run in background but return acknowledged if it started
+                    runMaintenanceRoutine(userId).catch(e => logger.error("[ADMIN] Maintenance failed", { error: e }));
+                    return { success: true, message: "Maintenance routine started" };
+                })
+
+                // --- Audit Logs ---
+
+                .get("/audit", async ({ query }) => {
+                    const qParams = AuditQuerySchema.parse(query);
+                    const logs = await q.queryAuditLogs.all(
+                        qParams.userId || null,
+                        qParams.action || null,
+                        qParams.from || 0,
+                        qParams.to || Date.now(),
+                        qParams.limit,
+                        qParams.offset
+                    );
+                    const stats = await q.getAuditStats.get(qParams.userId || null);
+                    return { logs, stats };
+                })
+
+                .get("/audit/stats", async ({ query }) => {
+                    const userId = (query as any).userId as string | undefined;
+                    const stats = await q.getAuditStats.get(userId || null);
+                    return stats;
+                })
+
+                .post("/audit/purge", async ({ body }) => {
+                    const { before } = PurgeAuditSchema.parse(body);
+                    const deadline = before || (Date.now() - 30 * 24 * 3600 * 1000); // Default 30 days
+                    const count = await q.purgeAuditLogs.run(deadline);
+                    return { success: true, count };
+                })
+
+                // --- User Summary ---
+
+                .get("/user/summary", async ({ query }) => {
+                    const userId = (query as any).userId as string | undefined;
+                    if (!userId) throw new AppError(400, "MISSING_ID", "userId is required");
+                    const userData = await q.getUser.get(userId);
+                    if (!userData) throw new AppError(404, "NOT_FOUND", "User not found");
+                    return {
+                        userId: userData.userId,
+                        summary: userData.summary,
+                        reflectionCount: userData.reflectionCount,
+                        updatedAt: userData.updatedAt,
+                    };
+                })
+
+                .post("/user/summary/regenerate", async ({ body }) => {
+                    const { userId } = SummaryRegenSchema.parse(body);
+                    const { updateUserSummary } = await import("../../memory/userSummary");
+                    await updateUserSummary(userId);
+                    const userData = await q.getUser.get(userId);
+                    return {
+                        success: true,
+                        userId,
+                        summary: userData?.summary,
+                        reflectionCount: userData?.reflectionCount,
+                    };
+                })
+
+                // --- Training / Intelligence ---
 
                 .post("/users/:userId/train", async ({ params }) => {
                     const p = TrainParamSchema.parse(params);
                     const { trainUserClassifier } = await import("../../ops/maintenance");
-                    const model = await trainUserClassifier(p.userId, 30);
+                    const model = await trainUserClassifier(p.userId, 20);
                     if (model) {
                         return { success: true, version: model.version, updatedAt: model.updatedAt };
+                    } else {
+                        return { success: false, message: "Training skipped (insufficient data)" };
+                    }
+                })
+
+                .post("/intelligence/train", async ({ body }) => {
+                    const b = TrainSchema.parse(body);
+                    const userId = b.userId;
+                    if (!userId) throw new AppError(400, "MISSING_ID", "userId is required");
+                    const { trainUserClassifier } = await import("../../ops/maintenance");
+                    const model = await trainUserClassifier(userId, 20);
+                    if (model) {
+                        return { success: true, jobId: "sync_" + Date.now(), status: "completed", version: model.version };
                     } else {
                         return { success: false, message: "Training skipped (insufficient data)" };
                     }

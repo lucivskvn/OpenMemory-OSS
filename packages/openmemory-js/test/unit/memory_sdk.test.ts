@@ -7,8 +7,12 @@ describe("SDK Parity", () => {
     let mem: Memory;
 
     beforeAll(async () => {
-        const mod = await import("../../src/core/memory");
-        mem = new mod.Memory("test_user");
+        mem = new Memory("test_user");
+        console.log("[DEBUG] Memory Facade Initialized. Facades:", {
+            compression: !!mem.compression,
+            temporal: !!mem.temporal,
+            source: typeof mem.source
+        });
     });
 
     afterAll(async () => {
@@ -29,8 +33,8 @@ describe("SDK Parity", () => {
         const text = "This is a very redundant sentence that is redundant.";
         const res = mem.compression.compress(text, "semantic");
         expect(res).toBeDefined();
-        expect(res.comp.length).toBeLessThanOrEqual(text.length);
-        expect(res.metrics.algorithm).toBe("semantic");
+        expect(res!.comp!.length).toBeLessThanOrEqual(text.length);
+        expect(res!.metrics!.algorithm).toBe("semantic");
     });
 
     test("Temporal Facade exists", () => {

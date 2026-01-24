@@ -4,7 +4,7 @@
  */
 import { env } from "../core/cfg";
 import { getVectorStore, q } from "../core/db";
-import { LearnedClassifier } from "../core/learned_classifier";
+import { LearnedClassifier } from "../core/learnedClassifier";
 import { normalizeUserId, now } from "../utils";
 import { DistributedLock } from "../utils/lock";
 import { logger } from "../utils/logger";
@@ -239,6 +239,10 @@ export async function cleanupOrphans() {
 export async function runMaintenanceRoutine(userId?: string | null, signal?: AbortSignal) {
     const uid = normalizeUserId(userId);
     const start = now();
+
+    // Ensure database is ready before accessing q object
+    const { waitForDb } = await import("../core/db/population");
+    await waitForDb();
 
     // Acquire distributed lock for system-wide maintenance
     const lockName = uid ? `maintenance:${uid}` : "system:maintenance";

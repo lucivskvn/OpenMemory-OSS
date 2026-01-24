@@ -1,0 +1,57 @@
+{
+  "audit": {
+    "enabled": true,
+    "schedule": "daily",
+    "failOnVulnerabilities": {
+      "critical": true,
+      "high": true,
+      "moderate": false,
+      "low": false
+    },
+    "excludePackages": [],
+    "allowedLicenses": [
+      "MIT",
+      "Apache-2.0",
+      "BSD-2-Clause",
+      "BSD-3-Clause",
+      "ISC",
+      "0BSD",
+      "Unlicense",
+      "CC0-1.0"
+    ],
+    "reportFormats": ["json", "html"],
+    "outputDirectory": "dependency-reports"
+  },
+  "versionConsistency": {
+    "enabled": true,
+    "enforceExact": false,
+    "allowedInconsistencies": [
+      "@types/*"
+    ]
+  },
+  "python": {
+    "enabled": true,
+    "tools": ["pip-audit", "safety", "bandit"],
+    "failOnVulnerabilities": {
+      "critical": true,
+      "high": true,
+      "moderate": false,
+      "low": false
+    }
+  },
+  "javascript": {
+    "enabled": true,
+    "tools": ["bun audit", "bun outdated"],
+    "failOnVulnerabilities": {
+      "critical": true,
+      "high": true,
+      "moderate": false,
+      "low": false
+    }
+  },
+  "notifications": {
+    "enabled": false,
+    "channels": [],
+    "onlyOnFailure": true
+  }
+}

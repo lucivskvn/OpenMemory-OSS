@@ -1,47 +1,106 @@
+/**
+ * @file Setup Token Manager
+ * Handles temporary setup tokens for initial system configuration
+ */
+import { logger } from "../utils/logger";
+import { env } from "../core/cfg";
 
-let _setupToken: string | null = null;
+interface SetupToken {
+    token: string;
+    expiresAt: number;
+    used: boolean;
+}
 
-export const setupTokenManager = {
+class SetupTokenManager {
+    private tokens = new Map<string, SetupToken>();
+    private readonly TOKEN_LIFETIME = 5 * 60 * 1000; // 5 minutes
+
     /**
-     * Generates a new random setup token.
-     * Only works if one isn't already active (or overwrites it? simpler to overwrite).
+     * Generate a new setup token
      */
-    generate: (): string => {
-        const token = Array.from(
-            globalThis.crypto.getRandomValues(new Uint8Array(16)),
-        )
-            .map((b) => b.toString(16).padStart(2, "0"))
-            .join("");
-        _setupToken = token;
+    generateToken(): string {
+        const token = crypto.randomUUID();
+        const expiresAt = Date.now() + this.TOKEN_LIFETIME;
+        
+        this.tokens.set(token, {
+            token,
+            expiresAt,
+            used: false
+        });
+
+        // Clean up expired tokens
+        this.cleanupExpiredTokens();
+
+        logger.info(`[SETUP] Generated setup token: ${token.slice(0, 8)}...`);
         return token;
-    },
+    }
 
     /**
-     * Gets the current active token.
+     * Validate and consume a setup token
      */
-    get: (): string | null => {
-        return _setupToken;
-    },
-
-    /**
-     * Verifies if the provided token matches the active one.
-     * If matched, the token is CONSUMED (invalidated).
-     */
-    verifyAndConsume: (input: string): boolean => {
-        if (!_setupToken) return false;
-        // Constant-time comparison to be standard, though timing attack on setup token is low risk
-        // Simpler check is fine for this context.
-        if (input === _setupToken) {
-            _setupToken = null; // Consume
-            return true;
+    validateToken(token: string): boolean {
+        const setupToken = this.tokens.get(token);
+        
+        if (!setupToken) {
+            logger.warn(`[SETUP] Invalid token attempted: ${token.slice(0, 8)}...`);
+            return false;
         }
-        return false;
-    },
+
+        if (setupToken.used) {
+            logger.warn(`[SETUP] Already used token attempted: ${token.slice(0, 8)}...`);
+            return false;
+        }
+
+        if (Date.now() > setupToken.expiresAt) {
+            logger.warn(`[SETUP] Expired token attempted: ${token.slice(0, 8)}...`);
+            this.tokens.delete(token);
+            return false;
+        }
+
+        // Mark as used
+        setupToken.used = true;
+        logger.info(`[SETUP] Token validated and consumed: ${token.slice(0, 8)}...`);
+        return true;
+    }
 
     /**
-     * Explicitly clears the token (e.g. if setup is done via other means).
+     * Check if setup is required (no admin key configured)
      */
-    clear: () => {
-        _setupToken = null;
-    },
-};
+    isSetupRequired(): boolean {
+        return !env.adminKey || env.adminKey === "";
+    }
+
+    /**
+     * Clean up expired tokens
+     */
+    private cleanupExpiredTokens(): void {
+        const now = Date.now();
+        for (const [token, setupToken] of this.tokens.entries()) {
+            if (now > setupToken.expiresAt) {
+                this.tokens.delete(token);
+            }
+        }
+    }
+
+    /**
+     * Get all active tokens (for testing)
+     */
+    getActiveTokens(): string[] {
+        this.cleanupExpiredTokens();
+        return Array.from(this.tokens.keys()).filter(token => !this.tokens.get(token)?.used);
+    }
+
+    /**
+     * Clear all tokens (for testing)
+     */
+    clearAllTokens(): void {
+        this.tokens.clear();
+        logger.info("[SETUP] All tokens cleared");
+    }
+}
+
+// Export singleton instance
+export const setupTokenManager = new SetupTokenManager();
+
+// Export class for testing
+export { SetupTokenManager };

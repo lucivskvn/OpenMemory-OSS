@@ -6,15 +6,22 @@ import { Memory } from "../../core/memory";
 import {
     autoUpdateUserSummaries,
     updateUserSummary,
-} from "../../memory/user_summary";
+} from "../../memory/userSummary";
 import { normalizeUserId } from "../../utils";
 import { AppError } from "../errors";
 import { verifyUserAccess, getUser } from "../middleware/auth";
+import {
+    ContentValidationSchema,
+    MetadataValidationSchema,
+    TagsValidationSchema,
+    UserIdValidationSchema,
+    createInputValidator,
+} from "../../utils/inputSanitization";
 
-// --- Schemas ---
+// --- Enhanced Schemas with Security Validation ---
 
 const UserIdSchema = z.object({
-    userId: z.string().min(1),
+    userId: UserIdValidationSchema,
 });
 
 const ListMemoriesQuerySchema = z.object({

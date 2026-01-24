@@ -1,5 +1,5 @@
-import { runAsync, getAsync, allAsync, runUser, getUser, allUser, transaction } from "../db_access";
-import { TABLES } from "../db_access";
+import { runAsync, getAsync, allAsync, runUser, getUser, allUser, transaction } from "../db";
+import { TABLES } from "../db";
 import { normalizeUserId } from "../../utils";
 import { env } from "../cfg";
 

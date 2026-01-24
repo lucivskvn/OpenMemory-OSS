@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { LearnedClassifier, ClassifierModel } from "../../src/core/learned_classifier";
+import { LearnedClassifier, ClassifierModel } from "../../src/core/learnedClassifier";
 
 describe("Learned Classifier", () => {
     test("train() should handle empty data gracefully", async () => {

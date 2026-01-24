@@ -258,6 +258,7 @@ describe("Client SDK Comprehensive Suite", () => {
             timeElapsedDays: 5
         });
         expect(sal.success).toBe(true);
+        expect(typeof sal.calculatedSalience).toBe('number');
         expect(sal.calculatedSalience).toBeLessThan(0.8);
 
         const graph = await c.getWaypointGraph();

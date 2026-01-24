@@ -2,12 +2,13 @@ import { BaseRepository } from "./base";
 import type { MemoryRow, BatchMemoryInsertItem } from "../types/memory";
 import type { SectorStat, LogEntry } from "../types/system";
 import type { SectorType } from "../types/primitives";
-import { getIsPg, hasVector } from "../db_access";
+import { getIsPg, hasVector } from "../db";
 import { vectorStore } from "../vector/manager";
 import { toVectorString } from "../../utils/vectors";
 import { normalizeUserId } from "../../utils";
 import { logger } from "../../utils/logger";
 import { calculateDualPhaseDecayMemoryRetention } from "../../ops/dynamics";
+import { queryBatchOptimizer } from "../queryOptimizer";
 
 export class MemoryRepository extends BaseRepository {
     async insMem(
@@ -31,7 +32,7 @@ export class MemoryRepository extends BaseRepository {
 
         const execChunk = async (chunk: BatchMemoryInsertItem[]) => {
             if (getIsPg()) {
-                const params: import("../db_utils").SqlValue[] = [];
+                const params: import("../dbUtils").SqlValue[] = [];
                 const rows: string[] = [];
                 let idx = 1;
                 for (const item of chunk) {
@@ -43,7 +44,7 @@ export class MemoryRepository extends BaseRepository {
                         hasVector ? toVectorString(item.meanVec as any) : (Array.isArray(item.meanVec) ? new Uint8Array(item.meanVec) : item.meanVec),
                         (Array.isArray(item.compressedVec) ? new Uint8Array(item.compressedVec) : item.compressedVec), item.feedbackScore || 0, item.generatedSummary || null,
                     ];
-                    params.push(...(rowParams as import("../db_utils").SqlValue[]));
+                    params.push(...(rowParams as import("../dbUtils").SqlValue[]));
                     const placeholders = rowParams.map(() => `$${idx++}`).join(",");
                     rows.push(`(${placeholders})`);
                 }
@@ -443,6 +444,58 @@ export class MemoryRepository extends BaseRepository {
             [limit],
             userId
         );
+    }
+
+    async findMems(params: {
+        userId?: string | null;
+        sector?: string;
+        tags?: string[];
+        metadata?: Record<string, unknown>;
+        limit?: number;
+        offset?: number;
+    }) {
+        const { sector, tags, metadata, limit = 100, offset = 0, userId } = params;
+        const uid = normalizeUserId(userId);
+        const where: string[] = [];
+        const queryParams: any[] = [];
+
+        if (sector) {
+            where.push("primary_sector = ?");
+            queryParams.push(sector);
+        }
+
+        if (tags && tags.length > 0) {
+            const tagGroup: string[] = [];
+            for (const tag of tags) {
+                const escapedTag = tag.replace(/[%_|]/g, '|$&');
+                tagGroup.push(`tags like ? escape '|'`);
+                queryParams.push(`%${escapedTag}%`);
+            }
+            where.push(`(${tagGroup.join(" OR ")})`);
+        }
+
+        if (metadata && Object.keys(metadata).length > 0) {
+            const isPg = getIsPg();
+            if (isPg) {
+                where.push("metadata::jsonb @> ?::jsonb");
+                queryParams.push(JSON.stringify(metadata));
+            } else {
+                // SQLite: simpler fallback with multiple LIKEs for basic kv matching
+                for (const [k, v] of Object.entries(metadata)) {
+                    // Escape LIKE wildcards using the same escape routine as tags
+                    const escapedKey = k.replace(/[%_|]/g, '|$&');
+                    const escapedValue = JSON.stringify(v).replace(/[%_|]/g, '|$&');
+                    where.push("metadata like ? escape '|'");
+                    queryParams.push(`%"${escapedKey}":%${escapedValue}%`);
+                }
+            }
+        }
+
+        const whereSql = where.length > 0 ? " AND " + where.join(" AND ") : "";
+        const sql = `select * from ${this.tables.memories} where 1=1 ${whereSql} order by created_at desc limit ? offset ?`;
+        queryParams.push(limit, offset);
+
+        return await this.allUser<MemoryRow>(sql, queryParams, uid);
     }
 
     async delMemByUser(userId: string) {

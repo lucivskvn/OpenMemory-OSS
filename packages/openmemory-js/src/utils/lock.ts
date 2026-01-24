@@ -16,7 +16,8 @@ export interface IDistributedLock {
  * Uses a token-based approach to ensure only the owner can release the lock.
  */
 export class DistributedLock implements IDistributedLock {
-    private backend: "redis" | "postgres" | "sqlite";
+    private static memLocks = new Map<string, { token: string; expiresAt: number }>();
+    private backend: "redis" | "postgres" | "sqlite" | "memory";
     private lockKey: string;
     private ownerToken: string;
     private isAcquired: boolean = false;
@@ -26,8 +27,13 @@ export class DistributedLock implements IDistributedLock {
         this.ownerToken = globalThis.crypto.randomUUID();
 
         // Determine backend based on configuration
+        if (env.isTest && env.lockBackend === "auto") {
+            this.backend = "memory";
+            return;
+        }
+
         if (env.lockBackend !== "auto") {
-            this.backend = env.lockBackend as "redis" | "postgres" | "sqlite";
+            this.backend = env.lockBackend as any;
         } else {
             // Auto detection
             if (env.vectorBackend === "valkey") {
@@ -46,10 +52,21 @@ export class DistributedLock implements IDistributedLock {
      * @returns True if acquired, false otherwise.
      */
     async acquire(ttlMs: number = 60000): Promise<boolean> {
-        // Allow re-entry to extend the lease (heartbeat)
-        // if (this.isAcquired) return true;
-
         try {
+            if (this.backend === "memory") {
+                const now = Date.now();
+                const current = DistributedLock.memLocks.get(this.lockKey);
+                if (!current || current.expiresAt < now || current.token === this.ownerToken) {
+                    DistributedLock.memLocks.set(this.lockKey, {
+                        token: this.ownerToken,
+                        expiresAt: now + ttlMs
+                    });
+                    this.isAcquired = true;
+                    return true;
+                }
+                return false;
+            }
+
             switch (this.backend) {
                 case "redis":
                     return await this.acquireRedis(ttlMs);
@@ -73,6 +90,15 @@ export class DistributedLock implements IDistributedLock {
         if (!this.isAcquired) return;
 
         try {
+            if ((this.backend as any) === "memory") {
+                const current = DistributedLock.memLocks.get(this.lockKey);
+                if (current && current.token === this.ownerToken) {
+                    DistributedLock.memLocks.delete(this.lockKey);
+                }
+                this.isAcquired = false;
+                return;
+            }
+
             switch (this.backend) {
                 case "redis":
                     await this.releaseRedis();

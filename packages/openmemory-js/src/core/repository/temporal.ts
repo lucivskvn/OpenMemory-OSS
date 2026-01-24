@@ -1,7 +1,7 @@
 import { BaseRepository } from "./base";
 import type { TemporalFactRow, TemporalEdgeRow, TemporalQuery } from "../types/temporal";
 import type { SectorType } from "../types/primitives";
-import { applySqlUser } from "../db_utils";
+import { applySqlUser } from "../dbUtils";
 
 export class TemporalRepository extends BaseRepository {
     // --- Batch / User Management ---

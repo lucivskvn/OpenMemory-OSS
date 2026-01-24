@@ -1,23 +1,21 @@
 
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { MemoryClient } from "../../src/client";
-import * as cp from "child_process";
-import { ChildProcess } from "child_process";
 
 // E2E Test covering Client SDK against a real running server
 // We will spawn the server in a separate process
 describe("Client E2E & CLI Parity", () => {
-    let serverProc: ChildProcess;
+    let serverProc: Bun.Subprocess;
     let client: MemoryClient;
     const PORT = 3456;
     const HOST = `http://localhost:${PORT}`;
 
     beforeAll(async () => {
         // Start Server
-        // using bun to run src/server/start.ts
-        serverProc = cp.spawn("bun", ["src/server/start.ts"], {
+        // using Bun.spawn to run src/server/start.ts
+        serverProc = Bun.spawn(["bun", "src/server/start.ts"], {
             env: { ...process.env, PORT: PORT.toString(), OM_DB_PATH: ":memory:", OM_VERBOSE: "true", OM_API_KEY: "test-key" },
-            stdio: "pipe"
+            stdio: ["pipe", "pipe", "pipe"]
         });
 
         // Wait for server to be ready
@@ -27,24 +25,58 @@ describe("Client E2E & CLI Parity", () => {
 
             const serverLogs: string[] = [];
 
-            serverProc.stdout?.on("data", (data) => {
-                const str = data.toString();
-                serverLogs.push(`[STDOUT] ${str}`);
-                console.log(`[SERVER] ${str}`); // Pipe to test output
-                if (str.includes(`Running on http://localhost:${PORT}`)) {
-                    booted = true;
-                    clearTimeout(timeout);
-                    resolve();
-                }
-            });
+            // Read stdout using Bun's ReadableStream
+            if (serverProc.stdout) {
+                const reader = serverProc.stdout.getReader();
+                const decoder = new TextDecoder();
+                
+                const readOutput = async () => {
+                    try {
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            if (done) break;
+                            
+                            const str = decoder.decode(value);
+                            serverLogs.push(`[STDOUT] ${str}`);
+                            console.log(`[SERVER] ${str}`); // Pipe to test output
+                            if (str.includes(`Running on http://localhost:${PORT}`)) {
+                                booted = true;
+                                clearTimeout(timeout);
+                                resolve();
+                                return;
+                            }
+                        }
+                    } catch (e) {
+                        console.error(`[SERVER_OUT] ${e}`);
+                    }
+                };
+                readOutput();
+            }
 
-            serverProc.stderr?.on("data", (data) => {
-                const str = data.toString();
-                serverLogs.push(`[STDERR] ${str}`);
-                console.error(`[SERVER_ERR] ${str}`);
-            });
+            // Read stderr using Bun's ReadableStream
+            if (serverProc.stderr) {
+                const reader = serverProc.stderr.getReader();
+                const decoder = new TextDecoder();
+                
+                const readError = async () => {
+                    try {
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            if (done) break;
+                            
+                            const str = decoder.decode(value);
+                            serverLogs.push(`[STDERR] ${str}`);
+                            console.error(`[SERVER_ERR] ${str}`);
+                        }
+                    } catch (e) {
+                        console.error(`[SERVER_ERR] ${e}`);
+                    }
+                };
+                readError();
+            }
 
-            serverProc.on("exit", (code) => {
+            // Handle process exit
+            serverProc.exited.then((code) => {
                 if (!booted) {
                     reject(new Error(`Server exited prematurely with code ${code}. Logs:\n${serverLogs.join("\n")}`));
                 }

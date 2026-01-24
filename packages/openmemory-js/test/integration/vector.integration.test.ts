@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { q, vectorStore, closeDb, waitReady, getContextId } from "../../src/core/db";
 import { reloadConfig } from "../../src/core/cfg";
 import { addMemory } from "../../src/memory/hsg";
-import { cleanupOrphanedVectors } from "../../src/ops/vector_maint";
+import { cleanupOrphanedVectors } from "../../src/ops/vectorMaint";
 import { getUniqueDbPath, waitForDb } from "../test_utils";
 import { SqlVectorStore } from "../../src/core/vector/sql";
 import { TABLES } from "../../src/core/db_access";

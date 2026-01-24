@@ -1,5 +1,5 @@
 import { describe, expect, test, mock, beforeEach, afterEach } from "bun:test";
-import { cleanupOrphanedVectors, verifyVectorConsistency } from "../../src/ops/vector_maint";
+import { cleanupOrphanedVectors, verifyVectorConsistency } from "../../src/ops/vectorMaint";
 import { extractURL } from "../../src/ops/extract";
 import { vectorStore, q } from "../../src/core/db";
 

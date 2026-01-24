@@ -13,7 +13,7 @@ export const temporalCommands = {
     "search-facts": async (args: string[], flags: CliFlags) => {
         if (!args[0]) throw new Error("Pattern required");
         const api = await ensureClient(flags);
-        const res = await api.temporal.search(args[0], { type: flags.type });
+        const res = await api.temporal.search(args[0], { type: flags.type as any });
         console.log(JSON.stringify(res, null, 2));
     },
 
@@ -31,5 +31,18 @@ export const temporalCommands = {
         const t2 = args[2] ? new Date(args[2]) : new Date();
         const res = await api.temporal.compare(args[0], t1, t2);
         console.log(JSON.stringify(res, null, 2));
+    },
+
+    decay: async (args: string[], flags: CliFlags) => {
+        const api = await ensureClient(flags);
+        const rate = args[0] ? parseFloat(args[0]) : undefined;
+        
+        if (rate !== undefined && !Number.isFinite(rate)) {
+            throw new Error("Invalid rate: must be a valid number");
+        }
+        
+        console.log(`Applying temporal decay (rate: ${rate ?? "default"})...`);
+        const res = await api.temporal.decay(rate);
+        console.log(`Decay applied. Facts updated: ${res.factsUpdated}`);
     }
 };

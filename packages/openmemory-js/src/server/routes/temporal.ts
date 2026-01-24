@@ -418,7 +418,7 @@ export const temporalRoutes = (app: Elysia) => app.group("/temporal", (app) => {
 
             return {
                 message: "Decay applied successfully",
-                changes,
+                factsUpdated: changes,
             };
         })
 

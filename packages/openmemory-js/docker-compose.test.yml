@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  # Main OpenMemory Test Service
+  openmemory-test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    image: openmemory-test:latest
+    container_name: om-test-runner
+    environment:
+      - NODE_ENV=test
+      - OM_TIER=local
+      - OM_EMBEDDINGS=local
+      - OM_DB_PATH=:memory:
+      - OM_LOG_LEVEL=warn
+      - OM_TELEMETRY_ENABLED=false
+      - OM_REDIS_URL=redis://redis:6379
+      - OM_VALKEY_URL=redis://valkey:6379
+      - OM_TEST_TIMEOUT=30000
+      - OM_SKIP_GLOBAL_SETUP=false
+    volumes:
+      - .:/usr/src/app
+      - /usr/src/app/node_modules
+    depends_on:
+      - redis
+      - valkey
+      - postgres-test
+    networks:
+      - test-net
+    command: bun test --timeout 30000
+
+  # Redis for caching tests
+  redis:
+    image: redis:7-alpine
+    container_name: om-test-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - test-net
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+
+  # Valkey for alternative caching tests
+  valkey:
+    image: valkey/valkey:7.2-alpine
+    container_name: om-test-valkey
+    ports:
+      - "6380:6379"
+    networks:
+      - test-net
+    command: valkey-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+
+  # PostgreSQL for database tests
+  postgres-test:
+    image: postgres:15-alpine
+    container_name: om-test-postgres
+    environment:
+      - POSTGRES_DB=openmemory_test
+      - POSTGRES_USER=test
+      - POSTGRES_PASSWORD=test123
+    ports:
+      - "5432:5432"
+    networks:
+      - test-net
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+
+  # Test Results Collector
+  test-reporter:
+    image: node:20-alpine
+    container_name: om-test-reporter
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    networks:
+      - test-net
+    command: sh -c "sleep 10 && echo 'Test results collected'"
+
+networks:
+  test-net:
+    driver: bridge
+
+volumes:
+  postgres_test_data:

@@ -237,6 +237,7 @@ let providerInstance: EncryptionProvider | null = null;
 
 /**
  * Retrieves the singleton encryption provider based on environment configuration.
+ * Fixed to handle initialization issues properly and provide better error messages.
  */
 export const getEncryption = (): EncryptionProvider => {
     if (providerInstance) return providerInstance;
@@ -245,28 +246,59 @@ export const getEncryption = (): EncryptionProvider => {
     const secondarySecrets = env.encryptionSecondaryKeys || [];
     const enabled = env.encryptionEnabled;
 
-    if (enabled && secret) {
-        providerInstance = new AesGcmProvider(secret, secondarySecrets);
-        logger.info("[Security] 🔒 Encryption-at-Rest ENABLED (AES-256-GCM)");
-        if (secondarySecrets.length > 0) {
-            logger.info(
-                `[Security] Rotation support active (${secondarySecrets.length} secondary keys)`,
-            );
-        }
-    } else {
-        providerInstance = new NoopProvider();
-        if (enabled && !secret) {
-            // CRITICAL: In production, do not allow silent fallback to plaintext if encryption was requested
-            if (env.isProd) {
-                logger.error("[Security] 🚨 FATAL: Encryption enabled (OM_ENCRYPTION_ENABLED=true) but no keys found!");
-                logger.error("[Security] You must set OM_ENCRYPTION_KEY.");
-                throw new Error("Security Misconfiguration: Encryption enabled but no keys provided in Production.");
+    try {
+        if (enabled && secret) {
+            // Validate secret strength before creating provider
+            if (secret.length < 32) {
+                const errorMsg = `Encryption secret must be at least 32 characters, got ${secret.length}`;
+                logger.error(`[Security] ${errorMsg}`);
+                if (env.isProd) {
+                    throw new SecurityError(errorMsg);
+                }
+                logger.warn("[Security] Using weak encryption key in non-production mode");
             }
-            logger.warn(
-                "[Security] ⚠️ Encryption enabled but no key found. Falling back to plaintext (Non-Prod Mode).",
-            );
+
+            providerInstance = new AesGcmProvider(secret, secondarySecrets);
+            logger.info("[Security] 🔒 Encryption-at-Rest ENABLED (AES-256-GCM)");
+            if (secondarySecrets.length > 0) {
+                logger.info(
+                    `[Security] Rotation support active (${secondarySecrets.length} secondary keys)`,
+                );
+            }
+
+            // Verify the provider works correctly
+            providerInstance.verifyKey().catch((error) => {
+                logger.error("[Security] Encryption provider verification failed:", { error });
+                if (env.isProd) {
+                    throw new SecurityError("Encryption provider verification failed");
+                }
+            });
+        } else {
+            providerInstance = new NoopProvider();
+            if (enabled && !secret) {
+                // CRITICAL: In production, do not allow silent fallback to plaintext if encryption was requested
+                if (env.isProd) {
+                    const errorMsg = "Encryption enabled (OM_ENCRYPTION_ENABLED=true) but no keys found! You must set OM_ENCRYPTION_KEY.";
+                    logger.error(`[Security] 🚨 FATAL: ${errorMsg}`);
+                    throw new SecurityError(`Security Misconfiguration: ${errorMsg}`);
+                }
+                logger.warn(
+                    "[Security] ⚠️ Encryption enabled but no key found. Falling back to plaintext (Non-Prod Mode).",
+                );
+            } else if (!enabled) {
+                logger.info("[Security] Encryption-at-Rest DISABLED (using NoopProvider)");
+            }
         }
+    } catch (error) {
+        logger.error("[Security] Failed to initialize encryption provider:", { error });
+        if (env.isProd) {
+            throw error;
+        }
+        // In non-production, fallback to NoopProvider with warning
+        logger.warn("[Security] Falling back to NoopProvider due to initialization error");
+        providerInstance = new NoopProvider();
     }
+
     return providerInstance!;
 };
 

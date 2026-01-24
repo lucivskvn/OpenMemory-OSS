@@ -37,4 +37,31 @@ export interface ErrorResponse {
     instance?: string;
 }
 
-// sendError removed as it is replaced by Elysia's global error handler
+/**
+ * Standardized function to generate a JSON error response.
+ * Useful for manual error handling or testing.
+ */
+export const sendError = (
+    res: { status: (s: number) => any, json: (j: any) => any },
+    error: any,
+): void => {
+    const isApp = error instanceof AppError;
+    const isError = error instanceof Error;
+
+    const status = isApp ? (error as AppError).statusCode : 500;
+    const code = isApp ? (error as AppError).code : "INTERNAL_ERROR";
+    const message = isError ? error.message : (typeof error === "string" ? error : "Internal Server Error");
+    const details = isApp ? (error as AppError).details : (isError ? {} : undefined);
+
+    const body: ErrorResponse = {
+        error: {
+            code,
+            message,
+            details,
+        },
+        status,
+        title: code,
+        type: "about:blank",
+    };
+    res.status(status).json(body);
+};

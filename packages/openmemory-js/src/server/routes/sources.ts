@@ -16,7 +16,7 @@ import { q } from "../../core/db"; // Static import
 import {
     deletePersistedConfig,
     setPersistedConfig,
-} from "../../core/persisted_cfg";
+} from "../../core/persistedCfg";
 import * as sources from "../../sources";
 import { normalizeUserId } from "../../utils";
 import { logger } from "../../utils/logger";
