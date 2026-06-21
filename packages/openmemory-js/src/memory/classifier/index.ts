@@ -12,23 +12,18 @@ export class LearnedSectorClassifier implements ISectorClassifier {
     async train(trainingData: { text: string; sector: string }[]): Promise<void> {
         if (!trainingData.length) return;
 
-        // Group training data by sector in a single pass
-        const sectorGroups: Record<string, { text: string; sector: string }[]> = {};
-        for (const item of trainingData) {
-            if (!sectorGroups[item.sector]) {
-                sectorGroups[item.sector] = [];
-            }
-            sectorGroups[item.sector].push(item);
-        }
-
         const centroids: Record<string, number[]> = {};
 
-        for (const [sector, sectorData] of Object.entries(sectorGroups)) {
+        // O(n) mapping
+        const groupedData = trainingData.reduce((acc, curr) => {
+            if (!acc[curr.sector]) acc[curr.sector] = [];
+            acc[curr.sector].push(curr);
+            return acc;
+        }, {} as Record<string, {text: string, sector: string}[]>);
+
+        for (const [sector, sectorData] of Object.entries(groupedData)) {
             const vectors = await Promise.all(
-                sectorData.map(async (d) => {
-                    const emb = await embed(d.text);
-                    return emb;
-                })
+                sectorData.map(async (d) => await embed(d.text))
             );
 
             // Compute mean vector
@@ -49,7 +44,12 @@ export class LearnedSectorClassifier implements ISectorClassifier {
         // Save to DB in stats or temporal facts? We can store it as a system meta object.
         // There is no dedicated system config table, let's use user summary for a system user "system_classifier"
         const centroidsStr = JSON.stringify(centroids);
-        await q.ins_user.run("system_classifier", centroidsStr, 0, Date.now(), Date.now());
+        const existing = await q.get_user.get("system_classifier");
+        if (existing) {
+            await q.upd_user_summary.run("system_classifier", centroidsStr, Date.now());
+        } else {
+            await q.ins_user.run("system_classifier", centroidsStr, 0, Date.now(), Date.now());
+        }
     }
 
     async classify(text: string): Promise<string> {

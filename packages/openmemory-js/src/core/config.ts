@@ -145,7 +145,7 @@ const rawEnv = {
     min_vector_dim: process.env.OM_MIN_VECTOR_DIM,
     summary_layers: process.env.OM_SUMMARY_LAYERS,
     keyword_boost: process.env.OM_KEYWORD_BOOST,
-    keyword_min_length: process.env.OM_KEYWORD_MIN_LENGTH,
+        keyword_min_length: process.env.OM_KEYWORD_MIN_LENGTH,
     OM_TURSO_URL: process.env.OM_TURSO_URL,
     OM_TURSO_TOKEN: process.env.OM_TURSO_TOKEN,
     OM_ENCRYPTION_KEY: process.env.OM_ENCRYPTION_KEY,

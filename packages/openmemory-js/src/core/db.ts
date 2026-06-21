@@ -881,7 +881,7 @@ if (is_pg) {
         ins_user: {
             run: (...p) =>
                 exec(
-                    "insert or replace into users(user_id,summary,reflection_count,created_at,updated_at) values(?,?,?,?,?)",
+                    "insert or ignore into users(user_id,summary,reflection_count,created_at,updated_at) values(?,?,?,?,?)",
                     p,
                 ),
         },

@@ -3,17 +3,13 @@
 "target": "ES2022",
 "module": "CommonJS",
 "moduleResolution": "node",
-"rootDir": "./src",
 "outDir": "dist",
 "allowJs": false,
 "checkJs": false,
 "esModuleInterop": true,
 "forceConsistentCasingInFileNames": true,
 "strict": true,
-"skipLibCheck": true,
-"ignoreDeprecations": "5.0",
-"types": ["node"],
-"declaration": true
+"skipLibCheck": true
 },
 "include": ["src"]
 }

@@ -41,20 +41,12 @@ export function sys(app: any) {
                 if (payload.event === "memory_sync" && payload.data) {
                     const data = payload.data as Record<string, any>;
 
-                    // Validate required fields
-                    const requiredFields = [
-                        'id', 'user_id', 'project_id', 'segment', 'content', 'simhash',
-                        'primary_sector', 'tags', 'meta', 'created_at', 'updated_at',
-                        'last_seen_at', 'salience', 'decay_lambda', 'version', 'mean_dim',
-                        'mean_vec', 'compressed_vec', 'feedback_score'
-                    ];
-                    const missingFields = requiredFields.filter(field => !(field in data));
-                    if (missingFields.length > 0) {
-                        return res.status(400).json({
-                            error: `Missing required fields: ${missingFields.join(', ')}`
-                        });
+                    const requiredFields = ['id', 'user_id', 'project_id', 'segment', 'content', 'simhash', 'primary_sector', 'tags', 'meta', 'created_at', 'updated_at', 'last_seen_at', 'salience', 'decay_lambda', 'version', 'mean_dim', 'mean_vec', 'compressed_vec', 'feedback_score'];
+                    for (const field of requiredFields) {
+                        if (!(field in data)) {
+                            return res.status(400).json({ error: "Invalid sync event" });
+                        }
                     }
-
                     const existing = await q.get_mem.get(data.id);
                     // Handle version tracker deduplication check
                     if (!existing || data.version > existing.version) {
@@ -100,24 +92,9 @@ export function sys(app: any) {
                 if (!Array.isArray(data)) {
                     return res.status(400).json({ error: "Data must be an array of {text, sector}" });
                 }
-
-                // Validate individual items
-                for (let i = 0; i < data.length; i++) {
-                    const item = data[i];
-                    if (!item || typeof item !== 'object') {
-                        return res.status(400).json({
-                            error: `Item at index ${i} must be an object`
-                        });
-                    }
-                    if (typeof item.text !== 'string' || item.text.trim() === '') {
-                        return res.status(400).json({
-                            error: `Item at index ${i} must have non-empty 'text' string`
-                        });
-                    }
-                    if (typeof item.sector !== 'string' || item.sector.trim() === '') {
-                        return res.status(400).json({
-                            error: `Item at index ${i} must have non-empty 'sector' string`
-                        });
+                for (const item of data) {
+                    if (typeof item.text !== 'string' || item.text.trim() === '' || typeof item.sector !== 'string' || item.sector.trim() === '') {
+                        return res.status(400).json({ error: "Each item must have non-empty text and sector strings" });
                     }
                 }
 
@@ -125,7 +102,6 @@ export function sys(app: any) {
                 classifier.train(data).catch(e => console.error("Classifier training error:", e));
                 res.json({ ok: true, message: "Training started" });
             } catch (e: unknown) {
-                console.error("Classifier training endpoint error:", e);
                 res.status(500).json({ error: "An error occurred" });
             }
         }

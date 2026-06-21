@@ -24,15 +24,14 @@ interface Migration {
     version: string;
     desc: string;
     sqlite: (vectorTable: string) => string[];
-    postgres: string[];
-}
+    }
 
 const migrations: Migration[] = [
     {
         version: "1.2.0",
         desc: "Add version column to memories",
         sqlite: () => ["ALTER TABLE memories ADD COLUMN version integer default 1;"],
-        postgres: ["ALTER TABLE memories ADD COLUMN version integer default 1;"],
+
     },
     {
         version: "1.3.0",
@@ -42,19 +41,13 @@ const migrations: Migration[] = [
             `ALTER TABLE ${vectorTable} ADD COLUMN project_id text;`,
             "ALTER TABLE waypoints ADD COLUMN project_id text;",
         ],
-        postgres: [
-            "ALTER TABLE memories ADD COLUMN project_id text;",
-            `ALTER TABLE "${process.env.OM_PG_SCHEMA || "public"}"."${
-                process.env.OM_VECTOR_TABLE || DEFAULT_VECTOR_TABLE
-            }" ADD COLUMN project_id text;`,
-            "ALTER TABLE waypoints ADD COLUMN project_id text;",
-        ],
+
     },
     {
         version: "1.3.1",
         desc: "Add tags column to memories",
         sqlite: () => ["ALTER TABLE memories ADD COLUMN tags text;"],
-        postgres: ["ALTER TABLE memories ADD COLUMN tags text;"],
+
     },
     {
         version: "1.4.0",
@@ -74,21 +67,7 @@ const migrations: Migration[] = [
             "create index if not exists idx_stats_ts on stats(ts);",
             "create index if not exists idx_stats_type on stats(type);",
         ],
-        postgres: [
-            `create table if not exists "${process.env.OM_PG_SCHEMA || "public"}"."temporal_facts"(id uuid primary key,user_id text,project_id text,subject text not null,predicate text not null,object text not null,valid_from bigint not null,valid_to bigint,confidence double precision not null check(confidence >= 0 and confidence <= 1),last_updated bigint not null,metadata text,unique(subject,predicate,object,valid_from));`,
-            `create index if not exists temporal_facts_user_idx on "${process.env.OM_PG_SCHEMA || "public"}"."temporal_facts"(user_id);`,
-            `create index if not exists temporal_facts_subject_idx on "${process.env.OM_PG_SCHEMA || "public"}"."temporal_facts"(subject);`,
-            `create index if not exists temporal_facts_predicate_idx on "${process.env.OM_PG_SCHEMA || "public"}"."temporal_facts"(predicate);`,
-            `create index if not exists temporal_facts_validity_idx on "${process.env.OM_PG_SCHEMA || "public"}"."temporal_facts"(valid_from,valid_to);`,
-            `create index if not exists temporal_facts_composite_idx on "${process.env.OM_PG_SCHEMA || "public"}"."temporal_facts"(subject,predicate,valid_from,valid_to);`,
-            `create table if not exists "${process.env.OM_PG_SCHEMA || "public"}"."temporal_edges"(id uuid primary key,source_id uuid not null,target_id uuid not null,relation_type text not null,valid_from bigint not null,valid_to bigint,weight double precision not null,metadata text,foreign key(source_id) references "${process.env.OM_PG_SCHEMA || "public"}"."temporal_facts"(id),foreign key(target_id) references "${process.env.OM_PG_SCHEMA || "public"}"."temporal_facts"(id));`,
-            `create index if not exists temporal_edges_source_idx on "${process.env.OM_PG_SCHEMA || "public"}"."temporal_edges"(source_id);`,
-            `create index if not exists temporal_edges_target_idx on "${process.env.OM_PG_SCHEMA || "public"}"."temporal_edges"(target_id);`,
-            `create index if not exists temporal_edges_validity_idx on "${process.env.OM_PG_SCHEMA || "public"}"."temporal_edges"(valid_from,valid_to);`,
-            `create table if not exists "${process.env.OM_PG_SCHEMA || "public"}"."stats"(id serial primary key,type text not null,count integer default 1,ts bigint not null);`,
-            `create index if not exists openmemory_stats_ts_idx on "${process.env.OM_PG_SCHEMA || "public"}"."stats"(ts);`,
-            `create index if not exists openmemory_stats_type_idx on "${process.env.OM_PG_SCHEMA || "public"}"."stats"(type);`,
-        ],
+
     },
     {
         version: "1.4.1",
@@ -97,10 +76,7 @@ const migrations: Migration[] = [
             "ALTER TABLE temporal_facts ADD COLUMN project_id text;",
             "ALTER TABLE temporal_edges ADD COLUMN project_id text;",
         ],
-        postgres: [
-            `ALTER TABLE "${process.env.OM_PG_SCHEMA || "public"}"."temporal_facts" ADD COLUMN project_id text;`,
-            `ALTER TABLE "${process.env.OM_PG_SCHEMA || "public"}"."temporal_edges" ADD COLUMN project_id text;`,
-        ],
+
     },
 ];
 
@@ -120,8 +96,8 @@ const update_db_version = async (ver: string) => {
 
 const check_column_exists = async (table: string, column: string): Promise<boolean> => {
     try {
-        assertSafeIdentifier(table, "table");
-        const res = await client.execute(`PRAGMA table_info(${table})`);
+        const safeTable = assertSafeIdentifier(table, "check_column_exists");
+        const res = await client.execute(`PRAGMA table_info(${safeTable})`);
         return res.rows.some((r: any) => r.name === column);
     } catch {
         return false;
@@ -149,14 +125,13 @@ const quarantine_orphan_temporal_facts = async (): Promise<number> => {
 };
 
 const compare_versions = (v1: string, v2: string) => {
-    const a = v1.split(".").map(Number);
-    const b = v2.split(".").map(Number);
-    // Pad arrays to 3 elements with 0 values
-    while (a.length < 3) a.push(0);
-    while (b.length < 3) b.push(0);
+    const a = v1.split(".");
+    const b = v2.split(".");
     for (let i = 0; i < 3; i++) {
-        if (a[i] > b[i]) return 1;
-        if (a[i] < b[i]) return -1;
+        const numA = Number(a[i]) || 0;
+        const numB = Number(b[i]) || 0;
+        if (numA > numB) return 1;
+        if (numA < numB) return -1;
     }
     return 0;
 };
