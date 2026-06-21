@@ -1,22 +1,24 @@
-import { env } from "./cfg";
-import sqlite3 from "sqlite3";
-import { Pool } from "pg";
+
+import { env } from "./config";
+import { createClient } from "@libsql/client";
 import {
     assertSafeIdentifier,
     DEFAULT_VECTOR_TABLE,
     LEGACY_ORPHAN_TENANT,
 } from "./identifiers";
-import { resolvePgSsl } from "./pg_ssl";
-
-const is_pg = env.metadata_backend === "postgres";
 
 const log = (msg: string) => console.log(`[MIGRATE] ${msg}`);
 
-// SQLite vector table: prefer explicit env var (validated), then the
-// canonical default, with a fallback to the legacy `vectors` name when
-// only the legacy table exists on disk. The fallback is resolved at
-// runtime (see `resolveSqliteVectorTable`).
-const LEGACY_SQLITE_VECTOR_TABLE = "vectors";
+const explicit_vector_table = process.env.OM_VECTOR_TABLE;
+const resolved_vector_table = assertSafeIdentifier(
+    explicit_vector_table || DEFAULT_VECTOR_TABLE,
+    "OM_VECTOR_TABLE"
+);
+
+// Connect to libSQL
+const url = env.OM_TURSO_URL || `file:${env.db_path || "./data/openmemory.db"}`;
+const token = env.OM_TURSO_TOKEN;
+const client = createClient({ url, authToken: token });
 
 interface Migration {
     version: string;
@@ -28,418 +30,189 @@ interface Migration {
 const migrations: Migration[] = [
     {
         version: "1.2.0",
-        desc: "Multi-user tenant support",
-        sqlite: (vectorTable: string) => [
-            `ALTER TABLE memories ADD COLUMN user_id TEXT`,
-            `CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id)`,
-            `ALTER TABLE ${vectorTable} ADD COLUMN user_id TEXT`,
-            `CREATE INDEX IF NOT EXISTS idx_vectors_user ON ${vectorTable}(user_id)`,
-            `CREATE TABLE IF NOT EXISTS waypoints_new (
-        src_id TEXT, dst_id TEXT NOT NULL, user_id TEXT,
-        weight REAL NOT NULL, created_at INTEGER, updated_at INTEGER,
-        PRIMARY KEY(src_id, user_id)
-      )`,
-            `INSERT INTO waypoints_new SELECT src_id, dst_id, NULL, weight, created_at, updated_at FROM waypoints`,
-            `DROP TABLE waypoints`,
-            `ALTER TABLE waypoints_new RENAME TO waypoints`,
-            `CREATE INDEX IF NOT EXISTS idx_waypoints_src ON waypoints(src_id)`,
-            `CREATE INDEX IF NOT EXISTS idx_waypoints_dst ON waypoints(dst_id)`,
-            `CREATE INDEX IF NOT EXISTS idx_waypoints_user ON waypoints(user_id)`,
-            `CREATE TABLE IF NOT EXISTS users (
-        user_id TEXT PRIMARY KEY, summary TEXT,
-        reflection_count INTEGER DEFAULT 0,
-        created_at INTEGER, updated_at INTEGER
-      )`,
-            `CREATE TABLE IF NOT EXISTS stats (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        type TEXT NOT NULL, count INTEGER DEFAULT 1, ts INTEGER NOT NULL
-      )`,
-            `CREATE INDEX IF NOT EXISTS idx_stats_ts ON stats(ts)`,
-            `CREATE INDEX IF NOT EXISTS idx_stats_type ON stats(type)`,
-        ],
-        postgres: [
-            `ALTER TABLE {m} ADD COLUMN IF NOT EXISTS user_id TEXT`,
-            `CREATE INDEX IF NOT EXISTS openmemory_memories_user_idx ON {m}(user_id)`,
-            `ALTER TABLE {v} ADD COLUMN IF NOT EXISTS user_id TEXT`,
-            `CREATE INDEX IF NOT EXISTS openmemory_vectors_user_idx ON {v}(user_id)`,
-            `ALTER TABLE {w} ADD COLUMN IF NOT EXISTS user_id TEXT`,
-            `ALTER TABLE {w} DROP CONSTRAINT IF EXISTS waypoints_pkey`,
-            `ALTER TABLE {w} ADD PRIMARY KEY (src_id, user_id)`,
-            `CREATE INDEX IF NOT EXISTS openmemory_waypoints_user_idx ON {w}(user_id)`,
-            `CREATE TABLE IF NOT EXISTS {u} (
-        user_id TEXT PRIMARY KEY, summary TEXT,
-        reflection_count INTEGER DEFAULT 0,
-        created_at BIGINT, updated_at BIGINT
-      )`,
-        ],
+        desc: "Add version column to memories",
+        sqlite: () => ["ALTER TABLE memories ADD COLUMN version integer default 1;"],
+        postgres: ["ALTER TABLE memories ADD COLUMN version integer default 1;"],
     },
     {
         version: "1.3.0",
-        desc: "Project-level isolation support",
+        desc: "Add project_id column to core tables",
         sqlite: (vectorTable: string) => [
-            `ALTER TABLE memories ADD COLUMN project_id TEXT`,
-            `CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project_id)`,
-            `ALTER TABLE ${vectorTable} ADD COLUMN project_id TEXT`,
-            `CREATE INDEX IF NOT EXISTS idx_vectors_project ON ${vectorTable}(project_id)`,
-            `ALTER TABLE waypoints ADD COLUMN project_id TEXT`,
-            `CREATE INDEX IF NOT EXISTS idx_waypoints_project ON waypoints(project_id)`,
-            `ALTER TABLE temporal_facts ADD COLUMN project_id TEXT`,
-            `CREATE INDEX IF NOT EXISTS idx_temporal_project ON temporal_facts(project_id)`,
+            "ALTER TABLE memories ADD COLUMN project_id text;",
+            `ALTER TABLE ${vectorTable} ADD COLUMN project_id text;`,
+            "ALTER TABLE waypoints ADD COLUMN project_id text;",
         ],
         postgres: [
-            `ALTER TABLE {m} ADD COLUMN IF NOT EXISTS project_id TEXT`,
-            `CREATE INDEX IF NOT EXISTS openmemory_memories_project_idx ON {m}(project_id)`,
-            `ALTER TABLE {v} ADD COLUMN IF NOT EXISTS project_id TEXT`,
-            `CREATE INDEX IF NOT EXISTS openmemory_vectors_project_idx ON {v}(project_id)`,
-            `ALTER TABLE {w} ADD COLUMN IF NOT EXISTS project_id TEXT`,
-            `CREATE INDEX IF NOT EXISTS openmemory_waypoints_project_idx ON {w}(project_id)`,
-            `ALTER TABLE temporal_facts ADD COLUMN IF NOT EXISTS project_id TEXT`,
-            `CREATE INDEX IF NOT EXISTS temporal_facts_project_idx ON temporal_facts(project_id)`,
+            "ALTER TABLE memories ADD COLUMN project_id text;",
+            `ALTER TABLE "${process.env.OM_PG_SCHEMA || "public"}"."${
+                process.env.OM_VECTOR_TABLE || DEFAULT_VECTOR_TABLE
+            }" ADD COLUMN project_id text;`,
+            "ALTER TABLE waypoints ADD COLUMN project_id text;",
+        ],
+    },
+    {
+        version: "1.3.1",
+        desc: "Add tags column to memories",
+        sqlite: () => ["ALTER TABLE memories ADD COLUMN tags text;"],
+        postgres: ["ALTER TABLE memories ADD COLUMN tags text;"],
+    },
+    {
+        version: "1.4.0",
+        desc: "Add temporal graph tables and stats",
+        sqlite: () => [
+            `create table if not exists temporal_facts(id text primary key,user_id text,project_id text,subject text not null,predicate text not null,object text not null,valid_from integer not null,valid_to integer,confidence real not null check(confidence >= 0 and confidence <= 1),last_updated integer not null,metadata text,unique(subject,predicate,object,valid_from));`,
+            "create index if not exists idx_temporal_user on temporal_facts(user_id);",
+            "create index if not exists idx_temporal_subject on temporal_facts(subject);",
+            "create index if not exists idx_temporal_predicate on temporal_facts(predicate);",
+            "create index if not exists idx_temporal_validity on temporal_facts(valid_from,valid_to);",
+            "create index if not exists idx_temporal_composite on temporal_facts(subject,predicate,valid_from,valid_to);",
+            `create table if not exists temporal_edges(id text primary key,source_id text not null,target_id text not null,relation_type text not null,valid_from integer not null,valid_to integer,weight real not null,metadata text,foreign key(source_id) references temporal_facts(id),foreign key(target_id) references temporal_facts(id));`,
+            "create index if not exists idx_edges_source on temporal_edges(source_id);",
+            "create index if not exists idx_edges_target on temporal_edges(target_id);",
+            "create index if not exists idx_edges_validity on temporal_edges(valid_from,valid_to);",
+            "create table if not exists stats(id integer primary key autoincrement,type text not null,count integer default 1,ts integer not null);",
+            "create index if not exists idx_stats_ts on stats(ts);",
+            "create index if not exists idx_stats_type on stats(type);",
+        ],
+        postgres: [
+            `create table if not exists "${process.env.OM_PG_SCHEMA || "public"}"."temporal_facts"(id uuid primary key,user_id text,project_id text,subject text not null,predicate text not null,object text not null,valid_from bigint not null,valid_to bigint,confidence double precision not null check(confidence >= 0 and confidence <= 1),last_updated bigint not null,metadata text,unique(subject,predicate,object,valid_from));`,
+            `create index if not exists temporal_facts_user_idx on "${process.env.OM_PG_SCHEMA || "public"}"."temporal_facts"(user_id);`,
+            `create index if not exists temporal_facts_subject_idx on "${process.env.OM_PG_SCHEMA || "public"}"."temporal_facts"(subject);`,
+            `create index if not exists temporal_facts_predicate_idx on "${process.env.OM_PG_SCHEMA || "public"}"."temporal_facts"(predicate);`,
+            `create index if not exists temporal_facts_validity_idx on "${process.env.OM_PG_SCHEMA || "public"}"."temporal_facts"(valid_from,valid_to);`,
+            `create index if not exists temporal_facts_composite_idx on "${process.env.OM_PG_SCHEMA || "public"}"."temporal_facts"(subject,predicate,valid_from,valid_to);`,
+            `create table if not exists "${process.env.OM_PG_SCHEMA || "public"}"."temporal_edges"(id uuid primary key,source_id uuid not null,target_id uuid not null,relation_type text not null,valid_from bigint not null,valid_to bigint,weight double precision not null,metadata text,foreign key(source_id) references "${process.env.OM_PG_SCHEMA || "public"}"."temporal_facts"(id),foreign key(target_id) references "${process.env.OM_PG_SCHEMA || "public"}"."temporal_facts"(id));`,
+            `create index if not exists temporal_edges_source_idx on "${process.env.OM_PG_SCHEMA || "public"}"."temporal_edges"(source_id);`,
+            `create index if not exists temporal_edges_target_idx on "${process.env.OM_PG_SCHEMA || "public"}"."temporal_edges"(target_id);`,
+            `create index if not exists temporal_edges_validity_idx on "${process.env.OM_PG_SCHEMA || "public"}"."temporal_edges"(valid_from,valid_to);`,
+            `create table if not exists "${process.env.OM_PG_SCHEMA || "public"}"."stats"(id serial primary key,type text not null,count integer default 1,ts bigint not null);`,
+            `create index if not exists openmemory_stats_ts_idx on "${process.env.OM_PG_SCHEMA || "public"}"."stats"(ts);`,
+            `create index if not exists openmemory_stats_type_idx on "${process.env.OM_PG_SCHEMA || "public"}"."stats"(type);`,
+        ],
+    },
+    {
+        version: "1.4.1",
+        desc: "Add missing project_id to temporal graph tables",
+        sqlite: () => [
+            "ALTER TABLE temporal_facts ADD COLUMN project_id text;",
+            "ALTER TABLE temporal_edges ADD COLUMN project_id text;",
+        ],
+        postgres: [
+            `ALTER TABLE "${process.env.OM_PG_SCHEMA || "public"}"."temporal_facts" ADD COLUMN project_id text;`,
+            `ALTER TABLE "${process.env.OM_PG_SCHEMA || "public"}"."temporal_edges" ADD COLUMN project_id text;`,
         ],
     },
 ];
 
-async function get_db_version_sqlite(
-    db: sqlite3.Database,
-): Promise<string | null> {
-    return new Promise((ok, no) => {
-        db.get(
-            `SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'`,
-            (err, row: any) => {
-                if (err) return no(err);
-                if (!row) return ok(null);
-                db.get(
-                    `SELECT version FROM schema_version ORDER BY applied_at DESC LIMIT 1`,
-                    (e, v: any) => {
-                        if (e) return no(e);
-                        ok(v?.version || null);
-                    },
-                );
-            },
-        );
-    });
-}
-
-async function set_db_version_sqlite(
-    db: sqlite3.Database,
-    version: string,
-): Promise<void> {
-    return new Promise((ok, no) => {
-        db.run(
-            `CREATE TABLE IF NOT EXISTS schema_version (
-        version TEXT PRIMARY KEY, applied_at INTEGER
-      )`,
-            (err) => {
-                if (err) return no(err);
-                db.run(
-                    `INSERT OR REPLACE INTO schema_version VALUES (?, ?)`,
-                    [version, Date.now()],
-                    (e) => {
-                        if (e) return no(e);
-                        ok();
-                    },
-                );
-            },
-        );
-    });
-}
-
-async function check_column_exists_sqlite(
-    db: sqlite3.Database,
-    table: string,
-    column: string,
-): Promise<boolean> {
-    return new Promise((ok, no) => {
-        db.all(`PRAGMA table_info(${table})`, (err, rows: any[]) => {
-            if (err) return no(err);
-            ok(rows.some((r) => r.name === column));
-        });
-    });
-}
-
-/**
- * Resolve which vector table this SQLite database actually uses.
- * Priority:
- *   1. OM_VECTOR_TABLE if set (validated as a safe identifier).
- *   2. The legacy `vectors` table if present on disk (back-compat).
- *   3. The canonical `openmemory_vectors` default.
- */
-async function resolveSqliteVectorTable(db: sqlite3.Database): Promise<string> {
-    const explicit = process.env.OM_VECTOR_TABLE;
-    if (explicit) return assertSafeIdentifier(explicit, "OM_VECTOR_TABLE");
-
-    const tableExists = (name: string) =>
-        new Promise<boolean>((ok, no) => {
-            db.get(
-                `SELECT name FROM sqlite_master WHERE type='table' AND name=?`,
-                [name],
-                (err, row: any) => (err ? no(err) : ok(!!row)),
-            );
-        });
-
-    if (await tableExists(LEGACY_SQLITE_VECTOR_TABLE)) {
-        log(
-            `Detected legacy "${LEGACY_SQLITE_VECTOR_TABLE}" table; migration will target it. ` +
-                `Consider renaming to "${DEFAULT_VECTOR_TABLE}" once safe.`,
-        );
-        return LEGACY_SQLITE_VECTOR_TABLE;
-    }
-    return DEFAULT_VECTOR_TABLE;
-}
-
-async function run_sqlite_migration(
-    db: sqlite3.Database,
-    m: Migration,
-): Promise<void> {
-    log(`Running migration: ${m.version} - ${m.desc}`);
-
-    const has_user_id = await check_column_exists_sqlite(
-        db,
-        "memories",
-        "user_id",
-    );
-    if (has_user_id) {
-        log(
-            `Migration ${m.version} already applied (user_id exists), skipping`,
-        );
-        await set_db_version_sqlite(db, m.version);
-        return;
-    }
-
-    const vectorTable = await resolveSqliteVectorTable(db);
-    const stmts = m.sqlite(vectorTable);
-
-    for (const sql of stmts) {
-        await new Promise<void>((ok, no) => {
-            db.run(sql, (err) => {
-                if (err && !err.message.includes("duplicate column")) {
-                    log(`ERROR: ${err.message}`);
-                    return no(err);
-                }
-                ok();
-            });
-        });
-    }
-
-    await set_db_version_sqlite(db, m.version);
-    log(`Migration ${m.version} completed successfully`);
-}
-
-function pgSchema(): string {
-    return assertSafeIdentifier(
-        process.env.OM_PG_SCHEMA || "public",
-        "OM_PG_SCHEMA",
-    );
-}
-
-async function get_db_version_pg(pool: Pool): Promise<string | null> {
+const get_db_version = async (): Promise<string> => {
     try {
-        const sc = pgSchema();
-        const check = await pool.query(
-            `SELECT EXISTS (
-        SELECT FROM information_schema.tables
-        WHERE table_schema = $1 AND table_name = 'schema_version'
-      )`,
-            [sc],
-        );
-        if (!check.rows[0].exists) return null;
-
-        const ver = await pool.query(
-            `SELECT version FROM "${sc}"."schema_version" ORDER BY applied_at DESC LIMIT 1`,
-        );
-        return ver.rows[0]?.version || null;
-    } catch (e) {
-        return null;
+        await client.execute("CREATE TABLE IF NOT EXISTS openmemory_schema (version TEXT)");
+        const res = await client.execute("SELECT version FROM openmemory_schema ORDER BY ROWID DESC LIMIT 1");
+        return res.rows.length ? (res.rows[0].version as string) : "0.0.0";
+    } catch {
+        return "0.0.0";
     }
-}
+};
 
-async function set_db_version_pg(pool: Pool, version: string): Promise<void> {
-    const sc = pgSchema();
-    await pool.query(
-        `CREATE TABLE IF NOT EXISTS "${sc}"."schema_version" (
-      version TEXT PRIMARY KEY, applied_at BIGINT
-    )`,
-    );
-    await pool.query(
-        `INSERT INTO "${sc}"."schema_version" VALUES ($1, $2)
-     ON CONFLICT (version) DO UPDATE SET applied_at = EXCLUDED.applied_at`,
-        [version, Date.now()],
-    );
-}
+const update_db_version = async (ver: string) => {
+    await client.execute({ sql: "INSERT INTO openmemory_schema (version) VALUES (?)", args: [ver] });
+};
 
-async function check_column_exists_pg(
-    pool: Pool,
-    table: string,
-    column: string,
-): Promise<boolean> {
-    const sc = pgSchema();
-    const tbl = table.replace(/"/g, "").split(".").pop() || table;
-    const res = await pool.query(
-        `SELECT EXISTS (
-      SELECT FROM information_schema.columns
-      WHERE table_schema = $1 AND table_name = $2 AND column_name = $3
-    )`,
-        [sc, tbl, column],
-    );
-    return res.rows[0].exists;
-}
-
-async function run_pg_migration(pool: Pool, m: Migration): Promise<void> {
-    log(`Running migration: ${m.version} - ${m.desc}`);
-
-    const sc = pgSchema();
-    const mt = assertSafeIdentifier(
-        process.env.OM_PG_TABLE || "openmemory_memories",
-        "OM_PG_TABLE",
-    );
-    const vt = assertSafeIdentifier(
-        process.env.OM_VECTOR_TABLE || DEFAULT_VECTOR_TABLE,
-        "OM_VECTOR_TABLE",
-    );
-    const has_user_id = await check_column_exists_pg(pool, mt, "user_id");
-
-    if (has_user_id) {
-        log(
-            `Migration ${m.version} already applied (user_id exists), skipping`,
-        );
-        await set_db_version_pg(pool, m.version);
-        return;
+const check_column_exists = async (table: string, column: string): Promise<boolean> => {
+    try {
+        const res = await client.execute(`PRAGMA table_info(${table})`);
+        return res.rows.some((r: any) => r.name === column);
+    } catch {
+        return false;
     }
+};
 
-    const replacements: Record<string, string> = {
-        "{m}": `"${sc}"."${mt}"`,
-        "{v}": `"${sc}"."${vt}"`,
-        "{w}": `"${sc}"."openmemory_waypoints"`,
-        "{u}": `"${sc}"."openmemory_users"`,
-    };
+const quarantine_orphan_temporal_facts = async (): Promise<number> => {
+    // Find orphans
+    const orphanQuery = await client.execute({
+        sql: `
+        SELECT tf.id
+        FROM temporal_facts tf
+        LEFT JOIN users u ON tf.user_id = u.user_id
+        WHERE u.user_id IS NULL AND tf.user_id IS NOT NULL AND tf.user_id != ?
+    `, args: [LEGACY_ORPHAN_TENANT]});
 
-    for (let sql of m.postgres) {
-        for (const [k, v] of Object.entries(replacements)) {
-            sql = sql.replace(new RegExp(k, "g"), v);
-        }
+    const ids = orphanQuery.rows.map((row: any) => row.id);
+    if (ids.length === 0) return 0;
 
-        try {
-            await pool.query(sql);
-        } catch (e: any) {
-            if (
-                !e.message.includes("already exists") &&
-                !e.message.includes("duplicate")
-            ) {
-                log(`ERROR: ${e.message}`);
-                throw e;
-            }
-        }
+    await client.batch(ids.map((id: any) => ({
+        sql: "UPDATE temporal_facts SET metadata = json_insert(coalesce(metadata, '{}'), '$._quarantined_legacy_user', user_id), user_id = ? WHERE id = ?",
+        args: [LEGACY_ORPHAN_TENANT, id]
+    })));
+    return ids.length;
+};
+
+const compare_versions = (v1: string, v2: string) => {
+    const a = v1.split(".").map(Number);
+    const b = v2.split(".").map(Number);
+    for (let i = 0; i < 3; i++) {
+        if (a[i] > b[i]) return 1;
+        if (a[i] < b[i]) return -1;
     }
+    return 0;
+};
 
-    await set_db_version_pg(pool, m.version);
-    log(`Migration ${m.version} completed successfully`);
-}
+const run_migrations = async () => {
+    log("Checking schema version via LibSQL...");
+    const current_version = await get_db_version();
+    log(`Current schema version: ${current_version}`);
 
-/**
- * One-shot data hygiene step: quarantine any pre-existing temporal_facts
- * rows whose user_id was NULL (i.e. were inserted before per-tenant
- * filtering became mandatory) under the synthetic LEGACY_ORPHAN_TENANT
- * id. This is idempotent: once stamped, the WHERE clause matches no rows
- * on subsequent runs. We do this outside the schema-version-tracked
- * migrations because temporal_facts is created lazily by db.ts on first
- * use rather than via a versioned migration step.
- */
-async function quarantine_orphan_temporal_facts_sqlite(
-    db: sqlite3.Database,
-): Promise<void> {
-    const tableExists = await new Promise<boolean>((ok, no) => {
-        db.get(
-            `SELECT name FROM sqlite_master WHERE type='table' AND name='temporal_facts'`,
-            (err, row: any) => (err ? no(err) : ok(!!row)),
-        );
-    });
-    if (!tableExists) return;
-    await new Promise<void>((ok, no) => {
-        db.run(
-            `UPDATE temporal_facts SET user_id = ? WHERE user_id IS NULL`,
-            [LEGACY_ORPHAN_TENANT],
-            function (err) {
-                if (err) return no(err);
-                if (this.changes > 0) {
-                    log(
-                        `Quarantined ${this.changes} orphan temporal_facts rows under ${LEGACY_ORPHAN_TENANT}`,
-                    );
+    for (const m of migrations) {
+        if (compare_versions(m.version, current_version) > 0) {
+            log(`Applying ${m.version}: ${m.desc}`);
+            try {
+                const sql_stmts = m.sqlite(resolved_vector_table);
+                if (sql_stmts.length > 0) {
+                    await client.batch(sql_stmts.map(sql => ({ sql, args: [] })), "write");
                 }
-                ok();
-            },
-        );
-    });
-}
-
-async function quarantine_orphan_temporal_facts_pg(pool: Pool): Promise<void> {
-    const sc = pgSchema();
-    const check = await pool.query(
-        `SELECT EXISTS (
-            SELECT FROM information_schema.tables
-            WHERE table_schema = $1 AND table_name = 'temporal_facts'
-        )`,
-        [sc],
-    );
-    if (!check.rows[0].exists) return;
-    const res = await pool.query(
-        `UPDATE "${sc}"."temporal_facts" SET user_id = $1 WHERE user_id IS NULL`,
-        [LEGACY_ORPHAN_TENANT],
-    );
-    if (res.rowCount && res.rowCount > 0) {
-        log(
-            `Quarantined ${res.rowCount} orphan temporal_facts rows under ${LEGACY_ORPHAN_TENANT}`,
-        );
-    }
-}
-
-export async function run_migrations() {
-    log("Checking for pending migrations...");
-
-    if (is_pg) {
-        const ssl = resolvePgSsl(process.env);
-        const db_name = assertSafeIdentifier(
-            process.env.OM_PG_DB || "openmemory",
-            "OM_PG_DB",
-        );
-
-        const pool = new Pool({
-            host: process.env.OM_PG_HOST,
-            port: process.env.OM_PG_PORT ? +process.env.OM_PG_PORT : undefined,
-            database: db_name,
-            user: process.env.OM_PG_USER,
-            password: process.env.OM_PG_PASSWORD,
-            ssl,
-        });
-
-        const current = await get_db_version_pg(pool);
-        log(`Current database version: ${current || "none"}`);
-
-        for (const m of migrations) {
-            if (!current || m.version > current) {
-                await run_pg_migration(pool, m);
+                await update_db_version(m.version);
+            } catch (e: any) {
+                // Ignore "duplicate column name" errors
+                if (
+                    e.message &&
+                    (e.message.includes("duplicate column name") ||
+                     e.message.includes("already exists"))
+                ) {
+                    log(`[WARN] ${m.desc} already applied partially, updating schema version.`);
+                    await update_db_version(m.version);
+                } else {
+                    log(`[FATAL] Migration ${m.version} failed: ${e.message}`);
+                    process.exit(1);
+                }
             }
         }
+    }
 
-        await quarantine_orphan_temporal_facts_pg(pool);
-
-        await pool.end();
+    log("Checking for orphaned temporal facts...");
+    const q_count = await quarantine_orphan_temporal_facts();
+    if (q_count > 0) {
+        log(`Quarantined ${q_count} orphaned temporal facts to tenant: ${LEGACY_ORPHAN_TENANT}`);
     } else {
-        const db_path = process.env.OM_DB_PATH || "./data/openmemory.sqlite";
-        const db = new sqlite3.Database(db_path);
-
-        const current = await get_db_version_sqlite(db);
-        log(`Current database version: ${current || "none"}`);
-
-        for (const m of migrations) {
-            if (!current || m.version > current) {
-                await run_sqlite_migration(db, m);
-            }
-        }
-
-        await quarantine_orphan_temporal_facts_sqlite(db);
-
-        await new Promise<void>((ok) => db.close(() => ok()));
+        log("No orphaned temporal facts found.");
     }
 
-    log("All migrations completed");
-}
+    const hasLastSeenAt = await check_column_exists("memories", "last_seen_at");
+    if (!hasLastSeenAt) {
+        try {
+            await client.execute("ALTER TABLE memories ADD COLUMN last_seen_at integer");
+            log("Added missing column last_seen_at");
+        } catch (e: any) {
+            if (!e.message.includes("duplicate column name")) {
+                console.error("Failed to add last_seen_at", e);
+            }
+        }
+    }
+
+    client.close();
+    log("All migrations complete.");
+};
+
+run_migrations().catch((err) => {
+    console.error("Migration failed:", err);
+    process.exit(1);
+});

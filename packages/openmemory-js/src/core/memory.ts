@@ -1,6 +1,7 @@
 import { add_hsg_memory, hsg_query } from "../memory/hsg";
 import { q, log_maint_op } from "./db";
-import { env } from "./cfg";
+import { env } from "./config";
+import { broadcastMemory } from "./cluster";
 import { j } from "../utils";
 
 export interface MemoryOptions {
@@ -44,6 +45,16 @@ export class Memory {
             uid ?? undefined,
             proj ?? undefined,
         );
+
+        // Broadcast to cluster nodes asynchronously
+        if (res && res.id) {
+            // Fetch memory state for broadcasting
+            q.get_mem.get(res.id).then(memoryState => {
+                if (memoryState) {
+                    broadcastMemory(memoryState);
+                }
+            }).catch(e => console.error("Failed to load memory state for broadcast:", e));
+        }
         return res;
     }
 

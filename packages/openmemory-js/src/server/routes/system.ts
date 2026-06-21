@@ -1,3 +1,4 @@
+import { classifier } from "../../memory/classifier";
 import { all_async } from "../../core/db";
 import { sector_configs } from "../../memory/hsg";
 import { getEmbeddingInfo } from "../../memory/embed";
@@ -30,7 +31,70 @@ const TIER_BENEFITS = {
     },
 };
 
+import { q } from "../../core/db";
 export function sys(app: any) {
+    app.post(
+        "/api/cluster/sync",
+        async (req: import("../server").AppRequest, res: import("../server").AppResponse) => {
+            try {
+                const payload = req.body as Record<string, unknown>;
+                if (payload.event === "memory_sync" && payload.data) {
+                    const data = payload.data as Record<string, any>;
+                    const existing = await q.get_mem.get(data.id);
+                    // Handle version tracker deduplication check
+                    if (!existing || data.version > existing.version) {
+                        // We do an upsert
+                        await q.ins_mem.run(
+                            data.id,
+                            data.user_id,
+                            data.project_id,
+                            data.segment,
+                            data.content,
+                            data.simhash,
+                            data.primary_sector,
+                            data.tags,
+                            data.meta,
+                            data.created_at,
+                            data.updated_at,
+                            data.last_seen_at,
+                            data.salience,
+                            data.decay_lambda,
+                            data.version,
+                            data.mean_dim,
+                            data.mean_vec,
+                            data.compressed_vec,
+                            data.feedback_score
+                        );
+                        return res.json({ ok: true, message: "Synced" });
+                    }
+                    return res.json({ ok: true, message: "Ignored due to version deduplication" });
+                }
+                res.status(400).json({ error: "Invalid sync event" });
+            } catch (e: unknown) {
+                console.error("[CLUSTER] Sync error:", e);
+                res.status(500).json({ error: (e as Error).message });
+            }
+        }
+    );
+
+    app.post(
+        "/api/system/classifier/train",
+        async (req: import("../server").AppRequest, res: import("../server").AppResponse) => {
+            try {
+                const { data } = req.body as { data: { text: string, sector: string }[] };
+                if (!Array.isArray(data)) {
+                    return res.status(400).json({ error: "Data must be an array of {text, sector}" });
+                }
+
+                // Fire and forget
+                classifier.train(data).catch(e => console.error("Classifier training error:", e));
+                res.json({ ok: true, message: "Training started" });
+            } catch (e: unknown) {
+                res.status(500).json({ error: (e as Error).message });
+            }
+        }
+    );
+
     app.get(
         "/health",
         async (incoming_http_request: any, outgoing_http_response: any) => {
