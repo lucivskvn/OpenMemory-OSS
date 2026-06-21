@@ -881,7 +881,7 @@ if (is_pg) {
         ins_user: {
             run: (...p) =>
                 exec(
-                    "insert or ignore into users(user_id,summary,reflection_count,created_at,updated_at) values(?,?,?,?,?)",
+                    "insert into users(user_id,summary,reflection_count,created_at,updated_at) values(?,?,?,?,?) on conflict(user_id) do update set summary=excluded.summary,reflection_count=excluded.reflection_count,updated_at=excluded.updated_at",
                     p,
                 ),
         },
