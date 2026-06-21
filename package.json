@@ -1,6 +1,0 @@
-{
-  "dependencies": {
-    "@types/node": "^26.0.0",
-    "@types/turndown": "^5.0.6"
-  }
-}

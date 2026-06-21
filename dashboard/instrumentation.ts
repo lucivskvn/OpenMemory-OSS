@@ -11,11 +11,11 @@ export async function register() {
   if (globalThis.__om_handlers_registered) return
   globalThis.__om_handlers_registered = true
 
-  process.on('uncaughtException', (err) => {
+  globalThis.process.on('uncaughtException', (err) => {
     console.error('uncaughtException', err)
   })
 
-  process.on('unhandledRejection', (reason: unknown) => {
+  globalThis.process.on('unhandledRejection', (reason: unknown) => {
     console.error('unhandledRejection', reason)
   })
 }
