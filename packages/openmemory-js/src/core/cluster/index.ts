@@ -16,6 +16,9 @@ export function broadcastMemory(memoryState: import("../types").mem_row): void {
         if (!peer) continue;
         const endpoint = `${peer.replace(/\/$/, "")}/api/cluster/sync`;
 
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+
         fetch(endpoint, {
             method: "POST",
             headers: {
@@ -24,8 +27,17 @@ export function broadcastMemory(memoryState: import("../types").mem_row): void {
                 ...(env.api_key ? { "x-api-key": env.api_key } : {}),
             },
             body: JSON.stringify(payload),
-        }).catch((e) => {
-            console.error(`[CLUSTER] Failed to sync with peer ${peer}:`, e.message);
-        });
+            signal: controller.signal,
+        })
+            .then((response) => {
+                clearTimeout(timeout);
+                if (!response.ok) {
+                    console.error(`[CLUSTER] Failed to sync with peer ${peer}: HTTP ${response.status}`);
+                }
+            })
+            .catch((e) => {
+                clearTimeout(timeout);
+                console.error(`[CLUSTER] Failed to sync with peer ${peer}:`, e.message);
+            });
     }
 }

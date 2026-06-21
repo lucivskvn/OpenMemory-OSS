@@ -40,6 +40,21 @@ export function sys(app: any) {
                 const payload = req.body as Record<string, unknown>;
                 if (payload.event === "memory_sync" && payload.data) {
                     const data = payload.data as Record<string, any>;
+
+                    // Validate required fields
+                    const requiredFields = [
+                        'id', 'user_id', 'project_id', 'segment', 'content', 'simhash',
+                        'primary_sector', 'tags', 'meta', 'created_at', 'updated_at',
+                        'last_seen_at', 'salience', 'decay_lambda', 'version', 'mean_dim',
+                        'mean_vec', 'compressed_vec', 'feedback_score'
+                    ];
+                    const missingFields = requiredFields.filter(field => !(field in data));
+                    if (missingFields.length > 0) {
+                        return res.status(400).json({
+                            error: `Missing required fields: ${missingFields.join(', ')}`
+                        });
+                    }
+
                     const existing = await q.get_mem.get(data.id);
                     // Handle version tracker deduplication check
                     if (!existing || data.version > existing.version) {
@@ -72,7 +87,7 @@ export function sys(app: any) {
                 res.status(400).json({ error: "Invalid sync event" });
             } catch (e: unknown) {
                 console.error("[CLUSTER] Sync error:", e);
-                res.status(500).json({ error: (e as Error).message });
+                res.status(500).json({ error: "An error occurred" });
             }
         }
     );
@@ -86,11 +101,32 @@ export function sys(app: any) {
                     return res.status(400).json({ error: "Data must be an array of {text, sector}" });
                 }
 
+                // Validate individual items
+                for (let i = 0; i < data.length; i++) {
+                    const item = data[i];
+                    if (!item || typeof item !== 'object') {
+                        return res.status(400).json({
+                            error: `Item at index ${i} must be an object`
+                        });
+                    }
+                    if (typeof item.text !== 'string' || item.text.trim() === '') {
+                        return res.status(400).json({
+                            error: `Item at index ${i} must have non-empty 'text' string`
+                        });
+                    }
+                    if (typeof item.sector !== 'string' || item.sector.trim() === '') {
+                        return res.status(400).json({
+                            error: `Item at index ${i} must have non-empty 'sector' string`
+                        });
+                    }
+                }
+
                 // Fire and forget
                 classifier.train(data).catch(e => console.error("Classifier training error:", e));
                 res.json({ ok: true, message: "Training started" });
             } catch (e: unknown) {
-                res.status(500).json({ error: (e as Error).message });
+                console.error("Classifier training endpoint error:", e);
+                res.status(500).json({ error: "An error occurred" });
             }
         }
     );

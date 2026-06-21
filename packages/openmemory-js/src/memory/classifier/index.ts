@@ -12,11 +12,18 @@ export class LearnedSectorClassifier implements ISectorClassifier {
     async train(trainingData: { text: string; sector: string }[]): Promise<void> {
         if (!trainingData.length) return;
 
-        const sectors = [...new Set(trainingData.map((d) => d.sector))];
+        // Group training data by sector in a single pass
+        const sectorGroups: Record<string, { text: string; sector: string }[]> = {};
+        for (const item of trainingData) {
+            if (!sectorGroups[item.sector]) {
+                sectorGroups[item.sector] = [];
+            }
+            sectorGroups[item.sector].push(item);
+        }
+
         const centroids: Record<string, number[]> = {};
 
-        for (const sector of sectors) {
-            const sectorData = trainingData.filter((d) => d.sector === sector);
+        for (const [sector, sectorData] of Object.entries(sectorGroups)) {
             const vectors = await Promise.all(
                 sectorData.map(async (d) => {
                     const emb = await embed(d.text);

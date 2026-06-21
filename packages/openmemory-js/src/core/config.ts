@@ -2,7 +2,7 @@ import { z } from "zod";
 import dotenv from "dotenv";
 import path from "path";
 
-dotenv.config({ path: path.resolve(__dirname, "../../../.env") });
+dotenv.config({ path: path.resolve(__dirname, "../../../../.env") });
 
 const tier_dims = { fast: 1536, smart: 1536, deep: 1536, hybrid: 1536 };
 const tier_cache = { fast: 2, smart: 3, deep: 5, hybrid: 3 };
@@ -146,6 +146,11 @@ const rawEnv = {
     summary_layers: process.env.OM_SUMMARY_LAYERS,
     keyword_boost: process.env.OM_KEYWORD_BOOST,
     keyword_min_length: process.env.OM_KEYWORD_MIN_LENGTH,
+    OM_TURSO_URL: process.env.OM_TURSO_URL,
+    OM_TURSO_TOKEN: process.env.OM_TURSO_TOKEN,
+    OM_ENCRYPTION_KEY: process.env.OM_ENCRYPTION_KEY,
+    OM_CLUSTER_PEERS: process.env.OM_CLUSTER_PEERS,
+    OM_NODE_ID: process.env.OM_NODE_ID,
 };
 
 export const env = envSchema.parse(rawEnv);

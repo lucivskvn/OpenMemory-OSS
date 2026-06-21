@@ -16,7 +16,7 @@ const resolved_vector_table = assertSafeIdentifier(
 );
 
 // Connect to libSQL
-const url = env.OM_TURSO_URL || `file:${env.db_path || "./data/openmemory.db"}`;
+const url = env.OM_TURSO_URL || `file:${env.db_path || "./data/openmemory.sqlite"}`;
 const token = env.OM_TURSO_TOKEN;
 const client = createClient({ url, authToken: token });
 
@@ -120,6 +120,7 @@ const update_db_version = async (ver: string) => {
 
 const check_column_exists = async (table: string, column: string): Promise<boolean> => {
     try {
+        assertSafeIdentifier(table, "table");
         const res = await client.execute(`PRAGMA table_info(${table})`);
         return res.rows.some((r: any) => r.name === column);
     } catch {
@@ -150,6 +151,9 @@ const quarantine_orphan_temporal_facts = async (): Promise<number> => {
 const compare_versions = (v1: string, v2: string) => {
     const a = v1.split(".").map(Number);
     const b = v2.split(".").map(Number);
+    // Pad arrays to 3 elements with 0 values
+    while (a.length < 3) a.push(0);
+    while (b.length < 3) b.push(0);
     for (let i = 0; i < 3; i++) {
         if (a[i] > b[i]) return 1;
         if (a[i] < b[i]) return -1;
