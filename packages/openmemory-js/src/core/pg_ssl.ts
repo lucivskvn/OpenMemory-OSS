@@ -48,7 +48,7 @@ export function resolvePgSsl(
         const caPath = env.OM_PG_SSL_CA;
         if (caPath) {
             try {
-                const ca = fs.readFileSync(caPath, "utf8");
+                const ca = fs.readFileSync(caPath, "utf8"); // Bun.file is async so sticking to readFileSync for sync requirement
                 return { rejectUnauthorized: true, ca };
             } catch (e: any) {
                 throw new Error(

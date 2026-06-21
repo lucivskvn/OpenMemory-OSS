@@ -188,9 +188,9 @@ export async function extractVideo(buffer: Buffer): Promise<ExtractionResult> {
                 .run();
         });
 
-        const audioBuffer = fs.readFileSync(audioPath);
+        const bufferObj = fs.readFileSync(audioPath);
 
-        const result = await extractAudio(audioBuffer, "audio/mpeg");
+        const result = await extractAudio(bufferObj, "audio/mpeg");
 
         result.metadata.content_type = "video";
         result.metadata.extraction_method = "ffmpeg+whisper";
