@@ -35,10 +35,10 @@ type q_type = {
     all_mem_by_user: {
         all: (user_id: string, limit: number, offset: number) => Promise<any[]>;
     };
-    get_segment_count: { get: (segment: number) => Promise<any> };
-    get_max_segment: { get: () => Promise<any> };
-    get_segments: { all: () => Promise<any[]> };
-    get_mem_by_segment: { all: (segment: number) => Promise<any[]> };
+    get_segment_count: { get: (segment: number, user_id?: string, project_id?: string) => Promise<any> };
+    get_max_segment: { get: (is_system?: boolean, user_id?: string, project_id?: string) => Promise<any> };
+    get_segments: { all: (is_system?: boolean, user_id?: string, project_id?: string) => Promise<any[]> };
+    get_mem_by_segment: { all: (segment: number, is_system?: boolean, user_id?: string, project_id?: string) => Promise<any[]> };
 
     ins_waypoint: { run: (...p: any[]) => Promise<void> };
     get_neighbors: { all: (src: string) => Promise<any[]> };
@@ -80,11 +80,20 @@ let txStmts: InStatement[] | null = null;
 const mapRow = (row: any) => {
     if (!row) return row;
     const result = { ...row };
-    if (result.content) {
-        result.content = decrypt(result.content as string);
+    if (result.content && typeof result.content === "string") {
+        result.content = decrypt(result.content);
     }
-    if (result.meta) {
-        result.meta = decrypt(result.meta as string);
+    if (result.meta && typeof result.meta === "string") {
+        result.meta = decrypt(result.meta);
+    }
+    if (result.summary && typeof result.summary === "string") {
+        result.summary = decrypt(result.summary);
+    }
+    if (result.object && typeof result.object === "string") {
+        result.object = decrypt(result.object);
+    }
+    if (result.metadata && typeof result.metadata === "string") {
+        result.metadata = decrypt(result.metadata);
     }
     return result;
 };
@@ -245,7 +254,54 @@ q = {
             );
         },
     },
-    del_mem: { run: (...p) => exec("delete from memories where id=?", p) },
+    del_mem: {
+        run: async (...p) => {
+            const id = p[0];
+            const user_id = p[1];
+            const project_id = p[2];
+            try {
+                await transaction.begin();
+                let sql = "delete from memories where id=?";
+                const params: any[] = [id];
+                if (user_id) { sql += " and user_id=?"; params.push(user_id); }
+                if (project_id) { sql += " and project_id=?"; params.push(project_id); }
+                await exec(sql, params);
+
+                /**
+                 * Cascading Temporal Graph Deletion
+                 * ---------------------------------
+                 * This deletes all facts originating from the source memory ID safely.
+                 * NOTE: High-volume enterprise deployments should index JSON extraction fields
+                 * (e.g. metadata) or maintain a relational source_id column on temporal_facts
+                 * to avoid full-table scan lock conditions associated with LIKE patterns.
+                 */
+                await exec("delete from temporal_facts where metadata like ?", ["%\"source_memory_id\":\"" + id + "\"%"]);
+                await transaction.commit();
+            } catch (err) {
+                await transaction.rollback();
+                throw err;
+            }
+
+            try {
+                if (vector_store) {
+                    await vector_store.deleteVectors(id);
+                }
+            } catch (vecErr) {
+                console.warn("[DB] Failed to delete vectors for id:", id, vecErr);
+                try {
+                    await q.ins_log.run(
+                        id + "_del_" + Date.now(),
+                        "vector_delete",
+                        "pending_delete",
+                        Date.now(),
+                        String(vecErr)
+                    );
+                } catch (logErr) {
+                    console.error("[DB] Failed to insert embed_log for vector deletion error", logErr);
+                }
+            }
+        }
+    },
     get_mem: {
         get: (id) => one("select * from memories where id=?", [id]),
     },
@@ -271,31 +327,48 @@ q = {
             ),
     },
     get_segment_count: {
-        get: (segment) =>
-            one("select count(*) as c from memories where segment=?", [
-                segment,
-            ]),
+        get: (segment, user_id, project_id) => {
+            let sql = "select count(*) as c from memories where segment=?";
+            const params: any[] = [segment];
+            if (user_id) { sql += " and user_id=?"; params.push(user_id); }
+            if (project_id) { sql += " and project_id=?"; params.push(project_id); }
+            return one(sql, params);
+        }
     },
     get_max_segment: {
-        get: () =>
-            one(
-                "select coalesce(max(segment), 0) as max_seg from memories",
-                [],
-            ),
+        get: (is_system = false, user_id, project_id) => {
+            let sql = "select coalesce(max(segment), 0) as max_seg from memories where 1=1";
+            const params: any[] = [];
+            if (!is_system) {
+                if (user_id) { sql += " and user_id=?"; params.push(user_id); }
+                if (project_id) { sql += " and project_id=?"; params.push(project_id); }
+            }
+            return one(sql, params);
+        }
     },
     get_segments: {
-        all: () =>
-            many(
-                "select distinct segment from memories order by segment desc",
-                [],
-            ),
+        all: (is_system = false, user_id, project_id) => {
+            let sql = "select distinct segment from memories where 1=1";
+            const params: any[] = [];
+            if (!is_system) {
+                if (user_id) { sql += " and user_id=?"; params.push(user_id); }
+                if (project_id) { sql += " and project_id=?"; params.push(project_id); }
+            }
+            sql += " order by segment desc";
+            return many(sql, params);
+        }
     },
     get_mem_by_segment: {
-        all: (segment) =>
-            many(
-                "select * from memories where segment=? order by created_at desc",
-                [segment],
-            ),
+        all: (segment, is_system = false, user_id, project_id) => {
+            let sql = "select * from memories where segment=?";
+            const params: any[] = [segment];
+            if (!is_system) {
+                if (user_id) { sql += " and user_id=?"; params.push(user_id); }
+                if (project_id) { sql += " and project_id=?"; params.push(project_id); }
+            }
+            sql += " order by created_at desc";
+            return many(sql, params);
+        }
     },
 
     ins_waypoint: {
