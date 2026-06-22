@@ -75,6 +75,7 @@ const token = env.OM_TURSO_TOKEN;
 const client = createClient({ url, authToken: token });
 
 let txStmts: InStatement[] | null = null;
+let activeTx: any = null;
 
 // Convert libSQL row array to object
 const mapRow = (row: any) => {
@@ -93,6 +94,10 @@ const mapRow = (row: any) => {
 const mapRows = (rows: any[]) => rows.map(mapRow);
 
 const exec = async (sql: string, args: any[] = []) => {
+    if (activeTx) {
+        await activeTx.execute({ sql, args });
+        return;
+    }
     if (txStmts) {
         txStmts.push({ sql, args });
         return;
@@ -101,21 +106,15 @@ const exec = async (sql: string, args: any[] = []) => {
 };
 
 const one = async (sql: string, args: any[] = []) => {
-    if (txStmts && txStmts.length > 0) {
-        await client.batch(txStmts, "write");
-        txStmts.length = 0;
-    }
-    const result = await client.execute({ sql, args });
+    const execTarget = activeTx || client;
+    const result = await execTarget.execute({ sql, args });
     if (result.rows.length === 0) return undefined;
     return mapRow(result.rows[0]);
 };
 
 const many = async (sql: string, args: any[] = []) => {
-    if (txStmts && txStmts.length > 0) {
-        await client.batch(txStmts, "write");
-        txStmts.length = 0;
-    }
-    const result = await client.execute({ sql, args });
+    const execTarget = activeTx || client;
+    const result = await execTarget.execute({ sql, args });
     return mapRows(result.rows);
 };
 
@@ -125,23 +124,43 @@ const all_async = many;
 
 transaction = {
     begin: async () => {
-        if (txStmts) {
+        if (activeTx) {
             throw new Error("Transaction already active");
         }
-        txStmts = [];
+        // Fall back to manual batching if client.transaction is not available
+        if (typeof client.transaction === 'function') {
+            activeTx = await client.transaction("write");
+        } else {
+            txStmts = [];
+        }
     },
     commit: async () => {
-        if (!txStmts) return;
-        try {
-            if (txStmts.length > 0) {
-                await client.batch(txStmts, "write");
+        if (activeTx) {
+            try {
+                await activeTx.commit();
+            } finally {
+                activeTx = null;
             }
-        } finally {
-            txStmts = null;
+        } else if (txStmts) {
+            try {
+                if (txStmts.length > 0) {
+                    await client.batch(txStmts, "write");
+                }
+            } finally {
+                txStmts = null;
+            }
         }
     },
     rollback: async () => {
-        txStmts = null;
+        if (activeTx) {
+            try {
+                await activeTx.rollback();
+            } finally {
+                activeTx = null;
+            }
+        } else {
+            txStmts = null;
+        }
     },
 };
 
