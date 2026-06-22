@@ -3,9 +3,9 @@ process.env.OM_EMBEDDING_FALLBACK = "synthetic";
 process.env.OM_METADATA_BACKEND = process.env.OM_METADATA_BACKEND || "sqlite";
 process.env.OM_VECTOR_BACKEND = process.env.OM_VECTOR_BACKEND || "sqlite";
 
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll } from "bun:test";
 import { Memory } from "../src/core/memory";
-import { env } from "../src/core/cfg";
+import { env } from "../src/core/config";
 import { all_async, run_async } from "../src/core/db";
 
 const SAMPLES = [
@@ -46,13 +46,13 @@ describe("verify: classifier behaviour snapshot", () => {
         rows = raw.map((r) => ({
             text: r.content,
             primary_sector: r.primary_sector,
-            vec_dim: r.mean_vec ? r.mean_vec.length / 4 : 0,
+            vec_dim: r.mean_vec ? r.mean_vec.byteLength / 4 : 0,
         }));
     });
 
     it("matches the classifier sector snapshot", () => {
         // Snapshot freezes current classifier behaviour. If this fails, the
-        // classifier changed: review the diff and update with `vitest -u`
+        // classifier changed: review the diff and update with `bun:test -u`
         // only if the new labels are intentional.
         expect(
             rows.map((r) => ({ text: r.text, sector: r.primary_sector })),

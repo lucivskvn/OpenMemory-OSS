@@ -1,12 +1,13 @@
+
 // Force synthetic embeddings BEFORE importing anything that loads cfg/db.
-// vitest.config.ts already sets this via env, but keep this here as a
+// bun:test.config.ts already sets this via env, but keep this here as a
 // belt-and-suspenders guard in case the spec is run standalone with tsx.
 process.env.OM_EMBEDDINGS = "synthetic";
 process.env.OM_EMBEDDING_FALLBACK = "synthetic";
 process.env.OM_METADATA_BACKEND = process.env.OM_METADATA_BACKEND || "sqlite";
 process.env.OM_VECTOR_BACKEND = process.env.OM_VECTOR_BACKEND || "sqlite";
 
-import { afterAll, beforeAll, describe, it } from "vitest";
+import { afterAll, beforeAll, describe, it } from "bun:test";
 import { Memory } from "../src/core/memory";
 import { run_async, q } from "../src/core/db";
 
@@ -70,16 +71,31 @@ describe("omnibus", () => {
         // 2. Evolution Loop
         for (let gen = 0; gen < 10; gen++) {
             // Advance 1 day per generation (86400000 ms)
-            mockTime! += 86400 * 1000;
+            if (mockTime !== null) {
+                mockTime += 86400 * 1000;
+            }
 
             // Reinforce Popular every other generation
             if (gen % 2 === 0) {
                 await mem.search("Popular", { user_id: uid, limit: 1 });
             }
+
+            // Advance the local memory engine tracker directly
+            const { reset_last_decay, apply_decay } = require("../src/memory/decay");
+            reset_last_decay();
+            await apply_decay();
         }
 
         // 3. Final Judgment
-        mockTime! += 86400 * 1000;
+        // Fast-forward the system timeline by exactly 24 hours
+        if (mockTime !== null) {
+            mockTime += 1000 * 60 * 60 * 24;
+        }
+
+        // Trigger decay recalculation using our controlled timeline
+        const decayModule = require("../src/memory/decay");
+        decayModule.reset_last_decay();
+        await decayModule.apply_decay();
 
         // Check Salience via DB directly to avoid search side-effects
         const pop_final = await q.get_mem.get(pid);

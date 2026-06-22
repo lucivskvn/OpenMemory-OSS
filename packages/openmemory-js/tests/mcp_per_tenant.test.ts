@@ -1,12 +1,12 @@
 // Force synthetic embeddings + sqlite backend BEFORE importing anything
-// that loads cfg/db. vitest.config.ts already sets these via env, but keep
+// that loads cfg/db. bun:test.config.ts already sets these via env, but keep
 // this guard for standalone tsx runs.
 process.env.OM_EMBEDDINGS = "synthetic";
 process.env.OM_EMBEDDING_FALLBACK = "synthetic";
 process.env.OM_METADATA_BACKEND = process.env.OM_METADATA_BACKEND || "sqlite";
 process.env.OM_VECTOR_BACKEND = process.env.OM_VECTOR_BACKEND || "sqlite";
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { create_mcp_srv } from "../src/ai/mcp";

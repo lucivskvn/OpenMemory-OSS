@@ -1,5 +1,5 @@
 import { canonical_tokens_from_text } from "./text";
-import { env } from "../core/cfg";
+import { env } from "../core/config";
 
 export interface keyword_match {
     id: string;

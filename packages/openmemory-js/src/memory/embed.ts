@@ -1,4 +1,4 @@
-﻿import { env, tier } from "../core/cfg";
+﻿import { env, tier } from "../core/config";
 import { get_model } from "../core/models";
 import { sector_configs } from "./hsg";
 import { q } from "../core/db";

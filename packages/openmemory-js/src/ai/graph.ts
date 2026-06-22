@@ -1,4 +1,4 @@
-import { env } from "../core/cfg";
+import { env } from "../core/config";
 import { add_hsg_memory, hsg_query } from "../memory/hsg";
 import { q, vector_store } from "../core/db";
 import { now, j } from "../utils";

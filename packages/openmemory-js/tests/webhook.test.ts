@@ -17,7 +17,7 @@
  * map verify.ok=false to HTTP 401 (or 503 when secret is unset).
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from "bun:test";
 import * as crypto from "crypto";
 import {
     verify_github_signature,

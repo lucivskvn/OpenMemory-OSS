@@ -78,6 +78,11 @@ const migrations: Migration[] = [
         ],
 
     },
+    {
+        version: "1.4.2",
+        desc: "Add summary column to memories for decay caching",
+        sqlite: () => ["ALTER TABLE memories ADD COLUMN summary text;"],
+    },
 ];
 
 const get_db_version = async (): Promise<string> => {
@@ -136,34 +141,53 @@ const compare_versions = (v1: string, v2: string) => {
     return 0;
 };
 
-const run_migrations = async () => {
+const apply_migration = async (m: Migration) => {
+    log(`Applying ${m.version}: ${m.desc}`);
+    try {
+        const sql_stmts = m.sqlite(resolved_vector_table);
+        if (sql_stmts.length > 0) {
+            await client.batch(sql_stmts.map(sql => ({ sql, args: [] })), "write");
+        }
+        await update_db_version(m.version);
+    } catch (e: any) {
+        // Ignore "duplicate column name" errors
+        if (
+            e.message &&
+            (e.message.includes("duplicate column name") ||
+             e.message.includes("already exists"))
+        ) {
+            log(`[WARN] ${m.desc} already applied partially, updating schema version.`);
+            await update_db_version(m.version);
+        } else {
+            log(`[FATAL] Migration ${m.version} failed: ${e.message}`);
+            throw e;
+        }
+    }
+};
+
+const ensure_last_seen_at = async () => {
+    const hasLastSeenAt = await check_column_exists("memories", "last_seen_at");
+    if (!hasLastSeenAt) {
+        try {
+            await client.execute("ALTER TABLE memories ADD COLUMN last_seen_at integer");
+            log("Added missing column last_seen_at");
+        } catch (e: any) {
+            if (!e.message.includes("duplicate column name")) {
+                console.error("Failed to add last_seen_at", e);
+                throw e;
+            }
+        }
+    }
+};
+
+export const run_migrations = async () => {
     log("Checking schema version via LibSQL...");
     const current_version = await get_db_version();
     log(`Current schema version: ${current_version}`);
 
     for (const m of migrations) {
         if (compare_versions(m.version, current_version) > 0) {
-            log(`Applying ${m.version}: ${m.desc}`);
-            try {
-                const sql_stmts = m.sqlite(resolved_vector_table);
-                if (sql_stmts.length > 0) {
-                    await client.batch(sql_stmts.map(sql => ({ sql, args: [] })), "write");
-                }
-                await update_db_version(m.version);
-            } catch (e: any) {
-                // Ignore "duplicate column name" errors
-                if (
-                    e.message &&
-                    (e.message.includes("duplicate column name") ||
-                     e.message.includes("already exists"))
-                ) {
-                    log(`[WARN] ${m.desc} already applied partially, updating schema version.`);
-                    await update_db_version(m.version);
-                } else {
-                    log(`[FATAL] Migration ${m.version} failed: ${e.message}`);
-                    process.exit(1);
-                }
-            }
+            await apply_migration(m);
         }
     }
 
@@ -175,23 +199,15 @@ const run_migrations = async () => {
         log("No orphaned temporal facts found.");
     }
 
-    const hasLastSeenAt = await check_column_exists("memories", "last_seen_at");
-    if (!hasLastSeenAt) {
-        try {
-            await client.execute("ALTER TABLE memories ADD COLUMN last_seen_at integer");
-            log("Added missing column last_seen_at");
-        } catch (e: any) {
-            if (!e.message.includes("duplicate column name")) {
-                console.error("Failed to add last_seen_at", e);
-            }
-        }
-    }
+    await ensure_last_seen_at();
 
     client.close();
     log("All migrations complete.");
 };
 
+if (require.main === module) {
 run_migrations().catch((err) => {
     console.error("Migration failed:", err);
     process.exit(1);
 });
+}

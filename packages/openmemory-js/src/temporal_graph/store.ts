@@ -1,5 +1,5 @@
 import { run_async, get_async, all_async } from "../core/db";
-import { env } from "../core/cfg";
+import { env } from "../core/config";
 import { TemporalFact, TemporalEdge } from "./types";
 import { randomUUID } from "crypto";
 

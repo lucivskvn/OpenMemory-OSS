@@ -1,5 +1,5 @@
 import { q, all_async, run_async } from "../../core/db";
-import { env } from "../../core/cfg";
+import { env } from "../../core/config";
 import * as fs from "fs";
 import * as path from "path";
 

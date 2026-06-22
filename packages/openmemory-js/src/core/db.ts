@@ -1,6 +1,4 @@
-import sqlite3 from "sqlite3";
-import { Pool, PoolClient } from "pg";
-import { env } from "./cfg";
+import { env } from "./config";
 import fs from "node:fs";
 import path from "node:path";
 import { VectorStore } from "./vector_store";
@@ -11,7 +9,8 @@ import {
     DbInitError,
     DEFAULT_VECTOR_TABLE,
 } from "./identifiers";
-import { resolvePgSsl } from "./pg_ssl";
+import { createClient, InStatement } from "@libsql/client";
+import { encrypt, decrypt } from "./crypto";
 
 const LEGACY_SQLITE_VECTOR_TABLE = "vectors";
 
@@ -52,879 +51,361 @@ type q_type = {
     upd_log: { run: (...p: any[]) => Promise<void> };
     get_pending_logs: { all: () => Promise<any[]> };
     get_failed_logs: { all: () => Promise<any[]> };
+
     ins_user: { run: (...p: any[]) => Promise<void> };
     get_user: { get: (user_id: string) => Promise<any> };
     upd_user_summary: { run: (...p: any[]) => Promise<void> };
+
     clear_all: { run: () => Promise<void> };
 };
 
-let run_async: (sql: string, p?: any[]) => Promise<void>;
-let get_async: (sql: string, p?: any[]) => Promise<any>;
-let all_async: (sql: string, p?: any[]) => Promise<any[]>;
+let q: q_type;
+
 let transaction: {
     begin: () => Promise<void>;
     commit: () => Promise<void>;
     rollback: () => Promise<void>;
 };
-let q: q_type;
+
+const memories_table = "memories";
 let vector_store: VectorStore;
-let memories_table: string;
 
-const is_pg = env.metadata_backend === "postgres";
+const url = env.OM_TURSO_URL || `file:${env.db_path || "./data/openmemory.sqlite"}`;
+const token = env.OM_TURSO_TOKEN;
+const client = createClient({ url, authToken: token });
 
-function convertPlaceholders(sql: string): string {
-    if (!is_pg) return sql;
-    let index = 1;
-    return sql.replace(/\?/g, () => `$${index++}`);
-}
+let txStmts: InStatement[] | null = null;
 
-if (is_pg) {
-    const ssl = resolvePgSsl(process.env);
-    const db_name_raw = process.env.OM_PG_DB || "openmemory";
-    const db_name = assertSafeIdentifier(db_name_raw, "OM_PG_DB");
-    const pool = (db: string) =>
-        new Pool({
-            host: process.env.OM_PG_HOST,
-            port: process.env.OM_PG_PORT ? +process.env.OM_PG_PORT : undefined,
-            database: db,
-            user: process.env.OM_PG_USER,
-            password: process.env.OM_PG_PASSWORD,
-            ssl,
-        });
-    let pg = pool(db_name);
-    let cli: PoolClient | null = null;
-    const sc = assertSafeIdentifier(
-        process.env.OM_PG_SCHEMA || "public",
-        "OM_PG_SCHEMA",
-    );
-    const memories_name = assertSafeIdentifier(
-        process.env.OM_PG_TABLE || "openmemory_memories",
-        "OM_PG_TABLE",
-    );
-    const vector_name = assertSafeIdentifier(
-        process.env.OM_VECTOR_TABLE || DEFAULT_VECTOR_TABLE,
-        "OM_VECTOR_TABLE",
-    );
-    const m = `"${sc}"."${memories_name}"`;
-    memories_table = m;
-    const v = `"${sc}"."${vector_name}"`;
-    const w = `"${sc}"."openmemory_waypoints"`;
-    const l = `"${sc}"."openmemory_embed_logs"`;
-    const f = `"${sc}"."openmemory_memories_fts"`;
-    const exec = async (sql: string, p: any[] = []) => {
-        const c = cli || pg;
-        return (await c.query(convertPlaceholders(sql), p)).rows;
-    };
-    run_async = async (sql, p = []) => {
-        await exec(sql, p);
-    };
-    get_async = async (sql, p = []) => (await exec(sql, p))[0];
-    all_async = async (sql, p = []) => await exec(sql, p);
-    transaction = {
-        begin: async () => {
-            if (cli) throw new Error("transaction active");
-            cli = await pg.connect();
-            await cli.query("BEGIN");
-        },
-        commit: async () => {
-            if (!cli) return;
-            try {
-                await cli.query("COMMIT");
-            } finally {
-                cli.release();
-                cli = null;
-            }
-        },
-        rollback: async () => {
-            if (!cli) return;
-            try {
-                await cli.query("ROLLBACK");
-            } finally {
-                cli.release();
-                cli = null;
-            }
-        },
-    };
-    let ready = false;
-    // Captures the first failure from init(); wait_ready and the public
-    // run/get/all wrappers below surface this as a tagged error instead of
-    // letting the package call process.exit() on the host application.
-    let initError: DbInitError | null = null;
-    const wait_ready = () =>
-        new Promise<void>((ok, no) => {
-            const check = () => {
-                if (initError) return no(initError);
-                if (ready) return ok();
-                setTimeout(check, 10);
-            };
-            check();
-        });
-    const init = async () => {
+// Convert libSQL row array to object
+const mapRow = (row: any) => {
+    if (!row) return row;
+    const result = { ...row };
+    if (result.content) {
+        result.content = decrypt(result.content as string);
+    }
+    if (result.meta) {
+        result.meta = decrypt(result.meta as string);
+    }
+    return result;
+};
+
+// Map row list
+const mapRows = (rows: any[]) => rows.map(mapRow);
+
+const exec = async (sql: string, args: any[] = []) => {
+    if (txStmts) {
+        txStmts.push({ sql, args });
+        return;
+    }
+    await client.execute({ sql, args });
+};
+
+const one = async (sql: string, args: any[] = []) => {
+    const result = await client.execute({ sql, args });
+    if (result.rows.length === 0) return undefined;
+    return mapRow(result.rows[0]);
+};
+
+const many = async (sql: string, args: any[] = []) => {
+    const result = await client.execute({ sql, args });
+    return mapRows(result.rows);
+};
+
+const run_async = exec;
+const get_async = one;
+const all_async = many;
+
+transaction = {
+    begin: async () => {
+        if (txStmts) {
+            throw new Error("Transaction already active");
+        }
+        txStmts = [];
+    },
+    commit: async () => {
+        if (!txStmts) return;
         try {
-            await pg.query("SELECT 1");
-        } catch (err: any) {
-            if (err.code === "3D000") {
-                const admin = pool("postgres");
-                try {
-                    // db_name has already been validated by assertSafeIdentifier above.
-                    await admin.query(`CREATE DATABASE "${db_name}"`);
-                    console.error(`[DB] Created ${db_name}`);
-                } catch (e: any) {
-                    if (e.code !== "42P04") throw e;
-                } finally {
-                    await admin.end();
-                }
-                pg = pool(db_name);
-                await pg.query("SELECT 1");
-            } else throw err;
+            if (txStmts.length > 0) {
+                await client.batch(txStmts, "write");
+            }
+        } finally {
+            txStmts = null;
         }
-        await pg.query(`create extension if not exists vector`);
-        console.error("[DB] pgvector extension enabled");
-        await pg.query(
-            `create table if not exists ${m}(id uuid primary key,user_id text,project_id text,segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,meta text,created_at bigint,updated_at bigint,last_seen_at bigint,salience double precision,decay_lambda double precision,version integer default 1,mean_dim integer,mean_vec bytea,compressed_vec bytea,feedback_score double precision default 0)`,
-        );
-        await pg.query(
-            `create table if not exists ${v}(id uuid,sector text,user_id text,project_id text,v vector,dim integer not null,primary key(id,sector))`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_vectors_hnsw_idx on ${v} using hnsw (v vector_cosine_ops)`,
-        );
-        console.error(`[DB] HNSW index created on ${v} for fast ANN queries`);
-        await pg.query(
-            `create table if not exists ${w}(src_id text,dst_id text not null,user_id text,project_id text,weight double precision not null,created_at bigint,updated_at bigint,primary key(src_id,user_id))`,
-        );
-        await pg.query(
-            `create table if not exists ${l}(id text primary key,model text,status text,ts bigint,err text)`,
-        );
-        await pg.query(
-            `create table if not exists "${sc}"."openmemory_users"(user_id text primary key,summary text,reflection_count integer default 0,created_at bigint,updated_at bigint)`,
-        );
-        await pg.query(
-            `create table if not exists "${sc}"."stats"(id serial primary key,type text not null,count integer default 1,ts bigint not null)`,
-        );
-        await pg.query(
-            `create table if not exists "${sc}"."temporal_facts"(id uuid primary key,user_id text,project_id text,subject text not null,predicate text not null,object text not null,valid_from bigint not null,valid_to bigint,confidence double precision not null check(confidence >= 0 and confidence <= 1),last_updated bigint not null,metadata text,unique(subject,predicate,object,valid_from))`,
-        );
-        await pg.query(
-            `create index if not exists temporal_facts_user_idx on "${sc}"."temporal_facts"(user_id)`,
-        );
-        await pg.query(
-            `create table if not exists "${sc}"."temporal_edges"(id uuid primary key,source_id uuid not null,target_id uuid not null,relation_type text not null,valid_from bigint not null,valid_to bigint,weight double precision not null,metadata text,foreign key(source_id) references "${sc}"."temporal_facts"(id),foreign key(target_id) references "${sc}"."temporal_facts"(id))`,
-        );
-        await pg.query(
-            `create index if not exists temporal_facts_subject_idx on "${sc}"."temporal_facts"(subject)`,
-        );
-        await pg.query(
-            `create index if not exists temporal_facts_predicate_idx on "${sc}"."temporal_facts"(predicate)`,
-        );
-        await pg.query(
-            `create index if not exists temporal_facts_validity_idx on "${sc}"."temporal_facts"(valid_from,valid_to)`,
-        );
-        await pg.query(
-            `create index if not exists temporal_facts_composite_idx on "${sc}"."temporal_facts"(subject,predicate,valid_from,valid_to)`,
-        );
-        await pg.query(
-            `create index if not exists temporal_edges_source_idx on "${sc}"."temporal_edges"(source_id)`,
-        );
-        await pg.query(
-            `create index if not exists temporal_edges_target_idx on "${sc}"."temporal_edges"(target_id)`,
-        );
-        await pg.query(
-            `create index if not exists temporal_edges_validity_idx on "${sc}"."temporal_edges"(valid_from,valid_to)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_memories_sector_idx on ${m}(primary_sector)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_memories_segment_idx on ${m}(segment)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_memories_simhash_idx on ${m}(simhash)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_memories_user_idx on ${m}(user_id)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_vectors_user_idx on ${v}(user_id)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_waypoints_user_idx on ${w}(user_id)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_stats_ts_idx on "${sc}"."stats"(ts)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_stats_type_idx on "${sc}"."stats"(type)`,
-        );
-        await pg.query(
-            `create index if not exists openmemory_stats_type_idx on "${sc}"."stats"(type)`,
-        );
-        ready = true;
+    },
+    rollback: async () => {
+        txStmts = null;
+    },
+};
 
-        if (env.vector_backend === "valkey") {
-            vector_store = new ValkeyVectorStore();
-            console.error("[DB] Using Valkey VectorStore");
-        } else {
-            // Pass the validated, schema-qualified identifier (with quotes)
-            // straight through; PostgresVectorStore interpolates it as-is.
-            vector_store = new PostgresVectorStore(
-                { run_async, get_async, all_async },
-                v,
-                true,
-            );
-            console.error(`[DB] Using Postgres VectorStore with table: ${v}`);
-        }
-    };
-    init().catch((err) => {
-        initError =
-            err instanceof DbInitError
-                ? err
-                : new DbInitError(
-                      `[OpenMemory] Postgres init failed: ${(err && err.message) || err}`,
-                      err,
-                  );
-        console.error("[DB] Init failed:", err);
-    });
-    const safe_exec = async (sql: string, p: any[] = []) => {
-        await wait_ready();
-        return exec(sql, p);
-    };
-    run_async = async (sql, p = []) => {
-        await safe_exec(sql, p);
-    };
-    get_async = async (sql, p = []) => (await safe_exec(sql, p))[0];
-    all_async = async (sql, p = []) => await safe_exec(sql, p);
-    const clean = (s: string) =>
-        s ? s.replace(/"/g, "").replace(/\s+OR\s+/gi, " OR ") : "";
-    q = {
-        ins_mem: {
-            run: (...p) =>
-                run_async(
-                    `insert into ${m}(id,user_id,project_id,segment,content,simhash,primary_sector,tags,meta,created_at,updated_at,last_seen_at,salience,decay_lambda,version,mean_dim,mean_vec,compressed_vec,feedback_score) values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) on conflict(id) do update set user_id=excluded.user_id,project_id=excluded.project_id,segment=excluded.segment,content=excluded.content,simhash=excluded.simhash,primary_sector=excluded.primary_sector,tags=excluded.tags,meta=excluded.meta,created_at=excluded.created_at,updated_at=excluded.updated_at,last_seen_at=excluded.last_seen_at,salience=excluded.salience,decay_lambda=excluded.decay_lambda,version=excluded.version,mean_dim=excluded.mean_dim,mean_vec=excluded.mean_vec,compressed_vec=excluded.compressed_vec,feedback_score=excluded.feedback_score`,
-                    p,
-                ),
-        },
-        upd_mean_vec: {
-            run: (...p) =>
-                run_async(
-                    `update ${m} set mean_dim=$2,mean_vec=$3 where id=$1`,
-                    p,
-                ),
-        },
-        upd_compressed_vec: {
-            run: (...p) =>
-                run_async(`update ${m} set compressed_vec=$2 where id=$1`, p),
-        },
-        upd_feedback: {
-            run: (...p) =>
-                run_async(`update ${m} set feedback_score=$2 where id=$1`, p),
-        },
-        upd_seen: {
-            run: (...p) =>
-                run_async(
-                    `update ${m} set last_seen_at=$2,salience=$3,updated_at=$4 where id=$1`,
-                    p,
-                ),
-        },
-        upd_mem: {
-            run: (...p) =>
-                run_async(
-                    `update ${m} set content=$1,tags=$2,meta=$3,updated_at=$4,version=version+1 where id=$5`,
-                    p,
-                ),
-        },
-        upd_mem_with_sector: {
-            run: (...p) =>
-                run_async(
-                    `update ${m} set content=$1,primary_sector=$2,tags=$3,meta=$4,updated_at=$5,version=version+1 where id=$6`,
-                    p,
-                ),
-        },
-        del_mem: {
-            run: (...p) => run_async(`delete from ${m} where id=$1`, p),
-        },
-        get_mem: {
-            get: (id) => get_async(`select * from ${m} where id=$1`, [id]),
-        },
-        get_mem_by_simhash: {
-            get: (simhash) =>
-                get_async(
-                    `select * from ${m} where simhash=$1 order by salience desc limit 1`,
-                    [simhash],
-                ),
-        },
-        all_mem: {
-            all: (limit, offset) =>
-                all_async(
-                    `select * from ${m} order by created_at desc limit $1 offset $2`,
-                    [limit, offset],
-                ),
-        },
-        all_mem_by_sector: {
-            all: (sector, limit, offset) =>
-                all_async(
-                    `select * from ${m} where primary_sector=$1 order by created_at desc limit $2 offset $3`,
-                    [sector, limit, offset],
-                ),
-        },
-        get_segment_count: {
-            get: (segment) =>
-                get_async(`select count(*) as c from ${m} where segment=$1`, [
-                    segment,
-                ]),
-        },
-        get_max_segment: {
-            get: () =>
-                get_async(
-                    `select coalesce(max(segment), 0) as max_seg from ${m}`,
-                    [],
-                ),
-        },
-        get_segments: {
-            all: () =>
-                all_async(
-                    `select distinct segment from ${m} order by segment desc`,
-                    [],
-                ),
-        },
-        get_mem_by_segment: {
-            all: (segment) =>
-                all_async(
-                    `select * from ${m} where segment=$1 order by created_at desc`,
-                    [segment],
-                ),
-        },
+const explicit_vector_table = process.env.OM_VECTOR_TABLE;
+const sqlite_vector_table = assertSafeIdentifier(
+    explicit_vector_table || DEFAULT_VECTOR_TABLE,
+    "OM_VECTOR_TABLE",
+);
 
-        ins_waypoint: {
-            run: (...p) =>
-                run_async(
-                    `insert into ${w}(src_id,dst_id,user_id,project_id,weight,created_at,updated_at) values($1,$2,$3,$4,$5,$6,$7) on conflict(src_id,user_id) do update set dst_id=excluded.dst_id,project_id=excluded.project_id,weight=excluded.weight,updated_at=excluded.updated_at`,
-                    p,
-                ),
-        },
-        get_neighbors: {
-            all: (src) =>
-                all_async(
-                    `select dst_id,weight from ${w} where src_id=$1 order by weight desc`,
-                    [src],
-                ),
-        },
-        get_waypoints_by_src: {
-            all: (src) =>
-                all_async(
-                    `select src_id,dst_id,weight,created_at,updated_at from ${w} where src_id=$1`,
-                    [src],
-                ),
-        },
-        get_waypoint: {
-            get: (src, dst) =>
-                get_async(
-                    `select weight from ${w} where src_id=$1 and dst_id=$2`,
-                    [src, dst],
-                ),
-        },
-        upd_waypoint: {
-            run: (...p) =>
-                run_async(
-                    `update ${w} set weight=$2,updated_at=$3 where src_id=$1 and dst_id=$4`,
-                    p,
-                ),
-        },
-        del_waypoints: {
-            run: (...p) =>
-                run_async(`delete from ${w} where src_id=$1 or dst_id=$2`, p),
-        },
-        prune_waypoints: {
-            run: (t) => run_async(`delete from ${w} where weight<$1`, [t]),
-        },
-        ins_log: {
-            run: (...p) =>
-                run_async(
-                    `insert into ${l}(id,model,status,ts,err) values($1,$2,$3,$4,$5) on conflict(id) do update set model=excluded.model,status=excluded.status,ts=excluded.ts,err=excluded.err`,
-                    p,
-                ),
-        },
-        upd_log: {
-            run: (...p) =>
-                run_async(`update ${l} set status=$2,err=$3 where id=$1`, p),
-        },
-        get_pending_logs: {
-            all: () =>
-                all_async(`select * from ${l} where status=$1`, ["pending"]),
-        },
-        get_failed_logs: {
-            all: () =>
-                all_async(
-                    `select * from ${l} where status=$1 order by ts desc limit 100`,
-                    ["failed"],
-                ),
-        },
-        all_mem_by_user: {
-            all: (user_id, limit, offset) =>
-                all_async(
-                    `select * from ${m} where user_id=$1 order by created_at desc limit $2 offset $3`,
-                    [user_id, limit, offset],
-                ),
-        },
-        ins_user: {
-            run: (...p) =>
-                run_async(
-                    `insert into "${sc}"."openmemory_users"(user_id,summary,reflection_count,created_at,updated_at) values($1,$2,$3,$4,$5) on conflict(user_id) do update set summary=excluded.summary,reflection_count=excluded.reflection_count,updated_at=excluded.updated_at`,
-                    p,
-                ),
-        },
-        get_user: {
-            get: (user_id) =>
-                get_async(
-                    `select * from "${sc}"."openmemory_users" where user_id=$1`,
-                    [user_id],
-                ),
-        },
-        upd_user_summary: {
-            run: (...p) =>
-                run_async(
-                    `update "${sc}"."openmemory_users" set summary=$2,reflection_count=reflection_count+1,updated_at=$3 where user_id=$1`,
-                    p,
-                ),
-        },
-        clear_all: {
-            run: async () => {
-                await run_async(`delete from ${m}`);
-                await run_async(`delete from ${v}`);
-                await run_async(`delete from ${w}`);
-                await run_async(`delete from "${sc}"."openmemory_users"`);
-            },
-        },
-    };
+if (env.vector_backend === "valkey") {
+    vector_store = new ValkeyVectorStore();
+    console.error("[DB] Using Valkey VectorStore");
 } else {
-    const db_path =
-        env.db_path || path.resolve(__dirname, "../../data/openmemory.sqlite");
-    const dir = path.dirname(db_path);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    const db = new sqlite3.Database(db_path);
-
-    // Default vector table name now matches the Postgres backend
-    // (`openmemory_vectors`). If a deployment sets OM_VECTOR_TABLE
-    // explicitly we honor it, but only after validating it's a safe
-    // SQL identifier — it gets interpolated into raw CREATE/DELETE SQL.
-    const explicit_vector_table = process.env.OM_VECTOR_TABLE;
-    const sqlite_vector_table = assertSafeIdentifier(
-        explicit_vector_table || DEFAULT_VECTOR_TABLE,
-        "OM_VECTOR_TABLE",
+    // PostgresVectorStore is used for SQLite as well, just renamed
+    vector_store = new PostgresVectorStore(
+        { run_async, get_async, all_async },
+        sqlite_vector_table,
     );
-
-    // Backward-compat warning: pre-1.4 SQLite databases used `vectors`.
-    // We don't auto-rename (data risk) — surface a one-time hint instead
-    // so operators can run the migration manually.
-    if (!explicit_vector_table) {
-        db.get(
-            `SELECT name FROM sqlite_master WHERE type='table' AND name=?`,
-            [LEGACY_SQLITE_VECTOR_TABLE],
-            (err, row: any) => {
-                if (err) return;
-                if (row && sqlite_vector_table !== LEGACY_SQLITE_VECTOR_TABLE) {
-                    console.warn(
-                        `[OpenMemory][DB] Detected legacy SQLite vector table "${LEGACY_SQLITE_VECTOR_TABLE}" but the canonical default is now "${DEFAULT_VECTOR_TABLE}". ` +
-                            `Either set OM_VECTOR_TABLE=${LEGACY_SQLITE_VECTOR_TABLE} to keep using it, or run: ` +
-                            `ALTER TABLE ${LEGACY_SQLITE_VECTOR_TABLE} RENAME TO ${DEFAULT_VECTOR_TABLE};`,
-                    );
-                }
-            },
-        );
-    }
-
-    db.serialize(() => {
-        db.run("PRAGMA journal_mode=WAL");
-        db.run("PRAGMA synchronous=NORMAL");
-        db.run("PRAGMA temp_store=MEMORY");
-        db.run("PRAGMA cache_size=-8000");
-        db.run("PRAGMA mmap_size=134217728");
-        // Foreign keys are required by the temporal_edges -> temporal_facts
-        // relation. SQLite defaults to OFF for backwards compatibility, so
-        // we have to enable it explicitly.
-        db.run("PRAGMA foreign_keys=ON");
-        db.run("PRAGMA wal_autocheckpoint=20000");
-        db.run("PRAGMA locking_mode=NORMAL");
-        db.run("PRAGMA busy_timeout=5000");
-        db.run(
-            `create table if not exists memories(id text primary key,user_id text,project_id text,segment integer default 0,content text not null,simhash text,primary_sector text not null,tags text,meta text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0)`,
-        );
-        db.run(
-            `create table if not exists ${sqlite_vector_table}(id text not null,sector text not null,user_id text,project_id text,v blob not null,dim integer not null,primary key(id,sector))`,
-        );
-        db.run(
-            `create table if not exists waypoints(src_id text,dst_id text not null,user_id text,project_id text,weight real not null,created_at integer,updated_at integer,primary key(src_id,user_id))`,
-        );
-        db.run(
-            `create table if not exists embed_logs(id text primary key,model text,status text,ts integer,err text)`,
-        );
-        db.run(
-            `create table if not exists users(user_id text primary key,summary text,reflection_count integer default 0,created_at integer,updated_at integer)`,
-        );
-        db.run(
-            `create table if not exists stats(id integer primary key autoincrement,type text not null,count integer default 1,ts integer not null)`,
-        );
-        db.run(
-            `create table if not exists temporal_facts(id text primary key,user_id text,project_id text,subject text not null,predicate text not null,object text not null,valid_from integer not null,valid_to integer,confidence real not null check(confidence >= 0 and confidence <= 1),last_updated integer not null,metadata text,unique(subject,predicate,object,valid_from))`,
-        );
-        db.run(
-            "create index if not exists idx_temporal_user on temporal_facts(user_id)",
-        );
-        db.run(
-            `create table if not exists temporal_edges(id text primary key,source_id text not null,target_id text not null,relation_type text not null,valid_from integer not null,valid_to integer,weight real not null,metadata text,foreign key(source_id) references temporal_facts(id),foreign key(target_id) references temporal_facts(id))`,
-        );
-        db.run(
-            "create index if not exists idx_memories_sector on memories(primary_sector)",
-        );
-        db.run(
-            "create index if not exists idx_memories_segment on memories(segment)",
-        );
-        db.run(
-            "create index if not exists idx_memories_simhash on memories(simhash)",
-        );
-        db.run(
-            "create index if not exists idx_memories_ts on memories(last_seen_at)",
-        );
-        db.run(
-            "create index if not exists idx_memories_user on memories(user_id)",
-        );
-        db.run(
-            `create index if not exists idx_vectors_user on ${sqlite_vector_table}(user_id)`,
-        );
-        db.run(
-            "create index if not exists idx_waypoints_src on waypoints(src_id)",
-        );
-        db.run(
-            "create index if not exists idx_waypoints_dst on waypoints(dst_id)",
-        );
-        db.run(
-            "create index if not exists idx_waypoints_user on waypoints(user_id)",
-        );
-        db.run("create index if not exists idx_stats_ts on stats(ts)");
-        db.run("create index if not exists idx_stats_type on stats(type)");
-        db.run(
-            "create index if not exists idx_temporal_subject on temporal_facts(subject)",
-        );
-        db.run(
-            "create index if not exists idx_temporal_predicate on temporal_facts(predicate)",
-        );
-        db.run(
-            "create index if not exists idx_temporal_validity on temporal_facts(valid_from,valid_to)",
-        );
-        db.run(
-            "create index if not exists idx_temporal_composite on temporal_facts(subject,predicate,valid_from,valid_to)",
-        );
-        db.run(
-            "create index if not exists idx_edges_source on temporal_edges(source_id)",
-        );
-        db.run(
-            "create index if not exists idx_edges_target on temporal_edges(target_id)",
-        );
-        db.run(
-            "create index if not exists idx_edges_validity on temporal_edges(valid_from,valid_to)",
-        );
-        db.run(
-            "create index if not exists idx_edges_validity on temporal_edges(valid_from,valid_to)",
-        );
-    });
-    memories_table = "memories";
-    const exec = (sql: string, p: any[] = []) =>
-        new Promise<void>((ok, no) =>
-            db.run(sql, p, (err) => (err ? no(err) : ok())),
-        );
-    const one = (sql: string, p: any[] = []) =>
-        new Promise<any>((ok, no) =>
-            db.get(sql, p, (err, row) => (err ? no(err) : ok(row))),
-        );
-    const many = (sql: string, p: any[] = []) =>
-        new Promise<any[]>((ok, no) =>
-            db.all(sql, p, (err, rows) => (err ? no(err) : ok(rows))),
-        );
-    run_async = exec;
-    get_async = one;
-    all_async = many;
-
-    if (env.vector_backend === "valkey") {
-        vector_store = new ValkeyVectorStore();
-        console.error("[DB] Using Valkey VectorStore");
-    } else {
-        vector_store = new PostgresVectorStore(
-            { run_async, get_async, all_async },
-            sqlite_vector_table,
-        );
-        console.error(
-            `[DB] Using SQLite VectorStore with table: ${sqlite_vector_table}`,
-        );
-    }
-
-    class Mutex {
-        private mutex = Promise.resolve();
-        lock(): Promise<() => void> {
-            let unlock: (value?: void) => void = () => {};
-            const willUnlock = new Promise<void>((resolve) => {
-                unlock = resolve;
-            });
-            const willAcquire = this.mutex.then(() => unlock);
-            this.mutex = this.mutex.then(() => willUnlock);
-            return willAcquire;
-        }
-    }
-    const txLock = new Mutex();
-    let releaseTx: (() => void) | null = null;
-
-    transaction = {
-        begin: async () => {
-            /*
-            if (releaseTx) {
-
-                throw new Error("Transaction already active via lock");
-            }
-            */
-            const release = await txLock.lock();
-            releaseTx = release;
-            try {
-                await exec("BEGIN TRANSACTION");
-            } catch (e) {
-                releaseTx();
-                releaseTx = null;
-                throw e;
-            }
-        },
-        commit: async () => {
-            if (!releaseTx) return;
-            try {
-                await exec("COMMIT");
-            } finally {
-                releaseTx();
-                releaseTx = null;
-            }
-        },
-        rollback: async () => {
-            if (!releaseTx) return;
-            try {
-                await exec("ROLLBACK");
-            } finally {
-                releaseTx();
-                releaseTx = null;
-            }
-        },
-    };
-    q = {
-        ins_mem: {
-            run: (...p) =>
-                exec(
-                    "insert into memories(id,user_id,project_id,segment,content,simhash,primary_sector,tags,meta,created_at,updated_at,last_seen_at,salience,decay_lambda,version,mean_dim,mean_vec,compressed_vec,feedback_score) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    p,
-                ),
-        },
-        upd_mean_vec: {
-            run: (...p) =>
-                exec("update memories set mean_dim=?,mean_vec=? where id=?", [
-                    p[1],
-                    p[2],
-                    p[0],
-                ]),
-        },
-        upd_compressed_vec: {
-            run: (...p) =>
-                exec("update memories set compressed_vec=? where id=?", p),
-        },
-        upd_feedback: {
-            run: (...p) =>
-                exec("update memories set feedback_score=? where id=?", p),
-        },
-        upd_seen: {
-            run: (...p) =>
-                exec(
-                    "update memories set last_seen_at=?,salience=?,updated_at=? where id=?",
-                    p,
-                ),
-        },
-        upd_mem: {
-            run: (...p) =>
-                exec(
-                    "update memories set content=?,tags=?,meta=?,updated_at=?,version=version+1 where id=?",
-                    p,
-                ),
-        },
-        upd_mem_with_sector: {
-            run: (...p) =>
-                exec(
-                    "update memories set content=?,primary_sector=?,tags=?,meta=?,updated_at=?,version=version+1 where id=?",
-                    p,
-                ),
-        },
-        del_mem: { run: (...p) => exec("delete from memories where id=?", p) },
-        get_mem: {
-            get: (id) => one("select * from memories where id=?", [id]),
-        },
-        get_mem_by_simhash: {
-            get: (simhash) =>
-                one(
-                    "select * from memories where simhash=? order by salience desc limit 1",
-                    [simhash],
-                ),
-        },
-        all_mem: {
-            all: (limit, offset) =>
-                many(
-                    "select * from memories order by created_at desc limit ? offset ?",
-                    [limit, offset],
-                ),
-        },
-        all_mem_by_sector: {
-            all: (sector, limit, offset) =>
-                many(
-                    "select * from memories where primary_sector=? order by created_at desc limit ? offset ?",
-                    [sector, limit, offset],
-                ),
-        },
-        get_segment_count: {
-            get: (segment) =>
-                one("select count(*) as c from memories where segment=?", [
-                    segment,
-                ]),
-        },
-        get_max_segment: {
-            get: () =>
-                one(
-                    "select coalesce(max(segment), 0) as max_seg from memories",
-                    [],
-                ),
-        },
-        get_segments: {
-            all: () =>
-                many(
-                    "select distinct segment from memories order by segment desc",
-                    [],
-                ),
-        },
-        get_mem_by_segment: {
-            all: (segment) =>
-                many(
-                    "select * from memories where segment=? order by created_at desc",
-                    [segment],
-                ),
-        },
-
-        ins_waypoint: {
-            run: (...p) =>
-                exec(
-                    "insert or replace into waypoints(src_id,dst_id,user_id,project_id,weight,created_at,updated_at) values(?,?,?,?,?,?,?)",
-                    p,
-                ),
-        },
-        get_neighbors: {
-            all: (src) =>
-                many(
-                    "select dst_id,weight from waypoints where src_id=? order by weight desc",
-                    [src],
-                ),
-        },
-        get_waypoints_by_src: {
-            all: (src) =>
-                many(
-                    "select src_id,dst_id,weight,created_at,updated_at from waypoints where src_id=?",
-                    [src],
-                ),
-        },
-        get_waypoint: {
-            get: (src, dst) =>
-                one(
-                    "select weight from waypoints where src_id=? and dst_id=?",
-                    [src, dst],
-                ),
-        },
-        upd_waypoint: {
-            run: (...p) =>
-                exec(
-                    "update waypoints set weight=?,updated_at=? where src_id=? and dst_id=?",
-                    p,
-                ),
-        },
-        del_waypoints: {
-            run: (...p) =>
-                exec("delete from waypoints where src_id=? or dst_id=?", p),
-        },
-        prune_waypoints: {
-            run: (t) => exec("delete from waypoints where weight<?", [t]),
-        },
-        ins_log: {
-            run: (...p) =>
-                exec(
-                    "insert or replace into embed_logs(id,model,status,ts,err) values(?,?,?,?,?)",
-                    p,
-                ),
-        },
-        upd_log: {
-            run: (...p) =>
-                exec("update embed_logs set status=?,err=? where id=?", p),
-        },
-        get_pending_logs: {
-            all: () =>
-                many("select * from embed_logs where status=?", ["pending"]),
-        },
-        get_failed_logs: {
-            all: () =>
-                many(
-                    "select * from embed_logs where status=? order by ts desc limit 100",
-                    ["failed"],
-                ),
-        },
-        all_mem_by_user: {
-            all: (user_id, limit, offset) =>
-                many(
-                    "select * from memories where user_id=? order by created_at desc limit ? offset ?",
-                    [user_id, limit, offset],
-                ),
-        },
-        ins_user: {
-            run: (...p) =>
-                exec(
-                    "insert into users(user_id,summary,reflection_count,created_at,updated_at) values(?,?,?,?,?) on conflict(user_id) do update set summary=excluded.summary,reflection_count=excluded.reflection_count,updated_at=excluded.updated_at",
-                    p,
-                ),
-        },
-        get_user: {
-            get: (user_id) =>
-                one("select * from users where user_id=?", [user_id]),
-        },
-        upd_user_summary: {
-            run: (...p) =>
-                exec(
-                    "update users set summary=?,reflection_count=reflection_count+1,updated_at=? where user_id=?",
-                    p,
-                ),
-        },
-        clear_all: {
-            run: async () => {
-                await exec("delete from memories");
-                await exec("delete from waypoints");
-                await exec("delete from users");
-
-                // sqlite_vector_table is already validated above and matches
-                // whatever this process actually created CREATE TABLE for.
-                await exec(`delete from ${sqlite_vector_table}`);
-            },
-        },
-    };
+    console.error(
+        `[DB] Using VectorStore with table: ${sqlite_vector_table}`,
+    );
 }
+
+export const init_tables = async () => {
+    const SCHEMA_TABLES = [
+        `create table if not exists memories(id text primary key,user_id text,project_id text,segment integer default 0,content text not null,summary text,simhash text,primary_sector text not null,tags text,meta text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0,coactivations integer default 0)`,
+        `create table if not exists openmemory_vectors(id text not null,project_id text,sector text not null,user_id text,v blob not null,dim integer not null,primary key(id,sector))`,
+        `create table if not exists waypoints(src_id text,dst_id text not null,user_id text,project_id text,weight real not null,created_at integer,updated_at integer,primary key(src_id,user_id))`,
+        `create table if not exists embed_logs(id text primary key,model text,status text,ts integer,err text)`,
+        `create table if not exists users(user_id text primary key,summary text,reflection_count integer default 0,created_at integer,updated_at integer)`,
+        `create table if not exists stats(id integer primary key autoincrement,type text not null,count integer default 1,ts integer not null)`,
+        `create table if not exists temporal_facts(id text primary key,user_id text,project_id text,subject text not null,predicate text not null,object text not null,valid_from integer not null,valid_to integer,confidence real not null check(confidence >= 0 and confidence <= 1),last_updated integer not null,metadata text,unique(subject,predicate,object,valid_from))`,
+        `create table if not exists temporal_edges(id text primary key,source_id text not null,target_id text not null,relation_type text not null,valid_from integer not null,valid_to integer,weight real not null,metadata text,foreign key(source_id) references temporal_facts(id),foreign key(target_id) references temporal_facts(id))`
+    ];
+    for (const sql of SCHEMA_TABLES) {
+        await exec(sql);
+    }
+};
+
+q = {
+    ins_mem: {
+        run: (...p) => {
+            // p[4] is content, p[8] is meta
+            const encryptedP = [...p];
+            if (encryptedP[4] !== undefined && encryptedP[4] !== null) {
+                encryptedP[4] = encrypt(encryptedP[4]);
+            }
+            if (encryptedP[8] !== undefined && encryptedP[8] !== null) {
+                encryptedP[8] = encrypt(encryptedP[8]);
+            }
+            return exec(
+                "insert into memories(id,user_id,project_id,segment,content,simhash,primary_sector,tags,meta,created_at,updated_at,last_seen_at,salience,decay_lambda,version,mean_dim,mean_vec,compressed_vec,feedback_score) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) on conflict(id) do update set user_id=excluded.user_id, project_id=excluded.project_id,segment=excluded.segment,content=excluded.content,simhash=excluded.simhash,primary_sector=excluded.primary_sector,tags=excluded.tags,meta=excluded.meta,created_at=excluded.created_at,updated_at=excluded.updated_at,last_seen_at=excluded.last_seen_at,salience=excluded.salience,decay_lambda=excluded.decay_lambda,version=excluded.version,mean_dim=excluded.mean_dim,mean_vec=excluded.mean_vec,compressed_vec=excluded.compressed_vec,feedback_score=excluded.feedback_score",
+                encryptedP,
+            );
+        },
+    },
+    upd_mean_vec: {
+        run: (...p) =>
+            exec("update memories set mean_dim=?,mean_vec=? where id=?", [
+                p[1],
+                p[2],
+                p[0],
+            ]),
+    },
+    upd_compressed_vec: {
+        run: (...p) =>
+            exec("update memories set compressed_vec=? where id=?", p),
+    },
+    upd_feedback: {
+        run: (...p) =>
+            exec("update memories set feedback_score=? where id=?", p),
+    },
+    upd_seen: {
+        run: (...p) =>
+            exec(
+                "update memories set last_seen_at=?,salience=?,updated_at=? where id=?",
+                p,
+            ),
+    },
+    upd_mem: {
+        run: (...p) => {
+            // content, tags, meta, updated_at, id
+            const encryptedP = [...p];
+            if (encryptedP[0] !== undefined && encryptedP[0] !== null) {
+                encryptedP[0] = encrypt(encryptedP[0]);
+            }
+            if (encryptedP[2] !== undefined && encryptedP[2] !== null) {
+                encryptedP[2] = encrypt(encryptedP[2]);
+            }
+            return exec(
+                "update memories set content=?,tags=?,meta=?,updated_at=?,version=version+1 where id=?",
+                encryptedP,
+            );
+        },
+    },
+    upd_mem_with_sector: {
+        run: (...p) => {
+            // content, primary_sector, tags, meta, updated_at, id
+            const encryptedP = [...p];
+            if (encryptedP[0] !== undefined && encryptedP[0] !== null) {
+                encryptedP[0] = encrypt(encryptedP[0]);
+            }
+            if (encryptedP[3] !== undefined && encryptedP[3] !== null) {
+                encryptedP[3] = encrypt(encryptedP[3]);
+            }
+            return exec(
+                "update memories set content=?,primary_sector=?,tags=?,meta=?,updated_at=?,version=version+1 where id=?",
+                encryptedP,
+            );
+        },
+    },
+    del_mem: { run: (...p) => exec("delete from memories where id=?", p) },
+    get_mem: {
+        get: (id) => one("select * from memories where id=?", [id]),
+    },
+    get_mem_by_simhash: {
+        get: (simhash) =>
+            one(
+                "select * from memories where simhash=? order by salience desc limit 1",
+                [simhash],
+            ),
+    },
+    all_mem: {
+        all: (limit, offset) =>
+            many(
+                "select * from memories order by created_at desc limit ? offset ?",
+                [limit, offset],
+            ),
+    },
+    all_mem_by_sector: {
+        all: (sector, limit, offset) =>
+            many(
+                "select * from memories where primary_sector=? order by created_at desc limit ? offset ?",
+                [sector, limit, offset],
+            ),
+    },
+    get_segment_count: {
+        get: (segment) =>
+            one("select count(*) as c from memories where segment=?", [
+                segment,
+            ]),
+    },
+    get_max_segment: {
+        get: () =>
+            one(
+                "select coalesce(max(segment), 0) as max_seg from memories",
+                [],
+            ),
+    },
+    get_segments: {
+        all: () =>
+            many(
+                "select distinct segment from memories order by segment desc",
+                [],
+            ),
+    },
+    get_mem_by_segment: {
+        all: (segment) =>
+            many(
+                "select * from memories where segment=? order by created_at desc",
+                [segment],
+            ),
+    },
+
+    ins_waypoint: {
+        run: (...p) =>
+            exec(
+                "insert into waypoints(src_id,dst_id,user_id,project_id,weight,created_at,updated_at) values(?,?,?,?,?,?,?) on conflict(src_id, user_id) do update set dst_id=excluded.dst_id,project_id=excluded.project_id, weight=excluded.weight, created_at=excluded.created_at, updated_at=excluded.updated_at",
+                p,
+            ),
+    },
+    get_neighbors: {
+        all: (src) =>
+            many(
+                "select dst_id,weight from waypoints where src_id=? order by weight desc",
+                [src],
+            ),
+    },
+    get_waypoints_by_src: {
+        all: (src) =>
+            many(
+                "select src_id,dst_id,weight,created_at,updated_at from waypoints where src_id=?",
+                [src],
+            ),
+    },
+    get_waypoint: {
+        get: (src, dst) =>
+            one(
+                "select weight from waypoints where src_id=? and dst_id=?",
+                [src, dst],
+            ),
+    },
+    upd_waypoint: {
+        run: (...p) =>
+            exec(
+                "update waypoints set weight=?,updated_at=? where src_id=? and dst_id=?",
+                p,
+            ),
+    },
+    del_waypoints: {
+        run: (...p) =>
+            exec("delete from waypoints where src_id=? or dst_id=?", p),
+    },
+    prune_waypoints: {
+        run: (t) => exec("delete from waypoints where weight<?", [t]),
+    },
+    ins_log: {
+        run: (...p) =>
+            exec(
+                "insert into embed_logs(id,model,status,ts,err) values(?,?,?,?,?) on conflict (id) do update set model=excluded.model, status=excluded.status, ts=excluded.ts, err=excluded.err",
+                p,
+            ),
+    },
+    upd_log: {
+        run: (...p) =>
+            exec("update embed_logs set status=?,err=? where id=?", p),
+    },
+    get_pending_logs: {
+        all: () =>
+            many("select * from embed_logs where status=?", ["pending"]),
+    },
+    get_failed_logs: {
+        all: () =>
+            many(
+                "select * from embed_logs where status=? order by ts desc limit 100",
+                ["failed"],
+            ),
+    },
+    all_mem_by_user: {
+        all: (user_id, limit, offset) =>
+            many(
+                "select * from memories where user_id=? order by created_at desc limit ? offset ?",
+                [user_id, limit, offset],
+            ),
+    },
+    ins_user: {
+        run: (...p) =>
+            exec(
+                "insert into users(user_id,summary,reflection_count,created_at,updated_at) values(?,?,?,?,?) on conflict(user_id) do update set summary=excluded.summary,reflection_count=excluded.reflection_count,updated_at=excluded.updated_at",
+                p,
+            ),
+    },
+    get_user: {
+        get: (user_id) =>
+            one("select * from users where user_id=?", [user_id]),
+    },
+    upd_user_summary: {
+        run: (...p) =>
+            exec(
+                "update users set summary=?,reflection_count=reflection_count+1,updated_at=? where user_id=?",
+                p,
+            ),
+    },
+    clear_all: {
+        run: async () => {
+            await exec("delete from memories");
+            await exec("delete from waypoints");
+            await exec("delete from users");
+
+            // sqlite_vector_table is already validated above and matches
+            // whatever this process actually created CREATE TABLE for.
+            await exec(`delete from ${sqlite_vector_table}`);
+        },
+    },
+};
 
 export const log_maint_op = async (
     type: "decay" | "reflect" | "consolidate",
     cnt = 1,
 ) => {
     try {
-        let sql: string;
-        if (is_pg) {
-            const sc = assertSafeIdentifier(
-                process.env.OM_PG_SCHEMA || "public",
-                "OM_PG_SCHEMA",
-            );
-            sql = `insert into "${sc}"."stats"(type,count,ts) values($1,$2,$3)`;
-        } else {
-            sql = "insert into stats(type,count,ts) values(?,?,?)";
-        }
+        const sql = "insert into stats(type,count,ts) values(?,?,?)";
         await run_async(sql, [type, cnt, Date.now()]);
     } catch (e) {
         console.error("[DB] Maintenance log error:", e);
