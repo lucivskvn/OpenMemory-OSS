@@ -75,7 +75,6 @@ const token = env.OM_TURSO_TOKEN;
 const client = createClient({ url, authToken: token });
 
 let txStmts: InStatement[] | null = null;
-let activeTx: any = null;
 
 // Convert libSQL row array to object
 const mapRow = (row: any) => {
@@ -94,10 +93,6 @@ const mapRow = (row: any) => {
 const mapRows = (rows: any[]) => rows.map(mapRow);
 
 const exec = async (sql: string, args: any[] = []) => {
-    if (activeTx) {
-        await activeTx.execute({ sql, args });
-        return;
-    }
     if (txStmts) {
         txStmts.push({ sql, args });
         return;
@@ -106,15 +101,13 @@ const exec = async (sql: string, args: any[] = []) => {
 };
 
 const one = async (sql: string, args: any[] = []) => {
-    const execTarget = activeTx || client;
-    const result = await execTarget.execute({ sql, args });
+    const result = await client.execute({ sql, args });
     if (result.rows.length === 0) return undefined;
     return mapRow(result.rows[0]);
 };
 
 const many = async (sql: string, args: any[] = []) => {
-    const execTarget = activeTx || client;
-    const result = await execTarget.execute({ sql, args });
+    const result = await client.execute({ sql, args });
     return mapRows(result.rows);
 };
 
@@ -124,43 +117,23 @@ const all_async = many;
 
 transaction = {
     begin: async () => {
-        if (activeTx) {
+        if (txStmts) {
             throw new Error("Transaction already active");
         }
-        // Fall back to manual batching if client.transaction is not available
-        if (typeof client.transaction === 'function') {
-            activeTx = await client.transaction("write");
-        } else {
-            txStmts = [];
-        }
+        txStmts = [];
     },
     commit: async () => {
-        if (activeTx) {
-            try {
-                await activeTx.commit();
-            } finally {
-                activeTx = null;
+        if (!txStmts) return;
+        try {
+            if (txStmts.length > 0) {
+                await client.batch(txStmts, "write");
             }
-        } else if (txStmts) {
-            try {
-                if (txStmts.length > 0) {
-                    await client.batch(txStmts, "write");
-                }
-            } finally {
-                txStmts = null;
-            }
+        } finally {
+            txStmts = null;
         }
     },
     rollback: async () => {
-        if (activeTx) {
-            try {
-                await activeTx.rollback();
-            } finally {
-                activeTx = null;
-            }
-        } else {
-            txStmts = null;
-        }
+        txStmts = null;
     },
 };
 
@@ -203,16 +176,13 @@ export const init_tables = async () => {
 q = {
     ins_mem: {
         run: (...p) => {
-            // Parameters: id, user_id, project_id, segment, content, simhash, primary_sector, tags, meta, ...
-            // Index 4 = content, Index 8 = meta
-            const CONTENT_INDEX = 4;
-            const META_INDEX = 8;
+            // p[4] is content, p[8] is meta
             const encryptedP = [...p];
-            if (encryptedP[CONTENT_INDEX] !== undefined && encryptedP[CONTENT_INDEX] !== null) {
-                encryptedP[CONTENT_INDEX] = encrypt(encryptedP[CONTENT_INDEX]);
+            if (encryptedP[4] !== undefined && encryptedP[4] !== null) {
+                encryptedP[4] = encrypt(encryptedP[4]);
             }
-            if (encryptedP[META_INDEX] !== undefined && encryptedP[META_INDEX] !== null) {
-                encryptedP[META_INDEX] = encrypt(encryptedP[META_INDEX]);
+            if (encryptedP[8] !== undefined && encryptedP[8] !== null) {
+                encryptedP[8] = encrypt(encryptedP[8]);
             }
             return exec(
                 "insert into memories(id,user_id,project_id,segment,content,simhash,primary_sector,tags,meta,created_at,updated_at,last_seen_at,salience,decay_lambda,version,mean_dim,mean_vec,compressed_vec,feedback_score) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) on conflict(id) do update set user_id=excluded.user_id, project_id=excluded.project_id,segment=excluded.segment,content=excluded.content,simhash=excluded.simhash,primary_sector=excluded.primary_sector,tags=excluded.tags,meta=excluded.meta,created_at=excluded.created_at,updated_at=excluded.updated_at,last_seen_at=excluded.last_seen_at,salience=excluded.salience,decay_lambda=excluded.decay_lambda,version=excluded.version,mean_dim=excluded.mean_dim,mean_vec=excluded.mean_vec,compressed_vec=excluded.compressed_vec,feedback_score=excluded.feedback_score",
@@ -245,15 +215,13 @@ q = {
     },
     upd_mem: {
         run: (...p) => {
-            // Parameters: content, tags, meta, updated_at, id
-            const CONTENT_INDEX = 0;
-            const META_INDEX = 2;
+            // content, tags, meta, updated_at, id
             const encryptedP = [...p];
-            if (encryptedP[CONTENT_INDEX] !== undefined && encryptedP[CONTENT_INDEX] !== null) {
-                encryptedP[CONTENT_INDEX] = encrypt(encryptedP[CONTENT_INDEX]);
+            if (encryptedP[0] !== undefined && encryptedP[0] !== null) {
+                encryptedP[0] = encrypt(encryptedP[0]);
             }
-            if (encryptedP[META_INDEX] !== undefined && encryptedP[META_INDEX] !== null) {
-                encryptedP[META_INDEX] = encrypt(encryptedP[META_INDEX]);
+            if (encryptedP[2] !== undefined && encryptedP[2] !== null) {
+                encryptedP[2] = encrypt(encryptedP[2]);
             }
             return exec(
                 "update memories set content=?,tags=?,meta=?,updated_at=?,version=version+1 where id=?",
@@ -263,15 +231,13 @@ q = {
     },
     upd_mem_with_sector: {
         run: (...p) => {
-            // Parameters: content, primary_sector, tags, meta, updated_at, id
-            const CONTENT_INDEX = 0;
-            const META_INDEX = 3;
+            // content, primary_sector, tags, meta, updated_at, id
             const encryptedP = [...p];
-            if (encryptedP[CONTENT_INDEX] !== undefined && encryptedP[CONTENT_INDEX] !== null) {
-                encryptedP[CONTENT_INDEX] = encrypt(encryptedP[CONTENT_INDEX]);
+            if (encryptedP[0] !== undefined && encryptedP[0] !== null) {
+                encryptedP[0] = encrypt(encryptedP[0]);
             }
-            if (encryptedP[META_INDEX] !== undefined && encryptedP[META_INDEX] !== null) {
-                encryptedP[META_INDEX] = encrypt(encryptedP[META_INDEX]);
+            if (encryptedP[3] !== undefined && encryptedP[3] !== null) {
+                encryptedP[3] = encrypt(encryptedP[3]);
             }
             return exec(
                 "update memories set content=?,primary_sector=?,tags=?,meta=?,updated_at=?,version=version+1 where id=?",

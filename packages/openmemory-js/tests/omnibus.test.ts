@@ -71,7 +71,9 @@ describe("omnibus", () => {
         // 2. Evolution Loop
         for (let gen = 0; gen < 10; gen++) {
             // Advance 1 day per generation (86400000 ms)
-            mockTime! += 86400 * 1000;
+            if (mockTime !== null) {
+                mockTime += 86400 * 1000;
+            }
 
             // Reinforce Popular every other generation
             if (gen % 2 === 0) {
@@ -86,7 +88,9 @@ describe("omnibus", () => {
 
         // 3. Final Judgment
         // Fast-forward the system timeline by exactly 24 hours
-        mockTime! += 1000 * 60 * 60 * 24;
+        if (mockTime !== null) {
+            mockTime += 1000 * 60 * 60 * 24;
+        }
 
         // Trigger decay recalculation using our controlled timeline
         const decayModule = require("../src/memory/decay");
@@ -101,8 +105,8 @@ describe("omnibus", () => {
             throw new Error("Memories lost in time!");
         }
 
-        const s_pop = pop_final.salience + 1;
-        const s_unpop = unpop_final.salience * 0.1;
+        const s_pop = pop_final.salience;
+        const s_unpop = unpop_final.salience;
 
         console.log(` -> Generation 10 Results:`);
         console.log(`    Popular Salience: ${s_pop.toFixed(4)}`);

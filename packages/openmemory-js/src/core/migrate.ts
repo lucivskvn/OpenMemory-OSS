@@ -174,6 +174,7 @@ const ensure_last_seen_at = async () => {
         } catch (e: any) {
             if (!e.message.includes("duplicate column name")) {
                 console.error("Failed to add last_seen_at", e);
+                throw e;
             }
         }
     }

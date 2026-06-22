@@ -42,12 +42,14 @@ jobs:
       OM_VEC_DIM: "1536"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      
+        with:
+          persist-credentials: false
+
       - name: Set up Bun Runtime
         uses: oven-sh/setup-bun@f4d14e03ff726c06358e5557344e1da148b56cf7 # v1
         with:
           bun-version: latest
-          
+
       - name: Install Project Workspace Dependencies
         run: |
           cd packages/openmemory-js

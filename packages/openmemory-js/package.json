@@ -11,7 +11,7 @@
     "scripts": {
         "dev": "bun --watch src/server/index.ts",
         "format": "bun --bun prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
-        "build": "bun build ./src/index.ts --outdir ./dist --target node",
+        "build": "bun build ./src/index.ts --outdir ./dist --target node && bun --bun tsc -p tsconfig.json",
         "start": "bun src/server/index.ts",
         "migrate": "bun src/core/migrate.ts",
         "test": "bun test",
