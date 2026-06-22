@@ -137,12 +137,10 @@ export function sys(app: any) {
             try {
                 const parsed = TrainSchema.safeParse(req.body);
                 if (!parsed.success) {
-                    return res
-                        .status(400)
-                        .json({
-                            error: "Invalid payload format",
-                            details: parsed.error,
-                        });
+                    return res.status(400).json({
+                        error: "Invalid payload format",
+                        details: parsed.error,
+                    });
                 }
 
                 if (parsed.data.data.length === 0) {
