@@ -49,11 +49,19 @@ export class Memory {
         // Broadcast to cluster nodes asynchronously
         if (res && res.id) {
             // Fetch memory state for broadcasting
-            q.get_mem.get(res.id).then(memoryState => {
-                if (memoryState) {
-                    broadcastMemory(memoryState);
-                }
-            }).catch(e => console.error("Failed to load memory state for broadcast:", e));
+            q.get_mem
+                .get(res.id)
+                .then((memoryState) => {
+                    if (memoryState) {
+                        broadcastMemory(memoryState);
+                    }
+                })
+                .catch((e) =>
+                    console.error(
+                        "Failed to load memory state for broadcast:",
+                        e,
+                    ),
+                );
         }
         return res;
     }

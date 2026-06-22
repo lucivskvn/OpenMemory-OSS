@@ -9,21 +9,26 @@ export interface ISectorClassifier {
 const SECTOR_CENTROIDS_META_KEY = "_sector_centroids";
 
 export class LearnedSectorClassifier implements ISectorClassifier {
-    async train(trainingData: { text: string; sector: string }[]): Promise<void> {
+    async train(
+        trainingData: { text: string; sector: string }[],
+    ): Promise<void> {
         if (!trainingData.length) return;
 
         const centroids: Record<string, number[]> = {};
 
         // O(n) mapping
-        const groupedData = trainingData.reduce((acc, curr) => {
-            if (!acc[curr.sector]) acc[curr.sector] = [];
-            acc[curr.sector].push(curr);
-            return acc;
-        }, {} as Record<string, {text: string, sector: string}[]>);
+        const groupedData = trainingData.reduce(
+            (acc, curr) => {
+                if (!acc[curr.sector]) acc[curr.sector] = [];
+                acc[curr.sector].push(curr);
+                return acc;
+            },
+            {} as Record<string, { text: string; sector: string }[]>,
+        );
 
         for (const [sector, sectorData] of Object.entries(groupedData)) {
             const vectors = await Promise.all(
-                sectorData.map(async (d) => await embed(d.text))
+                sectorData.map(async (d) => await embed(d.text)),
             );
 
             // Compute mean vector
@@ -46,9 +51,19 @@ export class LearnedSectorClassifier implements ISectorClassifier {
         const centroidsStr = JSON.stringify(centroids);
         const existing = await q.get_user.get("system_classifier");
         if (existing) {
-            await q.upd_user_summary.run("system_classifier", centroidsStr, Date.now());
+            await q.upd_user_summary.run(
+                "system_classifier",
+                centroidsStr,
+                Date.now(),
+            );
         } else {
-            await q.ins_user.run("system_classifier", centroidsStr, 0, Date.now(), Date.now());
+            await q.ins_user.run(
+                "system_classifier",
+                centroidsStr,
+                0,
+                Date.now(),
+                Date.now(),
+            );
         }
     }
 

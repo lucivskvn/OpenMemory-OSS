@@ -16,7 +16,7 @@ export function broadcastMemory(memoryState: import("../types").mem_row): void {
         if (!peer) continue;
         const endpoint = `${peer.replace(/\/$/, "")}/api/cluster/sync`;
 
-                fetch(endpoint, {
+        fetch(endpoint, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
@@ -32,7 +32,10 @@ export function broadcastMemory(memoryState: import("../types").mem_row): void {
                 }
             })
             .catch((e) => {
-                console.error(`[CLUSTER] Failed to sync with peer ${peer}:`, e.message);
+                console.error(
+                    `[CLUSTER] Failed to sync with peer ${peer}:`,
+                    e.message,
+                );
             });
     }
 }

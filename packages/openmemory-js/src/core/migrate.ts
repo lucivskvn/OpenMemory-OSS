@@ -1,4 +1,3 @@
-
 import { env } from "./config";
 import { createClient } from "@libsql/client";
 import {
@@ -12,11 +11,12 @@ const log = (msg: string) => console.log(`[MIGRATE] ${msg}`);
 const explicit_vector_table = process.env.OM_VECTOR_TABLE;
 const resolved_vector_table = assertSafeIdentifier(
     explicit_vector_table || DEFAULT_VECTOR_TABLE,
-    "OM_VECTOR_TABLE"
+    "OM_VECTOR_TABLE",
 );
 
 // Connect to libSQL
-const url = env.OM_TURSO_URL || `file:${env.db_path || "./data/openmemory.sqlite"}`;
+const url =
+    env.OM_TURSO_URL || `file:${env.db_path || "./data/openmemory.sqlite"}`;
 const token = env.OM_TURSO_TOKEN;
 const client = createClient({ url, authToken: token });
 
@@ -24,14 +24,15 @@ interface Migration {
     version: string;
     desc: string;
     sqlite: (vectorTable: string) => string[];
-    }
+}
 
 const migrations: Migration[] = [
     {
         version: "1.2.0",
         desc: "Add version column to memories",
-        sqlite: () => ["ALTER TABLE memories ADD COLUMN version integer default 1;"],
-
+        sqlite: () => [
+            "ALTER TABLE memories ADD COLUMN version integer default 1;",
+        ],
     },
     {
         version: "1.3.0",
@@ -41,13 +42,11 @@ const migrations: Migration[] = [
             `ALTER TABLE ${vectorTable} ADD COLUMN project_id text;`,
             "ALTER TABLE waypoints ADD COLUMN project_id text;",
         ],
-
     },
     {
         version: "1.3.1",
         desc: "Add tags column to memories",
         sqlite: () => ["ALTER TABLE memories ADD COLUMN tags text;"],
-
     },
     {
         version: "1.4.0",
@@ -67,7 +66,6 @@ const migrations: Migration[] = [
             "create index if not exists idx_stats_ts on stats(ts);",
             "create index if not exists idx_stats_type on stats(type);",
         ],
-
     },
     {
         version: "1.4.1",
@@ -76,7 +74,6 @@ const migrations: Migration[] = [
             "ALTER TABLE temporal_facts ADD COLUMN project_id text;",
             "ALTER TABLE temporal_edges ADD COLUMN project_id text;",
         ],
-
     },
     {
         version: "1.4.2",
@@ -87,8 +84,12 @@ const migrations: Migration[] = [
 
 const get_db_version = async (): Promise<string> => {
     try {
-        await client.execute("CREATE TABLE IF NOT EXISTS openmemory_schema (version TEXT)");
-        const res = await client.execute("SELECT version FROM openmemory_schema ORDER BY ROWID DESC LIMIT 1");
+        await client.execute(
+            "CREATE TABLE IF NOT EXISTS openmemory_schema (version TEXT)",
+        );
+        const res = await client.execute(
+            "SELECT version FROM openmemory_schema ORDER BY ROWID DESC LIMIT 1",
+        );
         return res.rows.length ? (res.rows[0].version as string) : "0.0.0";
     } catch {
         return "0.0.0";
@@ -96,10 +97,16 @@ const get_db_version = async (): Promise<string> => {
 };
 
 const update_db_version = async (ver: string) => {
-    await client.execute({ sql: "INSERT INTO openmemory_schema (version) VALUES (?)", args: [ver] });
+    await client.execute({
+        sql: "INSERT INTO openmemory_schema (version) VALUES (?)",
+        args: [ver],
+    });
 };
 
-const check_column_exists = async (table: string, column: string): Promise<boolean> => {
+const check_column_exists = async (
+    table: string,
+    column: string,
+): Promise<boolean> => {
     try {
         const safeTable = assertSafeIdentifier(table, "check_column_exists");
         const res = await client.execute(`PRAGMA table_info(${safeTable})`);
@@ -117,15 +124,19 @@ const quarantine_orphan_temporal_facts = async (): Promise<number> => {
         FROM temporal_facts tf
         LEFT JOIN users u ON tf.user_id = u.user_id
         WHERE u.user_id IS NULL AND tf.user_id IS NOT NULL AND tf.user_id != ?
-    `, args: [LEGACY_ORPHAN_TENANT]});
+    `,
+        args: [LEGACY_ORPHAN_TENANT],
+    });
 
     const ids = orphanQuery.rows.map((row: any) => row.id);
     if (ids.length === 0) return 0;
 
-    await client.batch(ids.map((id: any) => ({
-        sql: "UPDATE temporal_facts SET metadata = json_insert(coalesce(metadata, '{}'), '$._quarantined_legacy_user', user_id), user_id = ? WHERE id = ?",
-        args: [LEGACY_ORPHAN_TENANT, id]
-    })));
+    await client.batch(
+        ids.map((id: any) => ({
+            sql: "UPDATE temporal_facts SET metadata = json_insert(coalesce(metadata, '{}'), '$._quarantined_legacy_user', user_id), user_id = ? WHERE id = ?",
+            args: [LEGACY_ORPHAN_TENANT, id],
+        })),
+    );
     return ids.length;
 };
 
@@ -146,7 +157,10 @@ const apply_migration = async (m: Migration) => {
     try {
         const sql_stmts = m.sqlite(resolved_vector_table);
         if (sql_stmts.length > 0) {
-            await client.batch(sql_stmts.map(sql => ({ sql, args: [] })), "write");
+            await client.batch(
+                sql_stmts.map((sql) => ({ sql, args: [] })),
+                "write",
+            );
         }
         await update_db_version(m.version);
     } catch (e: any) {
@@ -154,9 +168,11 @@ const apply_migration = async (m: Migration) => {
         if (
             e.message &&
             (e.message.includes("duplicate column name") ||
-             e.message.includes("already exists"))
+                e.message.includes("already exists"))
         ) {
-            log(`[WARN] ${m.desc} already applied partially, updating schema version.`);
+            log(
+                `[WARN] ${m.desc} already applied partially, updating schema version.`,
+            );
             await update_db_version(m.version);
         } else {
             log(`[FATAL] Migration ${m.version} failed: ${e.message}`);
@@ -169,7 +185,9 @@ const ensure_last_seen_at = async () => {
     const hasLastSeenAt = await check_column_exists("memories", "last_seen_at");
     if (!hasLastSeenAt) {
         try {
-            await client.execute("ALTER TABLE memories ADD COLUMN last_seen_at integer");
+            await client.execute(
+                "ALTER TABLE memories ADD COLUMN last_seen_at integer",
+            );
             log("Added missing column last_seen_at");
         } catch (e: any) {
             if (!e.message.includes("duplicate column name")) {
@@ -194,7 +212,9 @@ export const run_migrations = async () => {
     log("Checking for orphaned temporal facts...");
     const q_count = await quarantine_orphan_temporal_facts();
     if (q_count > 0) {
-        log(`Quarantined ${q_count} orphaned temporal facts to tenant: ${LEGACY_ORPHAN_TENANT}`);
+        log(
+            `Quarantined ${q_count} orphaned temporal facts to tenant: ${LEGACY_ORPHAN_TENANT}`,
+        );
     } else {
         log("No orphaned temporal facts found.");
     }
@@ -206,8 +226,8 @@ export const run_migrations = async () => {
 };
 
 if (require.main === module) {
-run_migrations().catch((err) => {
-    console.error("Migration failed:", err);
-    process.exit(1);
-});
+    run_migrations().catch((err) => {
+        console.error("Migration failed:", err);
+        process.exit(1);
+    });
 }

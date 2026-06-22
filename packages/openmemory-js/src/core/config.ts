@@ -10,46 +10,106 @@ const tier_max_active = { fast: 32, smart: 64, deep: 128, hybrid: 64 };
 
 export const envSchema = z.object({
     port: z.coerce.number().default(8080),
-    db_path: z.string().default(path.resolve(__dirname, "../../data/openmemory.sqlite")),
+    db_path: z
+        .string()
+        .default(path.resolve(__dirname, "../../data/openmemory.sqlite")),
     api_key: z.string().optional(),
     rate_limit_enabled: z.preprocess((v) => v === "true", z.boolean()),
     rate_limit_window_ms: z.coerce.number().default(60000),
     rate_limit_max_requests: z.coerce.number().default(100),
     compression_enabled: z.preprocess((v) => v === "true", z.boolean()),
-    compression_algorithm: z.enum(["semantic", "syntactic", "aggressive", "auto"]).default("auto"),
+    compression_algorithm: z
+        .enum(["semantic", "syntactic", "aggressive", "auto"])
+        .default("auto"),
     compression_min_length: z.coerce.number().default(100),
     emb_kind: z.string().default("synthetic"),
-    embedding_fallback: z.string().default("synthetic").transform(s => s.split(",").map(i => i.trim()).filter(Boolean)),
+    embedding_fallback: z
+        .string()
+        .default("synthetic")
+        .transform((s) =>
+            s
+                .split(",")
+                .map((i) => i.trim())
+                .filter(Boolean),
+        ),
     embed_mode: z.string().default("simple"),
     adv_embed_parallel: z.preprocess((v) => v === "true", z.boolean()),
     embed_delay_ms: z.coerce.number().default(200),
-    openai_key: z.string().default("").transform((v, ctx) => v || process.env.OPENAI_API_KEY || process.env.OM_OPENAI_API_KEY || ""),
+    openai_key: z
+        .string()
+        .default("")
+        .transform(
+            (v, ctx) =>
+                v ||
+                process.env.OPENAI_API_KEY ||
+                process.env.OM_OPENAI_API_KEY ||
+                "",
+        ),
     openai_base_url: z.string().default("https://api.openai.com/v1"),
     openai_model: z.string().optional(),
-    gemini_key: z.string().default("").transform((v, ctx) => v || process.env.GEMINI_API_KEY || process.env.OM_GEMINI_API_KEY || ""),
+    gemini_key: z
+        .string()
+        .default("")
+        .transform(
+            (v, ctx) =>
+                v ||
+                process.env.GEMINI_API_KEY ||
+                process.env.OM_GEMINI_API_KEY ||
+                "",
+        ),
     AWS_REGION: z.string().default(""),
     AWS_ACCESS_KEY_ID: z.string().default(""),
     AWS_SECRET_ACCESS_KEY: z.string().default(""),
-    siray_key: z.string().default("").transform((v, ctx) => v || process.env.SIRAY_API_TOKEN || process.env.OM_SIRAY_API_TOKEN || ""),
+    siray_key: z
+        .string()
+        .default("")
+        .transform(
+            (v, ctx) =>
+                v ||
+                process.env.SIRAY_API_TOKEN ||
+                process.env.OM_SIRAY_API_TOKEN ||
+                "",
+        ),
     siray_base_url: z.string().default("https://api.siray.ai/v1"),
     ollama_url: z.string().default("http://localhost:11434"),
-    local_model_path: z.string().default("").transform((v, ctx) => v || process.env.LOCAL_MODEL_PATH || process.env.OM_LOCAL_MODEL_PATH || ""),
+    local_model_path: z
+        .string()
+        .default("")
+        .transform(
+            (v, ctx) =>
+                v ||
+                process.env.LOCAL_MODEL_PATH ||
+                process.env.OM_LOCAL_MODEL_PATH ||
+                "",
+        ),
     vec_dim: z.coerce.number().default(256),
     min_score: z.coerce.number().default(0.3),
     decay_lambda: z.coerce.number().default(0.02),
     decay_interval_minutes: z.coerce.number().default(1440),
     max_payload_size: z.coerce.number().default(1_000_000),
-    mode: z.string().default("standard").transform(v => v.toLowerCase()),
+    mode: z
+        .string()
+        .default("standard")
+        .transform((v) => v.toLowerCase()),
     lg_namespace: z.string().default("default"),
     lg_max_context: z.coerce.number().default(50),
     lg_reflective: z.preprocess((v) => v !== "false", z.boolean()),
-    metadata_backend: z.string().default("sqlite").transform(v => v.toLowerCase()),
-    vector_backend: z.string().default("postgres").transform(v => v.toLowerCase()),
+    metadata_backend: z
+        .string()
+        .default("sqlite")
+        .transform((v) => v.toLowerCase()),
+    vector_backend: z
+        .string()
+        .default("postgres")
+        .transform((v) => v.toLowerCase()),
     valkey_host: z.string().default("localhost"),
     valkey_port: z.coerce.number().default(6379),
     valkey_password: z.string().optional(),
     ide_mode: z.preprocess((v) => v === "true", z.boolean()),
-    ide_allowed_origins: z.string().default("http://localhost:5173,http://localhost:3000").transform(s => s.split(",")),
+    ide_allowed_origins: z
+        .string()
+        .default("http://localhost:5173,http://localhost:3000")
+        .transform((s) => s.split(",")),
     auto_reflect: z.preprocess((v) => v === "true", z.boolean()),
     reflect_interval: z.coerce.number().default(10),
     reflect_min: z.coerce.number().default(20),
@@ -73,14 +133,19 @@ export const envSchema = z.object({
     OM_TURSO_URL: z.string().optional(),
     OM_TURSO_TOKEN: z.string().optional(),
     OM_ENCRYPTION_KEY: z.string().optional(),
-    OM_CLUSTER_PEERS: z.string().optional().transform(v => v ? v.split(',').map(s => s.trim()) : []),
-    OM_NODE_ID: z.string().optional()
+    OM_CLUSTER_PEERS: z
+        .string()
+        .optional()
+        .transform((v) => (v ? v.split(",").map((s) => s.trim()) : [])),
+    OM_NODE_ID: z.string().optional(),
 });
 
 const get_tier = (): "fast" | "smart" | "deep" | "hybrid" => {
     const man = process.env.OM_TIER as any;
     if (man && ["fast", "smart", "deep", "hybrid"].includes(man)) return man;
-    console.warn("[OpenMemory] OM_TIER not set! Please set OM_TIER=hybrid|fast|smart|deep in .env");
+    console.warn(
+        "[OpenMemory] OM_TIER not set! Please set OM_TIER=hybrid|fast|smart|deep in .env",
+    );
     return "hybrid";
 };
 
@@ -109,7 +174,8 @@ const rawEnv = {
     siray_key: process.env.OM_SIRAY_API_TOKEN,
     siray_base_url: process.env.OM_SIRAY_BASE_URL,
     ollama_url: process.env.OLLAMA_URL || process.env.OM_OLLAMA_URL,
-    local_model_path: process.env.LOCAL_MODEL_PATH || process.env.OM_LOCAL_MODEL_PATH,
+    local_model_path:
+        process.env.LOCAL_MODEL_PATH || process.env.OM_LOCAL_MODEL_PATH,
     vec_dim: process.env.OM_VEC_DIM || tier_dims[tier],
     min_score: process.env.OM_MIN_SCORE,
     decay_lambda: process.env.OM_DECAY_LAMBDA,
@@ -145,7 +211,7 @@ const rawEnv = {
     min_vector_dim: process.env.OM_MIN_VECTOR_DIM,
     summary_layers: process.env.OM_SUMMARY_LAYERS,
     keyword_boost: process.env.OM_KEYWORD_BOOST,
-        keyword_min_length: process.env.OM_KEYWORD_MIN_LENGTH,
+    keyword_min_length: process.env.OM_KEYWORD_MIN_LENGTH,
     OM_TURSO_URL: process.env.OM_TURSO_URL,
     OM_TURSO_TOKEN: process.env.OM_TURSO_TOKEN,
     OM_ENCRYPTION_KEY: process.env.OM_ENCRYPTION_KEY,
