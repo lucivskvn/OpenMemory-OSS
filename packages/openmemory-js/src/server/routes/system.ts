@@ -32,9 +32,6 @@ const TIER_BENEFITS = {
 };
 
 import { q } from "../../core/db";
-/**
- * Registers HTTP routes for cluster synchronisation, classifier training, health monitoring, and sector information.
- */
 export function sys(app: any) {
     app.post(
         "/api/cluster/sync",
@@ -44,7 +41,12 @@ export function sys(app: any) {
         ) => {
             try {
                 const payload = req.body as Record<string, unknown>;
-                if (payload.event === "memory_sync" && payload.data) {
+                if (
+                    payload.event === "memory_sync" &&
+                    typeof payload.data === "object" &&
+                    payload.data !== null &&
+                    !Array.isArray(payload.data)
+                ) {
                     const data = payload.data as Record<string, any>;
 
                     const requiredFields = [
@@ -140,12 +142,10 @@ export function sys(app: any) {
             try {
                 const parsed = TrainSchema.safeParse(req.body);
                 if (!parsed.success) {
-                    return res
-                        .status(400)
-                        .json({
-                            error: "Invalid payload format",
-                            details: parsed.error,
-                        });
+                    return res.status(400).json({
+                        error: "Invalid payload format",
+                        details: parsed.error,
+                    });
                 }
 
                 if (parsed.data.data.length === 0) {

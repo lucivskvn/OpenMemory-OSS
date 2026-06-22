@@ -14,14 +14,16 @@ import { env } from '../../../packages/openmemory-js/src/core/config';
 class SemanticCache {
     private mem: Memory;
     private userId: string = "system_semantic_cache";
-    private valkey: Redis;
+    private readonly valkey: Redis;
 
     constructor() {
         this.mem = new Memory();
         // Use maxRetriesPerRequest: null to not buffer commands infinitely, keeping silent failures quick
         this.valkey = new Redis(env.valkey_port, env.valkey_host, { maxRetriesPerRequest: 1, showFriendlyErrorStack: true });
-        // Suppress unhandled error events to avoid verbose node console logs for offline valkey
-        this.valkey.on('error', (err) => {});
+        // Log valkey errors to avoid silencing critical offline states but prevent crashes
+        this.valkey.on('error', (err) => {
+            console.debug('[Valkey Offline/Error]', err.message);
+        });
     }
 
     private mockLLMCall(prompt: string): string {
@@ -59,28 +61,37 @@ class SemanticCache {
         // Assuming the SDK returns a 'score' field.
         const best = hits[0];
         if (best && best.score > 0.95) {
-            console.log(` ✅ Tier 2 Cache HIT (Score: ${best.score.toFixed(4)})`);
-            // Parse response from stored format
-            const cachedContent = best.content.split("| RESPONSE:")[1].trim();
+            // Parse response from stored format and ensure expected parts exist
+            const parts = best.content.split("| RESPONSE:");
+            if (parts.length >= 2) {
+                console.log(` ✅ Tier 2 Cache HIT (Score: ${best.score.toFixed(4)})`);
+                const cachedContent = parts[1].trim();
 
-            // Backfill into Tier 1 Valkey cache with 24h TTL (86400 seconds)
-            try {
-                await this.valkey.setex(tier1Key, 86400, cachedContent);
-            } catch (error: any) {
-                console.warn(`[Tier 1 Valkey Backfill Error]:`, error.message);
+                // Backfill into Tier 1 Valkey cache with 24h TTL (86400 seconds)
+                try {
+                    await this.valkey.setex(tier1Key, 86400, cachedContent);
+                } catch (error: any) {
+                    console.warn(`[Tier 1 Valkey Backfill Error]:`, error.message);
+                }
+
+                return cachedContent;
+            } else {
+                console.warn(`[Tier 2 OpenMemory Error] Malformed cache entry format: ${best.content}. Falling back to miss.`);
             }
-
-            return cachedContent;
         }
 
         console.log(` ❌ Cache MISS. Calling LLM...`);
         const response = this.mockLLMCall(prompt);
 
         // Store new pair in Tier 2
-        await this.mem.add(`PROMPT: ${prompt} | RESPONSE: ${response}`, {
-            user_id: userId,
-            metadata: { type: 'cache_entry' }
-        });
+        try {
+            await this.mem.add(`PROMPT: ${prompt} | RESPONSE: ${response}`, {
+                user_id: userId,
+                metadata: { type: 'cache_entry' }
+            });
+        } catch (error: any) {
+            console.warn(`[Tier 2 OpenMemory Store Error]:`, error.message);
+        }
 
         // Backfill new generation into Tier 1 Valkey cache with 24h TTL (86400 seconds)
         try {
