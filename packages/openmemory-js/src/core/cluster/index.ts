@@ -1,5 +1,10 @@
 import { env } from "../config";
 
+/**
+ * Broadcasts memory state to cluster peers for synchronisation.
+ *
+ * @param memoryState - The memory state to synchronise across the cluster
+ */
 export function broadcastMemory(memoryState: import("../types").mem_row): void {
     if (!env.OM_CLUSTER_PEERS || env.OM_CLUSTER_PEERS.length === 0) return;
 

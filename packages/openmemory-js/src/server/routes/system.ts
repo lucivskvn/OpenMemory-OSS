@@ -32,6 +32,9 @@ const TIER_BENEFITS = {
 };
 
 import { q } from "../../core/db";
+/**
+ * Registers HTTP routes for cluster synchronisation, classifier training, health monitoring, and sector information.
+ */
 export function sys(app: any) {
     app.post(
         "/api/cluster/sync",
