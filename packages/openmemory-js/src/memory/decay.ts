@@ -41,12 +41,7 @@ const parse_bool = (x: any, d: boolean) =>
     x === "true" ? true : x === "false" ? false : d;
 const clamp_f = (v: number, a: number, b: number) =>
     Math.min(b, Math.max(a, v));
-const safe_clamp = (
-    val: number,
-    fallback = 0.0,
-    min = 0.0,
-    max = 1.0,
-): number => {
+const safe_clamp = (val: number, fallback = 0, min = 0, max = 1): number => {
     if (Number.isNaN(val) || !Number.isFinite(val)) return fallback;
     return Math.max(min, Math.min(max, val));
 };
@@ -298,12 +293,12 @@ export const apply_decay = async () => {
                         );
                         const f = Math.exp(-lam * (dt / (sal + 0.1)));
 
-                        let new_sal = safe_clamp(sal * f, m.salience || 0.0);
-                        let new_feedback = safe_clamp(m.feedback_score, 0.0);
+                        let new_sal = safe_clamp(sal * f, m.salience || 0);
+                        let new_feedback = safe_clamp(m.feedback_score, 0);
 
                         let changed =
-                            Math.abs(new_sal - (m.salience || 0.0)) > 0.001 ||
-                            Math.abs(new_feedback - (m.feedback_score || 0.0)) >
+                            Math.abs(new_sal - (m.salience || 0)) > 0.001 ||
+                            Math.abs(new_feedback - (m.feedback_score || 0)) >
                                 0.001;
                         let compressed = false;
                         let fingerprinted = false;
