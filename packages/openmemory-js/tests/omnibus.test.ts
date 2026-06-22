@@ -1,4 +1,3 @@
-
 // Force synthetic embeddings BEFORE importing anything that loads cfg/db.
 // bun:test.config.ts already sets this via env, but keep this here as a
 // belt-and-suspenders guard in case the spec is run standalone with tsx.
@@ -81,7 +80,10 @@ describe("omnibus", () => {
             }
 
             // Advance the local memory engine tracker directly
-            const { reset_last_decay, apply_decay } = require("../src/memory/decay");
+            const {
+                reset_last_decay,
+                apply_decay,
+            } = require("../src/memory/decay");
             reset_last_decay();
             await apply_decay();
         }

@@ -35,16 +35,41 @@ import { q } from "../../core/db";
 export function sys(app: any) {
     app.post(
         "/api/cluster/sync",
-        async (req: import("../server").AppRequest, res: import("../server").AppResponse) => {
+        async (
+            req: import("../server").AppRequest,
+            res: import("../server").AppResponse,
+        ) => {
             try {
                 const payload = req.body as Record<string, unknown>;
                 if (payload.event === "memory_sync" && payload.data) {
                     const data = payload.data as Record<string, any>;
 
-                    const requiredFields = ['id', 'user_id', 'project_id', 'segment', 'content', 'simhash', 'primary_sector', 'tags', 'meta', 'created_at', 'updated_at', 'last_seen_at', 'salience', 'decay_lambda', 'version', 'mean_dim', 'mean_vec', 'compressed_vec', 'feedback_score'];
+                    const requiredFields = [
+                        "id",
+                        "user_id",
+                        "project_id",
+                        "segment",
+                        "content",
+                        "simhash",
+                        "primary_sector",
+                        "tags",
+                        "meta",
+                        "created_at",
+                        "updated_at",
+                        "last_seen_at",
+                        "salience",
+                        "decay_lambda",
+                        "version",
+                        "mean_dim",
+                        "mean_vec",
+                        "compressed_vec",
+                        "feedback_score",
+                    ];
                     for (const field of requiredFields) {
                         if (!(field in data)) {
-                            return res.status(400).json({ error: "Invalid sync event" });
+                            return res
+                                .status(400)
+                                .json({ error: "Invalid sync event" });
                         }
                     }
                     const existing = await q.get_mem.get(data.id);
@@ -70,49 +95,73 @@ export function sys(app: any) {
                             data.mean_dim,
                             data.mean_vec,
                             data.compressed_vec,
-                            data.feedback_score
+                            data.feedback_score,
                         );
                         return res.json({ ok: true, message: "Synced" });
                     }
-                    return res.json({ ok: true, message: "Ignored due to version deduplication" });
+                    return res.json({
+                        ok: true,
+                        message: "Ignored due to version deduplication",
+                    });
                 }
                 res.status(400).json({ error: "Invalid sync event" });
             } catch (e: unknown) {
                 console.error("[CLUSTER] Sync error:", e);
                 res.status(500).json({ error: "An error occurred" });
             }
-        }
+        },
     );
-
 
     const { z } = require("zod");
     const TrainSchema = z.object({
-        data: z.array(z.object({
-            text: z.string().min(1),
-            sector: z.enum(["episodic", "semantic", "procedural", "emotional", "reflective"])
-        }))
+        data: z.array(
+            z.object({
+                text: z.string().min(1),
+                sector: z.enum([
+                    "episodic",
+                    "semantic",
+                    "procedural",
+                    "emotional",
+                    "reflective",
+                ]),
+            }),
+        ),
     });
 
     app.post(
         "/api/system/classifier/train",
-        async (req: import("../server").AppRequest, res: import("../server").AppResponse) => {
+        async (
+            req: import("../server").AppRequest,
+            res: import("../server").AppResponse,
+        ) => {
             try {
                 const parsed = TrainSchema.safeParse(req.body);
                 if (!parsed.success) {
-                    return res.status(400).json({ error: "Invalid payload format", details: parsed.error });
+                    return res
+                        .status(400)
+                        .json({
+                            error: "Invalid payload format",
+                            details: parsed.error,
+                        });
                 }
 
                 if (parsed.data.data.length === 0) {
-                    return res.status(400).json({ error: "Data array cannot be empty" });
+                    return res
+                        .status(400)
+                        .json({ error: "Data array cannot be empty" });
                 }
 
                 // Fire and forget
-                classifier.train(parsed.data.data).catch(e => console.error("Classifier training error:", e));
+                classifier
+                    .train(parsed.data.data)
+                    .catch((e) =>
+                        console.error("Classifier training error:", e),
+                    );
                 res.json({ ok: true, message: "Training started" });
             } catch (e: unknown) {
                 res.status(500).json({ error: "An error occurred" });
             }
-        }
+        },
     );
 
     app.get(
