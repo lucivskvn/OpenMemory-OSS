@@ -32,6 +32,11 @@ const TIER_BENEFITS = {
 };
 
 import { q } from "../../core/db";
+/**
+ * Registers system endpoints for cluster synchronisation, classifier training, health checks, and sector information retrieval.
+ *
+ * @param app - The Express application instance to register endpoints on
+ */
 export function sys(app: any) {
     app.post(
         "/api/cluster/sync",
