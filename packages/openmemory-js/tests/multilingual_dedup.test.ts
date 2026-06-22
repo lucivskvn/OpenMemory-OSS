@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "bun:test";
 import { canonical_tokens_from_text, tokenize } from "../src/utils/text";
 import { compute_simhash } from "../src/memory/hsg";
 

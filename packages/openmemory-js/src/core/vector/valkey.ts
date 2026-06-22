@@ -1,6 +1,6 @@
 import { VectorStore } from "../vector_store";
 import Redis from "ioredis";
-import { env } from "../cfg";
+import { env } from "../config";
 import { vectorToBuffer, bufferToVector } from "../../memory/embed";
 
 export class ValkeyVectorStore implements VectorStore {

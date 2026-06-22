@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { canonical_token_set, stable_text_fallback_hash } from "../utils/text";
 import { inc_q, dec_q, on_query_hit } from "./decay";
-import { env, tier } from "../core/cfg";
+import { env, tier } from "../core/config";
 import { cos_sim, buf_to_vec, vec_to_buf } from "../utils/index";
 export interface sector_cfg {
     model: string;

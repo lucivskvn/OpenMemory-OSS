@@ -1,0 +1,3 @@
+[test]
+env = { OM_EMBEDDINGS = "synthetic", OM_EMBEDDING_FALLBACK = "synthetic", OM_METADATA_BACKEND = "sqlite", OM_VECTOR_BACKEND = "sqlite", NODE_ENV = "test" }
+preload = ["./tests/setup.ts"]

@@ -1,4 +1,4 @@
-import { env } from "../../core/cfg";
+import { env } from "../../core/config";
 import crypto from "crypto";
 
 /**

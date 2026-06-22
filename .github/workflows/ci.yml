@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, next]
   pull_request:
-    branches: [main, develop]
+    branches: [main, next]
   workflow_dispatch:
 
 jobs:
@@ -34,30 +34,26 @@ jobs:
           python -m pytest tests/test_omnibus.py -v
           
   test-node:
-    name: Test Node.js SDK
+    name: Test Bun SDK Stack
     runs-on: ubuntu-latest
     env:
-      OM_DB_URL: "sqlite:///:memory:"
+      OM_TURSO_URL: "file:openmemory.db"
       OM_TIER: "fast"
       OM_VEC_DIM: "1536"
     steps:
       - uses: actions/checkout@v4
       
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Set up Bun Runtime
+        uses: oven-sh/setup-bun@v1
         with:
-          node-version: '22'
+          bun-version: latest
           
-      - name: Install Dependencies
+      - name: Install Project Workspace Dependencies
         run: |
           cd packages/openmemory-js
-          npm ci
+          bun install
           
-      - name: Run Verification Test
-        # `tests/test_omnibus.ts` was ported to vitest as
-        # `tests/omnibus.test.ts` in cbc8c84; this step has been failing
-        # ever since. Run the whole vitest suite so omnibus + the rest of
-        # the per-tenant / temporal / multilingual specs are exercised.
+      - name: Run Full Core Test Suite
         run: |
           cd packages/openmemory-js
-          npm test
+          bun test

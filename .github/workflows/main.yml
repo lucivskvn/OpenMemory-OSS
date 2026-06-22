@@ -2,6 +2,7 @@ on:
   push:
     branches:
       - main
+      - next
 
 jobs:
   contrib-readme-job:

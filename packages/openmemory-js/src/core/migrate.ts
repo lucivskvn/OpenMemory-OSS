@@ -78,6 +78,11 @@ const migrations: Migration[] = [
         ],
 
     },
+    {
+        version: "1.4.2",
+        desc: "Add summary column to memories for decay caching",
+        sqlite: () => ["ALTER TABLE memories ADD COLUMN summary text;"],
+    },
 ];
 
 const get_db_version = async (): Promise<string> => {
@@ -136,7 +141,7 @@ const compare_versions = (v1: string, v2: string) => {
     return 0;
 };
 
-const run_migrations = async () => {
+export const run_migrations = async () => {
     log("Checking schema version via LibSQL...");
     const current_version = await get_db_version();
     log(`Current schema version: ${current_version}`);
@@ -191,7 +196,9 @@ const run_migrations = async () => {
     log("All migrations complete.");
 };
 
+if (require.main === module) {
 run_migrations().catch((err) => {
     console.error("Migration failed:", err);
     process.exit(1);
 });
+}

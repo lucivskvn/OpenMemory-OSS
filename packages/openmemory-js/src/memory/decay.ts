@@ -6,7 +6,7 @@ import {
     memories_table,
 } from "../core/db";
 import { now } from "../utils";
-import { env } from "../core/cfg";
+import { env } from "../core/config";
 
 type mem = {
     id: string;
@@ -80,7 +80,7 @@ const make_decay_cfg = (): decay_cfg => ({
 const cfg = make_decay_cfg();
 
 let active_q = 0;
-let last_decay = 0;
+export let last_decay = 0; export const reset_last_decay = () => last_decay = 0;
 const cooldown = 60000;
 export const inc_q = () => active_q++;
 export const dec_q = () => active_q--;

@@ -2,7 +2,7 @@ process.env.OM_EMBEDDINGS = "synthetic";
 process.env.OM_METADATA_BACKEND = "sqlite";
 process.env.OM_VECTOR_BACKEND = "sqlite";
 
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll } from "bun:test";
 import { run_async } from "../src/core/db";
 import {
     insert_fact,

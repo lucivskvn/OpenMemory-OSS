@@ -1,6 +1,6 @@
 import { q, log_maint_op } from "../core/db";
 import { add_hsg_memory } from "./hsg";
-import { env } from "../core/cfg";
+import { env } from "../core/config";
 import { j } from "../utils";
 
 const sim = (t1: string, t2: string): number => {

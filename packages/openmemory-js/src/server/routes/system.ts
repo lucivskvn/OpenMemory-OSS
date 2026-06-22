@@ -2,7 +2,7 @@ import { classifier } from "../../memory/classifier";
 import { all_async } from "../../core/db";
 import { sector_configs } from "../../memory/hsg";
 import { getEmbeddingInfo } from "../../memory/embed";
-import { tier, env } from "../../core/cfg";
+import { tier, env } from "../../core/config";
 
 const TIER_BENEFITS = {
     hybrid: {
@@ -84,22 +84,26 @@ export function sys(app: any) {
         }
     );
 
+
+    const { z } = require("zod");
+    const TrainSchema = z.object({
+        data: z.array(z.object({
+            text: z.string().min(1),
+            sector: z.enum(["episodic", "semantic", "procedural", "emotional", "reflective"])
+        }))
+    });
+
     app.post(
         "/api/system/classifier/train",
         async (req: import("../server").AppRequest, res: import("../server").AppResponse) => {
             try {
-                const { data } = req.body as { data: { text: string, sector: string }[] };
-                if (!Array.isArray(data)) {
-                    return res.status(400).json({ error: "Data must be an array of {text, sector}" });
-                }
-                for (const item of data) {
-                    if (typeof item.text !== 'string' || item.text.trim() === '' || typeof item.sector !== 'string' || item.sector.trim() === '') {
-                        return res.status(400).json({ error: "Each item must have non-empty text and sector strings" });
-                    }
+                const parsed = TrainSchema.safeParse(req.body);
+                if (!parsed.success) {
+                    return res.status(400).json({ error: "Invalid payload format", details: parsed.error });
                 }
 
                 // Fire and forget
-                classifier.train(data).catch(e => console.error("Classifier training error:", e));
+                classifier.train(parsed.data.data).catch(e => console.error("Classifier training error:", e));
                 res.json({ ok: true, message: "Training started" });
             } catch (e: unknown) {
                 res.status(500).json({ error: "An error occurred" });

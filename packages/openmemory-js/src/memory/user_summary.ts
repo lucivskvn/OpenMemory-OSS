@@ -1,5 +1,5 @@
 import { q } from "../core/db";
-import { env } from "../core/cfg";
+import { env } from "../core/config";
 
 const cos = (a: number[], b: number[]): number => {
     let d = 0,
