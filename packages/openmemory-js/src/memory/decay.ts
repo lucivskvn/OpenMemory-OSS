@@ -1,4 +1,5 @@
 import {
+    log_maint_op,
     all_async,
     run_async,
     q,
@@ -40,6 +41,15 @@ const parse_bool = (x: any, d: boolean) =>
     x === "true" ? true : x === "false" ? false : d;
 const clamp_f = (v: number, a: number, b: number) =>
     Math.min(b, Math.max(a, v));
+const safe_clamp = (
+    val: number,
+    fallback = 0.0,
+    min = 0.0,
+    max = 1.0,
+): number => {
+    if (Number.isNaN(val) || !Number.isFinite(val)) return fallback;
+    return Math.max(min, Math.min(max, val));
+};
 const clamp_i = (v: number, a: number, b: number) =>
     Math.min(b, Math.max(a, Math.floor(v)));
 const tick = () => new Promise<void>((r) => setImmediate(r));
@@ -80,7 +90,9 @@ const make_decay_cfg = (): decay_cfg => ({
 const cfg = make_decay_cfg();
 
 let active_q = 0;
-let last_decay = 0; export const reset_last_decay = () => last_decay = 0; export const get_last_decay = () => last_decay;
+let last_decay = 0;
+export const reset_last_decay = () => (last_decay = 0);
+export const get_last_decay = () => last_decay;
 const cooldown = 60000;
 export const inc_q = () => active_q++;
 export const dec_q = () => active_q--;
@@ -107,10 +119,7 @@ const compress_vector = (
     );
     const dim = Math.max(min_dim, Math.min(src.length, tgt_dim));
     if (dim >= src.length) return src.slice(0);
-    const pooled: number[] = [];
-    const bucket = Math.ceil(src.length / dim);
-    for (let i = 0; i < src.length; i += bucket)
-        pooled.push(mean(src.slice(i, i + bucket)));
+    const pooled = src.slice(0, dim);
     normalize(pooled);
     return pooled;
 };
@@ -128,9 +137,12 @@ const compress_summary = (txt: string, f: number, layers = 3): string => {
     return keys(t, lay >= 3 ? 5 : 3);
 };
 
-const fingerprint_mem = (m: any): { vector: number[]; summary: string } => {
+const fingerprint_mem = (
+    m: any,
+    d = 1536,
+): { vector: number[]; summary: string } => {
     const base = (m.id + "|" + (m.summary || m.content || "")).trim();
-    const vec = hash_to_vec(base, 32);
+    const vec = hash_to_vec(base, d);
     normalize(vec);
     const summary = top_keywords(m.summary || m.content || "", 3).join(" ");
     return { vector: vec, summary };
@@ -245,136 +257,145 @@ export const apply_decay = async () => {
     const tier_counts = { hot: 0, warm: 0, cold: 0 };
 
     for (const seg of segments) {
-        const segment = seg.segment;
-        const rows = await all_async(
-            "select id,content,summary,salience,decay_lambda,last_seen_at,updated_at,primary_sector,coactivations from memories where segment=?",
-            [segment],
-        );
+        try {
+            const segment = seg.segment;
+            const rows = await all_async(
+                "select id,content,summary,salience,decay_lambda,last_seen_at,updated_at,primary_sector,coactivations,feedback_score from memories where segment=?",
+                [segment],
+            );
 
-        const decay_ratio = env.decay_ratio;
-        const batch_sz = Math.max(1, Math.floor(rows.length * decay_ratio));
-        const start_idx = Math.floor(
-            Math.random() * Math.max(1, rows.length - batch_sz + 1),
-        );
-        const batch = rows.slice(start_idx, start_idx + batch_sz);
+            const decay_ratio = env.decay_ratio;
+            const batch_sz = Math.max(1, Math.floor(rows.length * decay_ratio));
+            const start_idx = Math.floor(
+                Math.random() * Math.max(1, rows.length - batch_sz + 1),
+            );
+            const batch = rows.slice(start_idx, start_idx + batch_sz);
 
-        const parts = chunkz(batch, cfg.threads);
+            const parts = chunkz(batch, cfg.threads);
 
-        await Promise.all(
-            parts.map(async (part) => {
-                for (const m of part) {
-                    const tier = pick_tier(m, now_ts);
-                    tier_counts[tier]++;
+            await Promise.all(
+                parts.map(async (part) => {
+                    for (const m of part) {
+                        const tier = pick_tier(m, now_ts);
+                        tier_counts[tier]++;
 
-                    const lam =
-                        tier === "hot"
-                            ? cfg.lambda_hot
-                            : tier === "warm"
-                              ? cfg.lambda_warm
-                              : cfg.lambda_cold;
-                    const dt = Math.max(
-                        0,
-                        (now_ts - (m.last_seen_at || m.updated_at)) /
-                            cfg.time_unit_ms,
-                    );
-                    const act = Math.max(0, m.coactivations || 0);
-                    const sal = clamp_f(
-                        (m.salience || 0.5) * (1 + Math.log1p(act)),
-                        0,
-                        1,
-                    );
-                    const f = Math.exp(-lam * (dt / (sal + 0.1)));
-
-                    let new_sal = clamp_f(sal * f, 0, 1);
-                    let changed = Math.abs(new_sal - m.salience) > 0.001;
-                    let compressed = false;
-                    let fingerprinted = false;
-
-                    if (f < 0.7) {
-                        const sector = m.primary_sector || "semantic";
-                        const vec_row = await vector_store.getVector(
-                            m.id,
-                            sector,
+                        const lam =
+                            tier === "hot"
+                                ? cfg.lambda_hot
+                                : tier === "warm"
+                                  ? cfg.lambda_warm
+                                  : cfg.lambda_cold;
+                        const dt = Math.max(
+                            0,
+                            (now_ts - (m.last_seen_at || m.updated_at)) /
+                                cfg.time_unit_ms,
                         );
+                        const act = Math.max(0, m.coactivations || 0);
+                        const sal = clamp_f(
+                            (m.salience || 0.5) * (1 + Math.log1p(act)),
+                            0,
+                            1,
+                        );
+                        const f = Math.exp(-lam * (dt / (sal + 0.1)));
 
-                        if (vec_row && vec_row.vector) {
-                            const vec =
-                                typeof vec_row.vector === "string"
-                                    ? JSON.parse(vec_row.vector)
-                                    : vec_row.vector;
-                            const before_len = Array.isArray(vec)
-                                ? vec.length
-                                : 0;
+                        let new_sal = safe_clamp(sal * f, m.salience || 0.0);
+                        let new_feedback = safe_clamp(m.feedback_score, 0.0);
 
-                            if (before_len > 0) {
-                                const new_vec = compress_vector(
-                                    vec,
-                                    f,
-                                    cfg.min_vec_dim,
-                                    cfg.max_vec_dim,
-                                );
-                                const new_summary = compress_summary(
-                                    m.summary || m.content || "",
-                                    f,
-                                    cfg.summary_layers,
-                                );
+                        let changed =
+                            Math.abs(new_sal - (m.salience || 0.0)) > 0.001 ||
+                            Math.abs(new_feedback - (m.feedback_score || 0.0)) >
+                                0.001;
+                        let compressed = false;
+                        let fingerprinted = false;
 
-                                if (new_vec.length < before_len) {
-                                    await vector_store.storeVector(
-                                        m.id,
-                                        sector,
-                                        new_vec,
-                                        new_vec.length,
+                        if (f < 0.7) {
+                            const sector = m.primary_sector || "semantic";
+                            const vec_row = await vector_store.getVector(
+                                m.id,
+                                sector,
+                            );
+
+                            if (vec_row && vec_row.vector) {
+                                const vec =
+                                    typeof vec_row.vector === "string"
+                                        ? JSON.parse(vec_row.vector)
+                                        : vec_row.vector;
+                                const before_len = Array.isArray(vec)
+                                    ? vec.length
+                                    : 0;
+
+                                if (before_len > 0) {
+                                    const new_vec = compress_vector(
+                                        vec,
+                                        f,
+                                        cfg.min_vec_dim,
+                                        cfg.max_vec_dim,
                                     );
-                                    compressed = true;
-                                    tot_comp++;
-                                }
-
-                                if (new_summary !== (m.summary || "")) {
-                                    await run_async(
-                                        "update memories set summary=? where id=?",
-                                        [new_summary, m.id],
+                                    const new_summary = compress_summary(
+                                        m.summary || m.content || "",
+                                        f,
+                                        cfg.summary_layers,
                                     );
+
+                                    if (new_vec.length < before_len) {
+                                        await vector_store.storeVector(
+                                            m.id,
+                                            sector,
+                                            new_vec,
+                                            new_vec.length,
+                                        );
+                                        compressed = true;
+                                        tot_comp++;
+                                    }
+
+                                    if (new_summary !== (m.summary || "")) {
+                                        await run_async(
+                                            "update memories set summary=? where id=?",
+                                            [new_summary, m.id],
+                                        );
+                                    }
                                 }
                             }
+                            changed = true;
                         }
-                        changed = true;
+
+                        if (f < Math.max(0.3, cfg.cold_threshold)) {
+                            const sector = m.primary_sector || "semantic";
+                            const fp = fingerprint_mem(m, cfg.max_vec_dim);
+                            await vector_store.storeVector(
+                                m.id,
+                                sector,
+                                fp.vector,
+                                fp.vector.length,
+                            );
+                            await run_async(
+                                "update memories set summary=? where id=?",
+                                [fp.summary, m.id],
+                            );
+                            fingerprinted = true;
+                            tot_fp++;
+                            changed = true;
+                        }
+
+                        if (changed) {
+                            await run_async(
+                                `update ${memories_table} set salience=?,feedback_score=?,updated_at=? where id=?`,
+                                [new_sal, new_feedback, now(), m.id],
+                            );
+                            tot_chg++;
+                        }
+
+                        tot_proc++;
+                        await tick();
                     }
+                }),
+            );
 
-                    if (f < Math.max(0.3, cfg.cold_threshold)) {
-                        const sector = m.primary_sector || "semantic";
-                        const fp = fingerprint_mem(m);
-                        await vector_store.storeVector(
-                            m.id,
-                            sector,
-                            fp.vector,
-                            fp.vector.length,
-                        );
-                        await run_async(
-                            "update memories set summary=? where id=?",
-                            [fp.summary, m.id],
-                        );
-                        fingerprinted = true;
-                        tot_fp++;
-                        changed = true;
-                    }
-
-                    if (changed) {
-                        await run_async(
-                            `update ${memories_table} set salience=?,updated_at=? where id=?`,
-                            [new_sal, now(), m.id],
-                        );
-                        tot_chg++;
-                    }
-
-                    tot_proc++;
-                    await tick();
-                }
-            }),
-        );
-
-        if (seg !== segments[segments.length - 1]) {
-            await sleep(env.decay_sleep_ms);
+            if (seg !== segments[segments.length - 1]) {
+                await sleep(env.decay_sleep_ms);
+            }
+        } finally {
+            await log_maint_op("decay", tot_proc);
         }
     }
 
