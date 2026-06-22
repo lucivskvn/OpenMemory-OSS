@@ -39,6 +39,11 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
+      - name: Set up Bun Runtime
+        uses: oven-sh/setup-bun@f4d14e03ff726c06358e5557344e1da148b56cf7 # v1
+        with:
+          bun-version: '1.2.14'
+
       - name: get version
         id: version
         run: |
