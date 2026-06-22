@@ -42,7 +42,8 @@ const parse_bool = (x: any, d: boolean) =>
 const clamp_f = (v: number, a: number, b: number) =>
     Math.min(b, Math.max(a, v));
 const safe_clamp = (val: number, fallback = 0, min = 0, max = 1): number => {
-    if (Number.isNaN(val) || !Number.isFinite(val)) return fallback;
+    if (Number.isNaN(val) || !Number.isFinite(val))
+        return Math.max(min, Math.min(max, fallback));
     return Math.max(min, Math.min(max, val));
 };
 const clamp_i = (v: number, a: number, b: number) =>
@@ -252,6 +253,7 @@ export const apply_decay = async () => {
     const tier_counts = { hot: 0, warm: 0, cold: 0 };
 
     for (const seg of segments) {
+        const seg_start_proc = tot_proc;
         try {
             const segment = seg.segment;
             const rows = await all_async(
@@ -390,7 +392,7 @@ export const apply_decay = async () => {
                 await sleep(env.decay_sleep_ms);
             }
         } finally {
-            await log_maint_op("decay", tot_proc);
+            await log_maint_op("decay", tot_proc - seg_start_proc);
         }
     }
 
