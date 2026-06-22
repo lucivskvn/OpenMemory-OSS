@@ -10,8 +10,8 @@
     "types": "dist/index.d.ts",
     "scripts": {
         "dev": "bun --watch src/server/index.ts",
-        "format": "bun --bun prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
-        "build": "bun build ./src/index.ts --outdir ./dist --target bun",
+        "format": "bun --bun prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
+        "build": "bun build ./src/index.ts --outdir ./dist --target node",
         "start": "bun src/server/index.ts",
         "migrate": "bun src/core/migrate.ts",
         "test": "bun test",
@@ -41,7 +41,6 @@
         "@types/cheerio": "^0.22.35",
         "@types/fluent-ffmpeg": "^2.1.26",
         "@types/node": "^20.19.25",
-        "@types/pg": "^8.15.6",
         "prettier": "^3.6.2",
         "typescript": "^5.9.3"
     }

@@ -67,12 +67,8 @@ let transaction: {
     rollback: () => Promise<void>;
 };
 
-let memories_table: string;
+const memories_table = "memories";
 let vector_store: VectorStore;
-
-let run_async: (sql: string, params?: any[]) => Promise<void>;
-let get_async: (sql: string, params?: any[]) => Promise<any>;
-let all_async: (sql: string, params?: any[]) => Promise<any[]>;
 
 const url = env.OM_TURSO_URL || `file:${env.db_path || "./data/openmemory.sqlite"}`;
 const token = env.OM_TURSO_TOKEN;
@@ -115,9 +111,9 @@ const many = async (sql: string, args: any[] = []) => {
     return mapRows(result.rows);
 };
 
-run_async = exec;
-get_async = one;
-all_async = many;
+const run_async = exec;
+const get_async = one;
+const all_async = many;
 
 transaction = {
     begin: async () => {
@@ -160,8 +156,6 @@ if (env.vector_backend === "valkey") {
         `[DB] Using VectorStore with table: ${sqlite_vector_table}`,
     );
 }
-
-memories_table = "memories";
 
 export const init_tables = async () => {
     const SCHEMA_TABLES = [

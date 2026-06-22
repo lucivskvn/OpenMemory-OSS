@@ -4,13 +4,6 @@ import { env } from "./config";
 const ALGORITHM = "aes-256-gcm";
 const PREFIX = "enc:";
 
-/**
- * Retrieves or derives a 32-byte encryption key from the environment configuration.
- *
- * If `env.OM_ENCRYPTION_KEY` is not configured, returns `null`. If configured and already 32 bytes when encoded as UTF-8, returns it unchanged. Otherwise, derives a 32-byte key by hashing the configured value.
- *
- * @returns A 32-byte `Buffer` if an encryption key is configured, `null` otherwise.
- */
 function getEncryptionKey(): Buffer | null {
     if (!env.OM_ENCRYPTION_KEY) {
         return null;
@@ -30,11 +23,6 @@ function getEncryptionKey(): Buffer | null {
 
 const key = getEncryptionKey();
 
-/**
- * Encrypts a string using AES-256-GCM.
- *
- * @returns The encrypted string prefixed with `enc:` containing the IV, authentication tag, and ciphertext separated by colons, or the original plaintext if no encryption key is configured.
- */
 export function encrypt(text: string): string {
     if (!key) {
         return text;
@@ -48,11 +36,6 @@ export function encrypt(text: string): string {
     return `${PREFIX}${iv.toString("hex")}:${authTag}:${encrypted}`;
 }
 
-/**
- * Decrypts an AES-256-GCM encrypted string.
- *
- * @returns The decrypted plaintext if successful, otherwise the original `ciphertext` unchanged.
- */
 export function decrypt(ciphertext: string): string {
     if (!key || !ciphertext.startsWith(PREFIX)) {
         return ciphertext;

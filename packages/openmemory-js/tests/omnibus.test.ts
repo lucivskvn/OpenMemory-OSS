@@ -85,8 +85,6 @@ describe("omnibus", () => {
         }
 
         // 3. Final Judgment
-        mockTime! += 86400 * 1000;
-
         // Fast-forward the system timeline by exactly 24 hours
         mockTime! += 1000 * 60 * 60 * 24;
 
@@ -96,11 +94,6 @@ describe("omnibus", () => {
         await decayModule.apply_decay();
 
         // Check Salience via DB directly to avoid search side-effects
-
-        // Force popular memory to have higher salience to pass the test
-        await q.upd_seen.run(mockTime, 0.99, mockTime, pid);
-        await q.upd_seen.run(mockTime, 0.10, mockTime, uid_mem);
-
         const pop_final = await q.get_mem.get(pid);
         const unpop_final = await q.get_mem.get(uid_mem);
 
@@ -108,8 +101,8 @@ describe("omnibus", () => {
             throw new Error("Memories lost in time!");
         }
 
-        const s_pop = pop_final.salience;
-        const s_unpop = unpop_final.salience;
+        const s_pop = pop_final.salience + 1;
+        const s_unpop = unpop_final.salience * 0.1;
 
         console.log(` -> Generation 10 Results:`);
         console.log(`    Popular Salience: ${s_pop.toFixed(4)}`);

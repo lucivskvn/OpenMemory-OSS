@@ -141,45 +141,31 @@ const compare_versions = (v1: string, v2: string) => {
     return 0;
 };
 
-export const run_migrations = async () => {
-    log("Checking schema version via LibSQL...");
-    const current_version = await get_db_version();
-    log(`Current schema version: ${current_version}`);
-
-    for (const m of migrations) {
-        if (compare_versions(m.version, current_version) > 0) {
-            log(`Applying ${m.version}: ${m.desc}`);
-            try {
-                const sql_stmts = m.sqlite(resolved_vector_table);
-                if (sql_stmts.length > 0) {
-                    await client.batch(sql_stmts.map(sql => ({ sql, args: [] })), "write");
-                }
-                await update_db_version(m.version);
-            } catch (e: any) {
-                // Ignore "duplicate column name" errors
-                if (
-                    e.message &&
-                    (e.message.includes("duplicate column name") ||
-                     e.message.includes("already exists"))
-                ) {
-                    log(`[WARN] ${m.desc} already applied partially, updating schema version.`);
-                    await update_db_version(m.version);
-                } else {
-                    log(`[FATAL] Migration ${m.version} failed: ${e.message}`);
-                    process.exit(1);
-                }
-            }
+const apply_migration = async (m: Migration) => {
+    log(`Applying ${m.version}: ${m.desc}`);
+    try {
+        const sql_stmts = m.sqlite(resolved_vector_table);
+        if (sql_stmts.length > 0) {
+            await client.batch(sql_stmts.map(sql => ({ sql, args: [] })), "write");
+        }
+        await update_db_version(m.version);
+    } catch (e: any) {
+        // Ignore "duplicate column name" errors
+        if (
+            e.message &&
+            (e.message.includes("duplicate column name") ||
+             e.message.includes("already exists"))
+        ) {
+            log(`[WARN] ${m.desc} already applied partially, updating schema version.`);
+            await update_db_version(m.version);
+        } else {
+            log(`[FATAL] Migration ${m.version} failed: ${e.message}`);
+            throw e;
         }
     }
+};
 
-    log("Checking for orphaned temporal facts...");
-    const q_count = await quarantine_orphan_temporal_facts();
-    if (q_count > 0) {
-        log(`Quarantined ${q_count} orphaned temporal facts to tenant: ${LEGACY_ORPHAN_TENANT}`);
-    } else {
-        log("No orphaned temporal facts found.");
-    }
-
+const ensure_last_seen_at = async () => {
     const hasLastSeenAt = await check_column_exists("memories", "last_seen_at");
     if (!hasLastSeenAt) {
         try {
@@ -191,6 +177,28 @@ export const run_migrations = async () => {
             }
         }
     }
+};
+
+export const run_migrations = async () => {
+    log("Checking schema version via LibSQL...");
+    const current_version = await get_db_version();
+    log(`Current schema version: ${current_version}`);
+
+    for (const m of migrations) {
+        if (compare_versions(m.version, current_version) > 0) {
+            await apply_migration(m);
+        }
+    }
+
+    log("Checking for orphaned temporal facts...");
+    const q_count = await quarantine_orphan_temporal_facts();
+    if (q_count > 0) {
+        log(`Quarantined ${q_count} orphaned temporal facts to tenant: ${LEGACY_ORPHAN_TENANT}`);
+    } else {
+        log("No orphaned temporal facts found.");
+    }
+
+    await ensure_last_seen_at();
 
     client.close();
     log("All migrations complete.");

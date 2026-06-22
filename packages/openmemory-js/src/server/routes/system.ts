@@ -32,11 +32,6 @@ const TIER_BENEFITS = {
 };
 
 import { q } from "../../core/db";
-/**
- * Registers system endpoints for cluster synchronisation, classifier training, health checks, and sector information retrieval.
- *
- * @param app - The Express application instance to register endpoints on
- */
 export function sys(app: any) {
     app.post(
         "/api/cluster/sync",
@@ -105,6 +100,10 @@ export function sys(app: any) {
                 const parsed = TrainSchema.safeParse(req.body);
                 if (!parsed.success) {
                     return res.status(400).json({ error: "Invalid payload format", details: parsed.error });
+                }
+
+                if (parsed.data.data.length === 0) {
+                    return res.status(400).json({ error: "Data array cannot be empty" });
                 }
 
                 // Fire and forget

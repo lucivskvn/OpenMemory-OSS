@@ -80,7 +80,7 @@ const make_decay_cfg = (): decay_cfg => ({
 const cfg = make_decay_cfg();
 
 let active_q = 0;
-export let last_decay = 0; export const reset_last_decay = () => last_decay = 0;
+let last_decay = 0; export const reset_last_decay = () => last_decay = 0; export const get_last_decay = () => last_decay;
 const cooldown = 60000;
 export const inc_q = () => active_q++;
 export const dec_q = () => active_q--;

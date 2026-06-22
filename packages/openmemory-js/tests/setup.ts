@@ -1,6 +1,5 @@
 import { beforeAll } from "bun:test";
 import { run_async } from "../src/core/db";
-import { run_migrations } from "../src/core/migrate";
 
 const SCHEMA_TABLES = [
     `create table if not exists memories(id text primary key,user_id text,project_id text,segment integer default 0,content text not null,summary text,simhash text,primary_sector text not null,tags text,meta text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0,coactivations integer default 0)`,
