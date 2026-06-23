@@ -36,9 +36,9 @@ type q_type = {
         all: (user_id: string, limit: number, offset: number) => Promise<any[]>;
     };
     get_segment_count: { get: (segment: number, user_id?: string, project_id?: string) => Promise<any> };
-    get_max_segment: { get: (is_system?: boolean, user_id?: string, project_id?: string) => Promise<any> };
-    get_segments: { all: (is_system?: boolean, user_id?: string, project_id?: string) => Promise<any[]> };
-    get_mem_by_segment: { all: (segment: number, is_system?: boolean, user_id?: string, project_id?: string) => Promise<any[]> };
+    get_max_segment: { get: (user_id?: string, project_id?: string, is_system?: boolean) => Promise<any> };
+    get_segments: { all: (user_id?: string, project_id?: string, is_system?: boolean) => Promise<any[]> };
+    get_mem_by_segment: { all: (segment: number, user_id?: string, project_id?: string, is_system?: boolean) => Promise<any[]> };
 
     ins_waypoint: { run: (...p: any[]) => Promise<void> };
     get_neighbors: { all: (src: string) => Promise<any[]> };
@@ -336,7 +336,7 @@ q = {
         }
     },
     get_max_segment: {
-        get: (is_system = false, user_id, project_id) => {
+        get: (user_id, project_id, is_system = false) => {
             let sql = "select coalesce(max(segment), 0) as max_seg from memories where 1=1";
             const params: any[] = [];
             if (!is_system) {
@@ -347,7 +347,7 @@ q = {
         }
     },
     get_segments: {
-        all: (is_system = false, user_id, project_id) => {
+        all: (user_id, project_id, is_system = false) => {
             let sql = "select distinct segment from memories where 1=1";
             const params: any[] = [];
             if (!is_system) {
@@ -359,7 +359,7 @@ q = {
         }
     },
     get_mem_by_segment: {
-        all: (segment, is_system = false, user_id, project_id) => {
+        all: (segment, user_id, project_id, is_system = false) => {
             let sql = "select * from memories where segment=?";
             const params: any[] = [segment];
             if (!is_system) {

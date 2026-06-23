@@ -237,7 +237,7 @@ export const apply_decay = async () => {
     last_decay = now_ts;
     const t0 = performance.now();
 
-    const segments = await q.get_segments.all();
+    const segments = await q.get_segments.all(undefined, undefined, true);
     let tot_proc = 0,
         tot_chg = 0,
         tot_comp = 0,

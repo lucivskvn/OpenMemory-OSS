@@ -35,7 +35,7 @@ async function cleanup(_user_id: string) {
 }
 
 async function check_vec(id: string) {
-    const row = await q.get_mem.get(id);
+    const row = await q.get_mem.get(id, "u1");
     if (!row) console.error(`[DEBUG] Memory ${id} NOT FOUND in DB`);
     else
         console.log(
@@ -98,8 +98,8 @@ describe("omnibus", () => {
         await decayModule.apply_decay();
 
         // Check Salience via DB directly to avoid search side-effects
-        const pop_final = await q.get_mem.get(pid);
-        const unpop_final = await q.get_mem.get(uid_mem);
+        const pop_final = await q.get_mem.get(pid, uid);
+        const unpop_final = await q.get_mem.get(uid_mem, uid);
 
         if (!pop_final || !unpop_final) {
             throw new Error("Memories lost in time!");
