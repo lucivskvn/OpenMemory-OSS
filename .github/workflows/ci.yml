@@ -26,7 +26,7 @@ jobs:
       - name: Run Desloppify Scan
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bunx desloppify scan --profile ci
+        run: bunx desloppify scan . --profile ci
 
   snyk:
     name: Snyk Vulnerability Scan
@@ -40,6 +40,8 @@ jobs:
 
       - name: Run Snyk to check for vulnerabilities
         uses: snyk/actions/node@8e119fbb6c251787721d34ba683ed48eba792766 # master
+        with:
+          args: --all-projects
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 
@@ -56,7 +58,7 @@ jobs:
       - name: Run Semgrep with OWASP Top 10 rules
         uses: returntocorp/semgrep-action@713efdd345f3035192eaa63f56867b88e63e4e5d # v1
         with:
-          config: p/owasp-top-10
+          config: p/owasp-top-ten
 
   test-python:
     name: Test Python SDK
