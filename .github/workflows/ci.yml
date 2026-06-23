@@ -11,8 +11,12 @@ jobs:
   desloppify:
     name: Desloppify Code Quality Scan
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@f4d14e03ff726c06358e5557344e1da148b56cf7 # v1
@@ -27,8 +31,12 @@ jobs:
   snyk:
     name: Snyk Vulnerability Scan
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Run Snyk to check for vulnerabilities
         uses: snyk/actions/node@8e119fbb6c251787721d34ba683ed48eba792766 # master
@@ -38,8 +46,12 @@ jobs:
   semgrep:
     name: Semgrep Application Audit
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Run Semgrep with OWASP Top 10 rules
         uses: returntocorp/semgrep-action@713efdd345f3035192eaa63f56867b88e63e4e5d # v1
