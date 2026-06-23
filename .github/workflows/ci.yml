@@ -8,8 +8,47 @@ on:
   workflow_dispatch:
 
 jobs:
+  desloppify:
+    name: Desloppify Code Quality Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@f4d14e03ff726c06358e5557344e1da148b56cf7 # v1
+        with:
+          bun-version: '1.2.14'
+
+      - name: Run Desloppify Scan
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bunx desloppify scan --profile ci
+
+  snyk:
+    name: Snyk Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Run Snyk to check for vulnerabilities
+        uses: snyk/actions/node@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+  semgrep:
+    name: Semgrep Application Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Run Semgrep with OWASP Top 10 rules
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: p/owasp-top-10
+
   test-python:
     name: Test Python SDK
+    needs: [desloppify, snyk, semgrep]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -35,6 +74,7 @@ jobs:
           
   test-node:
     name: Test Bun SDK Stack
+    needs: [desloppify, snyk, semgrep]
     runs-on: ubuntu-latest
     env:
       OM_TURSO_URL: "file:openmemory.db"

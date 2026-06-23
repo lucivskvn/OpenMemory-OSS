@@ -565,3 +565,34 @@ Issues and PRs are welcome.
 ## 13. License
 
 OpenMemory is licensed under **Apache 2.0**. See [LICENSE](LICENSE) for details.
+
+---
+
+## 14. Security, Regulatory Governance, and Compliance Deployment Guide
+
+This section outlines the strict requirements for deploying OpenMemory in enterprise and regulated environments. It must be adhered to when provisioning cloud databases, managing vector constraints, handling proxy routing, and processing user data deletion requests.
+
+### Configuration Parameters
+
+To ensure environment consistency and secure connectivity, the following environment variables must be rigidly defined in production:
+
+*   **`OM_TURSO_URL`**: The remote libSQL/Turso database connection URI (e.g., `libsql://your-db-name.turso.io`).
+*   **`OM_TURSO_TOKEN`**: The cryptographic auth token required to establish remote pooling transactions with the Turso cloud instance.
+*   **`OM_MAX_VECTOR_DIM`**: The maximum allowed dimensionality for vector embeddings (e.g., `1536`). This ensures dimensional alignment with the fixed database schema modifiers. Any vector exceeding this limit will be rejected or truncated via Matryoshka prefix-slicing.
+
+### GDPR-Compliant Cascading Erasure Mechanics
+
+OpenMemory supports "Right to be Forgotten" mandates under GDPR.
+
+A memory deletion request is not merely a soft-delete flag. Invoking the core memory deletion routine triggers a **clean prune cascade**:
+1.  **`memories`**: The primary episodic or semantic entry is permanently excised.
+2.  **`vector_store`**: Associated high-dimensional embedding arrays are destroyed, preventing latent vector reconstruction.
+3.  **`temporal_facts`**: Any point-in-time timeline nodes linked directly to the deleted memory are automatically closed and scrubbed.
+
+### Render MCP Proxy Connection Handling
+
+When deploying the native OpenMemory Model Context Protocol (MCP) server via Render, specific proxy routing mechanics are enforced:
+
+*   **Header Sanitation**: Render deploys services behind reverse proxies. The application enforces validation of `X-Forwarded-For` and `X-Forwarded-Proto` headers to trace original client IP origins and ensure secure protocol (HTTPS/WSS) termination.
+*   **Route Protection**: The `/mcp` routes are tightly bound to token verification constraints.
+*   **Context Boundaries**: To mitigate context exhaustion and extraction attacks via the MCP bridge, strict Context7 token window limits are enforced upon all inbound and outbound payloads.
