@@ -41,7 +41,12 @@ export function sys(app: any) {
         ) => {
             try {
                 const payload = req.body as Record<string, unknown>;
-                if (payload.event === "memory_sync" && payload.data) {
+                if (
+                    payload.event === "memory_sync" &&
+                    typeof payload.data === "object" &&
+                    payload.data !== null &&
+                    !Array.isArray(payload.data)
+                ) {
                     const data = payload.data as Record<string, any>;
 
                     const requiredFields = [
