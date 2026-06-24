@@ -68,15 +68,17 @@ jobs:
     permissions:
       contents: read
       security-events: write
+    container:
+      image: semgrep/semgrep:latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
 
       - name: Run Semgrep OSS Scan
-        uses: semgrep/semgrep-action@713efdd345f3035192eaa63f56867b88e63e4e5d # v1
-        with:
-          config: auto # Dynamically pulls 100% free community rules for JS/TS and Python
+        run: semgrep ci --config=auto
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
 
   test-python:
     name: Test Python SDK
