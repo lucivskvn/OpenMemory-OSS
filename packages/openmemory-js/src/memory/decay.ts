@@ -105,7 +105,7 @@ const compress_vector = (
     const src = vec.length ? vec : [1];
     const tgt_dim = Math.max(
         min_dim,
-        Math.min(max_dim, Math.floor(src.length * clamp_f(f, 0.0, 1.0))),
+        Math.min(max_dim, Math.floor(src.length * clamp_f(f, 0, 1))),
     );
     const dim = Math.max(min_dim, Math.min(src.length, tgt_dim));
     if (dim >= src.length) return src.slice(0);
