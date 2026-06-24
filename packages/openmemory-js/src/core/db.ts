@@ -70,7 +70,8 @@ let transaction: {
 const memories_table = "memories";
 let vector_store: VectorStore;
 
-const url = env.OM_TURSO_URL || `file:${env.db_path || "./data/openmemory.sqlite"}`;
+const url =
+    env.OM_TURSO_URL || `file:${env.db_path || "./data/openmemory.sqlite"}`;
 const token = env.OM_TURSO_TOKEN;
 const client = createClient({ url, authToken: token });
 
@@ -152,9 +153,7 @@ if (env.vector_backend === "valkey") {
         { run_async, get_async, all_async },
         sqlite_vector_table,
     );
-    console.error(
-        `[DB] Using VectorStore with table: ${sqlite_vector_table}`,
-    );
+    console.error(`[DB] Using VectorStore with table: ${sqlite_vector_table}`);
 }
 
 export const init_tables = async () => {
@@ -166,7 +165,7 @@ export const init_tables = async () => {
         `create table if not exists users(user_id text primary key,summary text,reflection_count integer default 0,created_at integer,updated_at integer)`,
         `create table if not exists stats(id integer primary key autoincrement,type text not null,count integer default 1,ts integer not null)`,
         `create table if not exists temporal_facts(id text primary key,user_id text,project_id text,subject text not null,predicate text not null,object text not null,valid_from integer not null,valid_to integer,confidence real not null check(confidence >= 0 and confidence <= 1),last_updated integer not null,metadata text,unique(subject,predicate,object,valid_from))`,
-        `create table if not exists temporal_edges(id text primary key,source_id text not null,target_id text not null,relation_type text not null,valid_from integer not null,valid_to integer,weight real not null,metadata text,foreign key(source_id) references temporal_facts(id),foreign key(target_id) references temporal_facts(id))`
+        `create table if not exists temporal_edges(id text primary key,source_id text not null,target_id text not null,relation_type text not null,valid_from integer not null,valid_to integer,weight real not null,metadata text,foreign key(source_id) references temporal_facts(id),foreign key(target_id) references temporal_facts(id))`,
     ];
     for (const sql of SCHEMA_TABLES) {
         await exec(sql);
@@ -321,10 +320,10 @@ q = {
     },
     get_waypoint: {
         get: (src, dst) =>
-            one(
-                "select weight from waypoints where src_id=? and dst_id=?",
-                [src, dst],
-            ),
+            one("select weight from waypoints where src_id=? and dst_id=?", [
+                src,
+                dst,
+            ]),
     },
     upd_waypoint: {
         run: (...p) =>
@@ -352,8 +351,7 @@ q = {
             exec("update embed_logs set status=?,err=? where id=?", p),
     },
     get_pending_logs: {
-        all: () =>
-            many("select * from embed_logs where status=?", ["pending"]),
+        all: () => many("select * from embed_logs where status=?", ["pending"]),
     },
     get_failed_logs: {
         all: () =>
@@ -377,8 +375,7 @@ q = {
             ),
     },
     get_user: {
-        get: (user_id) =>
-            one("select * from users where user_id=?", [user_id]),
+        get: (user_id) => one("select * from users where user_id=?", [user_id]),
     },
     upd_user_summary: {
         run: (...p) =>
