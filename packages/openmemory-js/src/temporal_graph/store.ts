@@ -5,10 +5,7 @@ import { randomUUID } from "crypto";
 
 const is_pg = env.metadata_backend === "postgres";
 
-const clamp_f = (val: number, min = 0, max = 1): number => {
-    if (Number.isNaN(val) || !Number.isFinite(val)) return min;
-    return Math.max(min, Math.min(max, val));
-};
+import { clamp_f } from "../utils/math";
 
 export interface InsertFactOptions {
     subject: string;

@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { classifier } from "../../memory/classifier";
 import { all_async } from "../../core/db";
 import { sector_configs } from "../../memory/hsg";
@@ -40,46 +41,37 @@ export function sys(app: any) {
             res: import("../server").AppResponse,
         ) => {
             try {
-                const payload = req.body as Record<string, unknown>;
-                if (
-                    payload.event === "memory_sync" &&
-                    typeof payload.data === "object" &&
-                    payload.data !== null &&
-                    !Array.isArray(payload.data)
-                ) {
-                    const data = payload.data as Record<string, any>;
+                const SyncSchema = z.object({
+                    event: z.literal("memory_sync"),
+                    data: z.object({
+                        id: z.string(),
+                        user_id: z.string().nullable().optional(),
+                        project_id: z.string().nullable().optional(),
+                        segment: z.number().nullable().optional(),
+                        content: z.string(),
+                        simhash: z.string().nullable().optional(),
+                        primary_sector: z.string(),
+                        tags: z.any().nullable().optional(),
+                        meta: z.any().nullable().optional(),
+                        created_at: z.number().nullable().optional(),
+                        updated_at: z.number().nullable().optional(),
+                        last_seen_at: z.number().nullable().optional(),
+                        salience: z.number().nullable().optional(),
+                        decay_lambda: z.number().nullable().optional(),
+                        version: z.number().nullable().optional(),
+                        mean_dim: z.number().nullable().optional(),
+                        mean_vec: z.any().nullable().optional(),
+                        compressed_vec: z.any().nullable().optional(),
+                        feedback_score: z.number().nullable().optional(),
+                    }),
+                });
 
-                    const requiredFields = [
-                        "id",
-                        "user_id",
-                        "project_id",
-                        "segment",
-                        "content",
-                        "simhash",
-                        "primary_sector",
-                        "tags",
-                        "meta",
-                        "created_at",
-                        "updated_at",
-                        "last_seen_at",
-                        "salience",
-                        "decay_lambda",
-                        "version",
-                        "mean_dim",
-                        "mean_vec",
-                        "compressed_vec",
-                        "feedback_score",
-                    ];
-                    for (const field of requiredFields) {
-                        if (!(field in data)) {
-                            return res
-                                .status(400)
-                                .json({ error: "Invalid sync event" });
-                        }
-                    }
+                const parsed = SyncSchema.safeParse(req.body);
+                if (parsed.success) {
+                    const data = parsed.data.data;
                     const existing = await q.get_mem.get(data.id);
                     // Handle version tracker deduplication check
-                    if (!existing || data.version > existing.version) {
+                    if (!existing || (data.version ?? 1) > existing.version) {
                         // We do an upsert
                         await q.ins_mem.run(
                             data.id,
@@ -96,7 +88,7 @@ export function sys(app: any) {
                             data.last_seen_at,
                             data.salience,
                             data.decay_lambda,
-                            data.version,
+                            data.version ?? 1,
                             data.mean_dim,
                             data.mean_vec,
                             data.compressed_vec,
@@ -117,7 +109,6 @@ export function sys(app: any) {
         },
     );
 
-    const { z } = require("zod");
     const TrainSchema = z.object({
         data: z.array(
             z.object({
@@ -142,9 +133,10 @@ export function sys(app: any) {
             try {
                 const parsed = TrainSchema.safeParse(req.body);
                 if (!parsed.success) {
+                    const isProd = process.env.NODE_ENV === "production";
                     return res.status(400).json({
                         error: "Invalid payload format",
-                        details: parsed.error,
+                        details: isProd ? "Validation failed" : parsed.error,
                     });
                 }
 

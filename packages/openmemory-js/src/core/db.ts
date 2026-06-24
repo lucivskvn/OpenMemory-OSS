@@ -108,6 +108,10 @@ const one = async (sql: string, args: any[] = []) => {
 };
 
 const many = async (sql: string, args: any[] = []) => {
+    if (txStmts) {
+        txStmts.push({ sql, args });
+        return [];
+    }
     const result = await client.execute({ sql, args });
     return mapRows(result.rows);
 };
