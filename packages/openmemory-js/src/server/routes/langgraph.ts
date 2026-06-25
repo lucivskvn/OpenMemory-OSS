@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import {
     store_node_mem,
     retrieve_node_mems,
@@ -12,6 +13,29 @@ import type {
     lgm_reflection_req,
 } from "../../core/types";
 
+
+const LgmStoreReqSchema = z.object({
+    memory: z.record(z.any()).optional(),
+    content: z.string().optional(),
+    metadata: z.record(z.any()).optional(),
+    session_id: z.string().optional(),
+    tags: z.array(z.string()).optional()
+}).passthrough();
+
+const LgmRetrieveReqSchema = z.object({
+    query: z.string().optional(),
+    session_id: z.string().optional(),
+    limit: z.number().optional()
+}).passthrough();
+
+const LgmContextReqSchema = z.object({
+    session_id: z.string().optional()
+}).passthrough();
+
+const LgmReflectionReqSchema = z.object({
+    session_id: z.string().optional()
+}).passthrough();
+
 export function lg(app: any) {
     app.get("/lgm/config", (_req: any, res: any) => {
         res.json(get_lg_cfg());
@@ -19,7 +43,8 @@ export function lg(app: any) {
 
     app.post("/lgm/store", async (req: any, res: any) => {
         try {
-            const r = await store_node_mem(req.body as lgm_store_req);
+            const parsedBody = LgmStoreReqSchema.parse(req.body);
+            const r = await store_node_mem(parsedBody as lgm_store_req);
             res.json(r);
         } catch (e) {
             console.error("[LGM] store error:", e);
@@ -32,7 +57,8 @@ export function lg(app: any) {
 
     app.post("/lgm/retrieve", async (req: any, res: any) => {
         try {
-            const r = await retrieve_node_mems(req.body as lgm_retrieve_req);
+            const parsedBody = LgmRetrieveReqSchema.parse(req.body);
+            const r = await retrieve_node_mems(parsedBody as lgm_retrieve_req);
             res.json(r);
         } catch (e) {
             console.error("[LGM] retrieve error:", e);
@@ -45,7 +71,8 @@ export function lg(app: any) {
 
     app.post("/lgm/context", async (req: any, res: any) => {
         try {
-            const r = await get_graph_ctx(req.body as lgm_context_req);
+            const parsedBody = LgmContextReqSchema.parse(req.body);
+            const r = await get_graph_ctx(parsedBody as lgm_context_req);
             res.json(r);
         } catch (e) {
             console.error("[LGM] context error:", e);
@@ -58,7 +85,8 @@ export function lg(app: any) {
 
     app.post("/lgm/reflection", async (req: any, res: any) => {
         try {
-            const r = await create_refl(req.body as lgm_reflection_req);
+            const parsedBody = LgmReflectionReqSchema.parse(req.body);
+            const r = await create_refl(parsedBody as lgm_reflection_req);
             res.json(r);
         } catch (e) {
             console.error("[LGM] reflection error:", e);

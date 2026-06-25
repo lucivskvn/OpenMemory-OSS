@@ -38,48 +38,39 @@ export class DashboardPanel {
 
         this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
 
-        this._panel.webview.onDidReceiveMessage(
-            message => {
-                switch (message.command) {
-                    case 'quickNote':
-                        vscode.commands.executeCommand('openmemory.quickNote');
-                        return;
-                    case 'query':
-                        vscode.commands.executeCommand('openmemory.queryContext');
-                        return;
-                    case 'patterns':
-                        vscode.commands.executeCommand('openmemory.viewPatterns');
-                        return;
-                    case 'settings':
-                        vscode.commands.executeCommand('openmemory.setup');
-                        return;
-                }
-            },
-            null,
-            this._disposables
-        );
+        this._panel.webview.onDidReceiveMessage(this._handleMessage.bind(this), null, this._disposables);
+    }
+
+    private _handleMessage(message: any) {
+        const commandMap: Record<string, string> = {
+            'quickNote': 'openmemory.quickNote',
+            'query': 'openmemory.queryContext',
+            'patterns': 'openmemory.viewPatterns',
+            'settings': 'openmemory.setup'
+        };
+
+        if (commandMap[message.command]) {
+            vscode.commands.executeCommand(commandMap[message.command]);
+        }
     }
 
     public dispose() {
         DashboardPanel.currentPanel = undefined;
         this._panel.dispose();
-        while (this._disposables.length) {
-            const x = this._disposables.pop();
-            if (x) {
-                x.dispose();
-            }
-        }
+
+        this._disposables.forEach(disposable => {
+            if (disposable) disposable.dispose();
+        });
+
+        this._disposables = [];
     }
 
     private _update() {
-        const webview = this._panel.webview;
-        this._panel.webview.html = this._getHtmlForWebview(webview);
+        this._panel.webview.html = this._getHtmlForWebview(this._panel.webview);
     }
 
     private _getHtmlForWebview(webview: vscode.Webview) {
-        // Use a nonce to only allow specific scripts to be run
         const nonce = getNonce();
-
         return `<!DOCTYPE html>
             <html lang="en">
             <head>

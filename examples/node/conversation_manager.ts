@@ -54,32 +54,28 @@ export class ConversationManager {
      * 2. Semantically relevant past messages (Long Term Memory)
      * 3. Relevant Facts/Summaries
      */
-    async getContext(currentQuery: string, historyWindow: number = 5): Promise<string> {
-        // 1. Fetch recent history (using search or a dedicated history endpoint if avail)
-        // Since Memory.search is semantic, we might not get *ordered* history easily without ID tracking
-        // But let's assume valid semantic search is what we want for *context*.
-
-        // Ideally, we'd have a `mem.history(userId)` method. 
-        // Let's use search for "relevant past" and assume the app maintains local state for immediate history
-        // OR we use semantic search to find *related* past conversations.
-
+        async getContext(currentQuery: string, historyWindow: number = 5): Promise<string> {
         const relevantMemories = await this.mem.search(currentQuery, {
             user_id: this.userId,
             limit: 5,
             minSalience: 0.5 // Only high relevance
         });
 
-        const contextBlocks: string[] = [];
+        const contextBlocks: string[] = ["--- RELEVANT PAST MEMORIES ---"];
 
-        contextBlocks.push("--- RELEVANT PAST MEMORIES ---");
         if (relevantMemories.length === 0) {
             contextBlocks.push("(No relevant past memories found)");
-        } else {
-            console.log(`[Manager] Found ${relevantMemories.length} relevant memories for context.`);
-            for (const mem of relevantMemories) {
-                const meta = mem.metadata || {};
-                const date = meta.timestamp ? new Date(meta.timestamp).toISOString() : 'Unknown Time';
+            return contextBlocks.join("\n");
+        }
+
+        console.log(`[Manager] Found ${relevantMemories.length} relevant memories for context.`);
+        for (const mem of relevantMemories) {
+            // Fix: Check if mem.metadata exists, no fallback empty object, provide clear path
+            if (mem.metadata && mem.metadata.timestamp) {
+                const date = new Date(mem.metadata.timestamp as number).toISOString();
                 contextBlocks.push(`[${date}] ${mem.content}`);
+            } else {
+                contextBlocks.push(`[Unknown Time] ${mem.content}`);
             }
         }
 
