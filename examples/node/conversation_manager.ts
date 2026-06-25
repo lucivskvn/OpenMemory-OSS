@@ -69,9 +69,9 @@ export class ConversationManager {
         }
 
         console.log(`[Manager] Found ${relevantMemories.length} relevant memories for context.`);
-        for (const mem of relevantMemories) {
+                for (const mem of relevantMemories) {
             // Fix: Check if mem.metadata exists, no fallback empty object, provide clear path
-            if (mem.metadata && mem.metadata.timestamp) {
+            if (mem.metadata?.timestamp) {
                 const date = new Date(mem.metadata.timestamp as number).toISOString();
                 contextBlocks.push(`[${date}] ${mem.content}`);
             } else {
