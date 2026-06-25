@@ -336,7 +336,7 @@ q = {
         }
     },
     get_max_segment: {
-        get: (user_id?: string, project_id?: string, is_system: boolean = false) => {
+        get: (user_id?: string, project_id?: string, is_system?: boolean) => {
             let sql = "select coalesce(max(segment), 0) as max_seg from memories where 1=1";
             const params: any[] = [];
             if (!is_system) {
@@ -347,7 +347,7 @@ q = {
         }
     },
     get_segments: {
-        all: (user_id?: string, project_id?: string, is_system: boolean = false) => {
+        all: (user_id?: string, project_id?: string, is_system?: boolean) => {
             let sql = "select distinct segment from memories where 1=1";
             const params: any[] = [];
             if (!is_system) {
@@ -359,7 +359,7 @@ q = {
         }
     },
     get_mem_by_segment: {
-        all: (segment: number, user_id?: string, project_id?: string, is_system: boolean = false) => {
+        all: (segment: number, user_id?: string, project_id?: string, is_system?: boolean) => {
             let sql = "select * from memories where segment=?";
             const params: any[] = [segment];
             if (!is_system) {
