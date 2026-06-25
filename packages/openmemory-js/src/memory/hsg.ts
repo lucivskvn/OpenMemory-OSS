@@ -1073,11 +1073,9 @@ export async function hsg_query(
             }
         }
 
-        for (const r of top) {
-            on_query_hit(r.id, r.primary_sector, (text) =>
-                embedForSector(text, r.primary_sector),
-            ).catch(() => {});
-        }
+        await Promise.all(top.map(r =>
+            on_query_hit(r.id, r.primary_sector, (text) => embedForSector(text, r.primary_sector)).catch(() => {})
+        ));
 
         cache.set(h, { r: top, t: Date.now() });
         return top;
