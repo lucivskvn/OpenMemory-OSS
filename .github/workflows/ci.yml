@@ -78,7 +78,6 @@ jobs:
             echo "SNYK_TOKEN is not set. Skipping Snyk scan."
             # We skip gracefully to avoid pipeline failures
           else
-            snyk auth $SNYK_TOKEN
             snyk test --all-projects
           fi
 
