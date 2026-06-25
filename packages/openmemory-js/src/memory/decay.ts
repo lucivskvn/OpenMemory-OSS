@@ -74,7 +74,10 @@ const make_decay_cfg = (): decay_cfg => ({
         true,
     ),
     regeneration_enabled: parse_bool(process.env.OM_REGENERATION_ENABLED, true),
-    max_vec_dim: parse_int(process.env.OM_MAX_VECTOR_DIM, env.vec_dim || 1536),
+    max_vec_dim: Math.max(
+        1,
+        parse_int(process.env.OM_MAX_VECTOR_DIM, env.vec_dim || 1536),
+    ),
     min_vec_dim: parse_int(process.env.OM_MIN_VECTOR_DIM, 64),
     summary_layers: clamp_i(parse_int(process.env.OM_SUMMARY_LAYERS, 3), 1, 3),
     lambda_hot: 0.005,
@@ -270,7 +273,7 @@ export const apply_decay = async () => {
 
             const parts = chunkz(batch, cfg.threads);
 
-            await Promise.all(
+            const results = await Promise.allSettled(
                 parts.map(async (part) => {
                     for (const m of part) {
                         const tier = pick_tier(m, now_ts);
@@ -387,6 +390,8 @@ export const apply_decay = async () => {
                     }
                 }),
             );
+            const firstError = results.find((r) => r.status === "rejected");
+            if (firstError) throw (firstError as PromiseRejectedResult).reason;
 
             if (seg !== segments[segments.length - 1]) {
                 await sleep(env.decay_sleep_ms);
