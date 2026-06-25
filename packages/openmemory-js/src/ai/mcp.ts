@@ -222,22 +222,15 @@ export const create_mcp_srv = (tenant?: string) => {
             const results: any = { type, query };
             const at_date = at ? new Date(at) : new Date();
 
-            if (type === "contextual" || type === "unified") {
-                const flt =
-                    sector || min_salience !== undefined || u || proj
-                        ? {
-                              ...(sector
-                                  ? { sectors: [sector as sector_type] }
-                                  : {}),
-                              ...(min_salience !== undefined
-                                  ? { minSalience: min_salience }
-                                  : {}),
-                              ...(u ? { user_id: u } : {}),
-                              ...(proj ? { project_id: proj } : {}),
-                          }
-                        : undefined;
+                        if (type === "contextual" || type === "unified") {
+                const flt: any = {};
+                if (sector) flt.sectors = [sector as sector_type];
+                if (min_salience !== undefined) flt.minSalience = min_salience;
+                if (u) flt.user_id = u;
+                if (proj) flt.project_id = proj;
 
-                const matches = await hsg_query(query, k ?? 8, flt);
+                const hasFilters = Object.keys(flt).length > 0;
+                const matches = await hsg_query(query, k ?? 8, hasFilters ? flt : undefined);
                 results.contextual = matches.map((m: any) => ({
                     source: "hsg",
                     id: m.id,
@@ -275,22 +268,22 @@ export const create_mcp_srv = (tenant?: string) => {
                 }));
             }
 
-            let summ = "";
+                        let summ = "";
+            const ctx_count = results.contextual?.length || 0;
+            const fact_count = results.factual?.length || 0;
+
             if (type === "contextual") {
-                summ = results.contextual.length
-                    ? fmt_matches(results.contextual)
-                    : "No contextual memories matched the query.";
+                summ = ctx_count ? fmt_matches(results.contextual) : "No contextual memories matched the query.";
             } else if (type === "factual") {
-                if (results.factual.length === 0) {
+                if (!fact_count) {
                     summ = "No temporal facts matched the query.";
                 } else {
-                    summ = results.factual
-                        .map(
-                            (f: any, idx: number) =>
-                                `${idx + 1}. [fact] confidence=${f.confidence} id=${f.id}\n${f.content}`,
-                        )
-                        .join("\n\n");
+                    summ = results.factual.map((f: any, idx: number) => `${idx + 1}. [fact] confidence=${f.confidence} id=${f.id}\n${f.content}`).join("\n\n");
                 }
+            } else {
+                summ = `Found ${ctx_count} contextual memories and ${fact_count} temporal facts.\n\n`;
+                if (ctx_count > 0) summ += "=== Contextual Memories ===\n" + fmt_matches(results.contextual) + "\n\n";
+                if (fact_count > 0) summ += "=== Temporal Facts ===\n" + results.factual.map((f: any, idx: number) => `${idx + 1}. [fact] confidence=${f.confidence} id=${f.id}\n${f.content}`).join("\n\n");
             } else {
                 const ctx_count = results.contextual?.length || 0;
                 const fact_count = results.factual?.length || 0;

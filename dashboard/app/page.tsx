@@ -102,7 +102,11 @@ export default function Dashboard() {
                     event: a.type.replace('_', ' '),
                     sector: a.sector,
                     salience: a.salience?.toFixed(2),
-                    level: a.salience > 0.8 ? 'Critical' : a.salience > 0.5 ? 'Warning' : 'Info',
+                    level: (() => {
+                        if (a.salience > 0.8) return 'Critical';
+                        if (a.salience > 0.5) return 'Warning';
+                        return 'Info';
+                    })(),
                 })) || [])
             }
 

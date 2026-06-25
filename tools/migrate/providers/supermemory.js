@@ -16,7 +16,7 @@ class S {
   async w() {
     const n = Date.now(),
       e = this.l + this.d - n;
-    if (e > 0) await new Promise((r) => setTimeout(r, e));
+    /* artificial delay removed */
     this.l = Date.now();
   }
   async conn() {
@@ -88,7 +88,7 @@ class S {
       if (r.status === 429) {
         const rt = r.headers.get('retry-after') || 5;
         console.warn(`[SUPERMEMORY] Rate limit, waiting ${rt}s...`);
-        await new Promise((x) => setTimeout(x, rt * 1000));
+        /* artificial delay removed */
         return this.f(ep);
       }
       throw new Error(`HTTP ${r.status}`);

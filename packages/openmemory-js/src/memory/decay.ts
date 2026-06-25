@@ -36,8 +36,11 @@ type decay_cfg = {
 const parse_int = (x: any, d: number) =>
     Number.isFinite(+x) ? Math.floor(+x) : d;
 const parse_f = (x: any, d: number) => (Number.isFinite(+x) ? +x : d);
-const parse_bool = (x: any, d: boolean) =>
-    x === "true" ? true : x === "false" ? false : d;
+const parse_bool = (x: any, d: boolean) => {
+    if (x === "true") return true;
+    if (x === "false") return false;
+    return d;
+};
 const clamp_f = (v: number, a: number, b: number) =>
     Math.min(b, Math.max(a, v));
 const clamp_i = (v: number, a: number, b: number) =>

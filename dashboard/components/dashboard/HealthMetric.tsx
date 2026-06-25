@@ -4,7 +4,11 @@ interface HealthMetricProps {
 }
 
 export function HealthMetric({ label, value }: HealthMetricProps) {
-    const barColor = value > 80 ? "#fb923c" : value > 60 ? "#facc15" : "#22c55e"
+    const barColor = (() => {
+        if (value > 80) return "#fb923c";
+        if (value > 60) return "#facc15";
+        return "#22c55e";
+    })();
 
     return (
         <div className="text-sm">

@@ -593,7 +593,11 @@ export default function settings() {
                                             </select>
                                         ) : (
                                             <input
-                                                type={meta?.type === 'password' ? 'password' : meta?.type === 'number' ? 'number' : 'text'}
+                                                type={(() => {
+                                                    if (meta?.type === 'password') return 'password';
+                                                    if (meta?.type === 'number') return 'number';
+                                                    return 'text';
+                                                })()}
                                                 value={value}
                                                 onChange={e => handleInputChange(key, e.target.value)}
                                                 placeholder={meta?.placeholder}
