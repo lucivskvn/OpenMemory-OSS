@@ -7,12 +7,17 @@ on:
     branches: [main, next]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   desloppify:
     name: Desloppify Code Quality Scan
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -33,6 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -49,13 +55,25 @@ jobs:
         with:
           bun-version: '1.2.14'
 
-      - name: Pre-resolve Python Dependencies
+      - name: Pre-resolve Dependencies
         run: |
           cd packages/openmemory-py
           pip install -e .[dev]
+          cd ../..
+          cd dashboard
+          bun install
+          cd ..
+          cd packages/openmemory-js
+          bun install
+          cd ../..
 
       - name: Initialize Snyk Engine
         uses: snyk/actions/setup@8e119fbb6c251787721d34ba683ed48eba792766 # master
+
+      - name: Authenticate Snyk
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: snyk auth $SNYK_TOKEN
 
       - name: Run Snyk Monorepo Scan
         env:
@@ -69,14 +87,15 @@ jobs:
       contents: read
       security-events: write
     container:
-      image: semgrep/semgrep:1.82.0
+      image: semgrep/semgrep:latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
 
       - name: Run Semgrep OSS Scan
-        run: semgrep ci --config=auto
+        run: semgrep ci --config=p/default --config=p/security-audit --config=p/secrets --config=p/ci
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
 
@@ -84,6 +103,7 @@ jobs:
     name: Test Python SDK
     needs: [desloppify, snyk, semgrep]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       
@@ -111,6 +131,7 @@ jobs:
       OM_TURSO_URL: "file:openmemory.db"
       OM_TIER: "fast"
       OM_VEC_DIM: "1536"
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
