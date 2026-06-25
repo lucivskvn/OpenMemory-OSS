@@ -70,11 +70,6 @@ jobs:
       - name: Initialize Snyk Engine
         uses: snyk/actions/setup@8e119fbb6c251787721d34ba683ed48eba792766 # master
 
-      - name: Authenticate Snyk
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        run: snyk auth $SNYK_TOKEN
-
       - name: Run Snyk Monorepo Scan
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
