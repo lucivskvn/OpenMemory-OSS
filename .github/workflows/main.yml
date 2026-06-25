@@ -11,6 +11,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+    timeout-minutes: 15
     steps:
       - name: Contribute List
         uses: akhilmhdh/contributors-readme-action@v2.3.11

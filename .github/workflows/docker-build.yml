@@ -11,10 +11,15 @@ on:
       - develop
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   docker-build-test:
     runs-on: ubuntu-latest
     name: Test Docker Build
+    timeout-minutes: 15
 
     steps:
       - name: Checkout code
