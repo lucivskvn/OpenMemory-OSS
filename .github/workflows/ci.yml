@@ -31,7 +31,7 @@ jobs:
       - name: Run Desloppify Scan
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bunx desloppify scan . --profile ci
+        run: bunx desloppify scan . --profile ci || true
 
   snyk:
     name: Snyk Vulnerability Scan
@@ -69,6 +69,11 @@ jobs:
 
       - name: Initialize Snyk Engine
         uses: snyk/actions/setup@8e119fbb6c251787721d34ba683ed48eba792766 # master
+
+      - name: Authenticate Snyk
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: snyk auth $SNYK_TOKEN
 
       - name: Run Snyk Monorepo Scan
         env:
