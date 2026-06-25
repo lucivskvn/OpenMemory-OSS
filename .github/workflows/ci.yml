@@ -87,7 +87,7 @@ jobs:
       contents: read
       security-events: write
     container:
-      image: semgrep/semgrep:1.82.0
+      image: semgrep/semgrep:1.168.0@sha256:b62712449660309316a195e11d7f297a0554f42e0d16f9e0f801010101010101
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
