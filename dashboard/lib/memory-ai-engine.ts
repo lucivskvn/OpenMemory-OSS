@@ -558,23 +558,21 @@ class QueryAnalyzer {
     /**
      * Analyze temporal context in query
      */
-    static analyzeTemporalContext(query: string) {
+            static analyzeTemporalContext(query: string) {
         const lower = query.toLowerCase()
-        const timeExpressions: string[] = []
-
-        for (const expr of TEMPORAL_EXPRESSIONS) {
-            if (lower.includes(expr)) {
-                timeExpressions.push(expr)
-            }
-        }
+        const timeExpressions = TEMPORAL_EXPRESSIONS.filter(expr => lower.includes(expr))
 
         let temporalScope: 'past' | 'present' | 'future' | 'general' = 'general'
 
-        if (timeExpressions.some(e => ['yesterday', 'last', 'ago', 'earlier', 'before', 'previously', 'past'].includes(e))) {
+        const pastWords = new Set(['yesterday', 'last', 'ago', 'earlier', 'before', 'previously', 'past'])
+        const futureWords = new Set(['tomorrow', 'next', 'later', 'soon', 'future'])
+        const presentWords = new Set(['today', 'now', 'currently', 'present'])
+
+        if (timeExpressions.some(e => pastWords.has(e))) {
             temporalScope = 'past'
-        } else if (timeExpressions.some(e => ['tomorrow', 'next', 'later', 'soon', 'future'].includes(e))) {
+        } else if (timeExpressions.some(e => futureWords.has(e))) {
             temporalScope = 'future'
-        } else if (timeExpressions.some(e => ['today', 'now', 'currently', 'present'].includes(e))) {
+        } else if (timeExpressions.some(e => presentWords.has(e))) {
             temporalScope = 'present'
         }
 

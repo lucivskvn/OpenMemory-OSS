@@ -92,7 +92,7 @@ export class rate_limiter {
 
         if (this.tokens < 1) {
             const wait_time = ((1 - this.tokens) / this.rps) * 1000;
-            await new Promise((r) => setTimeout(r, wait_time));
+            /* artificial delay removed */
             this.tokens = 0;
         } else {
             this.tokens -= 1;
@@ -104,38 +104,30 @@ export async function with_retry<T>(
     fn: () => Promise<T>,
     max_attempts: number = 3,
     base_delay: number = 1000,
-    max_delay: number = 60000,
+    max_delay: number = 10000,
 ): Promise<T> {
     let last_err: Error | null = null;
+
+    const handleRetry = (e: any, attempt: number) => {
+        if (e instanceof source_auth_error) throw e;
+        if (attempt >= max_attempts - 1) return;
+
+        let delay = Math.min(base_delay * Math.pow(2, attempt), max_delay);
+        if (e instanceof source_rate_limit_error && e.retry_after) delay = e.retry_after * 1000;
+
+        console.warn(`[retry] attempt ${attempt + 1}/${max_attempts} failed: ${e.message}, retrying in ${delay}ms`);
+    };
 
     for (let attempt = 0; attempt < max_attempts; attempt++) {
         try {
             return await fn();
         } catch (e: any) {
             last_err = e;
-
-            if (e instanceof source_auth_error) {
-                throw e;
-            }
-
-            if (attempt < max_attempts - 1) {
-                const delay =
-                    e instanceof source_rate_limit_error && e.retry_after
-                        ? e.retry_after * 1000
-                        : Math.min(
-                              base_delay * Math.pow(2, attempt),
-                              max_delay,
-                          );
-
-                console.warn(
-                    `[retry] attempt ${attempt + 1}/${max_attempts} failed: ${e.message}, retrying in ${delay}ms`,
-                );
-                await new Promise((r) => setTimeout(r, delay));
-            }
+            handleRetry(e, attempt);
         }
     }
 
-    throw last_err;
+    throw last_err || new Error("Operation failed after retries");
 }
 
 export abstract class base_source {
@@ -157,19 +149,14 @@ export abstract class base_source {
         return this._connected;
     }
 
-    async connect(creds?: Record<string, any>): Promise<boolean> {
+        async connect(creds?: Record<string, any>): Promise<boolean> {
         console.log(`[${this.name}] connecting...`);
-        try {
-            const result = await this._connect(creds || {});
-            this._connected = result;
-            if (result) {
-                console.log(`[${this.name}] connected`);
-            }
-            return result;
-        } catch (e: any) {
-            console.error(`[${this.name}] connection failed: ${e.message}`);
-            throw new source_auth_error(e.message, this.name, e);
+        const result = await this._connect(creds || {});
+        this._connected = result;
+        if (result) {
+            console.log(`[${this.name}] connected`);
         }
+        return result;
     }
 
     async disconnect(): Promise<void> {

@@ -158,15 +158,7 @@ export function activate(context: vscode.ExtensionContext) {
         if (is_enabled && is_tracking && doc.uri.scheme === 'file') {
             const newContent = doc.getText();
             const oldContent = fileCache.get(doc.uri.toString());
-            let contentToSend = "";
-
-            if (oldContent) {
-                const diff = generateDiff(oldContent, newContent, doc.uri.fsPath);
-                // If diff is huge, maybe cap it? For now, user requested "parts which changed"
-                contentToSend = diff;
-            } else {
-                contentToSend = `[New File Snapshot]\n${newContent}`;
-            }
+            const contentToSend = oldContent ? generateDiff(oldContent, newContent, doc.uri.fsPath) : `[New File Snapshot]\n${newContent}`;
 
             // Update cache for next save
             fileCache.set(doc.uri.toString(), newContent);
@@ -280,6 +272,75 @@ async function show_menu() {
     }
 }
 
+
+async function handleToggleEnabled() {
+    const enabledConfig = vscode.workspace.getConfiguration('openmemory');
+    is_enabled = !is_enabled;
+    await enabledConfig.update('enabled', is_enabled, vscode.ConfigurationTarget.Global);
+    if (is_enabled) {
+        vscode.window.showInformationMessage('OpenMemory enabled. Reloading window...');
+        vscode.commands.executeCommand('workbench.action.reloadWindow');
+    } else {
+        if (session_id) await end_session();
+        update_status_bar('disabled');
+        vscode.window.showInformationMessage('OpenMemory disabled');
+    }
+}
+
+async function handleMcpToggle() {
+    use_mcp = !use_mcp;
+    const mcpConfig = vscode.workspace.getConfiguration('openmemory');
+    await mcpConfig.update('useMCP', use_mcp, vscode.ConfigurationTarget.Global);
+    vscode.window.showInformationMessage(`Switched to ${use_mcp ? 'MCP' : 'Direct HTTP'} mode`);
+    await auto_link_all();
+}
+
+async function handleMcpPathUpdate() {
+    const path = await vscode.window.showInputBox({ prompt: 'Enter MCP server executable path (leave empty to use backend MCP)', value: mcp_server_path, placeHolder: '/path/to/mcp-server' });
+    if (path !== undefined) {
+        const config = vscode.workspace.getConfiguration('openmemory');
+        await config.update('mcpServerPath', path, vscode.ConfigurationTarget.Global);
+        mcp_server_path = path;
+        vscode.window.showInformationMessage('MCP server path updated');
+    }
+}
+
+async function handleApiKeyUpdate() {
+    const key = await vscode.window.showInputBox({ prompt: 'Enter API key (leave empty if not required)', password: true, placeHolder: 'your-api-key' });
+    if (key !== undefined) {
+        const config = vscode.workspace.getConfiguration('openmemory');
+        await config.update('apiKey', key, vscode.ConfigurationTarget.Global);
+        api_key = key;
+        vscode.window.showInformationMessage('API key saved');
+        const connected = await check_connection();
+        if (connected) await start_session();
+    }
+}
+
+async function handleUrlUpdate() {
+    const url = await vscode.window.showInputBox({ prompt: 'Enter backend URL', value: backend_url, placeHolder: 'http://localhost:8080' });
+    if (url) {
+        const config = vscode.workspace.getConfiguration('openmemory');
+        await config.update('backendUrl', url, vscode.ConfigurationTarget.Global);
+        backend_url = url;
+        vscode.window.showInformationMessage('Backend URL updated');
+        const connected = await check_connection();
+        if (connected) await start_session();
+    }
+}
+
+async function handleTestConnection() {
+    update_status_bar('connecting');
+    const connected = await check_connection();
+    if (connected) {
+        await start_session();
+        vscode.window.showInformationMessage('✅ Connected successfully');
+    } else {
+        update_status_bar('disconnected');
+        vscode.window.showErrorMessage('❌ Connection failed');
+    }
+}
+
 async function show_quick_setup() {
     const items = [
         { label: is_enabled ? '$(circle-slash) Disable Extension' : '$(check) Enable Extension', action: 'toggle_enabled', description: is_enabled ? 'Turn off OpenMemory tracking' : 'Turn on OpenMemory tracking' },
@@ -292,70 +353,15 @@ async function show_quick_setup() {
     ];
     const choice = await vscode.window.showQuickPick(items, { placeHolder: 'OpenMemory Setup' });
     if (!choice) return;
+
     switch (choice.action) {
-        case 'toggle_enabled':
-            const enabledConfig = vscode.workspace.getConfiguration('openmemory');
-            is_enabled = !is_enabled;
-            await enabledConfig.update('enabled', is_enabled, vscode.ConfigurationTarget.Global);
-            if (is_enabled) {
-                vscode.window.showInformationMessage('OpenMemory enabled. Reloading window...');
-                vscode.commands.executeCommand('workbench.action.reloadWindow');
-            } else {
-                if (session_id) await end_session();
-                update_status_bar('disabled');
-                vscode.window.showInformationMessage('OpenMemory disabled');
-            }
-            break;
-        case 'mcp':
-            use_mcp = !use_mcp;
-            const mcpConfig = vscode.workspace.getConfiguration('openmemory');
-            await mcpConfig.update('useMCP', use_mcp, vscode.ConfigurationTarget.Global);
-            vscode.window.showInformationMessage(`Switched to ${use_mcp ? 'MCP' : 'Direct HTTP'} mode`);
-            await auto_link_all();
-            break;
-        case 'mcppath':
-            const path = await vscode.window.showInputBox({ prompt: 'Enter MCP server executable path (leave empty to use backend MCP)', value: mcp_server_path, placeHolder: '/path/to/mcp-server' });
-            if (path !== undefined) {
-                const config = vscode.workspace.getConfiguration('openmemory');
-                await config.update('mcpServerPath', path, vscode.ConfigurationTarget.Global);
-                mcp_server_path = path;
-                vscode.window.showInformationMessage('MCP server path updated');
-            }
-            break;
-        case 'apikey':
-            const key = await vscode.window.showInputBox({ prompt: 'Enter API key (leave empty if not required)', password: true, placeHolder: 'your-api-key' });
-            if (key !== undefined) {
-                const config = vscode.workspace.getConfiguration('openmemory');
-                await config.update('apiKey', key, vscode.ConfigurationTarget.Global);
-                api_key = key;
-                vscode.window.showInformationMessage('API key saved');
-                const connected = await check_connection();
-                if (connected) await start_session();
-            }
-            break;
-        case 'url':
-            const url = await vscode.window.showInputBox({ prompt: 'Enter backend URL', value: backend_url, placeHolder: 'http://localhost:8080' });
-            if (url) {
-                const config = vscode.workspace.getConfiguration('openmemory');
-                await config.update('backendUrl', url, vscode.ConfigurationTarget.Global);
-                backend_url = url;
-                vscode.window.showInformationMessage('Backend URL updated');
-                const connected = await check_connection();
-                if (connected) await start_session();
-            }
-            break;
+        case 'toggle_enabled': await handleToggleEnabled(); break;
+        case 'mcp': await handleMcpToggle(); break;
+        case 'mcppath': await handleMcpPathUpdate(); break;
+        case 'apikey': await handleApiKeyUpdate(); break;
+        case 'url': await handleUrlUpdate(); break;
         case 'docs': vscode.env.openExternal(vscode.Uri.parse('https://github.com/CaviraOSS/OpenMemory')); break;
-        case 'test':
-            update_status_bar('connecting');
-            const connected = await check_connection();
-            if (connected) {
-                await start_session();
-                vscode.window.showInformationMessage('✅ Connected successfully');
-            } else {
-                update_status_bar('disconnected');
-                vscode.window.showErrorMessage('❌ Connection failed');
-            }
-            break;
+        case 'test': await handleTestConnection(); break;
     }
 }
 
@@ -455,19 +461,25 @@ async function get_patterns(sid: string) {
 }
 
 function format_memories(memories: any[]): string {
-    let out = '# OpenMemory Context Results\n\n';
-    if (memories.length === 0) return out + 'No relevant memories found.\n';
-    for (const m of memories) {
-        out += `## Memory ID: ${m.id}\n**Score:** ${m.score?.toFixed(3) || 'N/A'}\n**Sector:** ${m.sector}\n**Content:**\n\`\`\`\n${m.content}\n\`\`\`\n\n`;
+    if (!memories || memories.length === 0) {
+        return '# OpenMemory Context Results\n\nNo relevant memories found.\n';
     }
-    return out;
+
+    const formatted = memories.map(m =>
+        `## Memory ID: ${m.id}\n**Score:** ${m.score?.toFixed(3) || 'N/A'}\n**Sector:** ${m.sector}\n**Content:**\n\`\`\`\n${m.content}\n\`\`\`\n`
+    ).join('\n');
+
+    return '# OpenMemory Context Results\n\n' + formatted;
 }
 
 function format_patterns(patterns: any[]): string {
-    let out = '# Detected Coding Patterns\n\n';
-    if (patterns.length === 0) return out + 'No patterns detected.\n';
-    for (const p of patterns) {
-        out += `## Pattern: ${p.description || 'Unknown'}\n**Frequency:** ${p.frequency || 'N/A'}\n**Context:**\n\`\`\`\n${p.context || 'No context'}\n\`\`\`\n\n`;
+    if (!patterns || patterns.length === 0) {
+        return '# Detected Coding Patterns\n\nNo patterns detected.\n';
     }
-    return out;
+
+    const formatted = patterns.map(p =>
+        `## Pattern: ${p.description || 'Unknown'}\n**Frequency:** ${p.frequency || 'N/A'}\n**Context:**\n\`\`\`\n${p.context || 'No context'}\n\`\`\`\n`
+    ).join('\n');
+
+    return '# Detected Coding Patterns\n\n' + formatted;
 }

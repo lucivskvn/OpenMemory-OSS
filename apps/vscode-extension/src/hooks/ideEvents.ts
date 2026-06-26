@@ -47,17 +47,17 @@ export function updateMicroCache(query: string, vector: number[], score: number)
     const key = crypto.createHash('md5').update(query).digest('hex');
     microVectorCache.set(key, { vector, timestamp: Date.now(), score });
 
-    if (microVectorCache.size > CACHE_MAX_SIZE) {
-        let oldestKey = '';
-        let oldestTime = Infinity;
-        for (const [k, v] of microVectorCache.entries()) {
-            if (v.timestamp < oldestTime) {
-                oldestTime = v.timestamp;
-                oldestKey = k;
-            }
+    if (microVectorCache.size <= CACHE_MAX_SIZE) return;
+
+    let oldestKey = '';
+    let oldestTime = Infinity;
+    for (const [k, v] of microVectorCache.entries()) {
+        if (v.timestamp < oldestTime) {
+            oldestTime = v.timestamp;
+            oldestKey = k;
         }
-        if (oldestKey) microVectorCache.delete(oldestKey);
     }
+    if (oldestKey) microVectorCache.delete(oldestKey);
 }
 
 export function checkMicroCache(query: string, lambda = 0.7, tau = 3600000): { vector: number[], score: number } | null {

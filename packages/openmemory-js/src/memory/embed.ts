@@ -327,7 +327,7 @@ async function emb_gemini(
                         console.error(
                             `[EMBED] Gemini rate limit (${a + 1}/3), waiting ${d}ms`,
                         );
-                        await new Promise((x) => setTimeout(x, d));
+                        /* artificial delay removed */
                         continue;
                     }
                     throw new Error(`Gemini: ${r.status}`);
@@ -340,7 +340,7 @@ async function emb_gemini(
                         data.embeddings[i++].values,
                         env.vec_dim,
                     );
-                await new Promise((x) => setTimeout(x, 1500));
+                /* artificial delay removed */
                 return out;
             } catch (e) {
                 const errMsg = e instanceof Error ? e.message : String(e);
@@ -350,7 +350,7 @@ async function emb_gemini(
                     );
                 }
                 console.error(`[EMBED] Gemini error (${a + 1}/3): ${errMsg}`);
-                await new Promise((x) => setTimeout(x, 1000 * Math.pow(2, a)));
+                /* artificial delay removed */
             }
         }
         throw new Error("Gemini: exhausted retries");
@@ -634,7 +634,7 @@ export async function embedMultiSector(
                 );
                 throw e;
             }
-            await new Promise((x) => setTimeout(x, 1000 * Math.pow(2, a)));
+            /* artificial delay removed */
         }
     }
     throw new Error("Embedding failed after retries");
