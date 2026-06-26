@@ -75,7 +75,7 @@ const make_decay_cfg = (): decay_cfg => ({
     ),
     regeneration_enabled: parse_bool(process.env.OM_REGENERATION_ENABLED, true),
     max_vec_dim: Math.max(
-        1,
+        2,
         parse_int(process.env.OM_MAX_VECTOR_DIM, env.vec_dim || 1536),
     ),
     min_vec_dim: parse_int(process.env.OM_MIN_VECTOR_DIM, 64),
