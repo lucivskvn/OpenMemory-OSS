@@ -18,7 +18,6 @@ import type { sector_type, mem_row, rpc_err_code } from "../core/types";
 import { update_user_summary } from "../memory/user_summary";
 import { insert_fact } from "../temporal_graph/store";
 import { query_facts_at_time } from "../temporal_graph/query";
-import { ToolRegistry } from "./mcp_tools";
 
 const sec_enum = z.enum([
     "episodic",
@@ -81,25 +80,6 @@ const send_err = (
 
 const uid = (val?: string | null) => (val?.trim() ? val.trim() : undefined);
 
-/**
- * Resolve the effective user_id for a tool call.
- *
- * The HTTP MCP route runs through the same `authenticate_api_request`
- * middleware as the REST routes (see src/server/index.ts), so for every
- * authenticated MCP call we have a `tenant` derived from the API key.
- * That tenant is the source of truth for ownership, mirroring the REST
- * `require_tenant` + `reject_tenant_mismatch` model.
- *
- *  - tenant set + no arg                -> use tenant
- *  - tenant set + matching arg          -> use tenant
- *  - tenant set + mismatching arg       -> throw (becomes an MCP isError)
- *  - tenant unset (stdio transport etc) -> use the arg as supplied
- *
- * Stdio MCP keeps its existing behaviour — there is no HTTP request to
- * carry an API key, so tenant is undefined and the tool falls back to
- * whatever user_id the client passed (or `add_hsg_memory`'s "anonymous"
- * default).
- */
 const resolve_user_id = (
     tenant: string | undefined,
     arg: string | null | undefined,
@@ -125,9 +105,7 @@ export const create_mcp_srv = (tenant?: string) => {
         { capabilities: { tools: {}, resources: {}, logging: {} } },
     );
 
-    const registry = new ToolRegistry();
-
-    registry.tool(
+    srv.tool(
         "openmemory_query",
         "Query OpenMemory for contextual memories (HSG) and/or temporal facts",
         {
@@ -222,7 +200,7 @@ export const create_mcp_srv = (tenant?: string) => {
             const results: any = { type, query };
             const at_date = at ? new Date(at) : new Date();
 
-                        if (type === "contextual" || type === "unified") {
+            if (type === "contextual" || type === "unified") {
                 const flt: any = {};
                 if (sector) flt.sectors = [sector as sector_type];
                 if (min_salience !== undefined) flt.minSalience = min_salience;
@@ -268,7 +246,7 @@ export const create_mcp_srv = (tenant?: string) => {
                 }));
             }
 
-                        let summ = "";
+            let summ = "";
             const ctx_count = results.contextual?.length || 0;
             const fact_count = results.factual?.length || 0;
 
@@ -281,12 +259,6 @@ export const create_mcp_srv = (tenant?: string) => {
                     summ = results.factual.map((f: any, idx: number) => `${idx + 1}. [fact] confidence=${f.confidence} id=${f.id}\n${f.content}`).join("\n\n");
                 }
             } else {
-                summ = `Found ${ctx_count} contextual memories and ${fact_count} temporal facts.\n\n`;
-                if (ctx_count > 0) summ += "=== Contextual Memories ===\n" + fmt_matches(results.contextual) + "\n\n";
-                if (fact_count > 0) summ += "=== Temporal Facts ===\n" + results.factual.map((f: any, idx: number) => `${idx + 1}. [fact] confidence=${f.confidence} id=${f.id}\n${f.content}`).join("\n\n");
-            } else {
-                const ctx_count = results.contextual?.length || 0;
-                const fact_count = results.factual?.length || 0;
                 summ = `Found ${ctx_count} contextual memories and ${fact_count} temporal facts.\n\n`;
 
                 if (ctx_count > 0) {
@@ -321,7 +293,7 @@ export const create_mcp_srv = (tenant?: string) => {
         },
     );
 
-    registry.tool(
+    srv.tool(
         "openmemory_store_project",
         "Persist new content scoped to a SPECIFIC PROJECT. Use this for design decisions, code patterns, or business logic that is unique to this project. If unsure if the content is project-specific vs global, YOU MUST ASK THE USER for clarification.",
         {
@@ -478,9 +450,7 @@ export const create_mcp_srv = (tenant?: string) => {
         },
     );
 
-    // PROPOSAL: Consider renaming this tool to openmemory_store_global in the future to distinguish from project-specific storage.
-    // The current name 'openmemory_store' is kept for architectural compatibility.
-    registry.tool(
+    srv.tool(
         "openmemory_store",
         "Persist new content as GLOBAL KNOWLEDGE. Use this for general coding best practices, common library knowledge, or universal system concepts. If unsure if the content is global vs project-specific, YOU MUST ASK THE USER for clarification.",
         {
@@ -514,12 +484,10 @@ export const create_mcp_srv = (tenant?: string) => {
             user_id,
         }) => {
             const u = resolve_user_id(tenant, user_id);
-            // Force global scope for this tool
             const proj = "system_global";
             const results: any = { type };
 
             if (type === "contextual" || type === "both") {
-                // Add to contextual memory system (HSG)
                 const res = await add_hsg_memory(
                     content,
                     j(tags || []),
@@ -535,7 +503,6 @@ export const create_mcp_srv = (tenant?: string) => {
             }
 
             if ((type === "factual" || type === "both") && facts) {
-                // Add to factual graph system (Temporal)
                 const temporal_results = [];
                 for (const fact of facts) {
                     const valid_from = fact.valid_from
@@ -586,7 +553,7 @@ export const create_mcp_srv = (tenant?: string) => {
         },
     );
 
-    registry.tool(
+    srv.tool(
         "openmemory_reinforce",
         "Boost salience for an existing memory",
         {
@@ -600,7 +567,6 @@ export const create_mcp_srv = (tenant?: string) => {
         },
         async ({ id, boost }) => {
             if (tenant) {
-                // When HTTP-bound, refuse to reinforce another tenant's memory.
                 const mem = await q.get_mem.get(id);
                 if (!mem || mem.user_id !== tenant) {
                     throw new Error(
@@ -620,7 +586,7 @@ export const create_mcp_srv = (tenant?: string) => {
         },
     );
 
-    registry.tool(
+    srv.tool(
         "openmemory_delete",
         "Delete a memory by identifier",
         {
@@ -642,7 +608,6 @@ export const create_mcp_srv = (tenant?: string) => {
             const u = resolve_user_id(tenant, user_id);
             const proj = uid(project_id);
             if (u || proj) {
-                // Pre-check ownership if user_id/project_id provided
                 const mem = await q.get_mem.get(id);
                 if (mem) {
                     if (u && mem.user_id !== u)
@@ -684,7 +649,7 @@ export const create_mcp_srv = (tenant?: string) => {
         },
     );
 
-    registry.tool(
+    srv.tool(
         "openmemory_list",
         "List recent memories for quick inspection",
         {
@@ -716,12 +681,7 @@ export const create_mcp_srv = (tenant?: string) => {
             const proj = uid(project_id);
             let rows: mem_row[];
 
-            // This is a bit simplified for listing; we'll fetch based on filters
-            // In a real app we'd have a specialized query, but for now we'll use existing ones
-            // and post-filter or just use the project filter if available
             if (proj) {
-                // If project specified, we need a query that supports it.
-                // For now, let's just use a raw query if it's easier or use hsg_query
                 rows = await all_async(
                     `
                     SELECT * FROM ${memories_table} 
@@ -768,7 +728,7 @@ export const create_mcp_srv = (tenant?: string) => {
         },
     );
 
-    registry.tool(
+    srv.tool(
         "openmemory_get",
         "Fetch a single memory by identifier",
         {
@@ -828,7 +788,6 @@ export const create_mcp_srv = (tenant?: string) => {
             };
         },
     );
-    registry.apply(srv);
 
     srv.resource(
         "openmemory-config",
@@ -909,18 +868,6 @@ export const mcp = (app: any) => {
             console.error("[MCP] Incoming request:", JSON.stringify(pay));
             set_hdrs(res);
 
-            // Create a fresh transport + server per request to support
-            // multiple clients (MCP SDK 1.27 rejects re-initialization
-            // on a single transport instance).
-            //
-            // `req.tenant` is set by the global `authenticate_api_request`
-            // middleware (src/server/index.ts). Threading it into the
-            // per-request server is what scopes MCP tool calls to the
-            // authenticated tenant — without this, tools either wrote
-            // memories with user_id="anonymous" (invisible to REST
-            // `/memory/all` which is tenant-scoped) or read across
-            // every tenant. See resolve_user_id() for the per-tool
-            // contract.
             const tenant_from_req =
                 typeof (req as any).tenant === "string"
                     ? ((req as any).tenant as string)
