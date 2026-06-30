@@ -36,11 +36,6 @@ async def query_facts_at_time(subject: Optional[str] = None, predicate: Optional
     if min_confidence > 0:
         conds.append("confidence >= ?")
         params.append(min_confidence)
-    if project_id:
-        conds.append("(project_id = ? OR project_id = 'system_global' OR project_id IS NULL)")
-        params.append(project_id)
-    else:
-        conds.append("(project_id = 'system_global' OR project_id IS NULL)")
 
     sql = f"""
         SELECT id, user_id, project_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
@@ -99,11 +94,6 @@ async def query_facts_in_range(subject: str = None, predicate: str = None, start
     if min_confidence > 0:
         conds.append("confidence >= ?")
         params.append(min_confidence)
-    if project_id:
-        conds.append("(project_id = ? OR project_id = 'system_global' OR project_id IS NULL)")
-        params.append(project_id)
-    else:
-        conds.append("(project_id = 'system_global' OR project_id IS NULL)")
 
     where = f"WHERE {' AND '.join(conds)}" if conds else ""
     sql = f"""
@@ -163,7 +153,8 @@ async def search_facts(pattern: str, field: str = "subject", at: int = None, use
     user_id = enforce_tenant(user_id)
     ts = at if at is not None else int(time.time()*1000)
     search_pat = f"%{pattern}%"
-    if field not in ["subject", "predicate", "object"]: field = "subject"
+    if field not in ["subject", "predicate", "object"]:
+        field = "subject"
 
     sql = f"""
         SELECT id, user_id, project_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
