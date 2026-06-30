@@ -110,13 +110,15 @@ const compress_vector = (
 
     // Bucket Average Pooling
     const pooled: number[] = new Array(dim).fill(0);
+    const bucket_counts: number[] = new Array(dim).fill(0);
     const bucket_size = src.length / dim;
     for (let i = 0; i < src.length; i++) {
         const bucket = Math.min(dim - 1, Math.floor(i / bucket_size));
         pooled[bucket] += src[i];
+        bucket_counts[bucket]++;
     }
     for (let i = 0; i < dim; i++) {
-        pooled[i] /= Math.ceil(bucket_size);
+        if (bucket_counts[i] > 0) pooled[i] /= bucket_counts[i];
     }
 
     // L2 Re-normalization

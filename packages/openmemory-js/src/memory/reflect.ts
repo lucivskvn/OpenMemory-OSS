@@ -113,14 +113,18 @@ const boost = async (ids: string[]) => {
 export const run_reflection = async () => {
     console.error("[REFLECT] Starting reflection job...");
     const min = env.reflect_min || 20;
-    const mems = await q.all_mem.all(100, Math.floor(Math.random() * 500));
-    console.error(
-        `[REFLECT] Fetched ${mems.length} memories (min required: ${min})`,
-    );
-    if (mems.length < min) {
+    const countRes = await q.get_total_mem_count.get();
+    const totalMem = countRes?.c ? Number(countRes.c) : 0;
+    if (totalMem < min) {
         console.error("[REFLECT] Not enough memories, skipping");
         return { created: 0, reason: "low" };
     }
+    const maxOffset = Math.max(0, totalMem - 100);
+    const offset = Math.floor(Math.random() * (maxOffset + 1));
+    const mems = await q.all_mem.all(100, offset);
+    console.error(
+        `[REFLECT] Fetched ${mems.length} memories (min required: ${min})`,
+    );
     const cls = cluster(mems);
     console.error(`[REFLECT] Clustered into ${cls.length} groups`);
     let n = 0;

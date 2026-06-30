@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { enforce_tenant } from "../temporal_graph/tenant";
 import { canonical_token_set, stable_text_fallback_hash } from "../utils/text";
 import { inc_q, dec_q, on_query_hit } from "./decay";
 import { env, tier } from "../core/cfg";
@@ -1138,6 +1139,7 @@ export async function add_hsg_memory(
     chunks?: number;
     deduplicated?: boolean;
 }> {
+    user_id = enforce_tenant(user_id);
     const simhash = compute_simhash(content);
     const existing = await q.get_mem_by_simhash.get(simhash, user_id);
     if (existing && hamming_dist(simhash, existing.simhash) <= 3) {

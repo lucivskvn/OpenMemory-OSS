@@ -16,8 +16,8 @@ from ..core.db import db
 
 async def query_facts_at_time(subject: Optional[str] = None, predicate: Optional[str] = None, subject_object: Optional[str] = None, at: int = None, min_confidence: float = 0.1, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
     ts = at if at is not None else int(time.time()*1000)
-    conds = ["(valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?))"]
-    params = [ts, ts]
+    conds = ["user_id = ?", "(valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?))"]
+    params = [user_id, ts, ts]
 
     if user_id:
         conds.append("user_id = ?")
@@ -49,12 +49,13 @@ async def get_current_fact(subject: str, predicate: str, user_id: str = None) ->
     sql = """
         SELECT id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
         FROM temporal_facts
-        WHERE subject = ? AND predicate = ? AND user_id = ? AND valid_to IS NULL
+        WHERE subject = ? AND user_id = ? AND predicate = ? AND user_id = ? AND valid_to IS NULL
         ORDER BY valid_from DESC
         LIMIT 1
     """
     row = await asyncio.to_thread(db.fetchone, sql, (subject, predicate, user_id))
-    if not row: return None
+    if not row:
+        return None
     return format_fact(row)
 
 async def query_facts_in_range(subject: str = None, predicate: str = None, start: int = None, end: int = None, min_confidence: float = 0.1, user_id: str = None) -> List[Dict[str, Any]]:
@@ -92,25 +93,27 @@ async def query_facts_in_range(subject: str = None, predicate: str = None, start
     rows = await asyncio.to_thread(db.fetchall, sql, tuple(params))
     return [format_fact(r) for r in rows]
 
-async def find_conflicting_facts(subject: str, predicate: str, at: int = None) -> List[Dict[str, Any]]:
+async def find_conflicting_facts(subject: str, predicate: str, at: int = None, user_id: str = None) -> List[Dict[str, Any]]:
+    user_id = enforce_tenant(user_id)
     ts = at if at is not None else int(time.time()*1000)
     sql = """
         SELECT id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
         FROM temporal_facts
-        WHERE subject = ? AND predicate = ?
+        WHERE subject = ? AND user_id = ? AND predicate = ? AND user_id = ?
         AND (valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?))
         ORDER BY confidence DESC
     """
-    rows = await asyncio.to_thread(db.fetchall, sql, (subject, predicate, ts, ts))
+    rows = await asyncio.to_thread(db.fetchall, sql, (subject, predicate, user_id, ts, ts))
     return [format_fact(r) for r in rows]
 
-async def get_facts_by_subject(subject: str, at: int = None, include_historical: bool = False) -> List[Dict[str, Any]]:
-    params = [subject]
+async def get_facts_by_subject(subject: str, at: int = None, include_historical: bool = False, user_id: str = None) -> List[Dict[str, Any]]:
+    user_id = enforce_tenant(user_id)
+    params = [subject, user_id]
     if include_historical:
         sql = """
             SELECT id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
             FROM temporal_facts
-            WHERE subject = ?
+            WHERE subject = ? AND user_id = ?
             ORDER BY predicate ASC, valid_from DESC
         """
     else:
@@ -118,7 +121,7 @@ async def get_facts_by_subject(subject: str, at: int = None, include_historical:
         sql = """
             SELECT id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
             FROM temporal_facts
-            WHERE subject = ?
+            WHERE subject = ? AND user_id = ?
             AND (valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?))
             ORDER BY predicate ASC, confidence DESC
         """
@@ -147,8 +150,8 @@ async def search_facts(pattern: str, field: str = "subject", at: int = None, use
 async def get_related_facts(fact_id: str, relation_type: str = None, at: int = None, user_id: str = None) -> List[Dict[str, Any]]:
     user_id = enforce_tenant(user_id)
     ts = at if at is not None else int(time.time()*1000)
-    conds = ["e.user_id = ?", "(e.valid_from <= ? AND (e.valid_to IS NULL OR e.valid_to >= ?))"]
-    params = [user_id, ts, ts]
+    conds = ["e.user_id = ?", "f.user_id = ?", "(e.valid_from <= ? AND (e.valid_to IS NULL OR e.valid_to >= ?))"]
+    params = [user_id, user_id, ts, ts]
 
     if relation_type:
         conds.append("e.relation_type = ?")

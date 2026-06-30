@@ -29,9 +29,6 @@ export const query_facts_at_time = async (opts: {
     );
     params.push(timestamp, timestamp);
 
-    conditions.push("user_id = ?");
-    params.push(user_id);
-
     if (project_id) {
         conditions.push(
             "(project_id = ? OR project_id = 'system_global' OR project_id IS NULL)",
@@ -89,21 +86,22 @@ export const get_current_fact = async (
     project_id?: string,
 ): Promise<TemporalFact | null> => {
     user_id = enforce_tenant(user_id);
-    const row = await get_async(
-        `
+    const args: any[] = [subject, predicate, user_id];
+    let sql = `
         SELECT id, user_id, project_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
         FROM temporal_facts
-        WHERE subject = ? AND predicate = ? AND valid_to IS NULL AND user_id = ?${project_id ? " AND (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)" : " AND (project_id = 'system_global' OR project_id IS NULL)"}${project_id ? " AND (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)" : ""}
-        ${project_id ? "ORDER BY (project_id = ?) DESC, valid_from DESC" : "ORDER BY valid_from DESC"}
-        LIMIT 1
-    `,
-        [
-            subject,
-            predicate,
-            ...(user_id ? [user_id] : []),
-            ...(project_id ? [project_id] : []),
-        ],
-    );
+        WHERE subject = ? AND predicate = ? AND valid_to IS NULL AND user_id = ?`;
+
+    if (project_id) {
+        sql += " AND (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)";
+        args.push(project_id);
+        sql += " ORDER BY (project_id = ?) DESC, valid_from DESC LIMIT 1";
+        args.push(project_id);
+    } else {
+        sql += " AND (project_id = 'system_global' OR project_id IS NULL) ORDER BY valid_from DESC LIMIT 1";
+    }
+
+    const row = await get_async(sql, args);
 
     if (!row) return null;
 
@@ -157,9 +155,6 @@ export const query_facts_in_range = async (opts: {
         conditions.push("valid_from <= ?");
         params.push(to.getTime());
     }
-
-    conditions.push("user_id = ?");
-    params.push(user_id);
 
     if (project_id) {
         conditions.push(

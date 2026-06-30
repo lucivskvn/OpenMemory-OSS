@@ -37,6 +37,7 @@ type q_type = {
         all: (user_id: string, limit: number, offset: number) => Promise<any[]>;
     };
     get_segment_count: { get: (segment: number) => Promise<any> };
+    get_total_mem_count: { get: () => Promise<any> };
     get_max_segment: { get: () => Promise<any> };
     get_segments: { all: () => Promise<any[]> };
     get_mem_by_segment: { all: (segment: number) => Promise<any[]> };
@@ -203,7 +204,7 @@ if (is_pg) {
             `create table if not exists "${sc}"."stats"(id serial primary key,type text not null,count integer default 1,ts bigint not null)`,
         );
         await pg.query(
-            `create table if not exists "${sc}"."temporal_facts"(id uuid primary key,user_id text,project_id text,subject text not null,predicate text not null,object text not null,valid_from bigint not null,valid_to bigint,confidence double precision not null check(confidence >= 0 and confidence <= 1),last_updated bigint not null,metadata text,unique(subject,predicate,object,valid_from))`,
+            `create table if not exists "${sc}"."temporal_facts"(id uuid primary key,user_id text,project_id text,subject text not null,predicate text not null,object text not null,valid_from bigint not null,valid_to bigint,confidence double precision not null check(confidence >= 0 and confidence <= 1),last_updated bigint not null,metadata text,unique(subject,predicate,object,valid_from,user_id,project_id))`,
         );
         await pg.query(
             `create index if not exists temporal_facts_user_idx on "${sc}"."temporal_facts"(user_id)`,
@@ -342,8 +343,15 @@ if (is_pg) {
         },
         del_mem: {
             run: async (...p) => {
-                await run_async(`delete from temporal_facts where source_memory_id=$1`, p);
-                await run_async(`delete from ${m} where id=$1`, p);
+                await run_async('BEGIN');
+                try {
+                    await run_async(`delete from temporal_facts where source_memory_id=$1`, p);
+                    await run_async(`delete from ${m} where id=$1`, p);
+                    await run_async('COMMIT');
+                } catch (e) {
+                    await run_async('ROLLBACK');
+                    throw e;
+                }
             }
         },
         get_mem: {
@@ -382,6 +390,9 @@ if (is_pg) {
                 get_async(`select count(*) as c from ${m} where segment=$1`, [
                     segment,
                 ]),
+        },
+        get_total_mem_count: {
+            get: () => get_async(`select count(*) as c from ${m}`, []),
         },
         get_max_segment: {
             get: () =>
@@ -575,7 +586,7 @@ if (is_pg) {
             `create table if not exists stats(id integer primary key autoincrement,type text not null,count integer default 1,ts integer not null)`,
         );
         db.run(
-            `create table if not exists temporal_facts(id text primary key,user_id text,project_id text,source_memory_id text,subject text not null,predicate text not null,object text not null,valid_from integer not null,valid_to integer,confidence real not null check(confidence >= 0 and confidence <= 1),last_updated integer not null,metadata text,unique(subject,predicate,object,valid_from))`,
+            `create table if not exists temporal_facts(id text primary key,user_id text,project_id text,source_memory_id text references memories(id) on delete cascade,subject text not null,predicate text not null,object text not null,valid_from integer not null,valid_to integer,confidence real not null check(confidence >= 0 and confidence <= 1),last_updated integer not null,metadata text,unique(subject,predicate,object,valid_from,user_id,project_id))`,
         );
         db.run(
             "create index if not exists idx_temporal_user on temporal_facts(user_id)",
@@ -764,7 +775,7 @@ if (is_pg) {
                     p,
                 ),
         },
-        del_mem: { run: (...p) => { exec("delete from temporal_facts where source_memory_id=?", p); return exec("delete from memories where id=?", p); } },
+        del_mem: { run: async (...p) => { exec("BEGIN TRANSACTION"); try { exec("delete from temporal_facts where source_memory_id=?", p); exec("delete from memories where id=?", p); exec("COMMIT"); } catch(e) { exec("ROLLBACK"); throw e; } } },
         get_mem: {
             get: (id) => one("select * from memories where id=?", [id]),
         },
@@ -801,6 +812,9 @@ if (is_pg) {
                 one("select count(*) as c from memories where segment=?", [
                     segment,
                 ]),
+        },
+        get_total_mem_count: {
+            get: () => one("select count(*) as c from memories", []),
         },
         get_max_segment: {
             get: () =>
