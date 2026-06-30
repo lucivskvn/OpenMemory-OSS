@@ -1,4 +1,4 @@
-import crypto from "crypto";
+import crypto from "node:crypto";
 import { q, log_maint_op } from "../core/db";
 import { add_hsg_memory } from "./hsg";
 import { env } from "../core/cfg";
