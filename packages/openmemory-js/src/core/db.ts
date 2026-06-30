@@ -345,18 +345,8 @@ if (is_pg) {
         },
         del_mem: {
             run: async (...p) => {
-                const client = await pg.connect();
-                try {
-                    await client.query('BEGIN');
-                    await client.query(`delete from "${sc}"."temporal_facts" where source_memory_id=$1`, p);
-                    await client.query(`delete from ${m} where id=$1`, p);
-                    await client.query('COMMIT');
-                } catch (e) {
-                    await client.query('ROLLBACK');
-                    throw e;
-                } finally {
-                    client.release();
-                }
+                await run_async(`delete from "${sc}"."temporal_facts" where source_memory_id=$1`, p);
+                await run_async(`delete from ${m} where id=$1`, p);
             }
         },
         get_mem: {
@@ -788,26 +778,8 @@ if (is_pg) {
         },
         del_mem: {
             run: async (...p) => {
-                await new Promise<void>((resolve, reject) => {
-                    db.serialize(() => {
-                        db.run("BEGIN TRANSACTION", (err) => {
-                            if (err) return reject(err);
-                        });
-                        db.run("delete from temporal_facts where source_memory_id=?", p, (err) => {
-                            if (err) return reject(err);
-                        });
-                        db.run("delete from memories where id=?", p, (err) => {
-                            if (err) {
-                                db.run("ROLLBACK", () => reject(err));
-                            } else {
-                                db.run("COMMIT", (commitErr) => {
-                                    if (commitErr) reject(commitErr);
-                                    else resolve();
-                                });
-                            }
-                        });
-                    });
-                });
+                await exec("delete from temporal_facts where source_memory_id=?", p);
+                await exec("delete from memories where id=?", p);
             }
         },
         get_mem: {
