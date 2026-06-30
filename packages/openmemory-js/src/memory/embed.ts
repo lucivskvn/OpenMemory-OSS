@@ -329,10 +329,7 @@ async function emb_gemini(
                                 delayMs = 2000;
                             }
                         }
-                        const d = Math.max(1000, Math.min(
-                            delayMs,
-                            2000 * Math.pow(2, a)
-                        ));
+                        const d = Math.max(1000, delayMs, 2000 * Math.pow(2, a));
                         console.error(
                             `[EMBED] Gemini rate limit (${a + 1}/3), waiting ${d}ms`,
                         );

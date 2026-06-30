@@ -68,13 +68,18 @@ CREATE TABLE IF NOT EXISTS waypoints (
 
 CREATE TABLE IF NOT EXISTS temporal_facts (
     id TEXT PRIMARY KEY,
+    user_id TEXT,
+    project_id TEXT,
+    source_memory_id TEXT REFERENCES memories(id) ON DELETE CASCADE,
     subject TEXT NOT NULL,
     predicate TEXT NOT NULL,
-    obj TEXT NOT NULL,
+    object TEXT NOT NULL,
     valid_from INTEGER NOT NULL,
     valid_to INTEGER,
     confidence REAL,
-    metadata TEXT
+    last_updated INTEGER,
+    metadata TEXT,
+    UNIQUE(subject, predicate, object, valid_from, user_id, project_id)
 );
 
 CREATE TABLE IF NOT EXISTS temporal_edges (

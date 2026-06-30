@@ -796,9 +796,11 @@ export const create_mcp_srv = (tenant?: string) => {
                 .describe(
                     "Validate ownership against a specific user identifier",
                 ),
+            project_id: z.string().trim().min(1).optional().describe("Validate project identifier"),
         },
-        async ({ id, include_vectors, user_id }) => {
+        async ({ id, include_vectors, user_id, project_id }) => {
             const u = enforce_mcp_tenant(tenant, user_id);
+            const proj = uid(project_id);
             const mem = await q.get_mem.get(id);
             if (!mem)
                 return {
@@ -812,6 +814,15 @@ export const create_mcp_srv = (tenant?: string) => {
                         {
                             type: "text",
                             text: `Memory ${id} not found for user ${u}.`,
+                        },
+                    ],
+                };
+            if (mem.project_id && mem.project_id !== "system_global" && mem.project_id !== proj)
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: `Memory ${id} not found for project ${proj || 'global'}.`,
                         },
                     ],
                 };

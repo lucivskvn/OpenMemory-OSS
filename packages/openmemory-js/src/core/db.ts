@@ -38,6 +38,8 @@ type q_type = {
     };
     get_segment_count: { get: (segment: number) => Promise<any> };
     get_total_mem_count: { get: () => Promise<any> };
+    get_total_mem_count_by_user: { get: (user_id: string) => Promise<any> };
+    get_all_tenants: { all: () => Promise<any[]> };
     get_max_segment: { get: () => Promise<any> };
     get_segments: { all: () => Promise<any[]> };
     get_mem_by_segment: { all: (segment: number) => Promise<any[]> };
@@ -343,14 +345,17 @@ if (is_pg) {
         },
         del_mem: {
             run: async (...p) => {
-                await run_async('BEGIN');
+                const client = await pg.connect();
                 try {
-                    await run_async(`delete from temporal_facts where source_memory_id=$1`, p);
-                    await run_async(`delete from ${m} where id=$1`, p);
-                    await run_async('COMMIT');
+                    await client.query('BEGIN');
+                    await client.query(`delete from "${sc}"."temporal_facts" where source_memory_id=$1`, p);
+                    await client.query(`delete from ${m} where id=$1`, p);
+                    await client.query('COMMIT');
                 } catch (e) {
-                    await run_async('ROLLBACK');
+                    await client.query('ROLLBACK');
                     throw e;
+                } finally {
+                    client.release();
                 }
             }
         },
@@ -393,6 +398,12 @@ if (is_pg) {
         },
         get_total_mem_count: {
             get: () => get_async(`select count(*) as c from ${m}`, []),
+        },
+        get_total_mem_count_by_user: {
+            get: (user_id) => get_async(`select count(*) as c from ${m} where user_id=$1`, [user_id]),
+        },
+        get_all_tenants: {
+            all: () => all_async(`select distinct user_id from ${m} where user_id is not null`, []),
         },
         get_max_segment: {
             get: () =>
@@ -775,7 +786,30 @@ if (is_pg) {
                     p,
                 ),
         },
-        del_mem: { run: async (...p) => { exec("BEGIN TRANSACTION"); try { exec("delete from temporal_facts where source_memory_id=?", p); exec("delete from memories where id=?", p); exec("COMMIT"); } catch(e) { exec("ROLLBACK"); throw e; } } },
+        del_mem: {
+            run: async (...p) => {
+                await new Promise<void>((resolve, reject) => {
+                    db.serialize(() => {
+                        db.run("BEGIN TRANSACTION", (err) => {
+                            if (err) return reject(err);
+                        });
+                        db.run("delete from temporal_facts where source_memory_id=?", p, (err) => {
+                            if (err) return reject(err);
+                        });
+                        db.run("delete from memories where id=?", p, (err) => {
+                            if (err) {
+                                db.run("ROLLBACK", () => reject(err));
+                            } else {
+                                db.run("COMMIT", (commitErr) => {
+                                    if (commitErr) reject(commitErr);
+                                    else resolve();
+                                });
+                            }
+                        });
+                    });
+                });
+            }
+        },
         get_mem: {
             get: (id) => one("select * from memories where id=?", [id]),
         },
@@ -815,6 +849,12 @@ if (is_pg) {
         },
         get_total_mem_count: {
             get: () => one("select count(*) as c from memories", []),
+        },
+        get_total_mem_count_by_user: {
+            get: (user_id) => one("select count(*) as c from memories where user_id=?", [user_id]),
+        },
+        get_all_tenants: {
+            all: () => many("select distinct user_id from memories where user_id is not null", []),
         },
         get_max_segment: {
             get: () =>

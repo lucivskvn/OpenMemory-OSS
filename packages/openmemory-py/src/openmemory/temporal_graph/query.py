@@ -15,13 +15,10 @@ from typing import List, Dict, Any, Optional
 from ..core.db import db
 
 async def query_facts_at_time(subject: Optional[str] = None, predicate: Optional[str] = None, subject_object: Optional[str] = None, at: int = None, min_confidence: float = 0.1, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    user_id = enforce_tenant(user_id)
     ts = at if at is not None else int(time.time()*1000)
     conds = ["user_id = ?", "(valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?))"]
     params = [user_id, ts, ts]
-
-    if user_id:
-        conds.append("user_id = ?")
-        params.append(user_id)
     if subject:
         conds.append("subject = ?")
         params.append(subject)
@@ -49,7 +46,7 @@ async def get_current_fact(subject: str, predicate: str, user_id: str = None) ->
     sql = """
         SELECT id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
         FROM temporal_facts
-        WHERE subject = ? AND user_id = ? AND predicate = ? AND user_id = ? AND valid_to IS NULL
+        WHERE subject = ? AND predicate = ? AND user_id = ? AND valid_to IS NULL
         ORDER BY valid_from DESC
         LIMIT 1
     """

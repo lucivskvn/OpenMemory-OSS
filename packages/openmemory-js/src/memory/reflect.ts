@@ -110,10 +110,21 @@ const boost = async (ids: string[]) => {
     }
 };
 
-export const run_reflection = async () => {
-    console.error("[REFLECT] Starting reflection job...");
+export const run_reflection = async (tenant?: string) => {
+    if (!tenant) {
+        console.error("[REFLECT] No tenant specified, running across all active tenants...");
+        const tenants = await q.get_all_tenants.all();
+        if (!tenants || tenants.length === 0) return { created: 0, reason: "low" };
+        let tot = 0;
+        for (const t of tenants) {
+            const res = await run_reflection(t.user_id);
+            if (res.created) tot += res.created;
+        }
+        return { created: tot, reason: "ok" };
+    }
+    console.error(`[REFLECT] Starting reflection job for tenant ${tenant}...`);
     const min = env.reflect_min || 20;
-    const countRes = await q.get_total_mem_count.get();
+    const countRes = tenant ? await q.get_total_mem_count_by_user.get(tenant) : await q.get_total_mem_count.get();
     const totalMem = countRes?.c ? Number(countRes.c) : 0;
     if (totalMem < min) {
         console.error("[REFLECT] Not enough memories, skipping");
@@ -121,7 +132,7 @@ export const run_reflection = async () => {
     }
     const maxOffset = Math.max(0, totalMem - 100);
     const offset = Math.floor(Math.random() * (maxOffset + 1));
-    const mems = await q.all_mem.all(100, offset);
+    const mems = tenant ? await q.all_mem_by_user.all(tenant, 100, offset) : await q.all_mem.all(100, offset);
     console.error(
         `[REFLECT] Fetched ${mems.length} memories (min required: ${min})`,
     );
@@ -153,11 +164,11 @@ export const run_reflection = async () => {
 
 let timer: NodeJS.Timeout | null = null;
 
-export const start_reflection = () => {
+export const start_reflection = (tenant?: string) => {
     if (!env.auto_reflect || timer) return;
     const int = (env.reflect_interval || 10) * 60000;
     timer = setInterval(
-        () => run_reflection().catch((e) => console.error("[REFLECT]", e)),
+        () => run_reflection(tenant).catch((e) => console.error("[REFLECT]", e)),
         int,
     );
     console.error(`[REFLECT] Started: every ${env.reflect_interval || 10}m`);
