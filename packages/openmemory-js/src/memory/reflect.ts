@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { q, log_maint_op } from "../core/db";
 import { add_hsg_memory } from "./hsg";
 import { env } from "../core/cfg";
@@ -131,7 +132,7 @@ export const run_reflection = async (tenant?: string) => {
         return { created: 0, reason: "low" };
     }
     const maxOffset = Math.max(0, totalMem - 100);
-    const offset = Math.floor(Math.random() * (maxOffset + 1));
+    const offset = maxOffset > 0 ? crypto.randomInt(0, maxOffset + 1) : 0;
     const mems = tenant ? await q.all_mem_by_user.all(tenant, 100, offset) : await q.all_mem.all(100, offset);
     console.error(
         `[REFLECT] Fetched ${mems.length} memories (min required: ${min})`,

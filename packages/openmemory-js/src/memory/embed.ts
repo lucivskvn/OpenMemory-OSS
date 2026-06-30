@@ -321,12 +321,12 @@ async function emb_gemini(
                     if (r.status === 429) {
                         const headerVal = r.headers.get("retry-after") || "2";
                         let delayMs = parseInt(headerVal) * 1000;
-                        if (isNaN(delayMs)) {
+                        if (Number.isNaN(delayMs)) {
                             const dateVal = new Date(headerVal).getTime();
-                            if (!isNaN(dateVal)) {
-                                delayMs = Math.max(0, dateVal - Date.now());
-                            } else {
+                            if (Number.isNaN(dateVal)) {
                                 delayMs = 2000;
+                            } else {
+                                delayMs = Math.max(0, dateVal - Date.now());
                             }
                         }
                         const d = Math.max(1000, delayMs, 2000 * Math.pow(2, a));
