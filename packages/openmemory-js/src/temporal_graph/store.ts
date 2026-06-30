@@ -2,6 +2,7 @@ import { run_async, get_async, all_async } from "../core/db";
 import { env } from "../core/cfg";
 import { TemporalFact, TemporalEdge } from "./types";
 import { randomUUID } from "crypto";
+import { enforce_tenant } from "./tenant";
 
 const is_pg = env.metadata_backend === "postgres";
 
@@ -14,6 +15,7 @@ export interface InsertFactOptions {
     metadata?: Record<string, any>;
     user_id?: string;
     project_id?: string;
+    source_memory_id?: string;
 }
 
 export async function insert_fact(opts: InsertFactOptions): Promise<string>;
@@ -26,6 +28,7 @@ export async function insert_fact(
     metadata?: Record<string, any>,
     user_id?: string,
     project_id?: string,
+    source_memory_id?: string,
 ): Promise<string>;
 export async function insert_fact(
     subject_or_opts: string | InsertFactOptions,
@@ -36,6 +39,7 @@ export async function insert_fact(
     metadata?: Record<string, any>,
     user_id?: string,
     project_id?: string,
+    source_memory_id?: string,
 ): Promise<string> {
     // Normalize options-bag form to the positional locals used by the
     // existing implementation.
@@ -50,6 +54,7 @@ export async function insert_fact(
             opts.metadata,
             opts.user_id,
             opts.project_id,
+            opts.source_memory_id,
         );
     }
     return _insert_fact_impl(
@@ -61,6 +66,7 @@ export async function insert_fact(
         metadata,
         user_id,
         project_id,
+        source_memory_id,
     );
 }
 
@@ -73,7 +79,9 @@ const _insert_fact_impl = async (
     metadata?: Record<string, any>,
     user_id?: string,
     project_id?: string,
+    source_memory_id?: string,
 ): Promise<string> => {
+    user_id = enforce_tenant(user_id);
     const id = randomUUID();
     const now = Date.now();
     const valid_from_ts = valid_from.getTime();
@@ -81,7 +89,7 @@ const _insert_fact_impl = async (
     const existing = await all_async(
         `
         SELECT id, valid_from FROM temporal_facts
-        WHERE subject = ? AND predicate = ? AND valid_to IS NULL${user_id ? " AND user_id = ?" : ""}${project_id ? " AND (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)" : ""}
+        WHERE subject = ? AND predicate = ? AND valid_to IS NULL AND user_id = ?${project_id ? " AND project_id = ?" : " AND project_id IS NULL"}
         ORDER BY valid_from DESC
     `,
         [
@@ -106,13 +114,14 @@ const _insert_fact_impl = async (
 
     await run_async(
         `
-        INSERT INTO temporal_facts (id, user_id, project_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata)
-        VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+        INSERT INTO temporal_facts (id, user_id, project_id, source_memory_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
     `,
         [
             id,
             user_id || null,
             project_id || null,
+            source_memory_id || null,
             subject,
             predicate,
             object,
@@ -232,10 +241,12 @@ export const batch_insert_facts = async (
         confidence?: number;
         metadata?: Record<string, any>;
         project_id?: string;
+        source_memory_id?: string;
     }>,
     user_id?: string,
     project_id?: string,
 ): Promise<string[]> => {
+    user_id = enforce_tenant(user_id);
     const ids: string[] = [];
 
     await run_async("BEGIN TRANSACTION");
@@ -250,6 +261,7 @@ export const batch_insert_facts = async (
                 fact.metadata,
                 user_id,
                 fact.project_id || project_id,
+                fact.source_memory_id,
             );
             ids.push(id);
         }

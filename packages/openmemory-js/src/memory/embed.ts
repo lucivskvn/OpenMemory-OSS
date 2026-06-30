@@ -319,11 +319,10 @@ async function emb_gemini(
                 });
                 if (!r.ok) {
                     if (r.status === 429) {
-                        const d = Math.min(
-                            parseInt(r.headers.get("retry-after") || "2") *
-                                1000,
-                            1000 * Math.pow(2, a),
-                        );
+                        const d = Math.max(1000, Math.min(
+                            parseInt(r.headers.get("retry-after") || "2") * 1000,
+                            2000 * Math.pow(2, a)
+                        ));
                         console.error(
                             `[EMBED] Gemini rate limit (${a + 1}/3), waiting ${d}ms`,
                         );

@@ -113,7 +113,7 @@ const boost = async (ids: string[]) => {
 export const run_reflection = async () => {
     console.error("[REFLECT] Starting reflection job...");
     const min = env.reflect_min || 20;
-    const mems = await q.all_mem.all(100, 0);
+    const mems = await q.all_mem.all(100, Math.floor(Math.random() * 500));
     console.error(
         `[REFLECT] Fetched ${mems.length} memories (min required: ${min})`,
     );

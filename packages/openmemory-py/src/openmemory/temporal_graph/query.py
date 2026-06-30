@@ -1,4 +1,14 @@
 import time
+import os
+import asyncio
+
+def enforce_tenant(user_id: str = None) -> str:
+    if user_id:
+        return user_id
+    if os.environ.get("OM_ALLOW_ANONYMOUS_TENANT") == "true":
+        return "anonymous"
+    raise ValueError("MissingTenantError: user_id is required for multi-tenant isolation.")
+
 import json
 from typing import List, Dict, Any, Optional
 
@@ -31,24 +41,26 @@ async def query_facts_at_time(subject: Optional[str] = None, predicate: Optional
         WHERE {' AND '.join(conds)}
         ORDER BY confidence DESC, valid_from DESC
     """
-    rows = db.fetchall(sql, tuple(params))
+    rows = await asyncio.to_thread(db.fetchall, sql, tuple(params))
     return [format_fact(r) for r in rows]
 
-async def get_current_fact(subject: str, predicate: str) -> Optional[Dict[str, Any]]:
+async def get_current_fact(subject: str, predicate: str, user_id: str = None) -> Optional[Dict[str, Any]]:
+    user_id = enforce_tenant(user_id)
     sql = """
         SELECT id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
         FROM temporal_facts
-        WHERE subject = ? AND predicate = ? AND valid_to IS NULL
+        WHERE subject = ? AND predicate = ? AND user_id = ? AND valid_to IS NULL
         ORDER BY valid_from DESC
         LIMIT 1
     """
-    row = db.fetchone(sql, (subject, predicate))
+    row = await asyncio.to_thread(db.fetchone, sql, (subject, predicate, user_id))
     if not row: return None
     return format_fact(row)
 
-async def query_facts_in_range(subject: str = None, predicate: str = None, start: int = None, end: int = None, min_confidence: float = 0.1) -> List[Dict[str, Any]]:
-    conds = []
-    params = []
+async def query_facts_in_range(subject: str = None, predicate: str = None, start: int = None, end: int = None, min_confidence: float = 0.1, user_id: str = None) -> List[Dict[str, Any]]:
+    user_id = enforce_tenant(user_id)
+    conds = ["user_id = ?"]
+    params = [user_id]
 
     if start is not None and end is not None:
         conds.append("((valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?)) OR (valid_from >= ? AND valid_from <= ?))")
@@ -77,7 +89,7 @@ async def query_facts_in_range(subject: str = None, predicate: str = None, start
         {where}
         ORDER BY valid_from DESC
     """
-    rows = db.fetchall(sql, tuple(params))
+    rows = await asyncio.to_thread(db.fetchall, sql, tuple(params))
     return [format_fact(r) for r in rows]
 
 async def find_conflicting_facts(subject: str, predicate: str, at: int = None) -> List[Dict[str, Any]]:
@@ -89,7 +101,7 @@ async def find_conflicting_facts(subject: str, predicate: str, at: int = None) -
         AND (valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?))
         ORDER BY confidence DESC
     """
-    rows = db.fetchall(sql, (subject, predicate, ts, ts))
+    rows = await asyncio.to_thread(db.fetchall, sql, (subject, predicate, ts, ts))
     return [format_fact(r) for r in rows]
 
 async def get_facts_by_subject(subject: str, at: int = None, include_historical: bool = False) -> List[Dict[str, Any]]:
@@ -112,10 +124,11 @@ async def get_facts_by_subject(subject: str, at: int = None, include_historical:
         """
         params.extend([ts, ts])
 
-    rows = db.fetchall(sql, tuple(params))
+    rows = await asyncio.to_thread(db.fetchall, sql, tuple(params))
     return [format_fact(r) for r in rows]
 
-async def search_facts(pattern: str, field: str = "subject", at: int = None) -> List[Dict[str, Any]]:
+async def search_facts(pattern: str, field: str = "subject", at: int = None, user_id: str = None) -> List[Dict[str, Any]]:
+    user_id = enforce_tenant(user_id)
     ts = at if at is not None else int(time.time()*1000)
     search_pat = f"%{pattern}%"
     if field not in ["subject", "predicate", "object"]: field = "subject"
@@ -123,18 +136,19 @@ async def search_facts(pattern: str, field: str = "subject", at: int = None) -> 
     sql = f"""
         SELECT id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
         FROM temporal_facts
-        WHERE {field} LIKE ?
+        WHERE {field} LIKE ? AND user_id = ?
         AND (valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?))
         ORDER BY confidence DESC, valid_from DESC
         LIMIT 100
     """
-    rows = db.fetchall(sql, (search_pat, ts, ts))
+    rows = await asyncio.to_thread(db.fetchall, sql, (search_pat, user_id, ts, ts))
     return [format_fact(r) for r in rows]
 
-async def get_related_facts(fact_id: str, relation_type: str = None, at: int = None) -> List[Dict[str, Any]]:
+async def get_related_facts(fact_id: str, relation_type: str = None, at: int = None, user_id: str = None) -> List[Dict[str, Any]]:
+    user_id = enforce_tenant(user_id)
     ts = at if at is not None else int(time.time()*1000)
-    conds = ["(e.valid_from <= ? AND (e.valid_to IS NULL OR e.valid_to >= ?))"]
-    params = [ts, ts]
+    conds = ["e.user_id = ?", "(e.valid_from <= ? AND (e.valid_to IS NULL OR e.valid_to >= ?))"]
+    params = [user_id, ts, ts]
 
     if relation_type:
         conds.append("e.relation_type = ?")
@@ -152,7 +166,7 @@ async def get_related_facts(fact_id: str, relation_type: str = None, at: int = N
     params.insert(0, fact_id)
     params.extend([ts, ts])
 
-    rows = db.fetchall(sql, tuple(params))
+    rows = await asyncio.to_thread(db.fetchall, sql, tuple(params))
     return [{
         "fact": format_fact(r),
         "relation": r["relation_type"],

@@ -1,4 +1,13 @@
 import time
+import os
+
+def enforce_tenant(user_id: str = None) -> str:
+    if user_id:
+        return user_id
+    if os.environ.get("OM_ALLOW_ANONYMOUS_TENANT") == "true":
+        return "anonymous"
+    raise ValueError("MissingTenantError: user_id is required for multi-tenant isolation.")
+
 import uuid
 import json
 import logging
@@ -80,7 +89,7 @@ async def invalidate_edge(edge_id: str, valid_to: int = None):
     db.execute("UPDATE temporal_edges SET valid_to=? WHERE id=?", (ts, edge_id))
     db.commit()
 
-async def batch_insert_facts(facts: List[Dict[str, Any]]) -> List[str]:
+async def batch_insert_facts(facts: List[Dict[str, Any]], user_id: str = None) -> List[str]:
     ids = []
     try:
         db.execute("BEGIN")
@@ -93,13 +102,24 @@ async def batch_insert_facts(facts: List[Dict[str, Any]]) -> List[str]:
             vf = f.get("valid_from", now)
             conf = f.get("confidence", 1.0)
             meta = f.get("metadata")
-            existing = db.conn.execute("SELECT id, valid_from FROM temporal_facts WHERE subject=? AND predicate=? AND valid_to IS NULL", (sub, pred)).fetchall()
+                    user_id = enforce_tenant(user_id)
+            query = "SELECT id, valid_from FROM temporal_facts WHERE subject=? AND predicate=? AND user_id=? AND valid_to IS NULL"
+            params = [sub, pred, user_id]
+
+            p_id = f.get("project_id")
+            if p_id:
+                query += " AND project_id=?"
+                params.append(p_id)
+            else:
+                query += " AND project_id IS NULL"
+
+            existing = db.conn.execute(query, tuple(params)).fetchall()
             for old in existing:
                  if old["valid_from"] < vf:
                      db.conn.execute("UPDATE temporal_facts SET valid_to=? WHERE id=?", (vf - 1, old["id"]))
 
-            db.conn.execute("INSERT INTO temporal_facts(id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata) VALUES (?,?,?,?,?,NULL,?,?,?)",
-               (fid, sub, pred, obj, vf, conf, now, json.dumps(meta) if meta else None))
+            db.conn.execute("INSERT INTO temporal_facts(id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata, user_id, project_id, source_memory_id) VALUES (?,?,?,?,?,NULL,?,?,?,?,?,?)",
+               (fid, sub, pred, obj, vf, conf, now, json.dumps(meta) if meta else None, user_id, f.get("project_id"), f.get("source_memory_id")))
             ids.append(fid)
 
         db.execute("COMMIT")
