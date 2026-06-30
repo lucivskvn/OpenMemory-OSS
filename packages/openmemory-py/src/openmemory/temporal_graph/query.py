@@ -111,11 +111,17 @@ async def find_conflicting_facts(subject: str, predicate: str, at: int = None, u
     sql = """
         SELECT id, user_id, project_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
         FROM temporal_facts
-        WHERE subject = ? AND user_id = ? AND predicate = ? AND user_id = ?
+        WHERE subject = ? AND user_id = ? AND predicate = ?
         AND (valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?))
-        ORDER BY confidence DESC
     """
-    rows = await asyncio.to_thread(db.fetchall, sql, (subject, predicate, user_id, ts, ts))
+    params = [subject, user_id, predicate, ts, ts]
+    if project_id:
+        sql += " AND (project_id = ? OR project_id = 'system_global' OR project_id IS NULL) ORDER BY (project_id = ?) DESC, confidence DESC"
+        params.extend([project_id, project_id])
+    else:
+        sql += " AND (project_id = 'system_global' OR project_id IS NULL) ORDER BY confidence DESC"
+
+    rows = await asyncio.to_thread(db.fetchall, sql, tuple(params))
     return [format_fact(r) for r in rows]
 
 async def get_facts_by_subject(subject: str, at: int = None, include_historical: bool = False, user_id: str = None, project_id: str = None) -> List[Dict[str, Any]]:
@@ -139,6 +145,10 @@ async def get_facts_by_subject(subject: str, at: int = None, include_historical:
             FROM temporal_facts
             WHERE subject = ? AND user_id = ?
             AND (valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?))"""
+
+        # We must insert the ts timestamps BEFORE project_id because they correspond to the (valid_from <= ? AND ...) condition above!
+        params.extend([ts, ts])
+
         if project_id:
             sql += " AND (project_id = ? OR project_id = 'system_global' OR project_id IS NULL) ORDER BY (project_id = ?) DESC, predicate ASC, confidence DESC"
             params.extend([project_id, project_id])
