@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { enforce_tenant } from "../temporal_graph/tenant";
 import { canonical_token_set, stable_text_fallback_hash } from "../utils/text";
 import { inc_q, dec_q, on_query_hit } from "./decay";
 import { env, tier } from "../core/cfg";
@@ -653,8 +654,9 @@ export async function expand_via_waypoints(
     }
     const q_arr = [...exp];
     let exp_cnt = 0;
-    while (q_arr.length > 0 && exp_cnt < max_exp) {
-        const cur = q_arr.shift()!;
+    let head = 0;
+    while (head < q_arr.length && exp_cnt < max_exp) {
+        const cur = q_arr[head++];
         const neighs = await q.get_neighbors.all(cur.id);
         for (const neigh of neighs) {
             if (vis.has(neigh.dst_id)) continue;
@@ -746,8 +748,9 @@ export async function calc_multi_vec_fusion_score(
     }
     return tot > 0 ? sum / tot : 0;
 }
-const cache = new Map<string, { r: hsg_q_result[]; t: number }>();
-const sal_cache = new Map<string, { s: number; t: number }>();
+import { LRUCache } from "lru-cache";
+const cache = new LRUCache<string, { r: hsg_q_result[]; t: number }>({ max: 5000, ttl: 60000 });
+const sal_cache = new LRUCache<string, { s: number; t: number }>({ max: 50000, ttl: 300000 });
 
 const seg_cache = new Map<number, any[]>();
 const coact_buf: Array<[string, string]> = [];
@@ -1136,8 +1139,9 @@ export async function add_hsg_memory(
     chunks?: number;
     deduplicated?: boolean;
 }> {
+    user_id = enforce_tenant(user_id);
     const simhash = compute_simhash(content);
-    const existing = await q.get_mem_by_simhash.get(simhash);
+    const existing = await q.get_mem_by_simhash.get(simhash, user_id);
     if (existing && hamming_dist(simhash, existing.simhash) <= 3) {
         const now = Date.now();
         const boosted_sal = Math.min(1, existing.salience + 0.15);

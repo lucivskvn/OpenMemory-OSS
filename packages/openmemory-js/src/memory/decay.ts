@@ -107,11 +107,26 @@ const compress_vector = (
     );
     const dim = Math.max(min_dim, Math.min(src.length, tgt_dim));
     if (dim >= src.length) return src.slice(0);
-    const pooled: number[] = [];
-    const bucket = Math.ceil(src.length / dim);
-    for (let i = 0; i < src.length; i += bucket)
-        pooled.push(mean(src.slice(i, i + bucket)));
-    normalize(pooled);
+
+    // Bucket Average Pooling
+    const pooled: number[] = new Array(dim).fill(0);
+    const bucket_counts: number[] = new Array(dim).fill(0);
+    const bucket_size = src.length / dim;
+    for (let i = 0; i < src.length; i++) {
+        const bucket = Math.min(dim - 1, Math.floor(i / bucket_size));
+        pooled[bucket] += src[i];
+        bucket_counts[bucket]++;
+    }
+    for (let i = 0; i < dim; i++) {
+        if (bucket_counts[i] > 0) pooled[i] /= bucket_counts[i];
+    }
+
+    // L2 Re-normalization
+    let sumSq = 0;
+    for (let i = 0; i < dim; i++) sumSq += pooled[i] * pooled[i];
+    const norm = sumSq > 0 ? Math.sqrt(sumSq) : 1;
+    for (let i = 0; i < dim; i++) pooled[i] /= norm;
+
     return pooled;
 };
 
@@ -210,7 +225,7 @@ const stop = new Set([
 ]);
 
 const top_keywords = (t: string, k = 5): string[] => {
-    const words = (t.toLowerCase().match(/[a-z0-9]+/g) || []).filter(
+    const words = (t.toLowerCase().match(/[\p{L}\p{N}]+/gu) || []).filter(
         (w) => !stop.has(w),
     );
     if (!words.length) return [];

@@ -1,5 +1,6 @@
 import { env } from "../../core/cfg";
 import crypto from "crypto";
+import { LRUCache } from "lru-cache";
 
 /**
  * SECURITY: Authentication is fail-closed by default.
@@ -24,10 +25,10 @@ import crypto from "crypto";
  *    with a lookup — route handlers don't need to change.
  */
 
-const rate_limit_store = new Map<
-    string,
-    { count: number; reset_time: number }
->();
+const rate_limit_store = new LRUCache<string, { count: number; reset_time: number }>({
+    max: 10000,
+    ttl: env.rate_limit_window_ms || 60000
+});
 
 const REQUIRE_AUTH =
     process.env.NODE_ENV === "production" ||
@@ -90,9 +91,10 @@ function extract_api_key(req: any): string | null {
 }
 
 function validate_api_key(provided: string, expected: string): boolean {
-    if (!provided || !expected || provided.length !== expected.length)
-        return false;
-    return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+    if (typeof provided !== "string" || typeof expected !== "string") return false;
+    const providedHash = crypto.createHash("sha256").update(provided).digest();
+    const expectedHash = crypto.createHash("sha256").update(expected).digest();
+    return crypto.timingSafeEqual(providedHash, expectedHash);
 }
 
 /**
@@ -188,11 +190,3 @@ export function log_authenticated_request(req: any, res: any, next: any) {
     next();
 }
 
-setInterval(
-    () => {
-        const now = Date.now();
-        for (const [id, data] of rate_limit_store.entries())
-            if (now >= data.reset_time) rate_limit_store.delete(id);
-    },
-    5 * 60 * 1000,
-);

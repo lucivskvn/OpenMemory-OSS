@@ -175,6 +175,9 @@ describe("MCP per-tenant scoping", () => {
     });
 
     it("stdio-style server (no tenant) preserves legacy behaviour", async () => {
+        const oldEnv = process.env.OM_ALLOW_ANONYMOUS_TENANT;
+        process.env.OM_ALLOW_ANONYMOUS_TENANT = "true";
+        try {
         // No tenant bound — this is the stdio MCP shape. Stored memories
         // get the "anonymous" fallback from add_hsg_memory and openmemory_list
         // returns everything in the table (the pre-existing local-dev contract).
@@ -197,5 +200,12 @@ describe("MCP per-tenant scoping", () => {
         );
         expect(items.length).toBe(1);
         expect(items[0].id).toBe(id);
+        } finally {
+            if (oldEnv === undefined) {
+                delete process.env.OM_ALLOW_ANONYMOUS_TENANT;
+            } else {
+                process.env.OM_ALLOW_ANONYMOUS_TENANT = oldEnv;
+            }
+        }
     });
 });

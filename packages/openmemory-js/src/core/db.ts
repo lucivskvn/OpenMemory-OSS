@@ -28,7 +28,7 @@ type q_type = {
     upd_mem_with_sector: { run: (...p: any[]) => Promise<void> };
     del_mem: { run: (...p: any[]) => Promise<void> };
     get_mem: { get: (id: string) => Promise<any> };
-    get_mem_by_simhash: { get: (simhash: string) => Promise<any> };
+    get_mem_by_simhash: { get: (simhash: string, user_id?: string) => Promise<any> };
     all_mem: { all: (limit: number, offset: number) => Promise<any[]> };
     all_mem_by_sector: {
         all: (sector: string, limit: number, offset: number) => Promise<any[]>;
@@ -37,6 +37,9 @@ type q_type = {
         all: (user_id: string, limit: number, offset: number) => Promise<any[]>;
     };
     get_segment_count: { get: (segment: number) => Promise<any> };
+    get_total_mem_count: { get: () => Promise<any> };
+    get_total_mem_count_by_user: { get: (user_id: string) => Promise<any> };
+    get_all_tenants: { all: () => Promise<any[]> };
     get_max_segment: { get: () => Promise<any> };
     get_segments: { all: () => Promise<any[]> };
     get_mem_by_segment: { all: (segment: number) => Promise<any[]> };
@@ -203,7 +206,7 @@ if (is_pg) {
             `create table if not exists "${sc}"."stats"(id serial primary key,type text not null,count integer default 1,ts bigint not null)`,
         );
         await pg.query(
-            `create table if not exists "${sc}"."temporal_facts"(id uuid primary key,user_id text,project_id text,subject text not null,predicate text not null,object text not null,valid_from bigint not null,valid_to bigint,confidence double precision not null check(confidence >= 0 and confidence <= 1),last_updated bigint not null,metadata text,unique(subject,predicate,object,valid_from))`,
+            `create table if not exists "${sc}"."temporal_facts"(id uuid primary key,user_id text,project_id text,subject text not null,predicate text not null,object text not null,valid_from bigint not null,valid_to bigint,confidence double precision not null check(confidence >= 0 and confidence <= 1),last_updated bigint not null,metadata text,unique(subject,predicate,object,valid_from,user_id,project_id))`,
         );
         await pg.query(
             `create index if not exists temporal_facts_user_idx on "${sc}"."temporal_facts"(user_id)`,
@@ -341,17 +344,27 @@ if (is_pg) {
                 ),
         },
         del_mem: {
-            run: (...p) => run_async(`delete from ${m} where id=$1`, p),
+            run: async (...p) => {
+                await run_async(`delete from "${sc}"."temporal_facts" where source_memory_id=$1`, p);
+                await run_async(`delete from ${m} where id=$1`, p);
+            }
         },
         get_mem: {
             get: (id) => get_async(`select * from ${m} where id=$1`, [id]),
         },
         get_mem_by_simhash: {
-            get: (simhash) =>
-                get_async(
+            get: (simhash, user_id) => {
+                if (user_id) {
+                    return get_async(
+                        `select * from ${m} where simhash=$1 and user_id=$2 order by salience desc limit 1`,
+                        [simhash, user_id],
+                    );
+                }
+                return get_async(
                     `select * from ${m} where simhash=$1 order by salience desc limit 1`,
                     [simhash],
-                ),
+                );
+            }
         },
         all_mem: {
             all: (limit, offset) =>
@@ -372,6 +385,15 @@ if (is_pg) {
                 get_async(`select count(*) as c from ${m} where segment=$1`, [
                     segment,
                 ]),
+        },
+        get_total_mem_count: {
+            get: () => get_async(`select count(*) as c from ${m}`, []),
+        },
+        get_total_mem_count_by_user: {
+            get: (user_id) => get_async(`select count(*) as c from ${m} where user_id=$1`, [user_id]),
+        },
+        get_all_tenants: {
+            all: () => all_async(`select distinct user_id from ${m} where user_id is not null`, []),
         },
         get_max_segment: {
             get: () =>
@@ -565,7 +587,7 @@ if (is_pg) {
             `create table if not exists stats(id integer primary key autoincrement,type text not null,count integer default 1,ts integer not null)`,
         );
         db.run(
-            `create table if not exists temporal_facts(id text primary key,user_id text,project_id text,subject text not null,predicate text not null,object text not null,valid_from integer not null,valid_to integer,confidence real not null check(confidence >= 0 and confidence <= 1),last_updated integer not null,metadata text,unique(subject,predicate,object,valid_from))`,
+            `create table if not exists temporal_facts(id text primary key,user_id text,project_id text,source_memory_id text references memories(id) on delete cascade,subject text not null,predicate text not null,object text not null,valid_from integer not null,valid_to integer,confidence real not null check(confidence >= 0 and confidence <= 1),last_updated integer not null,metadata text,unique(subject,predicate,object,valid_from,user_id,project_id))`,
         );
         db.run(
             "create index if not exists idx_temporal_user on temporal_facts(user_id)",
@@ -754,16 +776,28 @@ if (is_pg) {
                     p,
                 ),
         },
-        del_mem: { run: (...p) => exec("delete from memories where id=?", p) },
+        del_mem: {
+            run: async (...p) => {
+                await exec("delete from temporal_facts where source_memory_id=?", p);
+                await exec("delete from memories where id=?", p);
+            }
+        },
         get_mem: {
             get: (id) => one("select * from memories where id=?", [id]),
         },
         get_mem_by_simhash: {
-            get: (simhash) =>
-                one(
+            get: (simhash, user_id) => {
+                if (user_id) {
+                    return one(
+                        "select * from memories where simhash=? and user_id=? order by salience desc limit 1",
+                        [simhash, user_id],
+                    );
+                }
+                return one(
                     "select * from memories where simhash=? order by salience desc limit 1",
                     [simhash],
-                ),
+                );
+            }
         },
         all_mem: {
             all: (limit, offset) =>
@@ -784,6 +818,15 @@ if (is_pg) {
                 one("select count(*) as c from memories where segment=?", [
                     segment,
                 ]),
+        },
+        get_total_mem_count: {
+            get: () => one("select count(*) as c from memories", []),
+        },
+        get_total_mem_count_by_user: {
+            get: (user_id) => one("select count(*) as c from memories where user_id=?", [user_id]),
+        },
+        get_all_tenants: {
+            all: () => many("select distinct user_id from memories where user_id is not null", []),
         },
         get_max_segment: {
             get: () =>

@@ -1,4 +1,5 @@
 import time
+import asyncio
 import math
 import asyncio
 import json
@@ -505,7 +506,7 @@ async def expand_via_waypoints(ids: List[str], max_exp: int = 10):
 
     while q_arr and cnt < max_exp:
         cur = q_arr.pop(0)
-        neighs = db.fetchall("SELECT dst_id, weight FROM waypoints WHERE src_id=? ORDER BY weight DESC", (cur["id"],))
+        neighs = await asyncio.to_thread(db.fetchall, "SELECT dst_id, weight FROM waypoints WHERE src_id=? ORDER BY weight DESC", (cur["id"],))
         for n in neighs:
             dst = n["dst_id"]
             if dst in vis: continue

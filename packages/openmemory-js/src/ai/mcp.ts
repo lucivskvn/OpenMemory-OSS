@@ -217,7 +217,7 @@ export const create_mcp_srv = (tenant?: string) => {
             user_id,
             project_id,
         }) => {
-            const u = resolve_user_id(tenant, user_id);
+            const u = enforce_mcp_tenant(tenant, user_id);
             const proj = uid(project_id);
             const results: any = { type, query };
             const at_date = at ? new Date(at) : new Date();
@@ -403,7 +403,7 @@ export const create_mcp_srv = (tenant?: string) => {
             metadata,
             user_id,
         }) => {
-            const u = resolve_user_id(tenant, user_id);
+            const u = enforce_mcp_tenant(tenant, user_id);
             const proj = uid(project_id);
             const results: any = { type };
 
@@ -507,7 +507,8 @@ export const create_mcp_srv = (tenant?: string) => {
                         valid_from: z.string().optional(),
                     }),
                 )
-                .optional(),
+                .optional()
+                .default([]),
             tags: z.array(z.string()).optional(),
             metadata: z.record(z.any()).optional(),
             user_id: z.string().trim().min(1).optional(),
@@ -520,9 +521,14 @@ export const create_mcp_srv = (tenant?: string) => {
             metadata,
             user_id,
         }) => {
-            const u = resolve_user_id(tenant, user_id);
+            const u = enforce_mcp_tenant(tenant, user_id);
             // Force global scope for this tool
             const proj = "system_global";
+
+            if ((type === "factual" || type === "both") && (!facts || facts.length === 0)) {
+                throw new Error("Facts array cannot be empty when type is 'factual' or 'both'");
+            }
+
             const results: any = { type };
 
             if (type === "contextual" || type === "both") {
@@ -604,16 +610,18 @@ export const create_mcp_srv = (tenant?: string) => {
                 .max(1)
                 .default(0.1)
                 .describe("Salience boost amount (default 0.1)"),
+            user_id: z.string().trim().min(1).optional().describe("Validate ownership"),
+            project_id: z.string().trim().min(1).optional().describe("Validate project identifier"),
         },
-        async ({ id, boost }) => {
-            if (tenant) {
-                // When HTTP-bound, refuse to reinforce another tenant's memory.
-                const mem = await q.get_mem.get(id);
-                if (!mem || mem.user_id !== tenant) {
-                    throw new Error(
-                        `Memory ${id} not found for user ${tenant}`,
-                    );
-                }
+        async ({ id, boost, user_id, project_id }) => {
+            const u = enforce_mcp_tenant(tenant, user_id);
+            const proj = uid(project_id);
+
+            const mem = await q.get_mem.get(id);
+            if (!mem) throw new Error(`Memory ${id} not found`);
+            if (mem.user_id !== u) throw new Error(`Memory ${id} not found for user ${u}`);
+            if (mem.project_id && mem.project_id !== "system_global" && mem.project_id !== proj) {
+                throw new Error(`Memory ${id} not found for project ${proj || 'global'}`);
             }
             await reinforce_memory(id, boost);
             return {
@@ -646,20 +654,16 @@ export const create_mcp_srv = (tenant?: string) => {
                 .describe("Validate project identifier"),
         },
         async ({ id, user_id, project_id }) => {
-            const u = resolve_user_id(tenant, user_id);
+            const u = enforce_mcp_tenant(tenant, user_id);
             const proj = uid(project_id);
-            if (u || proj) {
-                // Pre-check ownership if user_id/project_id provided
+
+            // Strictly enforce ownership on delete
+            {
                 const mem = await q.get_mem.get(id);
                 if (mem) {
-                    if (u && mem.user_id !== u)
+                    if (mem.user_id !== u)
                         throw new Error(`Memory ${id} not found for user ${u}`);
-                    if (
-                        proj &&
-                        mem.project_id &&
-                        mem.project_id !== proj &&
-                        mem.project_id !== "system_global"
-                    ) {
+                    if (mem.project_id && mem.project_id !== "system_global" && mem.project_id !== proj) {
                         throw new Error(
                             `Memory ${id} belongs to another project and cannot be deleted from ${proj}`,
                         );
@@ -719,7 +723,7 @@ export const create_mcp_srv = (tenant?: string) => {
                 .describe("Restrict results to a specific project identifier"),
         },
         async ({ limit, sector, user_id, project_id }) => {
-            const u = resolve_user_id(tenant, user_id);
+            const u = enforce_mcp_tenant(tenant, user_id);
             const proj = uid(project_id);
             let rows: mem_row[];
 
@@ -792,9 +796,11 @@ export const create_mcp_srv = (tenant?: string) => {
                 .describe(
                     "Validate ownership against a specific user identifier",
                 ),
+            project_id: z.string().trim().min(1).optional().describe("Validate project identifier"),
         },
-        async ({ id, include_vectors, user_id }) => {
-            const u = resolve_user_id(tenant, user_id);
+        async ({ id, include_vectors, user_id, project_id }) => {
+            const u = enforce_mcp_tenant(tenant, user_id);
+            const proj = uid(project_id);
             const mem = await q.get_mem.get(id);
             if (!mem)
                 return {
@@ -802,12 +808,21 @@ export const create_mcp_srv = (tenant?: string) => {
                         { type: "text", text: `Memory ${id} not found.` },
                     ],
                 };
-            if (u && mem.user_id !== u)
+            if (mem.user_id !== u)
                 return {
                     content: [
                         {
                             type: "text",
                             text: `Memory ${id} not found for user ${u}.`,
+                        },
+                    ],
+                };
+            if (mem.project_id && mem.project_id !== "system_global" && mem.project_id !== proj)
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: `Memory ${id} not found for project ${proj || 'global'}.`,
                         },
                     ],
                 };
@@ -882,6 +897,15 @@ export const create_mcp_srv = (tenant?: string) => {
         );
     };
     return srv;
+};
+
+const enforce_mcp_tenant = (tenant: any, user_id?: string) => {
+    const u = resolve_user_id(tenant, user_id);
+    if (!u) {
+        if (process.env.OM_ALLOW_ANONYMOUS_TENANT === "true") return "anonymous";
+        throw new Error("Missing tenant and anonymous fallback is not enabled.");
+    }
+    return u;
 };
 
 const extract_pay = async (req: IncomingMessage & { body?: any }) => {

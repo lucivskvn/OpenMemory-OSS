@@ -1,5 +1,6 @@
 import { get_async, all_async } from "../core/db";
 import { TemporalFact, TemporalQuery, TimelineEntry } from "./types";
+import { enforce_tenant } from "./tenant";
 
 export const query_facts_at_time = async (opts: {
     user_id: string;
@@ -10,8 +11,7 @@ export const query_facts_at_time = async (opts: {
     at?: Date;
     min_confidence?: number;
 }): Promise<TemporalFact[]> => {
-    const {
-        user_id,
+    let { user_id,
         project_id,
         subject,
         predicate,
@@ -19,17 +19,15 @@ export const query_facts_at_time = async (opts: {
         at = new Date(),
         min_confidence = 0.1,
     } = opts;
+    user_id = enforce_tenant(user_id);
     const timestamp = at.getTime();
-    const conditions: string[] = [];
-    const params: any[] = [];
+    const conditions: string[] = ["user_id = ?"];
+    const params: any[] = [user_id];
 
     conditions.push(
         "(valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?))",
     );
     params.push(timestamp, timestamp);
-
-    conditions.push("user_id = ?");
-    params.push(user_id);
 
     if (project_id) {
         conditions.push(
@@ -87,21 +85,23 @@ export const get_current_fact = async (
     user_id?: string,
     project_id?: string,
 ): Promise<TemporalFact | null> => {
-    const row = await get_async(
-        `
+    user_id = enforce_tenant(user_id);
+    const args: any[] = [subject, predicate, user_id];
+    let sql = `
         SELECT id, user_id, project_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
         FROM temporal_facts
-        WHERE subject = ? AND predicate = ? AND valid_to IS NULL${user_id ? " AND user_id = ?" : ""}${project_id ? " AND (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)" : ""}
-        ORDER BY valid_from DESC
-        LIMIT 1
-    `,
-        [
-            subject,
-            predicate,
-            ...(user_id ? [user_id] : []),
-            ...(project_id ? [project_id] : []),
-        ],
-    );
+        WHERE subject = ? AND predicate = ? AND valid_to IS NULL AND user_id = ?`;
+
+    if (project_id) {
+        sql += " AND (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)";
+        args.push(project_id);
+        sql += " ORDER BY (project_id = ?) DESC, valid_from DESC LIMIT 1";
+        args.push(project_id);
+    } else {
+        sql += " AND (project_id = 'system_global' OR project_id IS NULL) ORDER BY valid_from DESC LIMIT 1";
+    }
+
+    const row = await get_async(sql, args);
 
     if (!row) return null;
 
@@ -129,8 +129,7 @@ export const query_facts_in_range = async (opts: {
     to?: Date;
     min_confidence?: number;
 }): Promise<TemporalFact[]> => {
-    const {
-        user_id,
+    let { user_id,
         project_id,
         subject,
         predicate,
@@ -138,8 +137,9 @@ export const query_facts_in_range = async (opts: {
         to,
         min_confidence = 0.1,
     } = opts;
-    const conditions: string[] = [];
-    const params: any[] = [];
+    const conditions: string[] = ["user_id = ?"];
+    user_id = enforce_tenant(user_id);
+    const params: any[] = [user_id];
 
     if (from && to) {
         const from_ts = from.getTime();
@@ -155,9 +155,6 @@ export const query_facts_in_range = async (opts: {
         conditions.push("valid_from <= ?");
         params.push(to.getTime());
     }
-
-    conditions.push("user_id = ?");
-    params.push(user_id);
 
     if (project_id) {
         conditions.push(
@@ -187,7 +184,7 @@ export const query_facts_in_range = async (opts: {
         SELECT id, user_id, project_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
         FROM temporal_facts
         ${where}
-        ORDER BY valid_from DESC
+        ${project_id ? "ORDER BY (project_id = ?) DESC, valid_from DESC" : "ORDER BY valid_from DESC"}
     `;
 
     const rows = await all_async(sql, params);
