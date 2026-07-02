@@ -46,7 +46,18 @@ const trunc = (txt: string, max = 320) =>
 const safe_parse = <T>(val: string | null, fb: T): T => {
     if (!val) return fb;
     try {
-        return JSON.parse(val) as T;
+        const parsed = JSON.parse(val);
+        // Basic type checking instead of casting directly
+        if (Array.isArray(fb)) {
+            return Array.isArray(parsed) ? (parsed as unknown as T) : fb;
+        }
+        if (typeof fb === 'object' && fb !== null) {
+            return typeof parsed === 'object' && parsed !== null ? (parsed as T) : fb;
+        }
+        if (typeof fb === 'number' || typeof fb === 'string' || typeof fb === 'boolean') {
+            return typeof parsed === typeof fb ? (parsed as T) : fb;
+        }
+        return parsed as T;
     } catch {
         return fb;
     }
