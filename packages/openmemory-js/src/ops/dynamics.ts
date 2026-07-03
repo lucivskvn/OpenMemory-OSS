@@ -155,7 +155,7 @@ export async function applyDualPhaseDecayToAllMemories(): Promise<void> {
         "select id,salience,decay_lambda,last_seen_at,updated_at,created_at from memories",
     );
     const ts = now();
-    const ops = mems.map(async (m: any) => {
+    await Promise.all(mems.map(async (m: any) => {
         const tms = Math.max(0, ts - (m.last_seen_at || m.updated_at));
         const td = tms / 86400000;
         const rt = await calculateDualPhaseDecayMemoryRetention(td);
@@ -164,8 +164,7 @@ export async function applyDualPhaseDecayToAllMemories(): Promise<void> {
             `update ${memories_table} set salience=?,updated_at=? where id=?`,
             [Math.max(0, nsal), ts, m.id],
         );
-    });
-    await Promise.all(ops);
+    }));
     console.log(`[DECAY] Applied to ${mems.length} memories`);
 }
 

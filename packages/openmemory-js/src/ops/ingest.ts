@@ -115,7 +115,6 @@ const link = async (
         );
     } catch (e) {
         await transaction.rollback();
-        console.error(`[INGEST] Link failed for section ${idx}:`, e);
         throw e;
     }
 };
@@ -198,7 +197,6 @@ export async function ingestDocument(
             extraction: exMeta,
         };
     } catch (e) {
-        console.error("[INGEST] Document ingestion failed:", e);
         throw e;
     }
 }
@@ -280,7 +278,6 @@ export async function ingestURL(
             extraction: ex.metadata,
         };
     } catch (e) {
-        console.error("[INGEST] URL ingestion failed:", e);
         throw e;
     }
 }

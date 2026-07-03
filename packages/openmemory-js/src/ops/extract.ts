@@ -157,8 +157,7 @@ export async function extractAudio(
             },
         };
     } catch (error: any) {
-        console.error("[EXTRACT] Audio transcription failed:", error);
-        throw new Error(`Audio transcription failed: ${error.message}`);
+        throw new Error(`Audio transcription failed: ${error.message}`, { cause: error });
     } finally {
         try {
             if (fs.existsSync(tempFilePath)) {
