@@ -45,10 +45,10 @@ const DEFAULT_NAV: NavItem[] = [
 ];
 
 export interface SidebarProps {
-  readonly items?: NavItem[];
+  readonly items?: ReadonlyArray<NavItem>;
 }
 
-export default function Sidebar({ items = DEFAULT_NAV }: SidebarProps) {
+export default function Sidebar({ items = DEFAULT_NAV }: Readonly<SidebarProps>) {
   const pathname = usePathname()
 
   return (
