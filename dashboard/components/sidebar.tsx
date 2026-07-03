@@ -45,7 +45,7 @@ const DEFAULT_NAV: NavItem[] = [
 ];
 
 export interface SidebarProps {
-  items?: NavItem[];
+  readonly items?: NavItem[];
 }
 
 export default function Sidebar({ items = DEFAULT_NAV }: SidebarProps) {

@@ -278,7 +278,7 @@ q = {
                  * (e.g. metadata) or maintain a relational source_id column on temporal_facts
                  * to avoid full-table scan lock conditions associated with LIKE patterns.
                  */
-                await exec("delete from temporal_facts where metadata like ?", [`%\"source_memory_id\":\"${id}\"%`]);
+                await exec("delete from temporal_facts where metadata like ?", [`%"source_memory_id":"${id}"%`]);
                 await transaction.commit();
             } catch (err) {
                 await transaction.rollback();
