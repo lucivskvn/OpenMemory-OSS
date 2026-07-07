@@ -424,7 +424,7 @@ export const on_query_hit = async (
     let updated = false;
 
     if (cfg.regeneration_enabled && reembed) {
-        const vec_row = await vector_store.getVector(mem_id, sector);
+        const vec_row = await vector_store.getVector(mem_id, sector, m.user_id || undefined);
         if (vec_row && vec_row.vector) {
             const vec =
                 typeof vec_row.vector === "string"

@@ -1256,7 +1256,7 @@ export async function delete_memory(id: string): Promise<boolean> {
     try {
         await q.del_mem.run(id);
         await q.del_waypoints.run(id, id);
-        await vector_store.deleteVectors(id);
+        await vector_store.deleteVectors(id, mem.user_id || undefined);
         await transaction.commit();
         return true;
     } catch (error) {
@@ -1295,7 +1295,7 @@ export async function update_memory(
                 classification.primary,
                 ...classification.additional,
             ];
-            await vector_store.deleteVectors(id);
+            await vector_store.deleteVectors(id, mem.user_id || undefined);
             const emb_res = await embedMultiSector(
                 id,
                 new_content,

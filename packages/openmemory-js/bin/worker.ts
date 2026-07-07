@@ -1,12 +1,12 @@
 import { apply_decay } from "../src/memory/decay";
 import { run_migrations } from "../src/core/migrate";
-import { q, all_async, run_async } from "../src/core/db";
-import { compressionEngine } from "../src/ops/compress";
+import { client } from "../src/core/db";
 
 async function run_worker() {
     console.log("[WORKER] Starting background maintenance...");
 
     const startTime = Date.now();
+    let hasFailed = false;
 
     // 1. Run migrations first to ensure schema is up to date
     try {
@@ -14,6 +14,7 @@ async function run_worker() {
         await run_migrations();
     } catch (e) {
         console.error("[WORKER] Migration failed:", e);
+        hasFailed = true;
     }
 
     // 2. Memory Decay & Compression
@@ -22,6 +23,7 @@ async function run_worker() {
         await apply_decay();
     } catch (e) {
         console.error("[WORKER] Decay process failed:", e);
+        hasFailed = true;
     }
 
     // 3. Optional: Graph Fact confidence decay
@@ -31,10 +33,24 @@ async function run_worker() {
         await apply_confidence_decay(0.01);
     } catch (e) {
         console.error("[WORKER] Confidence decay failed:", e);
+        hasFailed = true;
+    }
+
+    // Explicitly close the shared client at the end of all stages
+    try {
+        client.close();
+    } catch (e) {
+        console.warn("[WORKER] Error closing DB client:", e);
     }
 
     const duration = (Date.now() - startTime) / 1000;
     console.log(`[WORKER] Maintenance completed in ${duration.toFixed(2)}s`);
+
+    if (hasFailed) {
+        console.error("[WORKER] One or more maintenance stages failed.");
+        process.exit(1);
+    }
+
     process.exit(0);
 }
 

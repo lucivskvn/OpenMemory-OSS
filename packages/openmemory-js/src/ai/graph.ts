@@ -125,7 +125,7 @@ const hydrate_mem_row = async (
     path?: string[],
 ): Promise<hydrated_mem> => {
     const tags = safe_parse<string[]>(row.tags, []);
-    const vecs = await vector_store.getVectorsById(row.id);
+    const vecs = await vector_store.getVectorsById(row.id, row.user_id || undefined);
     const secs = vecs.map((v) => v.sector);
     const mem: hydrated_mem = {
         id: row.id,

@@ -1,5 +1,5 @@
 import { env } from "./config";
-import { createClient } from "@libsql/client";
+import { client } from "./db";
 import {
     assertSafeIdentifier,
     DEFAULT_VECTOR_TABLE,
@@ -13,12 +13,6 @@ const resolved_vector_table = assertSafeIdentifier(
     explicit_vector_table || DEFAULT_VECTOR_TABLE,
     "OM_VECTOR_TABLE",
 );
-
-// Connect to libSQL
-const url =
-    env.OM_TURSO_URL || `file:${env.db_path || "./data/openmemory.sqlite"}`;
-const token = env.OM_TURSO_TOKEN;
-const client = createClient({ url, authToken: token });
 
 interface Migration {
     version: string;
@@ -80,6 +74,16 @@ const migrations: Migration[] = [
         desc: "Add summary column to memories for decay caching",
         sqlite: () => ["ALTER TABLE memories ADD COLUMN summary text;"],
     },
+    {
+        version: "1.4.3",
+        desc: "Add user_id and sector indexes for vector isolation",
+        sqlite: (vectorTable: string) => [
+            `create index if not exists idx_vectors_user_id on ${vectorTable}(user_id);`,
+            `create index if not exists idx_vectors_sector on ${vectorTable}(sector);`,
+            "create index if not exists idx_mem_user_id on memories(user_id);",
+            "create index if not exists idx_mem_simhash on memories(simhash);",
+        ],
+    },
 ];
 
 const get_db_version = async (): Promise<string> => {
@@ -117,7 +121,6 @@ const check_column_exists = async (
 };
 
 const quarantine_orphan_temporal_facts = async (): Promise<number> => {
-    // Find orphans
     const orphanQuery = await client.execute({
         sql: `
         SELECT tf.id
@@ -164,7 +167,6 @@ const apply_migration = async (m: Migration) => {
         }
         await update_db_version(m.version);
     } catch (e: any) {
-        // Ignore "duplicate column name" errors
         if (
             e.message &&
             (e.message.includes("duplicate column name") ||
@@ -221,12 +223,11 @@ export const run_migrations = async () => {
 
     await ensure_last_seen_at();
 
-    client.close();
     log("All migrations complete.");
 };
 
 if (require.main === module) {
-    run_migrations().catch((err) => {
+    run_migrations().then(() => client.close()).catch((err) => {
         console.error("Migration failed:", err);
         process.exit(1);
     });

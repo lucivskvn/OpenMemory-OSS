@@ -765,7 +765,7 @@ export const create_mcp_srv = (tenant?: string) => {
                     ],
                 };
             const vecs = include_vectors
-                ? await vector_store.getVectorsById(id)
+                ? await vector_store.getVectorsById(id, user_id)
                 : [];
             const pay = {
                 id: mem.id,

@@ -186,13 +186,13 @@ export function send_problem(
     instance?: string,
     additional?: Record<string, any>
 ) {
-    res.status(status).json({
+    res.status(status).set("Content-Type", "application/problem+json").json({
+        ...additional,
         type,
         title,
         status,
         detail,
-        instance: instance || res.req?.url,
-        ...additional
+        instance: instance || res.req?.url
     });
 }
 

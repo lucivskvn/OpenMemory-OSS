@@ -17,7 +17,7 @@ def get_tokenizer():
     if _HAS_TIKTOKEN:
         try:
             return tiktoken.get_encoding("cl100k_base")
-        except:
+        except (ValueError, RuntimeError):
             return None
     return None
 
@@ -25,7 +25,9 @@ _tokenizer = get_tokenizer()
 
 def est_tokens(t: str) -> int:
     if _tokenizer:
-        return len(_tokenizer.encode(t))
+        # Use disallowed_special=() to treat special tokens as normal text
+        return len(_tokenizer.encode(t, disallowed_special=()))
+    # Fallback to character-based estimate if tiktoken is not available
     return math.ceil(len(t) / 4)
 
 def chunk_text(txt: str, tgt: int = 768, ovr: float = 0.1) -> List[Chunk]:
@@ -40,31 +42,36 @@ def chunk_text(txt: str, tgt: int = 768, ovr: float = 0.1) -> List[Chunk]:
     chks: List[Chunk] = []
     cur = ""
     cs = 0
+    cur_tokens = 0
 
     for p in paras:
         sents = re.split(r"(?<=[.!?])\s+", p)
         for s in sents:
-            pot = cur + (" " if cur else "") + s
-            cur_tokens = est_tokens(pot)
-            if cur_tokens > tgt and len(cur) > 0:
+            s_tokens = est_tokens(s)
+            pot_tokens = cur_tokens + (1 if cur else 0) + s_tokens
+
+            if pot_tokens > tgt and len(cur) > 0:
                 chks.append({
                     "text": cur,
                     "start": cs,
                     "end": cs + len(cur),
-                    "tokens": est_tokens(cur)
+                    "tokens": cur_tokens
                 })
                 ovt = cur[-och:] if och < len(cur) else cur
+                ovt_tokens = est_tokens(ovt)
                 cur = ovt + " " + s
                 cs = cs + len(cur) - len(ovt) - 1
+                cur_tokens = ovt_tokens + 1 + s_tokens
             else:
-                cur = pot
+                cur = cur + (" " if cur else "") + s
+                cur_tokens = pot_tokens
 
     if len(cur) > 0:
         chks.append({
             "text": cur,
             "start": cs,
             "end": cs + len(cur),
-            "tokens": est_tokens(cur)
+            "tokens": cur_tokens
         })
     return chks
 

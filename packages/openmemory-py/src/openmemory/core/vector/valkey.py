@@ -1,4 +1,3 @@
-
 from typing import List, Optional, Dict, Any
 import json
 import logging
@@ -9,7 +8,7 @@ from ..vector_store import VectorStore, VectorRow
 logger = logging.getLogger("vector_store.valkey")
 
 class ValkeyVectorStore(VectorStore):
-    def __init__(self, url: str, prefix: str = "om:vec:"):
+    def __init__(self, url: str, prefix: str = "om:"):
         self.url = url
         self.prefix = prefix
         self.client = None
@@ -20,12 +19,13 @@ class ValkeyVectorStore(VectorStore):
             self.client = redis.from_url(self.url)
         return self.client
 
-    def _key(self, id: str) -> str:
-        return f"{self.prefix}{id}"
+    def _key(self, user_id: str, sector: str, id: str) -> str:
+        return f"{self.prefix}{user_id}:vector:{sector}:{id}"
 
     async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None):
         client = await self._get_client()
-        key = self._key(id)
+        uid = user_id or "anonymous"
+        key = self._key(uid, sector, id)
         vec_bytes = np.array(vector, dtype=np.float32).tobytes()
 
         mapping = {
@@ -33,49 +33,19 @@ class ValkeyVectorStore(VectorStore):
             "sector": sector,
             "dim": dim,
             "v": vec_bytes,
-            "user_id": user_id or ""
+            "user_id": uid
         }
         await client.hset(key, mapping=mapping)
 
-    async def getVectorsById(self, id: str) -> List[VectorRow]:
+    async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]:
         client = await self._get_client()
-        key = self._key(id)
-        data = await client.hgetall(key)
-        if not data: return []
-        def dec(x): return x.decode('utf-8') if isinstance(x, bytes) else str(x)
-
-        vec_bytes = data.get(b'v') or data.get('v')
-        vec = list(np.frombuffer(vec_bytes, dtype=np.float32))
-
-        return [VectorRow(
-            dec(data.get(b'id') or data.get('id')),
-            dec(data.get(b'sector') or data.get('sector')),
-            vec,
-            int(dec(data.get(b'dim') or data.get('dim')))
-        )]
-
-    async def getVector(self, id: str, sector: str) -> Optional[VectorRow]:
-        rows = await self.getVectorsById(id)
-        for r in rows:
-            if r.sector == sector:
-                return r
-        return None
-
-    async def deleteVectors(self, id: str):
-        client = await self._get_client()
-        await client.delete(self._key(id))
-
-    async def search(self, vector: List[float], sector: str, k: int, filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-
-        client = await self._get_client()
-        query_vec = np.array(vector, dtype=np.float32)
-        q_norm = np.linalg.norm(query_vec)
+        uid = user_id or "*"
+        pattern = f"{self.prefix}{uid}:vector:*:{id}"
 
         cursor = 0
         results = []
-
         while True:
-            cursor, keys = await client.scan(cursor, match=f"{self.prefix}*", count=100)
+            cursor, keys = await client.scan(cursor, match=pattern, count=100)
             if keys:
                 pipe = client.pipeline()
                 for key in keys:
@@ -86,12 +56,83 @@ class ValkeyVectorStore(VectorStore):
                     if not item: continue
                     def dec(x): return x.decode('utf-8') if isinstance(x, bytes) else str(x)
 
-                    i_sector = dec(item.get(b'sector') or item.get('sector'))
-                    if i_sector != sector: continue
+                    v_bytes = item.get(b'v') or item.get('v')
+                    vec = list(np.frombuffer(v_bytes, dtype=np.float32))
 
-                    if filter and filter.get("user_id"):
-                        i_uid = dec(item.get(b'user_id') or item.get('user_id'))
-                        if i_uid != filter["user_id"]: continue
+                    results.append(VectorRow(
+                        dec(item.get(b'id') or item.get('id')),
+                        dec(item.get(b'sector') or item.get('sector')),
+                        vec,
+                        int(dec(item.get(b'dim') or item.get('dim'))),
+                        dec(item.get(b'user_id') or item.get('user_id'))
+                    ))
+            if cursor == 0: break
+        return results
+
+    async def getVector(self, id: str, sector: str, user_id: Optional[str] = None) -> Optional[VectorRow]:
+        client = await self._get_client()
+        uid = user_id or "anonymous"
+        key = self._key(uid, sector, id)
+        item = await client.hgetall(key)
+        if not item: return None
+
+        def dec(x): return x.decode('utf-8') if isinstance(x, bytes) else str(x)
+        v_bytes = item.get(b'v') or item.get('v')
+        vec = list(np.frombuffer(v_bytes, dtype=np.float32))
+
+        return VectorRow(
+            dec(item.get(b'id') or item.get('id')),
+            dec(item.get(b'sector') or item.get('sector')),
+            vec,
+            int(dec(item.get(b'dim') or item.get('dim'))),
+            dec(item.get(b'user_id') or item.get('user_id'))
+        )
+
+    async def deleteVectors(self, id: str, user_id: Optional[str] = None):
+        client = await self._get_client()
+        uid = user_id or "*"
+        pattern = f"{self.prefix}{uid}:vector:*:{id}"
+        cursor = 0
+        while True:
+            cursor, keys = await client.scan(cursor, match=pattern, count=100)
+            if keys:
+                await client.delete(*keys)
+            if cursor == 0: break
+
+    async def search(self, vector: List[float], sector: str, k: int, filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        client = await self._get_client()
+        query_vec = np.array(vector, dtype=np.float32)
+        q_norm = np.linalg.norm(query_vec)
+
+        user_id = filter.get("user_id") if filter else None
+        project_id = filter.get("project_id") if filter else None
+
+        if not user_id:
+            pattern = f"{self.prefix}*:vector:{sector}:*"
+        else:
+            pattern = f"{self.prefix}{user_id}:vector:{sector}:*"
+
+        fetch_k = k * 5 if project_id else k
+
+        cursor = 0
+        results = []
+
+        while True:
+            cursor, keys = await client.scan(cursor, match=pattern, count=100)
+            if keys:
+                pipe = client.pipeline()
+                for key in keys:
+                    pipe.hgetall(key)
+                items = await pipe.execute()
+
+                for item in items:
+                    if not item: continue
+                    def dec(x): return x.decode('utf-8') if isinstance(x, bytes) else str(x)
+
+                    if project_id:
+                        i_proj = dec(item.get(b'project_id') or item.get('project_id'))
+                        if i_proj != project_id and i_proj != "system_global" and i_proj != "null":
+                            continue
 
                     v_bytes = item.get(b'v') or item.get('v')
                     v = np.frombuffer(v_bytes, dtype=np.float32)
@@ -104,8 +145,9 @@ class ValkeyVectorStore(VectorStore):
                         "id": dec(item.get(b'id') or item.get('id')),
                         "similarity": float(sim)
                     })
+                    if len(results) >= fetch_k: break
 
-            if cursor == 0: break
+            if cursor == 0 or len(results) >= fetch_k: break
 
         results.sort(key=lambda x: x["similarity"], reverse=True)
         return results[:k]

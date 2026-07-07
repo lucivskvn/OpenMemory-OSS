@@ -287,7 +287,7 @@ q = {
 
             try {
                 if (vector_store) {
-                    await vector_store.deleteVectors(id);
+                    await vector_store.deleteVectors(id, user_id || undefined);
                 }
             } catch (vecErr) {
                 console.warn("[DB] Failed to delete vectors for id:", id, vecErr);
@@ -486,7 +486,7 @@ export const log_maint_op = async (
     }
 };
 
-export {
+export { client,
     q,
     transaction,
     all_async,
