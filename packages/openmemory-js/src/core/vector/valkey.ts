@@ -1,7 +1,7 @@
-import { VectorStore } from "../vector_store";
 import Redis from "ioredis";
 import { env } from "../config";
-import { vectorToBuffer, bufferToVector } from "../../memory/embed";
+import { VectorStore } from "../vector_store";
+import { bufferToVector, vectorToBuffer } from "../../memory/embed";
 
 export class ValkeyVectorStore implements VectorStore {
     private client: Redis;
@@ -15,8 +15,8 @@ export class ValkeyVectorStore implements VectorStore {
         });
     }
 
-    private getKey(id: string, sector: string): string {
-        return `vec:${sector}:${id}`;
+    private getKey(tenant_id: string, id: string, sector: string): string {
+        return `om:${tenant_id}:vector:${sector}:${id}`;
     }
 
     async storeVector(
@@ -24,34 +24,34 @@ export class ValkeyVectorStore implements VectorStore {
         sector: string,
         vector: number[],
         dim: number,
-        user_id?: string,
+        user_id: string,
         project_id?: string,
     ): Promise<void> {
-        const key = this.getKey(id, sector);
+        const key = this.getKey(user_id, id, sector);
         const buf = vectorToBuffer(vector);
 
         await this.client.hset(key, {
             v: buf,
             dim: dim,
-            user_id: user_id || "anonymous",
+            user_id: user_id,
             project_id: project_id || "null",
             id: id,
             sector: sector,
         });
     }
 
-    async deleteVector(id: string, sector: string): Promise<void> {
-        const key = this.getKey(id, sector);
+    async deleteVector(id: string, sector: string, user_id: string): Promise<void> {
+        const key = this.getKey(user_id, id, sector);
         await this.client.del(key);
     }
 
-    async deleteVectors(id: string): Promise<void> {
+    async deleteVectors(id: string, user_id: string): Promise<void> {
         let cursor = "0";
         do {
             const res = await this.client.scan(
                 cursor,
                 "MATCH",
-                `vec:*:${id}`,
+                `om:${user_id}:vector:*:${id}`,
                 "COUNT",
                 100,
             );
@@ -65,20 +65,17 @@ export class ValkeyVectorStore implements VectorStore {
         sector: string,
         queryVec: number[],
         topK: number,
-        user_id?: string,
+        user_id: string,
         project_id?: string,
     ): Promise<Array<{ id: string; score: number }>> {
-        // Valkey/Redis doesn't support user_id filtering in FT.SEARCH easily
-        // For now we'll need to post-filter or use a more complex query
         const indexName = `idx:${sector}`;
         const blob = vectorToBuffer(queryVec);
 
         try {
-            // Use FT.SEARCH with vector similarity
             const res = (await this.client.call(
                 "FT.SEARCH",
                 indexName,
-                `*=>[KNN ${topK * 2} @v $blob AS score]`, // fetch more to allow filtering
+                `(@user_id:{${user_id.replace(/-/g, "\\-")}}) => [KNN ${topK} @v $blob AS score]`,
                 "PARAMS",
                 "2",
                 "blob",
@@ -87,27 +84,21 @@ export class ValkeyVectorStore implements VectorStore {
                 "2",
             )) as any[];
 
-            // Parse results and filter by user_id if provided
             const results: Array<{ id: string; score: number }> = [];
             for (let i = 1; i < res.length; i += 2) {
                 const key = res[i] as string;
                 const fields = res[i + 1] as any[];
                 let id = "";
                 let dist = 0;
-                let vec_user_id = "";
                 let vec_project_id = "";
 
                 for (let j = 0; j < fields.length; j += 2) {
                     if (fields[j] === "id") id = fields[j + 1];
                     if (fields[j] === "score") dist = parseFloat(fields[j + 1]);
-                    if (fields[j] === "user_id") vec_user_id = fields[j + 1];
-                    if (fields[j] === "project_id")
-                        vec_project_id = fields[j + 1];
+                    if (fields[j] === "project_id") vec_project_id = fields[j + 1];
                 }
                 if (!id) id = key.split(":").pop()!;
 
-                // Filter by user_id and project_id if provided
-                const userMatch = !user_id || vec_user_id === user_id;
                 const projectMatch =
                     !project_id ||
                     vec_project_id === project_id ||
@@ -115,32 +106,24 @@ export class ValkeyVectorStore implements VectorStore {
                     vec_project_id === "null" ||
                     vec_project_id === "";
 
-                if (userMatch && projectMatch) {
+                if (projectMatch) {
                     results.push({ id, score: 1 - dist });
-                    if (results.length >= topK) break;
                 }
             }
 
             return results;
         } catch (e) {
-            console.warn(
-                `[Valkey] FT.SEARCH failed for ${sector}, falling back to scan (slow):`,
-                e,
-            );
-
-            // Fallback: scan all vectors and filter
             let cursor = "0";
             const allVecs: Array<{
                 id: string;
                 vector: number[];
-                user_id: string;
                 project_id: string;
             }> = [];
             do {
                 const res = await this.client.scan(
                     cursor,
                     "MATCH",
-                    `vec:${sector}:*`,
+                    `om:${user_id}:vector:${sector}:*`,
                     "COUNT",
                     100,
                 );
@@ -149,21 +132,14 @@ export class ValkeyVectorStore implements VectorStore {
                 if (keys.length) {
                     const pipe = this.client.pipeline();
                     keys.forEach((k) =>
-                        pipe.hmget(k, "v", "user_id", "project_id"),
+                        pipe.hmget(k, "v", "project_id"),
                     );
                     const buffers = await pipe.exec();
                     buffers?.forEach((b, idx) => {
                         if (b && b[1]) {
-                            const [buf, vec_user_id, vec_project_id] = b[1] as [
-                                Buffer,
-                                string,
-                                string,
-                            ];
+                            const [buf, vec_project_id] = b[1] as [Buffer, string];
                             const id = keys[idx].split(":").pop()!;
 
-                            // Filter by user_id and project_id during scan
-                            const userMatch =
-                                !user_id || vec_user_id === user_id;
                             const projectMatch =
                                 !project_id ||
                                 vec_project_id === project_id ||
@@ -171,11 +147,10 @@ export class ValkeyVectorStore implements VectorStore {
                                 vec_project_id === "null" ||
                                 vec_project_id === "";
 
-                            if (userMatch && projectMatch) {
+                            if (projectMatch) {
                                 allVecs.push({
                                     id,
                                     vector: bufferToVector(buf),
-                                    user_id: vec_user_id,
                                     project_id: vec_project_id,
                                 });
                             }
@@ -195,9 +170,7 @@ export class ValkeyVectorStore implements VectorStore {
 
     private cosineSimilarity(a: number[], b: number[]) {
         if (a.length !== b.length) return 0;
-        let dot = 0,
-            na = 0,
-            nb = 0;
+        let dot = 0, na = 0, nb = 0;
         for (let i = 0; i < a.length; i++) {
             dot += a[i] * b[i];
             na += a[i] * a[i];
@@ -209,8 +182,9 @@ export class ValkeyVectorStore implements VectorStore {
     async getVector(
         id: string,
         sector: string,
+        user_id: string,
     ): Promise<{ vector: number[]; dim: number } | null> {
-        const key = this.getKey(id, sector);
+        const key = this.getKey(user_id, id, sector);
         const res = await this.client.hmget(key, "v", "dim");
         if (!res[0]) return null;
         return {
@@ -221,18 +195,15 @@ export class ValkeyVectorStore implements VectorStore {
 
     async getVectorsById(
         id: string,
+        user_id: string,
     ): Promise<Array<{ sector: string; vector: number[]; dim: number }>> {
-        const results: Array<{
-            sector: string;
-            vector: number[];
-            dim: number;
-        }> = [];
+        const results: Array<{ sector: string; vector: number[]; dim: number }> = [];
         let cursor = "0";
         do {
             const res = await this.client.scan(
                 cursor,
                 "MATCH",
-                `vec:*:${id}`,
+                `om:${user_id}:vector:*:${id}`,
                 "COUNT",
                 100,
             );
@@ -247,7 +218,7 @@ export class ValkeyVectorStore implements VectorStore {
                         const [v, dim] = r[1] as [Buffer, string];
                         const key = keys[idx];
                         const parts = key.split(":");
-                        const sector = parts[1];
+                        const sector = parts[3];
                         results.push({
                             sector,
                             vector: bufferToVector(v),
@@ -262,15 +233,15 @@ export class ValkeyVectorStore implements VectorStore {
 
     async getVectorsBySector(
         sector: string,
+        user_id: string,
     ): Promise<Array<{ id: string; vector: number[]; dim: number }>> {
-        const results: Array<{ id: string; vector: number[]; dim: number }> =
-            [];
+        const results: Array<{ id: string; vector: number[]; dim: number }> = [];
         let cursor = "0";
         do {
             const res = await this.client.scan(
                 cursor,
                 "MATCH",
-                `vec:${sector}:*`,
+                `om:${user_id}:vector:${sector}:*`,
                 "COUNT",
                 100,
             );

@@ -1,6 +1,11 @@
 import math
 import re
-from typing import List, Dict, TypedDict
+from typing import List, Dict, TypedDict, Optional
+try:
+    import tiktoken
+    _HAS_TIKTOKEN = True
+except ImportError:
+    _HAS_TIKTOKEN = False
 
 class Chunk(TypedDict):
     text: str
@@ -8,16 +13,27 @@ class Chunk(TypedDict):
     end: int
     tokens: int
 
-CPT = 4
-def est(t: str) -> int:
-    return math.ceil(len(t) / CPT)
+def get_tokenizer():
+    if _HAS_TIKTOKEN:
+        try:
+            return tiktoken.get_encoding("cl100k_base")
+        except:
+            return None
+    return None
+
+_tokenizer = get_tokenizer()
+
+def est_tokens(t: str) -> int:
+    if _tokenizer:
+        return len(_tokenizer.encode(t))
+    return math.ceil(len(t) / 4)
 
 def chunk_text(txt: str, tgt: int = 768, ovr: float = 0.1) -> List[Chunk]:
-    tot = est(txt)
+    tot = est_tokens(txt)
     if tot <= tgt:
         return [{"text": txt, "start": 0, "end": len(txt), "tokens": tot}]
 
-    tch = tgt * CPT
+    tch = tgt * 4
     och = math.floor(tch * ovr)
     paras = re.split(r"\n\n+", txt)
 
@@ -29,12 +45,13 @@ def chunk_text(txt: str, tgt: int = 768, ovr: float = 0.1) -> List[Chunk]:
         sents = re.split(r"(?<=[.!?])\s+", p)
         for s in sents:
             pot = cur + (" " if cur else "") + s
-            if len(pot) > tch and len(cur) > 0:
+            cur_tokens = est_tokens(pot)
+            if cur_tokens > tgt and len(cur) > 0:
                 chks.append({
                     "text": cur,
                     "start": cs,
                     "end": cs + len(cur),
-                    "tokens": est(cur)
+                    "tokens": est_tokens(cur)
                 })
                 ovt = cur[-och:] if och < len(cur) else cur
                 cur = ovt + " " + s
@@ -47,7 +64,7 @@ def chunk_text(txt: str, tgt: int = 768, ovr: float = 0.1) -> List[Chunk]:
             "text": cur,
             "start": cs,
             "end": cs + len(cur),
-            "tokens": est(cur)
+            "tokens": est_tokens(cur)
         })
     return chks
 

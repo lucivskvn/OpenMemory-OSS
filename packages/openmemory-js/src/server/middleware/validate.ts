@@ -1,16 +1,6 @@
 /**
  * Tiny hand-written request validator.
- *
- * Avoids pulling in a runtime dep (zod is in package.json but we don't
- * want to take a hard import on it from the HTTP layer here).
- *
- * Usage:
- *   const { ok, data, errors } = validate(req.body, {
- *       content: { type: "string", required: true, max_length: 50_000 },
- *       tags: { type: "array", items: { type: "string", max_length: 256 }, max_items: 64 },
- *       k: { type: "number", min: 1, max: 100 },
- *   });
- *   if (!ok) return res.status(400).json({ error: "invalid_input", details: errors });
+ * RFC 7807 (Problem Details for HTTP APIs) compliant responses.
  */
 
 export type field_type =
@@ -25,25 +15,15 @@ export type field_type =
 export interface field_schema {
     type: field_type;
     required?: boolean;
-    /** allow null in addition to the typed value */
     nullable?: boolean;
-    /** string min length (codepoints) */
     min_length?: number;
-    /** string max length (codepoints) */
     max_length?: number;
-    /** numeric lower bound (inclusive) */
     min?: number;
-    /** numeric upper bound (inclusive) */
     max?: number;
-    /** array element schema */
     items?: field_schema;
-    /** array minimum length */
     min_items?: number;
-    /** array maximum length */
     max_items?: number;
-    /** restrict string to one of these values */
     one_of?: ReadonlyArray<string>;
-    /** nested object schema */
     fields?: schema;
 }
 
@@ -183,7 +163,6 @@ export function validate<T = Record<string, unknown>>(
 ): validate_result<T> {
     const errors: string[] = [];
     if (input === null || input === undefined) {
-        // Treat missing body as empty object so that schema "required" still fires.
         const data = run_schema("", {}, spec, errors);
         return { ok: errors.length === 0, data: data as unknown as T, errors };
     }
@@ -196,7 +175,29 @@ export function validate<T = Record<string, unknown>>(
 }
 
 /**
- * Helper: validate and 400-respond on failure. Returns parsed data or null.
+ * RFC 7807 (Problem Details for HTTP APIs) formatter.
+ */
+export function send_problem(
+    res: any,
+    status: number,
+    title: string,
+    detail?: string,
+    type: string = "about:blank",
+    instance?: string,
+    additional?: Record<string, any>
+) {
+    res.status(status).json({
+        type,
+        title,
+        status,
+        detail,
+        instance: instance || res.req?.url,
+        ...additional
+    });
+}
+
+/**
+ * Helper: validate and 400-respond on failure (RFC 7807).
  */
 export function parse_or_400<T = Record<string, unknown>>(
     res: any,
@@ -205,7 +206,15 @@ export function parse_or_400<T = Record<string, unknown>>(
 ): T | null {
     const r = validate<T>(input, spec);
     if (!r.ok) {
-        res.status(400).json({ error: "invalid_input", details: r.errors });
+        send_problem(
+            res,
+            400,
+            "Invalid Input",
+            "The request body failed validation checks.",
+            "https://openmemory.dev/errors/invalid_input",
+            undefined,
+            { validation_errors: r.errors }
+        );
         return null;
     }
     return r.data;

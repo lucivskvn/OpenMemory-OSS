@@ -1,3 +1,5 @@
+import { getEncoding } from "js-tiktoken";
+
 export type chunk = {
     text: string;
     start: number;
@@ -5,15 +7,16 @@ export type chunk = {
     tokens: number;
 };
 
-const cpt = 4;
-const est = (t: string) => Math.ceil(t.length / cpt);
+const encoder = getEncoding("cl100k_base");
+
+const est = (t: string) => encoder.encode(t).length;
 
 export const chunk_text = (txt: string, tgt = 768, ovr = 0.1): chunk[] => {
     const tot = est(txt);
     if (tot <= tgt)
         return [{ text: txt, start: 0, end: txt.length, tokens: tot }];
 
-    const tch = tgt * cpt,
+    const tch = tgt * 4,
         och = Math.floor(tch * ovr);
     const paras = txt.split(/\n\n+/);
 
@@ -25,7 +28,9 @@ export const chunk_text = (txt: string, tgt = 768, ovr = 0.1): chunk[] => {
         const sents = p.split(/(?<=[.!?])\s+/);
         for (const s of sents) {
             const pot = cur + (cur ? " " : "") + s;
-            if (pot.length > tch && cur.length > 0) {
+            const pot_tokens = est(pot);
+
+            if (pot_tokens > tgt && cur.length > 0) {
                 chks.push({
                     text: cur,
                     start: cs,
