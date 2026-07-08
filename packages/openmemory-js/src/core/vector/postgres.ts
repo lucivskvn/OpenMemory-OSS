@@ -117,21 +117,16 @@ export class PostgresVectorStore implements VectorStore {
             const rows = await this.db.all_async(sql, args);
             return rows.map((r) => ({ id: r.id, score: r.similarity }));
         } else {
-            let filter_sql = "where sector=$1";
-            const direct_args: any[] = [sector];
-
-            if (user_id) {
-                filter_sql += ` and user_id=$${direct_args.length + 1}`;
-                direct_args.push(user_id);
-            }
+            const direct_args: any[] = [sector, user_id];
+            let direct_filter = "where sector=$1 and user_id=$2";
 
             if (project_id) {
-                filter_sql += ` and (project_id=$${direct_args.length + 1} or project_id='system_global' or project_id IS NULL)`;
+                direct_filter += ` and (project_id=$3 or project_id='system_global' or project_id IS NULL)`;
                 direct_args.push(project_id);
             }
 
             const rows = await this.db.all_async(
-                `select id,v,dim from ${this.table} ${filter_sql}`,
+                `select id,v,dim from ${this.table} ${direct_filter}`,
                 direct_args,
             );
             const sims: Array<{ id: string; score: number }> = [];
@@ -150,7 +145,7 @@ export class PostgresVectorStore implements VectorStore {
         sector: string,
         user_id?: string,
     ): Promise<{ vector: number[]; dim: number } | null> {
-        let sql = `select v\${this.usePgVector ? '::text' : ''} as v_val, dim from \${this.table} where id=$1 and sector=$2`;
+        let sql = `select v${this.usePgVector ? '::text' : ''} as v_val, dim from ${this.table} where id=$1 and sector=$2`;
         const params: any[] = [id, sector];
         if (user_id) {
             sql += " and user_id=$3";
@@ -171,7 +166,7 @@ export class PostgresVectorStore implements VectorStore {
         id: string,
         user_id?: string,
     ): Promise<Array<{ sector: string; vector: number[]; dim: number }>> {
-        let sql = `select sector, v\${this.usePgVector ? '::text' : ''} as v_val, dim from \${this.table} where id=$1`;
+        let sql = `select sector, v${this.usePgVector ? '::text' : ''} as v_val, dim from ${this.table} where id=$1`;
         const params: any[] = [id];
         if (user_id) {
             sql += " and user_id=$2";
@@ -190,7 +185,7 @@ export class PostgresVectorStore implements VectorStore {
         sector: string,
         user_id?: string,
     ): Promise<Array<{ id: string; vector: number[]; dim: number }>> {
-        let sql = `select id, v\${this.usePgVector ? '::text' : ''} as v_val, dim from \${this.table} where sector=$1`;
+        let sql = `select id, v${this.usePgVector ? '::text' : ''} as v_val, dim from ${this.table} where sector=$1`;
         const params: any[] = [sector];
         if (user_id) {
             sql += " and user_id=$2";

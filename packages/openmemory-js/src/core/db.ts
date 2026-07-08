@@ -46,7 +46,8 @@ type q_type = {
     get_waypoint: { get: (src: string, dst: string) => Promise<any> };
     upd_waypoint: { run: (...p: any[]) => Promise<void> };
     del_waypoints: { run: (...p: any[]) => Promise<void> };
-    prune_waypoints: { run: (threshold: number) => Promise<void> };
+    prune_waypoints: { run: (t: number) => Promise<void> };
+
     ins_log: { run: (...p: any[]) => Promise<void> };
     upd_log: { run: (...p: any[]) => Promise<void> };
     get_pending_logs: { all: () => Promise<any[]> };
@@ -60,47 +61,57 @@ type q_type = {
 };
 
 let q: q_type;
-
 let transaction: {
     begin: () => Promise<void>;
     commit: () => Promise<void>;
     rollback: () => Promise<void>;
 };
 
-const memories_table = "memories";
-let vector_store: VectorStore;
+const explicit_vector_table = process.env.OM_VECTOR_TABLE;
+const sqlite_vector_table = assertSafeIdentifier(
+    explicit_vector_table || DEFAULT_VECTOR_TABLE,
+    "OM_VECTOR_TABLE",
+);
 
 const url =
     env.OM_TURSO_URL || `file:${env.db_path || "./data/openmemory.sqlite"}`;
 const token = env.OM_TURSO_TOKEN;
-const client = createClient({ url, authToken: token });
 
-let txStmts: InStatement[] | null = null;
+let client: any;
+try {
+    client = createClient({ url, authToken: token });
+} catch (e: any) {
+    throw new DbInitError(
+        `Failed to initialize libSQL client: ${e.message}. URL: ${url}`,
+    );
+}
 
-// Convert libSQL row array to object
+export { client };
+
 const mapRow = (row: any) => {
     if (!row) return row;
     const result = { ...row };
-    if (result.content && typeof result.content === "string") {
+    if (result.content) {
         result.content = decrypt(result.content);
     }
-    if (result.meta && typeof result.meta === "string") {
+    if (result.meta) {
         result.meta = decrypt(result.meta);
     }
-    if (result.summary && typeof result.summary === "string") {
+    if (result.summary) {
         result.summary = decrypt(result.summary);
     }
-    if (result.object && typeof result.object === "string") {
+    if (result.object) {
         result.object = decrypt(result.object);
     }
-    if (result.metadata && typeof result.metadata === "string") {
+    if (result.metadata) {
         result.metadata = decrypt(result.metadata);
     }
     return result;
 };
 
-// Map row list
 const mapRows = (rows: any[]) => rows.map(mapRow);
+
+let txStmts: InStatement[] | null = null;
 
 const exec = async (sql: string, args: any[] = []) => {
     if (txStmts) {
@@ -138,12 +149,12 @@ transaction = {
     },
     commit: async () => {
         if (!txStmts) return;
+        const stmts = txStmts;
+        txStmts = null;
         try {
-            if (txStmts.length > 0) {
-                await client.batch(txStmts, "write");
-            }
-        } finally {
-            txStmts = null;
+            await client.batch(stmts, "write");
+        } catch (e) {
+            throw e;
         }
     },
     rollback: async () => {
@@ -151,28 +162,27 @@ transaction = {
     },
 };
 
-const explicit_vector_table = process.env.OM_VECTOR_TABLE;
-const sqlite_vector_table = assertSafeIdentifier(
-    explicit_vector_table || DEFAULT_VECTOR_TABLE,
-    "OM_VECTOR_TABLE",
-);
+const memories_table = "memories";
+let vector_store: VectorStore;
 
-if (env.vector_backend === "valkey") {
+if (env.vector_store === "valkey") {
     vector_store = new ValkeyVectorStore();
-    console.error("[DB] Using Valkey VectorStore");
 } else {
-    // PostgresVectorStore is used for SQLite as well, just renamed
     vector_store = new PostgresVectorStore(
         { run_async, get_async, all_async },
         sqlite_vector_table,
+        !!env.OM_POSTGRES_URL,
     );
-    console.error(`[DB] Using VectorStore with table: ${sqlite_vector_table}`);
 }
 
-export const init_tables = async () => {
+export const init_db = async () => {
     const SCHEMA_TABLES = [
         `create table if not exists memories(id text primary key,user_id text,project_id text,segment integer default 0,content text not null,summary text,simhash text,primary_sector text not null,tags text,meta text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0,coactivations integer default 0)`,
+        `create index if not exists idx_mem_user_id on memories(user_id)`,
+        `create index if not exists idx_mem_simhash on memories(simhash)`,
         `create table if not exists openmemory_vectors(id text not null,project_id text,sector text not null,user_id text,v blob not null,dim integer not null,primary key(id,sector))`,
+        `create index if not exists idx_vectors_user_id on openmemory_vectors(user_id)`,
+        `create index if not exists idx_vectors_sector on openmemory_vectors(sector)`,
         `create table if not exists waypoints(src_id text,dst_id text not null,user_id text,project_id text,weight real not null,created_at integer,updated_at integer,primary key(src_id,user_id))`,
         `create table if not exists embed_logs(id text primary key,model text,status text,ts integer,err text)`,
         `create table if not exists users(user_id text primary key,summary text,reflection_count integer default 0,created_at integer,updated_at integer)`,
@@ -188,7 +198,6 @@ export const init_tables = async () => {
 q = {
     ins_mem: {
         run: (...p) => {
-            // p[4] is content, p[8] is meta
             const encryptedP = [...p];
             if (encryptedP[4] !== undefined && encryptedP[4] !== null) {
                 encryptedP[4] = encrypt(encryptedP[4]);
@@ -197,26 +206,24 @@ q = {
                 encryptedP[8] = encrypt(encryptedP[8]);
             }
             return exec(
-                "insert into memories(id,user_id,project_id,segment,content,simhash,primary_sector,tags,meta,created_at,updated_at,last_seen_at,salience,decay_lambda,version,mean_dim,mean_vec,compressed_vec,feedback_score) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) on conflict(id) do update set user_id=excluded.user_id, project_id=excluded.project_id,segment=excluded.segment,content=excluded.content,simhash=excluded.simhash,primary_sector=excluded.primary_sector,tags=excluded.tags,meta=excluded.meta,created_at=excluded.created_at,updated_at=excluded.updated_at,last_seen_at=excluded.last_seen_at,salience=excluded.salience,decay_lambda=excluded.decay_lambda,version=excluded.version,mean_dim=excluded.mean_dim,mean_vec=excluded.mean_vec,compressed_vec=excluded.compressed_vec,feedback_score=excluded.feedback_score",
+                "insert into memories(id,user_id,project_id,segment,content,simhash,primary_sector,tags,meta,created_at,updated_at,last_seen_at,salience,decay_lambda,version,mean_dim,mean_vec,compressed_vec,feedback_score) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 encryptedP,
             );
         },
     },
     upd_mean_vec: {
         run: (...p) =>
-            exec("update memories set mean_dim=?,mean_vec=? where id=?", [
-                p[1],
-                p[2],
-                p[0],
-            ]),
+            exec("update memories set mean_dim=?,mean_vec=? where id=?", p),
     },
     upd_compressed_vec: {
-        run: (...p) =>
-            exec("update memories set compressed_vec=? where id=?", p),
+        run: (...p) => exec("update memories set compressed_vec=? where id=?", p),
     },
     upd_feedback: {
         run: (...p) =>
-            exec("update memories set feedback_score=? where id=?", p),
+            exec(
+                "update memories set feedback_score=?,coactivations=coactivations+1,updated_at=? where id=?",
+                p,
+            ),
     },
     upd_seen: {
         run: (...p) =>
@@ -227,7 +234,6 @@ q = {
     },
     upd_mem: {
         run: (...p) => {
-            // content, tags, meta, updated_at, id
             const encryptedP = [...p];
             if (encryptedP[0] !== undefined && encryptedP[0] !== null) {
                 encryptedP[0] = encrypt(encryptedP[0]);
@@ -243,7 +249,6 @@ q = {
     },
     upd_mem_with_sector: {
         run: (...p) => {
-            // content, primary_sector, tags, meta, updated_at, id
             const encryptedP = [...p];
             if (encryptedP[0] !== undefined && encryptedP[0] !== null) {
                 encryptedP[0] = encrypt(encryptedP[0]);
@@ -270,38 +275,11 @@ q = {
                 if (project_id) { sql += " and project_id=?"; params.push(project_id); }
                 await exec(sql, params);
 
-                /**
-                 * Cascading Temporal Graph Deletion
-                 * ---------------------------------
-                 * This deletes all facts originating from the source memory ID safely.
-                 * NOTE: High-volume enterprise deployments should index JSON extraction fields
-                 * (e.g. metadata) or maintain a relational source_id column on temporal_facts
-                 * to avoid full-table scan lock conditions associated with LIKE patterns.
-                 */
                 await exec("delete from temporal_facts where metadata like ?", [`%"source_memory_id":"${id}"%`]);
                 await transaction.commit();
             } catch (err) {
                 await transaction.rollback();
                 throw err;
-            }
-
-            try {
-                if (vector_store) {
-                    await vector_store.deleteVectors(id, user_id || undefined);
-                }
-            } catch (vecErr) {
-                console.warn("[DB] Failed to delete vectors for id:", id, vecErr);
-                try {
-                    await q.ins_log.run(
-                        id + "_del_" + Date.now(),
-                        "vector_delete",
-                        "pending_delete",
-                        Date.now(),
-                        String(vecErr)
-                    );
-                } catch (logErr) {
-                    console.error("[DB] Failed to insert embed_log for vector deletion error", logErr);
-                }
             }
         }
     },
@@ -466,9 +444,6 @@ q = {
             await exec("delete from memories");
             await exec("delete from waypoints");
             await exec("delete from users");
-
-            // sqlite_vector_table is already validated above and matches
-            // whatever this process actually created CREATE TABLE for.
             await exec(`delete from ${sqlite_vector_table}`);
         },
     },
@@ -486,7 +461,7 @@ export const log_maint_op = async (
     }
 };
 
-export { client,
+export {
     q,
     transaction,
     all_async,

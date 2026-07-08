@@ -16,7 +16,7 @@ export async function fetchWithTrace(
 
     // Apply a default timeout of 30 seconds if no signal is provided
     let signal = init?.signal;
-    let timeoutId: any = null;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
     if (!signal) {
         const controller = new AbortController();
         signal = controller.signal;

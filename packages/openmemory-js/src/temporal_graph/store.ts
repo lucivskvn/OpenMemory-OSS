@@ -39,7 +39,7 @@ export async function insert_fact(
     project_id?: string,
 ): Promise<string> {
     if (typeof subject_or_opts === "object" && subject_or_opts !== null) {
-        const opts = subject_or_opts;
+        const opts = subject_or_opts as FactOptions;
         return _insert_fact_impl(
             opts.subject,
             opts.predicate,
@@ -52,7 +52,7 @@ export async function insert_fact(
         );
     }
     return _insert_fact_impl(
-        subject_or_opts,
+        subject_or_opts as string,
         predicate as string,
         object as string,
         valid_from ?? new Date(),
@@ -84,11 +84,11 @@ const _insert_fact_impl = async (
     const now = Date.now();
     const valid_from_ts = valid_from.getTime();
 
-    // Move existing lookup outside the transaction for better consistency
+    // Use a clean lookup that works even if a transaction is currently buffered
     const existing = await all_async(
         `
         SELECT id, valid_from FROM temporal_facts
-        WHERE subject = ? AND predicate = ? AND valid_to IS NULL AND user_id = ?\${project_id ? " AND (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)" : ""}
+        WHERE subject = ? AND predicate = ? AND valid_to IS NULL AND user_id = ?${project_id ? " AND (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)" : ""}
         ORDER BY valid_from DESC
     `,
         [
@@ -104,17 +104,17 @@ const _insert_fact_impl = async (
         for (const old of existing) {
             if (old.valid_from < valid_from_ts) {
                 await run_async(
-                    \`UPDATE temporal_facts SET valid_to = ?, last_updated = ? WHERE id = ?\`,
+                    `UPDATE temporal_facts SET valid_to = ?, last_updated = ? WHERE id = ?`,
                     [valid_from_ts - 1, now, old.id],
                 );
             }
         }
 
         await run_async(
-            \`
+            `
             INSERT INTO temporal_facts (id, user_id, project_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata)
             VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
-        \`,
+        `,
             [
                 id,
                 user_id,
@@ -161,7 +161,7 @@ export const update_fact = async (
 
     if (updates.length > 0) {
         await run_async(
-            \`UPDATE temporal_facts SET \${updates.join(", ")} WHERE id = ?\`,
+            `UPDATE temporal_facts SET ${updates.join(", ")} WHERE id = ?`,
             params,
         );
     }
@@ -172,13 +172,13 @@ export const invalidate_fact = async (
     valid_to: Date = new Date(),
 ): Promise<void> => {
     await run_async(
-        \`UPDATE temporal_facts SET valid_to = ?, last_updated = ? WHERE id = ?\`,
+        `UPDATE temporal_facts SET valid_to = ?, last_updated = ? WHERE id = ?`,
         [valid_to.getTime(), Date.now(), id],
     );
 };
 
 export const delete_fact = async (id: string): Promise<void> => {
-    await run_async(\`DELETE FROM temporal_facts WHERE id = ?\`, [id]);
+    await run_async(`DELETE FROM temporal_facts WHERE id = ?`, [id]);
 };
 
 export const insert_edge = async (
@@ -193,10 +193,10 @@ export const insert_edge = async (
     const valid_from_ts = valid_from.getTime();
 
     await run_async(
-        \`
+        `
         INSERT INTO temporal_edges (id, source_id, target_id, relation_type, valid_from, valid_to, weight, metadata)
         VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
-    \`,
+    `,
         [
             id,
             source_id,
@@ -214,7 +214,7 @@ export const invalidate_edge = async (
     id: string,
     valid_to: Date = new Date(),
 ): Promise<void> => {
-    await run_async(\`UPDATE temporal_edges SET valid_to = ? WHERE id = ?\`, [
+    await run_async(`UPDATE temporal_edges SET valid_to = ? WHERE id = ?`, [
         valid_to.getTime(),
         id,
     ]);
@@ -270,22 +270,22 @@ export const apply_confidence_decay = async (
 
     if (is_pg) {
         const rows = await all_async(
-            \`
+            `
             UPDATE temporal_facts
             SET confidence = GREATEST(0.1, confidence * (1 - ? * ((? - last_updated) / ?))), last_updated = ?
             WHERE valid_to IS NULL AND confidence > 0.1
             RETURNING 1
-        \`,
+        `,
             [decay_rate, now, one_day, now],
         );
         changes = Array.isArray(rows) ? rows.length : 0;
     } else {
         await run_async(
-            \`
+            `
             UPDATE temporal_facts
             SET confidence = MAX(0.1, confidence * (1 - ? * ((? - last_updated) / ?))), last_updated = ?
             WHERE valid_to IS NULL AND confidence > 0.1
-        \`,
+        `,
             [decay_rate, now, one_day, now],
         );
         const result = (await get_async(\`SELECT changes() as changes\`)) as any;

@@ -132,7 +132,6 @@ class ValkeyVectorStore(VectorStore):
         project_id = filter.get("project_id") if filter else None
 
         pattern = f"{self.prefix}{user_id or '*'}:vector:{sector}:*"
-        fetch_k = k * 5 if project_id else k
 
         cursor = 0
         results = []
@@ -145,9 +144,8 @@ class ValkeyVectorStore(VectorStore):
                     pipe.hgetall(key)
                 items = await pipe.execute()
                 results.extend(self._parse_and_filter_results(items, query_vec, q_norm, project_id))
-                if len(results) >= fetch_k: break
 
-            if cursor == 0 or len(results) >= fetch_k: break
+            if cursor == 0: break
 
         results.sort(key=lambda x: x["similarity"], reverse=True)
         return results[:k]

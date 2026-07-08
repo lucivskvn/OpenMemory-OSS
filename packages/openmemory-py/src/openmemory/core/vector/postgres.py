@@ -48,7 +48,7 @@ class PostgresVectorStore(VectorStore):
 
         sql = f"""
             INSERT INTO {self.table} (id, sector, user_id, v, dim)
-            VALUES (\$1, \$2, \$3, \$4::vector, \$5)
+            VALUES ($1, $2, $3, $4::vector, $5)
             ON CONFLICT (id, sector) DO UPDATE SET
                 user_id = EXCLUDED.user_id,
                 v = EXCLUDED.v,
@@ -59,10 +59,10 @@ class PostgresVectorStore(VectorStore):
 
     async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]:
         pool = await self._get_pool()
-        sql = f"SELECT id, sector, user_id, v::text as v_txt, dim FROM {self.table} WHERE id=\$1"
+        sql = f"SELECT id, sector, user_id, v::text as v_txt, dim FROM {self.table} WHERE id=$1"
         params = [id]
         if user_id:
-            sql += " AND user_id=\$2"
+            sql += " AND user_id=$2"
             params.append(user_id)
 
         async with pool.acquire() as conn:
@@ -76,10 +76,10 @@ class PostgresVectorStore(VectorStore):
 
     async def getVector(self, id: str, sector: str, user_id: Optional[str] = None) -> Optional[VectorRow]:
         pool = await self._get_pool()
-        sql = f"SELECT id, sector, user_id, v::text as v_txt, dim FROM {self.table} WHERE id=\$1 AND sector=\$2"
+        sql = f"SELECT id, sector, user_id, v::text as v_txt, dim FROM {self.table} WHERE id=$1 AND sector=$2"
         params = [id, sector]
         if user_id:
-            sql += " AND user_id=\$3"
+            sql += " AND user_id=$3"
             params.append(user_id)
 
         async with pool.acquire() as conn:
@@ -91,10 +91,10 @@ class PostgresVectorStore(VectorStore):
 
     async def deleteVectors(self, id: str, user_id: Optional[str] = None):
         pool = await self._get_pool()
-        sql = f"DELETE FROM {self.table} WHERE id=\$1"
+        sql = f"DELETE FROM {self.table} WHERE id=$1"
         params = [id]
         if user_id:
-            sql += " AND user_id=\$2"
+            sql += " AND user_id=$2"
             params.append(user_id)
 
         async with pool.acquire() as conn:
@@ -104,20 +104,20 @@ class PostgresVectorStore(VectorStore):
         pool = await self._get_pool()
         vec_str = str(vector)
 
-        filter_sql = " AND sector=\$2"
+        filter_sql = " AND sector=$2"
         args = [vec_str, sector]
         arg_idx = 3
 
         if filter and filter.get("user_id"):
-            filter_sql += f" AND user_id=\${arg_idx}"
+            filter_sql += f" AND user_id=${arg_idx}"
             args.append(filter["user_id"])
             arg_idx += 1
 
         sql = f"""
-            SELECT id, 1 - (v <=> \$1::vector) as similarity
+            SELECT id, 1 - (v <=> $1::vector) as similarity
             FROM {self.table}
             WHERE 1=1 {filter_sql}
-            ORDER BY v <=> \$1::vector
+            ORDER BY v <=> $1::vector
             LIMIT {k}
         """
 

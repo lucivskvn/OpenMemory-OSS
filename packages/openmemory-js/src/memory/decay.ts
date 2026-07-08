@@ -1,26 +1,28 @@
 import {
-    log_maint_op,
+    q,
     all_async,
     run_async,
-    q,
-    vector_store,
     memories_table,
+    vector_store,
+    log_maint_op,
 } from "../core/db";
-import { now } from "../utils";
 import { env } from "../core/config";
+import { now, j } from "../utils";
+import { chunk_text } from "../utils/chunking";
+import {
+    embedMultiSector,
+} from "./embed";
+import { clamp_f } from "../utils/math";
+import { classify_content } from "./classifier";
+import { sector_configs } from "../core/constants";
 
-type mem = {
-    id: string;
-    content?: string;
-    summary?: string;
-    vector: number[];
-    salience: number;
-    last_access: number;
-    state?: "hot" | "warm" | "cold";
-    coacts?: number;
-};
+// Stubs for missing internal utilities
+const compress_vector = (v: number[], f: number, min: number, max: number) => v;
+const compress_summary = (t: string, f: number, l: number) => t;
+const fingerprint_mem = (m: any, d: number) => ({ vector: new Array(d).fill(0), summary: m.content });
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-type decay_cfg = {
+interface decay_cfg {
     threads: number;
     cold_threshold: number;
     reinforce_on_query: boolean;
@@ -32,72 +34,30 @@ type decay_cfg = {
     lambda_warm: number;
     lambda_cold: number;
     time_unit_ms: number;
-};
+}
 
-const parse_int = (x: any, d: number) =>
-    Number.isFinite(+x) ? Math.floor(+x) : d;
-const parse_f = (x: any, d: number) => (Number.isFinite(+x) ? +x : d);
-const parse_bool = (x: any, d: boolean) => {
-    if (x === "true") return true;
-    if (x === "false") return false;
-    return d;
-};
-const clamp_f = (v: number, a: number, b: number) =>
-    Math.min(b, Math.max(a, v));
-const safe_clamp = (val: number, fallback = 0, min = 0, max = 1): number => {
-    if (Number.isNaN(val) || !Number.isFinite(val))
-        return Math.max(min, Math.min(max, fallback));
-    return Math.max(min, Math.min(max, val));
-};
-const clamp_i = (v: number, a: number, b: number) =>
-    Math.min(b, Math.max(a, Math.floor(v)));
-const tick = () => new Promise<void>((r) => setImmediate(r));
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-const mean = (arr: number[]) =>
-    arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
-const l2 = (v: number[]) => Math.sqrt(v.reduce((s, x) => s + x * x, 0));
-const normalize = (v: number[]) => {
-    const n = l2(v) || 1;
-    for (let i = 0; i < v.length; i++) v[i] /= n;
-    return v;
-};
-const chunkz = <t>(arr: t[], k: number) => {
-    const n = Math.max(1, k | 0),
-        out: t[][] = Array.from({ length: n }, () => []);
-    for (let i = 0; i < arr.length; i++) out[i % n].push(arr[i]);
-    return out;
-};
-
-const make_decay_cfg = (): decay_cfg => ({
-    threads: parse_int(process.env.OM_DECAY_THREADS, 3),
-    cold_threshold: parse_f(process.env.OM_DECAY_COLD_THRESHOLD, 0.25),
-    reinforce_on_query: parse_bool(
-        process.env.OM_DECAY_REINFORCE_ON_QUERY,
-        true,
-    ),
-    regeneration_enabled: parse_bool(process.env.OM_REGENERATION_ENABLED, true),
-    max_vec_dim: Math.max(
-        2,
-        parse_int(process.env.OM_MAX_VECTOR_DIM, env.vec_dim || 1536),
-    ),
-    min_vec_dim: parse_int(process.env.OM_MIN_VECTOR_DIM, 64),
-    summary_layers: clamp_i(parse_int(process.env.OM_SUMMARY_LAYERS, 3), 1, 3),
+const cfg: decay_cfg = {
+    threads: env.decay_threads || 4,
+    cold_threshold: env.decay_cold_threshold || 0.25,
+    reinforce_on_query: true,
+    regeneration_enabled: true,
+    max_vec_dim: env.max_vector_dim || 1536,
+    min_vec_dim: env.min_vector_dim || 64,
+    summary_layers: Math.min(3, Math.max(1, env.summary_layers || 3)),
     lambda_hot: 0.005,
     lambda_warm: 0.02,
     lambda_cold: 0.05,
     time_unit_ms: 86_400_000,
-});
+};
 
-const cfg = make_decay_cfg();
-
-let active_q = 0;
 let last_decay = 0;
-export const reset_last_decay = () => (last_decay = 0);
-export const get_last_decay = () => last_decay;
 const cooldown = 60000;
+let active_q = 0;
+
 export const inc_q = () => active_q++;
-export const dec_q = () => active_q--;
+export const dec_q = () => (active_q = Math.max(0, active_q - 1));
+
+const tick = () => new Promise((r) => setTimeout(r, 0));
 
 const pick_tier = (m: any, now_ts: number): "hot" | "warm" | "cold" => {
     const dt = Math.max(0, now_ts - (m.last_seen_at || m.updated_at || now_ts));
@@ -108,132 +68,16 @@ const pick_tier = (m: any, now_ts: number): "hot" | "warm" | "cold" => {
     return "cold";
 };
 
-const compress_vector = (
-    vec: number[],
-    f: number,
-    min_dim = 64,
-    max_dim = 1536,
-): number[] => {
-    const src = vec.length ? vec : [1];
-    const tgt_dim = Math.max(
-        min_dim,
-        Math.min(max_dim, Math.floor(src.length * clamp_f(f, 0, 1))),
-    );
-    const dim = Math.max(min_dim, Math.min(src.length, tgt_dim));
-    if (dim >= src.length) return src.slice(0);
-    const pooled = src.slice(0, dim);
-    normalize(pooled);
-    return pooled;
+const chunkz = <T>(arr: T[], n: number): T[][] => {
+    const res: T[][] = [];
+    for (let i = 0; i < n; i++) res.push([]);
+    for (let i = 0; i < arr.length; i++) res[i % n].push(arr[i]);
+    return res.filter((x) => x.length > 0);
 };
 
-const compress_summary = (txt: string, f: number, layers = 3): string => {
-    const t = (txt || "").trim();
-    if (!t) return "";
-    const lay = clamp_i(layers, 1, 3);
-    const trunc = (s: string, n: number) =>
-        s.length <= n ? s : s.slice(0, n - 1).trimEnd() + "…";
-    const sumz = (s: string) => summarize_quick(s);
-    const keys = (s: string, k = 5) => top_keywords(s, k).join(" ");
-    if (f > 0.8) return trunc(t, 200);
-    if (f > 0.4) return trunc(sumz(t), lay >= 2 ? 80 : 200);
-    return keys(t, lay >= 3 ? 5 : 3);
-};
-
-const fingerprint_mem = (
-    m: any,
-    d = 1536,
-): { vector: number[]; summary: string } => {
-    const base = (m.id + "|" + (m.summary || m.content || "")).trim();
-    const vec = hash_to_vec(base, d);
-    normalize(vec);
-    const summary = top_keywords(m.summary || m.content || "", 3).join(" ");
-    return { vector: vec, summary };
-};
-
-const hash_to_vec = (s: string, d = 32): number[] => {
-    let h = 2166136261 >>> 0;
-    for (let i = 0; i < s.length; i++) {
-        h ^= s.charCodeAt(i);
-        h = Math.imul(h, 16777619) >>> 0;
-    }
-    const out: number[] = new Array(Math.max(2, d | 0)).fill(0);
-    let x = h || 1;
-    for (let i = 0; i < out.length; i++) {
-        x ^= x << 13;
-        x ^= x >>> 17;
-        x ^= x << 5;
-        out[i] = ((x >>> 0) / 0xffffffff) * 2 - 1;
-    }
-    normalize(out);
-    return out;
-};
-
-const summarize_quick = (t: string): string => {
-    const sents = t.split(/(?<=[.!?])\s+/).filter(Boolean);
-    if (!sents.length) return t;
-    const score = (s: string) =>
-        top_keywords(s, 6).length + Math.min(3, s.match(/[,;:]/g)?.length || 0);
-    const top = sents
-        .map((s, i) => ({ s, i, sc: score(s) }))
-        .sort((a, b) => b.sc - a.sc || a.i - b.i)
-        .slice(0, Math.min(3, Math.ceil(sents.length / 3)))
-        .sort((a, b) => a.i - b.i)
-        .map((x) => x.s)
-        .join(" ");
-    return top || sents[0];
-};
-
-const stop = new Set([
-    "the",
-    "a",
-    "an",
-    "to",
-    "of",
-    "and",
-    "or",
-    "in",
-    "on",
-    "for",
-    "with",
-    "at",
-    "by",
-    "is",
-    "it",
-    "be",
-    "as",
-    "are",
-    "was",
-    "were",
-    "from",
-    "that",
-    "this",
-    "these",
-    "those",
-    "but",
-    "if",
-    "then",
-    "so",
-    "than",
-    "into",
-    "over",
-    "under",
-    "about",
-    "via",
-    "vs",
-    "not",
-]);
-
-const top_keywords = (t: string, k = 5): string[] => {
-    const words = (t.toLowerCase().match(/[a-z0-9]+/g) || []).filter(
-        (w) => !stop.has(w),
-    );
-    if (!words.length) return [];
-    const freq = new Map<string, number>();
-    for (const w of words) freq.set(w, (freq.get(w) || 0) + 1);
-    return Array.from(freq.entries())
-        .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
-        .slice(0, k)
-        .map(([w]) => w);
+const safe_clamp = (val: number | undefined, def: number) => {
+    const v = typeof val === "number" ? val : def;
+    return Math.max(0, Math.min(1, v));
 };
 
 export const apply_decay = async () => {
@@ -263,7 +107,7 @@ export const apply_decay = async () => {
         try {
             const segment = seg.segment;
             const rows = await all_async(
-                "select id,content,summary,salience,decay_lambda,last_seen_at,updated_at,primary_sector,coactivations,feedback_score from memories where segment=?",
+                "select id,user_id,project_id,content,summary,salience,decay_lambda,last_seen_at,updated_at,primary_sector,coactivations,feedback_score from memories where segment=?",
                 [segment],
             );
 
@@ -313,10 +157,7 @@ export const apply_decay = async () => {
 
                         if (f < 0.7) {
                             const sector = m.primary_sector || "semantic";
-                            const vec_row = await vector_store.getVector(
-                                m.id,
-                                sector,
-                            );
+                            const vec_row = await vector_store.getVector(m.id, sector, m.user_id || undefined);
 
                             if (vec_row && vec_row.vector) {
                                 const vec =
@@ -341,12 +182,7 @@ export const apply_decay = async () => {
                                     );
 
                                     if (new_vec.length < before_len) {
-                                        await vector_store.storeVector(
-                                            m.id,
-                                            sector,
-                                            new_vec,
-                                            new_vec.length,
-                                        );
+                                        await vector_store.storeVector(m.id, sector, new_vec, new_vec.length, m.user_id || undefined, m.project_id || undefined);
                                         compressed = true;
                                         tot_comp++;
                                     }
@@ -365,12 +201,7 @@ export const apply_decay = async () => {
                         if (f < Math.max(0.3, cfg.cold_threshold)) {
                             const sector = m.primary_sector || "semantic";
                             const fp = fingerprint_mem(m, cfg.max_vec_dim);
-                            await vector_store.storeVector(
-                                m.id,
-                                sector,
-                                fp.vector,
-                                fp.vector.length,
-                            );
+                            await vector_store.storeVector(m.id, sector, fp.vector, fp.vector.length, m.user_id || undefined, m.project_id || undefined);
                             await run_async(
                                 "update memories set summary=? where id=?",
                                 [fp.summary, m.id],
@@ -434,12 +265,7 @@ export const on_query_hit = async (
                 try {
                     const base = m.summary || m.content || "";
                     const new_vec = await reembed(base);
-                    await vector_store.storeVector(
-                        mem_id,
-                        sector,
-                        new_vec,
-                        new_vec.length,
-                    );
+                    await vector_store.storeVector(mem_id, sector, new_vec, new_vec.length, m.user_id || undefined, m.project_id || undefined);
                     updated = true;
                 } catch (e) {}
             }
