@@ -30,7 +30,7 @@ async def list_sources():
         }
     }
 
-@router.post("/{source}/ingest")
+@router.post("/{source}/ingest", responses={500: {"description": "Internal Server Error"}})
 async def ingest_source(source: str, req: ingest_req):
     from ..connectors import (
         github_connector, notion_connector, google_drive_connector,
@@ -56,11 +56,11 @@ async def ingest_source(source: str, req: ingest_req):
         await src.connect(**req.creds)
         ids = await src.ingest_all(**req.filters)
         return {"ok": True, "ingested": len(ids), "memory_ids": ids}
-    except Exception as e:
-        logger.error(f"Error ingesting source {source}: {str(e)}", exc_info=True)
-        raise HTTPException(500, "Source ingestion failed")
+    except Exception:
+        logger.exception("Source ingestion failed")
+        raise HTTPException(500, "Source ingestion failed") from None
 
-@router.post("/webhook/github")
+@router.post("/webhook/github", responses={500: {"description": "Internal Server Error"}})
 async def github_webhook(request: Request):
     from ..ops.ingest import ingest_document
 
@@ -97,11 +97,11 @@ async def github_webhook(request: Request):
             result = await ingest_document("text", content, meta=meta)
             return {"ok": True, "memory_id": result.get("root_memory_id"), "event": event_type}
         return {"ok": True, "skipped": True, "reason": "no content"}
-    except Exception as e:
-        logger.error(f"Error handling GitHub webhook: {str(e)}", exc_info=True)
-        raise HTTPException(500, "Webhook processing failed")
+    except Exception:
+        logger.exception("GitHub webhook processing failed")
+        raise HTTPException(500, "Webhook processing failed") from None
 
-@router.post("/webhook/notion")
+@router.post("/webhook/notion", responses={500: {"description": "Internal Server Error"}})
 async def notion_webhook(request: Request):
     from ..ops.ingest import ingest_document
     import json
@@ -112,6 +112,6 @@ async def notion_webhook(request: Request):
         content = json.dumps(payload, indent=2)
         result = await ingest_document("text", content, meta={"source": "notion_webhook"})
         return {"ok": True, "memory_id": result.get("root_memory_id")}
-    except Exception as e:
-        logger.error(f"Error handling Notion webhook: {str(e)}", exc_info=True)
-        raise HTTPException(500, "Webhook processing failed")
+    except Exception:
+        logger.exception("Notion webhook processing failed")
+        raise HTTPException(500, "Webhook processing failed") from None

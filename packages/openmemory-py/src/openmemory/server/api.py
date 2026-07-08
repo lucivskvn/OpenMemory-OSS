@@ -1,10 +1,11 @@
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request, status, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 import time
 import logging
+import re
 from ..core.config import env
 from .routes import memory, health, sources
 from ..trace import inject_trace_middleware
@@ -38,20 +39,22 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        # Using exc.errors() without arguments to ensure compatibility across Pydantic versions
+        # as reported by static analysis.
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content={
                 "type": "https://openmemory.oss/errors/validation-error",
                 "title": "Validation Error",
                 "status": 422,
-                "detail": exc.errors(include_input=False, include_context=False),
+                "detail": exc.errors(),
                 "instance": request.url.path
             },
         )
 
     @app.exception_handler(Exception)
     async def generic_exception_handler(request: Request, exc: Exception):
-        logger.error(f"Unhandled error: {str(exc)}", exc_info=True)
+        logger.exception("Unhandled error")
         return JSONResponse(
             status_code=500,
             content={
@@ -66,7 +69,9 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def log_requests(request: Request, call_next):
         start = time.time()
-        path = request.url.path.replace("\n", "").replace("\r", "")
+        # Sanitize path and method to prevent log forging
+        path = re.sub(r"[\r\n]", "", request.url.path)
+        method = re.sub(r"[\r\n]", "", request.method)
         status_code = 500
         try:
             response = await call_next(request)
@@ -74,7 +79,7 @@ def create_app() -> FastAPI:
             return response
         finally:
             process_time = (time.time() - start) * 1000
-            logger.info(f"{request.method} {path} - {status_code} ({process_time:.2f}ms)")
+            logger.info(f"{method} {path} - {status_code} ({process_time:.2f}ms)")
 
     app.include_router(health.router)
     app.include_router(memory.router, prefix="/memory", tags=["memory"])
