@@ -9,8 +9,10 @@ POST /sources/webhook/{source}
 """
 from fastapi import APIRouter, Request, HTTPException
 from typing import Optional, Dict, Any
+import logging
 from pydantic import BaseModel
 
+logger = logging.getLogger("server.sources")
 router = APIRouter(prefix="/sources", tags=["sources"])
 
 class ingest_req(BaseModel):
@@ -55,7 +57,8 @@ async def ingest_source(source: str, req: ingest_req):
         ids = await src.ingest_all(**req.filters)
         return {"ok": True, "ingested": len(ids), "memory_ids": ids}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        logger.error(f"Error ingesting source {source}: {str(e)}", exc_info=True)
+        raise HTTPException(500, "Source ingestion failed")
 
 @router.post("/webhook/github")
 async def github_webhook(request: Request):
@@ -95,7 +98,8 @@ async def github_webhook(request: Request):
             return {"ok": True, "memory_id": result.get("root_memory_id"), "event": event_type}
         return {"ok": True, "skipped": True, "reason": "no content"}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        logger.error(f"Error handling GitHub webhook: {str(e)}", exc_info=True)
+        raise HTTPException(500, "Webhook processing failed")
 
 @router.post("/webhook/notion")
 async def notion_webhook(request: Request):
@@ -109,4 +113,5 @@ async def notion_webhook(request: Request):
         result = await ingest_document("text", content, meta={"source": "notion_webhook"})
         return {"ok": True, "memory_id": result.get("root_memory_id")}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        logger.error(f"Error handling Notion webhook: {str(e)}", exc_info=True)
+        raise HTTPException(500, "Webhook processing failed")

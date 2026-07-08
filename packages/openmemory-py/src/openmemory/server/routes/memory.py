@@ -1,8 +1,10 @@
-
 from fastapi import APIRouter, HTTPException, Body
 from typing import List, Dict, Any, Optional
+import logging
 from pydantic import BaseModel
 from ...main import Memory
+
+logger = logging.getLogger("server.memory")
 mem = Memory()
 
 router = APIRouter()
@@ -28,7 +30,8 @@ async def add_memory(req: AddMemoryRequest):
         result = await mem.add(req.content, user_id=req.user_id, meta=meta)
         return {"success": True, "data": result}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error adding memory: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to add memory")
 
 @router.post("/search")
 async def search_memory(req: SearchMemoryRequest):
@@ -37,7 +40,8 @@ async def search_memory(req: SearchMemoryRequest):
         results = await mem.search(req.query, user_id=req.user_id, limit=req.limit, **filters)
         return {"results": results}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error searching memory: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to search memory")
 
 @router.get("/history")
 async def get_history(user_id: str, limit: int = 20, offset: int = 0):
@@ -45,4 +49,5 @@ async def get_history(user_id: str, limit: int = 20, offset: int = 0):
         results = mem.history(user_id, limit, offset)
         return {"history": results}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error fetching memory history: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to fetch memory history")

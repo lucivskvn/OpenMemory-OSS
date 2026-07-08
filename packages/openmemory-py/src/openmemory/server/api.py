@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, status, HTTPException
+from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
@@ -44,7 +44,7 @@ def create_app() -> FastAPI:
                 "type": "https://openmemory.oss/errors/validation-error",
                 "title": "Validation Error",
                 "status": 422,
-                "detail": exc.errors(),
+                "detail": exc.errors(include_input=False, include_context=False),
                 "instance": request.url.path
             },
         )
@@ -58,7 +58,7 @@ def create_app() -> FastAPI:
                 "type": "https://openmemory.oss/errors/internal-server-error",
                 "title": "Internal Server Error",
                 "status": 500,
-                "detail": str(exc),
+                "detail": "An unexpected error occurred on the server.",
                 "instance": request.url.path
             },
         )
@@ -66,10 +66,15 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def log_requests(request: Request, call_next):
         start = time.time()
-        response = await call_next(request)
-        process_time = (time.time() - start) * 1000
-        logger.info(f"{request.method} {request.url.path} - {response.status_code} ({process_time:.2f}ms)")
-        return response
+        path = request.url.path.replace("\n", "").replace("\r", "")
+        status_code = 500
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            return response
+        finally:
+            process_time = (time.time() - start) * 1000
+            logger.info(f"{request.method} {path} - {status_code} ({process_time:.2f}ms)")
 
     app.include_router(health.router)
     app.include_router(memory.router, prefix="/memory", tags=["memory"])
