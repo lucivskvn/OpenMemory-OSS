@@ -9,6 +9,9 @@ import logging
 
 logger = logging.getLogger("vector_store")
 
+# Constants for common SQL fragments
+USER_ID_CONDITION = " AND user_id=?"
+
 class VectorRow:
     def __init__(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None):
         self.id = id
@@ -47,7 +50,7 @@ class SQLiteVectorStore(VectorStore):
         sql = f"SELECT * FROM {self.table} WHERE id=?"
         params = [id]
         if user_id:
-            sql += " AND user_id=?"
+            sql += USER_ID_CONDITION
             params.append(user_id)
         rows = db.conn.execute(sql, tuple(params)).fetchall()
         res = []
@@ -61,7 +64,7 @@ class SQLiteVectorStore(VectorStore):
         sql = f"SELECT * FROM {self.table} WHERE id=? AND sector=?"
         params = [id, sector]
         if user_id:
-            sql += " AND user_id=?"
+            sql += USER_ID_CONDITION
             params.append(user_id)
         r = db.conn.execute(sql, tuple(params)).fetchone()
         if not r: return None
@@ -73,7 +76,7 @@ class SQLiteVectorStore(VectorStore):
         sql = f"DELETE FROM {self.table} WHERE id=?"
         params = [id]
         if user_id:
-            sql += " AND user_id=?"
+            sql += USER_ID_CONDITION
             params.append(user_id)
         db.conn.execute(sql, tuple(params))
         db.commit()
@@ -82,7 +85,7 @@ class SQLiteVectorStore(VectorStore):
         filter_sql = ""
         params = [sector]
         if filter and filter.get("user_id"):
-            filter_sql += " AND user_id=?"
+            filter_sql += USER_ID_CONDITION
             params.append(filter["user_id"])
 
         sql = f"SELECT id, v FROM {self.table} WHERE sector=? {filter_sql}"

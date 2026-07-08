@@ -29,6 +29,40 @@ const est = (t: string) => {
     return Math.ceil(t.length / 4);
 };
 
+/**
+ * Splits a paragraph into chunks based on token limit and overlap.
+ */
+function process_paragraph_sentences(
+    p: string,
+    chks: chunk[],
+    tgt: number,
+    och: number,
+    state: { cur: string; cs: number; cur_tokens: number }
+) {
+    const sents = p.split(/(?<=[.!?])\s+/);
+    for (const s of sents) {
+        const s_tokens = est(s);
+        const pot_tokens = state.cur_tokens + (state.cur ? 1 : 0) + s_tokens;
+
+        if (pot_tokens > tgt && state.cur.length > 0) {
+            chks.push({
+                text: state.cur,
+                start: state.cs,
+                end: state.cs + state.cur.length,
+                tokens: state.cur_tokens,
+            });
+            const ovt = state.cur.slice(-och);
+            const ovt_tokens = est(ovt);
+            state.cur = ovt + " " + s;
+            state.cs = state.cs + state.cur.length - ovt.length - 1;
+            state.cur_tokens = ovt_tokens + 1 + s_tokens;
+        } else {
+            state.cur = state.cur + (state.cur ? " " : "") + s;
+            state.cur_tokens = pot_tokens;
+        }
+    }
+}
+
 export const chunk_text = (txt: string, tgt = 768, ovr = 0.1): chunk[] => {
     const tot = est(txt);
     if (tot <= tgt)
@@ -39,41 +73,18 @@ export const chunk_text = (txt: string, tgt = 768, ovr = 0.1): chunk[] => {
     const paras = txt.split(/\n\n+/);
 
     const chks: chunk[] = [];
-    let cur = "",
-        cs = 0,
-        cur_tokens = 0;
+    const state = { cur: "", cs: 0, cur_tokens: 0 };
 
     for (const p of paras) {
-        const sents = p.split(/(?<=[.!?])\s+/);
-        for (const s of sents) {
-            const s_tokens = est(s);
-            const pot_tokens = cur_tokens + (cur ? 1 : 0) + s_tokens; // +1 for the space
-
-            if (pot_tokens > tgt && cur.length > 0) {
-                chks.push({
-                    text: cur,
-                    start: cs,
-                    end: cs + cur.length,
-                    tokens: cur_tokens,
-                });
-                const ovt = cur.slice(-och);
-                const ovt_tokens = est(ovt);
-                cur = ovt + " " + s;
-                cs = cs + cur.length - ovt.length - 1;
-                cur_tokens = ovt_tokens + 1 + s_tokens;
-            } else {
-                cur = cur + (cur ? " " : "") + s;
-                cur_tokens = pot_tokens;
-            }
-        }
+        process_paragraph_sentences(p, chks, tgt, och, state);
     }
 
-    if (cur.length > 0)
+    if (state.cur.length > 0)
         chks.push({
-            text: cur,
-            start: cs,
-            end: cs + cur.length,
-            tokens: cur_tokens,
+            text: state.cur,
+            start: state.cs,
+            end: state.cs + state.cur.length,
+            tokens: state.cur_tokens,
         });
     return chks;
 };

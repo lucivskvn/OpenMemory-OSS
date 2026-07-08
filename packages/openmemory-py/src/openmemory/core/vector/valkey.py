@@ -99,6 +99,30 @@ class ValkeyVectorStore(VectorStore):
                 await client.delete(*keys)
             if cursor == 0: break
 
+    def _parse_and_filter_results(self, items, query_vec, q_norm, project_id):
+        batch_results = []
+        for item in items:
+            if not item: continue
+            def dec(x): return x.decode('utf-8') if isinstance(x, bytes) else str(x)
+
+            if project_id:
+                i_proj = dec(item.get(b'project_id') or item.get('project_id'))
+                if i_proj != project_id and i_proj != "system_global" and i_proj != "null":
+                    continue
+
+            v_bytes = item.get(b'v') or item.get('v')
+            v = np.frombuffer(v_bytes, dtype=np.float32)
+
+            dot = np.dot(query_vec, v)
+            norm = np.linalg.norm(v)
+            sim = dot / (q_norm * norm) if (q_norm * norm) > 0 else 0
+
+            batch_results.append({
+                "id": dec(item.get(b'id') or item.get('id')),
+                "similarity": float(sim)
+            })
+        return batch_results
+
     async def search(self, vector: List[float], sector: str, k: int, filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         client = await self._get_client()
         query_vec = np.array(vector, dtype=np.float32)
@@ -107,11 +131,7 @@ class ValkeyVectorStore(VectorStore):
         user_id = filter.get("user_id") if filter else None
         project_id = filter.get("project_id") if filter else None
 
-        if not user_id:
-            pattern = f"{self.prefix}*:vector:{sector}:*"
-        else:
-            pattern = f"{self.prefix}{user_id}:vector:{sector}:*"
-
+        pattern = f"{self.prefix}{user_id or '*'}:vector:{sector}:*"
         fetch_k = k * 5 if project_id else k
 
         cursor = 0
@@ -124,28 +144,8 @@ class ValkeyVectorStore(VectorStore):
                 for key in keys:
                     pipe.hgetall(key)
                 items = await pipe.execute()
-
-                for item in items:
-                    if not item: continue
-                    def dec(x): return x.decode('utf-8') if isinstance(x, bytes) else str(x)
-
-                    if project_id:
-                        i_proj = dec(item.get(b'project_id') or item.get('project_id'))
-                        if i_proj != project_id and i_proj != "system_global" and i_proj != "null":
-                            continue
-
-                    v_bytes = item.get(b'v') or item.get('v')
-                    v = np.frombuffer(v_bytes, dtype=np.float32)
-
-                    dot = np.dot(query_vec, v)
-                    norm = np.linalg.norm(v)
-                    sim = dot / (q_norm * norm) if (q_norm * norm) > 0 else 0
-
-                    results.append({
-                        "id": dec(item.get(b'id') or item.get('id')),
-                        "similarity": float(sim)
-                    })
-                    if len(results) >= fetch_k: break
+                results.extend(self._parse_and_filter_results(items, query_vec, q_norm, project_id))
+                if len(results) >= fetch_k: break
 
             if cursor == 0 or len(results) >= fetch_k: break
 

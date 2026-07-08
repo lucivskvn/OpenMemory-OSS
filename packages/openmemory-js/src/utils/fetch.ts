@@ -1,4 +1,4 @@
-import { trace, propagation, context } from "@opentelemetry/api";
+import { propagation, context } from "@opentelemetry/api";
 
 /**
  * Enhanced fetch with OpenTelemetry trace context propagation and default timeout.
