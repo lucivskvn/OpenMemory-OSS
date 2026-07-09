@@ -144,11 +144,7 @@ export const transaction = {
         if (!txStmts) return;
         const stmts = txStmts;
         txStmts = null;
-        try {
-            await client.batch(stmts, "write");
-        } catch (e) {
-            throw e;
-        }
+        await client.batch(stmts, "write");
     },
     rollback: async () => {
         txStmts = null;
@@ -156,19 +152,14 @@ export const transaction = {
 };
 
 export const memories_table = "memories";
-let vector_store_inst: VectorStore;
 
-if (env.vector_store === "valkey") {
-    vector_store_inst = new ValkeyVectorStore();
-} else {
-    vector_store_inst = new PostgresVectorStore(
+export const vector_store: VectorStore = env.vector_store === "valkey"
+    ? new ValkeyVectorStore()
+    : new PostgresVectorStore(
         { run_async, get_async, all_async },
         sqlite_vector_table,
         !!env.OM_POSTGRES_URL,
     );
-}
-
-export { vector_store_inst as vector_store };
 
 export const init_db = async () => {
     const SCHEMA_TABLES = [

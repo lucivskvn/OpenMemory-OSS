@@ -38,6 +38,9 @@ class ValkeyVectorStore(VectorStore):
         }
         await client.hset(key, mapping=mapping)
 
+    def _dec(self, x):
+        return x.decode('utf-8') if isinstance(x, bytes) else str(x)
+
     async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]:
         client = await self._get_client()
         uid = user_id or "*"
@@ -55,17 +58,15 @@ class ValkeyVectorStore(VectorStore):
 
                 for item in items:
                     if not item: continue
-                    def dec(x): return x.decode('utf-8') if isinstance(x, bytes) else str(x)
-
                     v_bytes = item.get(b'v') or item.get('v')
                     vec = list(np.frombuffer(v_bytes, dtype=np.float32))
 
                     results.append(VectorRow(
-                        dec(item.get(b'id') or item.get('id')),
-                        dec(item.get(b'sector') or item.get('sector')),
+                        self._dec(item.get(b'id') or item.get('id')),
+                        self._dec(item.get(b'sector') or item.get('sector')),
                         vec,
-                        int(dec(item.get(b'dim') or item.get('dim'))),
-                        dec(item.get(b'user_id') or item.get('user_id'))
+                        int(self._dec(item.get(b'dim') or item.get('dim'))),
+                        self._dec(item.get(b'user_id') or item.get('user_id'))
                     ))
             if cursor == 0: break
         return results
@@ -77,16 +78,15 @@ class ValkeyVectorStore(VectorStore):
         item = await client.hgetall(key)
         if not item: return None
 
-        def dec(x): return x.decode('utf-8') if isinstance(x, bytes) else str(x)
         v_bytes = item.get(b'v') or item.get('v')
         vec = list(np.frombuffer(v_bytes, dtype=np.float32))
 
         return VectorRow(
-            dec(item.get(b'id') or item.get('id')),
-            dec(item.get(b'sector') or item.get('sector')),
+            self._dec(item.get(b'id') or item.get('id')),
+            self._dec(item.get(b'sector') or item.get('sector')),
             vec,
-            int(dec(item.get(b'dim') or item.get('dim'))),
-            dec(item.get(b'user_id') or item.get('user_id'))
+            int(self._dec(item.get(b'dim') or item.get('dim'))),
+            self._dec(item.get(b'user_id') or item.get('user_id'))
         )
 
     async def deleteVectors(self, id: str, user_id: Optional[str] = None):
@@ -100,27 +100,29 @@ class ValkeyVectorStore(VectorStore):
                 await client.delete(*keys)
             if cursor == 0: break
 
+    def _should_filter(self, item, project_id):
+        i_proj = self._dec(item.get(b'project_id') or item.get('project_id') or "null")
+        if project_id:
+            # system_global is exempt, "null" is private to unscoped queries
+            if i_proj != project_id and i_proj != "system_global":
+                return True
+        return False
+
+    def _calc_sim(self, v_bytes, query_vec, q_norm):
+        v = np.frombuffer(v_bytes, dtype=np.float32)
+        dot = np.dot(query_vec, v)
+        norm = np.linalg.norm(v)
+        return dot / (q_norm * norm) if (q_norm * norm) > 0 else 0
+
     def _parse_and_filter_results(self, items, query_vec, q_norm, project_id):
         batch_results = []
         for item in items:
-            if not item: continue
-            def dec(x): return x.decode('utf-8') if isinstance(x, bytes) else str(x)
-
-            i_proj = dec(item.get(b'project_id') or item.get('project_id') or "null")
-            if project_id:
-                # system_global is exempt, "null" is private to unscoped queries
-                if i_proj != project_id and i_proj != "system_global":
-                    continue
-
+            if not item or self._should_filter(item, project_id):
+                continue
             v_bytes = item.get(b'v') or item.get('v')
-            v = np.frombuffer(v_bytes, dtype=np.float32)
-
-            dot = np.dot(query_vec, v)
-            norm = np.linalg.norm(v)
-            sim = dot / (q_norm * norm) if (q_norm * norm) > 0 else 0
-
+            sim = self._calc_sim(v_bytes, query_vec, q_norm)
             batch_results.append({
-                "id": dec(item.get(b'id') or item.get('id')),
+                "id": self._dec(item.get(b'id') or item.get('id')),
                 "similarity": float(sim)
             })
         return batch_results
@@ -129,15 +131,12 @@ class ValkeyVectorStore(VectorStore):
         client = await self._get_client()
         query_vec = np.array(vector, dtype=np.float32)
         q_norm = np.linalg.norm(query_vec)
-
-        user_id = filter.get("user_id") if filter else None
         project_id = filter.get("project_id") if filter else None
-
+        user_id = filter.get("user_id") if filter else None
         pattern = f"{self.prefix}{user_id or '*'}:vector:{sector}:*"
 
         cursor = 0
         results = []
-
         while True:
             cursor, keys = await client.scan(cursor, match=pattern, count=100)
             if keys:
@@ -146,7 +145,6 @@ class ValkeyVectorStore(VectorStore):
                     pipe.hgetall(key)
                 items = await pipe.execute()
                 results.extend(self._parse_and_filter_results(items, query_vec, q_norm, project_id))
-
             if cursor == 0: break
 
         results.sort(key=lambda x: x["similarity"], reverse=True)

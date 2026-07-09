@@ -15,7 +15,7 @@ import {
     fingerprint_mem,
 } from "./decay_utils";
 
-interface decay_cfg {
+interface DecayCfg {
     threads: number;
     cold_threshold: number;
     reinforce_on_query: boolean;
@@ -29,7 +29,7 @@ interface decay_cfg {
     time_unit_ms: number;
 }
 
-const cfg: decay_cfg = {
+const cfg: DecayCfg = {
     threads: env.decay_threads || 4,
     cold_threshold: env.decay_cold_threshold || 0.25,
     reinforce_on_query: true,

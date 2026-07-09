@@ -20,7 +20,8 @@ export const compress_vector = (v: number[], f: number, min_dim: number, max_dim
 
 export const compress_summary = (t: string, f: number, layers: number): string => {
     if (!t || f > 0.8) return t;
-    const sentences = t.split(/[.!?]+\s+/);
+    // Simplified regex to avoid potential backtracking performance issues.
+    const sentences = t.split(/[.!?]\s+/);
     if (sentences.length <= 1) return t;
 
     // Simple extractive summarization based on position and length
@@ -31,12 +32,17 @@ export const compress_summary = (t: string, f: number, layers: number): string =
 const hash_to_vec = (s: string, d: number): number[] => {
     // NOTE: MD5 is used here for non-security related deterministic
     // pseudo-random vector generation for memory fingerprinting.
-    const h = createHash("md5").update(s).digest();
     const vec: number[] = [];
+    let h = createHash("md5").update(s).digest();
     for (let i = 0; i < d; i++) {
-        const b1 = h[i % h.length];
-        const b2 = h[(i + 1) % h.length];
-        // Combine both bytes to increase entropy and avoid short cycles
+        const h_idx = i % 16;
+        if (i > 0 && h_idx === 0) {
+            // Re-hash to get fresh entropy for the next 16 dimensions
+            h = createHash("md5").update(h).digest();
+        }
+        const b1 = h[h_idx];
+        const b2 = h[(h_idx + 1) % 16];
+        // Combine both bytes and avoid 16-byte period collapse
         const val = ((b1 ^ b2) / 255.0) * 2 - 1;
         vec.push(val);
     }
