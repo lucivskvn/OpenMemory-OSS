@@ -84,6 +84,7 @@ export const client = (() => {
 const mapRow = (row: any) => {
     if (!row) return row;
     const result = { ...row };
+    if (result.content) {
         result.content = decrypt(result.content);
     }
     if (result.meta) {
@@ -171,18 +172,18 @@ export { vector_store_inst as vector_store };
 
 export const init_db = async () => {
     const SCHEMA_TABLES = [
-        `create table if not exists memories(id text primary key,user_id text,project_id text,segment integer default 0,content text not null,summary text,simhash text,primary_sector text not null,tags text,meta text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0,coactivations integer default 0)`,
-        `create index if not exists idx_mem_user_id on memories(user_id)`,
-        `create index if not exists idx_mem_simhash on memories(simhash)`,
-        `create table if not exists openmemory_vectors(id text not null,project_id text,sector text not null,user_id text,v blob not null,dim integer not null,primary key(id,sector))`,
-        `create index if not exists idx_vectors_user_id on openmemory_vectors(user_id)`,
-        `create index if not exists idx_vectors_sector on openmemory_vectors(sector)`,
-        `create table if not exists waypoints(src_id text,dst_id text not null,user_id text,project_id text,weight real not null,created_at integer,updated_at integer,primary key(src_id,user_id))`,
-        `create table if not exists embed_logs(id text primary key,model text,status text,ts integer,err text)`,
-        `create table if not exists users(user_id text primary key,summary text,reflection_count integer default 0,created_at integer,updated_at integer)`,
-        `create table if not exists stats(id integer primary key autoincrement,type text not null,count integer default 1,ts integer not null)`,
-        `create table if not exists temporal_facts(id text primary key,user_id text,project_id text,subject text not null,predicate text not null,object text not null,valid_from integer not null,valid_to integer,confidence real not null check(confidence >= 0 and confidence <= 1),last_updated integer not null,metadata text,unique(subject,predicate,object,valid_from))`,
-        `create table if not exists temporal_edges(id text primary key,source_id text not null,target_id text not null,relation_type text not null,valid_from integer not null,valid_to integer,weight real not null,metadata text,foreign key(source_id) references temporal_facts(id),foreign key(target_id) references temporal_facts(id))`,
+        "create table if not exists memories(id text primary key,user_id text,project_id text,segment integer default 0,content text not null,summary text,simhash text,primary_sector text not null,tags text,meta text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0,coactivations integer default 0)",
+        "create index if not exists idx_mem_user_id on memories(user_id)",
+        "create index if not exists idx_mem_simhash on memories(simhash)",
+        "create table if not exists openmemory_vectors(id text not null,project_id text,sector text not null,user_id text,v blob not null,dim integer not null,primary key(id,sector))",
+        "create index if not exists idx_vectors_user_id on openmemory_vectors(user_id)",
+        "create index if not exists idx_vectors_sector on openmemory_vectors(sector)",
+        "create table if not exists waypoints(src_id text,dst_id text not null,user_id text,project_id text,weight real not null,created_at integer,updated_at integer,primary key(src_id,user_id))",
+        "create table if not exists embed_logs(id text primary key,model text,status text,ts integer,err text)",
+        "create table if not exists users(user_id text primary key,summary text,reflection_count integer default 0,created_at integer,updated_at integer)",
+        "create table if not exists stats(id integer primary key autoincrement,type text not null,count integer default 1,ts integer not null)",
+        "create table if not exists temporal_facts(id text primary key,user_id text,project_id text,subject text not null,predicate text not null,object text not null,valid_from integer not null,valid_to integer,confidence real not null check(confidence >= 0 and confidence <= 1),last_updated integer not null,metadata text,unique(subject,predicate,object,valid_from))",
+        "create table if not exists temporal_edges(id text primary key,source_id text not null,target_id text not null,relation_type text not null,valid_from integer not null,valid_to integer,weight real not null,metadata text,foreign key(source_id) references temporal_facts(id),foreign key(target_id) references temporal_facts(id))",
     ];
     for (const sql of SCHEMA_TABLES) {
         await exec(sql);
@@ -269,7 +270,12 @@ export const q: q_type = {
                 if (project_id) { sql += " and project_id=?"; params.push(project_id); }
                 await exec(sql, params);
 
-                await exec("delete from temporal_facts where metadata like ?", [`%"source_memory_id":"${id}"%`]);
+                let factSql = "delete from temporal_facts where metadata like ?";
+                const factParams: any[] = [`%"source_memory_id":"${id}"%`];
+                if (user_id) { factSql += " and user_id=?"; factParams.push(user_id); }
+                if (project_id) { factSql += " and project_id=?"; factParams.push(project_id); }
+                await exec(factSql, factParams);
+
                 await transaction.commit();
             } catch (err) {
                 await transaction.rollback();

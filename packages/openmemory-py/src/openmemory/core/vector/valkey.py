@@ -108,7 +108,8 @@ class ValkeyVectorStore(VectorStore):
 
             i_proj = dec(item.get(b'project_id') or item.get('project_id') or "null")
             if project_id:
-                if i_proj != project_id and i_proj != "system_global" and i_proj != "null":
+                # system_global is exempt, "null" is private to unscoped queries
+                if i_proj != project_id and i_proj != "system_global":
                     continue
 
             v_bytes = item.get(b'v') or item.get('v')

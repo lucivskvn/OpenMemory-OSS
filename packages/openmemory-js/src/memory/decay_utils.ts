@@ -29,13 +29,16 @@ export const compress_summary = (t: string, f: number, layers: number): string =
 };
 
 const hash_to_vec = (s: string, d: number): number[] => {
+    // NOTE: MD5 is used here for non-security related deterministic
+    // pseudo-random vector generation for memory fingerprinting.
     const h = createHash("md5").update(s).digest();
     const vec: number[] = [];
     for (let i = 0; i < d; i++) {
-        // Use hash bytes to generate pseudo-random float values
         const b1 = h[i % h.length];
         const b2 = h[(i + 1) % h.length];
-        vec.push((b1 / 255.0) * 2 - 1);
+        // Combine both bytes to increase entropy and avoid short cycles
+        const val = ((b1 ^ b2) / 255.0) * 2 - 1;
+        vec.push(val);
     }
     const norm = Math.sqrt(vec.reduce((a, b) => a + b * b, 0));
     return norm > 0 ? vec.map(x => x / norm) : vec;
