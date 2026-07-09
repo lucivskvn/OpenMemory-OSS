@@ -7,20 +7,13 @@ import {
     log_maint_op,
 } from "../core/db";
 import { env } from "../core/config";
-import { now, j } from "../utils";
-import { chunk_text } from "../utils/chunking";
-import {
-    embedMultiSector,
-} from "./embed";
+import { now } from "../utils";
 import { clamp_f } from "../utils/math";
-import { classify_content } from "./classifier";
-import { sector_configs } from "../core/constants";
-
-// Stubs for missing internal utilities
-const compress_vector = (v: number[], f: number, min: number, max: number) => v;
-const compress_summary = (t: string, f: number, l: number) => t;
-const fingerprint_mem = (m: any, d: number) => ({ vector: new Array(d).fill(0), summary: m.content });
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+import {
+    compress_vector,
+    compress_summary,
+    fingerprint_mem,
+} from "./decay_utils";
 
 interface decay_cfg {
     threads: number;
@@ -79,6 +72,8 @@ const safe_clamp = (val: number | undefined, def: number) => {
     const v = typeof val === "number" ? val : def;
     return Math.max(0, Math.min(1, v));
 };
+
+const sleep_local = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export const apply_decay = async () => {
     if (active_q > 0) {
@@ -228,7 +223,7 @@ export const apply_decay = async () => {
             if (firstError) throw (firstError as PromiseRejectedResult).reason;
 
             if (seg !== segments[segments.length - 1]) {
-                await sleep(env.decay_sleep_ms);
+                await sleep_local(env.decay_sleep_ms);
             }
         } finally {
             await log_maint_op("decay", tot_proc - seg_start_proc);

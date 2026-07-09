@@ -1,6 +1,4 @@
 import { env } from "./config";
-import fs from "node:fs";
-import path from "node:path";
 import { VectorStore } from "./vector_store";
 import { PostgresVectorStore } from "./vector/postgres";
 import { ValkeyVectorStore } from "./vector/valkey";
@@ -60,13 +58,6 @@ type q_type = {
     clear_all: { run: () => Promise<void> };
 };
 
-let q: q_type;
-let transaction: {
-    begin: () => Promise<void>;
-    commit: () => Promise<void>;
-    rollback: () => Promise<void>;
-};
-
 const explicit_vector_table = process.env.OM_VECTOR_TABLE;
 const sqlite_vector_table = assertSafeIdentifier(
     explicit_vector_table || DEFAULT_VECTOR_TABLE,
@@ -77,21 +68,22 @@ const url =
     env.OM_TURSO_URL || `file:${env.db_path || "./data/openmemory.sqlite"}`;
 const token = env.OM_TURSO_TOKEN;
 
-let client: any;
-try {
-    client = createClient({ url, authToken: token });
-} catch (e: any) {
-    throw new DbInitError(
-        `Failed to initialize libSQL client: ${e.message}. URL: ${url}`,
-    );
-}
-
-export { client };
+/**
+ * Singleton database client using libSQL.
+ */
+export const client = (() => {
+    try {
+        return createClient({ url, authToken: token });
+    } catch (e: any) {
+        throw new DbInitError(
+            `Failed to initialize libSQL client: ${e.message}. URL: ${url}`,
+        );
+    }
+})();
 
 const mapRow = (row: any) => {
     if (!row) return row;
     const result = { ...row };
-    if (result.content) {
         result.content = decrypt(result.content);
     }
     if (result.meta) {
@@ -140,7 +132,7 @@ const run_async = exec;
 const get_async = one;
 const all_async = many;
 
-transaction = {
+export const transaction = {
     begin: async () => {
         if (txStmts) {
             throw new Error("Transaction already active");
@@ -162,18 +154,20 @@ transaction = {
     },
 };
 
-const memories_table = "memories";
-let vector_store: VectorStore;
+export const memories_table = "memories";
+let vector_store_inst: VectorStore;
 
 if (env.vector_store === "valkey") {
-    vector_store = new ValkeyVectorStore();
+    vector_store_inst = new ValkeyVectorStore();
 } else {
-    vector_store = new PostgresVectorStore(
+    vector_store_inst = new PostgresVectorStore(
         { run_async, get_async, all_async },
         sqlite_vector_table,
         !!env.OM_POSTGRES_URL,
     );
 }
+
+export { vector_store_inst as vector_store };
 
 export const init_db = async () => {
     const SCHEMA_TABLES = [
@@ -195,7 +189,7 @@ export const init_db = async () => {
     }
 };
 
-q = {
+export const q: q_type = {
     ins_mem: {
         run: (...p) => {
             const encryptedP = [...p];
@@ -206,7 +200,7 @@ q = {
                 encryptedP[8] = encrypt(encryptedP[8]);
             }
             return exec(
-                "insert into memories(id,user_id,project_id,segment,content,simhash,primary_sector,tags,meta,created_at,updated_at,last_seen_at,salience,decay_lambda,version,mean_dim,mean_vec,compressed_vec,feedback_score) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "insert into memories(id,user_id,project_id,segment,content,simhash,primary_sector,tags,meta,created_at,updated_at,last_seen_at,salience,decay_lambda,version,mean_dim,mean_vec,compressed_vec,feedback_score) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) on conflict(id) do update set user_id=excluded.user_id, project_id=excluded.project_id, content=excluded.content, simhash=excluded.simhash, primary_sector=excluded.primary_sector, tags=excluded.tags, meta=excluded.meta, updated_at=excluded.updated_at, last_seen_at=excluded.last_seen_at, salience=excluded.salience, decay_lambda=excluded.decay_lambda, version=excluded.version, mean_dim=excluded.mean_dim, mean_vec=excluded.mean_vec, compressed_vec=excluded.compressed_vec, feedback_score=excluded.feedback_score",
                 encryptedP,
             );
         },
@@ -462,11 +456,7 @@ export const log_maint_op = async (
 };
 
 export {
-    q,
-    transaction,
     all_async,
     get_async,
     run_async,
-    memories_table,
-    vector_store,
 };

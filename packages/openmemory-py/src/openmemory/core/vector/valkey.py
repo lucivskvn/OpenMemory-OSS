@@ -22,7 +22,7 @@ class ValkeyVectorStore(VectorStore):
     def _key(self, user_id: str, sector: str, id: str) -> str:
         return f"{self.prefix}{user_id}:vector:{sector}:{id}"
 
-    async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None):
+    async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None, project_id: Optional[str] = None):
         client = await self._get_client()
         uid = user_id or "anonymous"
         key = self._key(uid, sector, id)
@@ -33,7 +33,8 @@ class ValkeyVectorStore(VectorStore):
             "sector": sector,
             "dim": dim,
             "v": vec_bytes,
-            "user_id": uid
+            "user_id": uid,
+            "project_id": project_id or "null"
         }
         await client.hset(key, mapping=mapping)
 
@@ -105,8 +106,8 @@ class ValkeyVectorStore(VectorStore):
             if not item: continue
             def dec(x): return x.decode('utf-8') if isinstance(x, bytes) else str(x)
 
+            i_proj = dec(item.get(b'project_id') or item.get('project_id') or "null")
             if project_id:
-                i_proj = dec(item.get(b'project_id') or item.get('project_id'))
                 if i_proj != project_id and i_proj != "system_global" and i_proj != "null":
                     continue
 
