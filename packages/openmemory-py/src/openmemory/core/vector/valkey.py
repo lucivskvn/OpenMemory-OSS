@@ -127,14 +127,7 @@ class ValkeyVectorStore(VectorStore):
             })
         return batch_results
 
-    async def search(self, vector: List[float], sector: str, k: int, filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        client = await self._get_client()
-        query_vec = np.array(vector, dtype=np.float32)
-        q_norm = np.linalg.norm(query_vec)
-        project_id = filter.get("project_id") if filter else None
-        user_id = filter.get("user_id") if filter else None
-        pattern = f"{self.prefix}{user_id or '*'}:vector:{sector}:*"
-
+    async def _scan_and_fetch(self, client, pattern, query_vec, q_norm, project_id):
         cursor = 0
         results = []
         while True:
@@ -146,6 +139,17 @@ class ValkeyVectorStore(VectorStore):
                 items = await pipe.execute()
                 results.extend(self._parse_and_filter_results(items, query_vec, q_norm, project_id))
             if cursor == 0: break
+        return results
+
+    async def search(self, vector: List[float], sector: str, k: int, filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        client = await self._get_client()
+        query_vec = np.array(vector, dtype=np.float32)
+        q_norm = np.linalg.norm(query_vec)
+        project_id = filter.get("project_id") if filter else None
+        user_id = filter.get("user_id") if filter else None
+        pattern = f"{self.prefix}{user_id or '*'}:vector:{sector}:*"
+
+        results = await self._scan_and_fetch(client, pattern, query_vec, q_norm, project_id)
 
         results.sort(key=lambda x: x["similarity"], reverse=True)
         return results[:k]

@@ -106,46 +106,48 @@ const mapRows = (rows: any[]) => rows.map(mapRow);
 
 let txStmts: InStatement[] | null = null;
 
+/**
+ * Executes a SQL query directly against the client without buffering.
+ */
+const _exec_direct = async (sql: string, args: any[] = []) => {
+    return await client.execute({ sql, args });
+};
+
+/**
+ * Internal executor that respects transaction buffering.
+ */
 const exec = async (sql: string, args: any[] = []) => {
     if (txStmts) {
         txStmts.push({ sql, args });
         return;
     }
-    await client.execute({ sql, args });
+    await _exec_direct(sql, args);
 };
 
-const one = async (sql: string, args: any[] = []) => {
-    const result = await client.execute({ sql, args });
+export const run_async = exec;
+export const run_async_direct = async (sql: string, args: any[] = []) => {
+    await _exec_direct(sql, args);
+};
+
+export const get_async = async (sql: string, args: any[] = []) => {
+    const result = await _exec_direct(sql, args);
     if (result.rows.length === 0) return undefined;
     return mapRow(result.rows[0]);
 };
 
-const many = async (sql: string, args: any[] = []) => {
+export const get_async_direct = get_async;
+
+export const all_async = async (sql: string, args: any[] = []) => {
     if (txStmts) {
         txStmts.push({ sql, args });
         return [];
     }
-    const result = await client.execute({ sql, args });
+    const result = await _exec_direct(sql, args);
     return mapRows(result.rows);
 };
 
-export const run_async = exec;
-export const get_async = one;
-export const all_async = many;
-
-/**
- * Direct (non-buffered) query methods to bypass active transactions.
- */
-export const run_async_direct = async (sql: string, args: any[] = []) => {
-    await client.execute({ sql, args });
-};
-export const get_async_direct = async (sql: string, args: any[] = []) => {
-    const result = await client.execute({ sql, args });
-    if (result.rows.length === 0) return undefined;
-    return mapRow(result.rows[0]);
-};
 export const all_async_direct = async (sql: string, args: any[] = []) => {
-    const result = await client.execute({ sql, args });
+    const result = await _exec_direct(sql, args);
     return mapRows(result.rows);
 };
 
@@ -291,25 +293,25 @@ export const q: q_type = {
         }
     },
     get_mem: {
-        get: (id) => one("select * from memories where id=?", [id]),
+        get: (id) => get_async("select * from memories where id=?", [id]),
     },
     get_mem_by_simhash: {
         get: (simhash) =>
-            one(
+            get_async(
                 "select * from memories where simhash=? order by salience desc limit 1",
                 [simhash],
             ),
     },
     all_mem: {
         all: (limit, offset) =>
-            many(
+            all_async(
                 "select * from memories order by created_at desc limit ? offset ?",
                 [limit, offset],
             ),
     },
     all_mem_by_sector: {
         all: (sector, limit, offset) =>
-            many(
+            all_async(
                 "select * from memories where primary_sector=? order by created_at desc limit ? offset ?",
                 [sector, limit, offset],
             ),
@@ -320,7 +322,7 @@ export const q: q_type = {
             const params: any[] = [segment];
             if (user_id) { sql += " and user_id=?"; params.push(user_id); }
             if (project_id) { sql += " and project_id=?"; params.push(project_id); }
-            return one(sql, params);
+            return get_async(sql, params);
         }
     },
     get_max_segment: {
@@ -331,7 +333,7 @@ export const q: q_type = {
                 if (user_id) { sql += " and user_id=?"; params.push(user_id); }
                 if (project_id) { sql += " and project_id=?"; params.push(project_id); }
             }
-            return one(sql, params);
+            return get_async(sql, params);
         }
     },
     get_segments: {
@@ -343,7 +345,7 @@ export const q: q_type = {
                 if (project_id) { sql += " and project_id=?"; params.push(project_id); }
             }
             sql += " order by segment desc";
-            return many(sql, params);
+            return all_async(sql, params);
         }
     },
     get_mem_by_segment: {
@@ -355,7 +357,7 @@ export const q: q_type = {
                 if (project_id) { sql += " and project_id=?"; params.push(project_id); }
             }
             sql += " order by created_at desc";
-            return many(sql, params);
+            return all_async(sql, params);
         }
     },
 
@@ -368,21 +370,21 @@ export const q: q_type = {
     },
     get_neighbors: {
         all: (src) =>
-            many(
+            all_async(
                 "select dst_id,weight from waypoints where src_id=? order by weight desc",
                 [src],
             ),
     },
     get_waypoints_by_src: {
         all: (src) =>
-            many(
+            all_async(
                 "select src_id,dst_id,weight,created_at,updated_at from waypoints where src_id=?",
                 [src],
             ),
     },
     get_waypoint: {
         get: (src, dst) =>
-            one("select weight from waypoints where src_id=? and dst_id=?", [
+            get_async("select weight from waypoints where src_id=? and dst_id=?", [
                 src,
                 dst,
             ]),
@@ -413,18 +415,18 @@ export const q: q_type = {
             exec("update embed_logs set status=?,err=? where id=?", p),
     },
     get_pending_logs: {
-        all: () => many("select * from embed_logs where status=?", ["pending"]),
+        all: () => all_async("select * from embed_logs where status=?", ["pending"]),
     },
     get_failed_logs: {
         all: () =>
-            many(
+            all_async(
                 "select * from embed_logs where status=? order by ts desc limit 100",
                 ["failed"],
             ),
     },
     all_mem_by_user: {
         all: (user_id, limit, offset) =>
-            many(
+            all_async(
                 "select * from memories where user_id=? order by created_at desc limit ? offset ?",
                 [user_id, limit, offset],
             ),
@@ -437,7 +439,7 @@ export const q: q_type = {
             ),
     },
     get_user: {
-        get: (user_id) => one("select * from users where user_id=?", [user_id]),
+        get: (user_id) => get_async("select * from users where user_id=?", [user_id]),
     },
     upd_user_summary: {
         run: (...p) =>
