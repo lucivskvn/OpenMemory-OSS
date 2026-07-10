@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { all_async, run_async, get_async, transaction } from "../core/db";
+import { all_async, run_async, get_async, transaction, all_async_direct } from "../core/db";
 import { env } from "../core/config";
 import { TemporalFact, TemporalEdge } from "./types";
 import { clamp_f } from "../utils/math";
@@ -85,7 +85,8 @@ const _insert_fact_impl = async (
     const valid_from_ts = valid_from.getTime();
 
     // Use a clean lookup that works even if a transaction is currently buffered
-    const existing = await all_async(
+    // We use all_async_direct to bypass the txStmts buffer if we are in a batch
+    const existing = await all_async_direct(
         `
         SELECT id, valid_from FROM temporal_facts
         WHERE subject = ? AND predicate = ? AND valid_to IS NULL AND user_id = ?${project_id ? " AND (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)" : ""}
@@ -288,7 +289,7 @@ export const apply_confidence_decay = async (
         `,
             [decay_rate, now, one_day, now],
         );
-        const result = (await get_async(\`SELECT changes() as changes\`)) as any;
+        const result = (await get_async("SELECT changes() as changes")) as any;
         changes = result?.changes || 0;
     }
     return changes;
@@ -296,14 +297,14 @@ export const apply_confidence_decay = async (
 
 export const get_active_facts_count = async (): Promise<number> => {
     const result = (await get_async(
-        \`SELECT COUNT(*) as count FROM temporal_facts WHERE valid_to IS NULL\`,
+        "SELECT COUNT(*) as count FROM temporal_facts WHERE valid_to IS NULL",
     )) as any;
     return result?.count || 0;
 };
 
 export const get_total_facts_count = async (): Promise<number> => {
     const result = (await get_async(
-        \`SELECT COUNT(*) as count FROM temporal_facts\`,
+        "SELECT COUNT(*) as count FROM temporal_facts",
     )) as any;
     return result?.count || 0;
 };
@@ -314,8 +315,8 @@ export const get_fact_by_id_for_user = async (
     project_id?: string,
 ): Promise<TemporalFact | null> => {
     const params: any[] = [id, user_id];
-    let sql = \`SELECT id, user_id, project_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
-         FROM temporal_facts WHERE id = ? AND user_id = ?\`;
+    let sql = `SELECT id, user_id, project_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
+         FROM temporal_facts WHERE id = ? AND user_id = ?`;
     if (project_id) {
         sql +=
             " AND (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)";

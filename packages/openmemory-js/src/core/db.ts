@@ -129,9 +129,25 @@ const many = async (sql: string, args: any[] = []) => {
     return mapRows(result.rows);
 };
 
-const run_async = exec;
-const get_async = one;
-const all_async = many;
+export const run_async = exec;
+export const get_async = one;
+export const all_async = many;
+
+/**
+ * Direct (non-buffered) query methods to bypass active transactions.
+ */
+export const run_async_direct = async (sql: string, args: any[] = []) => {
+    await client.execute({ sql, args });
+};
+export const get_async_direct = async (sql: string, args: any[] = []) => {
+    const result = await client.execute({ sql, args });
+    if (result.rows.length === 0) return undefined;
+    return mapRow(result.rows[0]);
+};
+export const all_async_direct = async (sql: string, args: any[] = []) => {
+    const result = await client.execute({ sql, args });
+    return mapRows(result.rows);
+};
 
 export const transaction = {
     begin: async () => {
@@ -450,10 +466,4 @@ export const log_maint_op = async (
     } catch (e) {
         console.error("[DB] Maintenance log error:", e);
     }
-};
-
-export {
-    all_async,
-    get_async,
-    run_async,
 };
