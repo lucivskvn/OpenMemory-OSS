@@ -1,4 +1,4 @@
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Callable
 import json
 import logging
 import asyncio
@@ -54,13 +54,9 @@ class ValkeyVectorStore(VectorStore):
             self._dec(item.get(b'user_id') or item.get('user_id'))
         )
 
-    async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]:
+    async def _scan_pattern(self, pattern: str, processor: Callable[[List[Dict[Any, Any]]], None]):
         client = await self._get_client()
-        uid = user_id or "*"
-        pattern = f"{self.prefix}{uid}:vector:*:{id}"
-
         cursor = 0
-        results = []
         while True:
             cursor, keys = await client.scan(cursor, match=pattern, count=100)
             if keys:
@@ -68,12 +64,19 @@ class ValkeyVectorStore(VectorStore):
                 for key in keys:
                     pipe.hgetall(key)
                 items = await pipe.execute()
-
-                for item in items:
-                    row = self._parse_item_to_row(item)
-                    if row:
-                        results.append(row)
+                processor(items)
             if cursor == 0: break
+
+    async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]:
+        uid = user_id or "*"
+        pattern = f"{self.prefix}{uid}:vector:*:{id}"
+        results = []
+
+        def process(items):
+            rows = [self._parse_item_to_row(i) for i in items]
+            results.extend([r for r in rows if r])
+
+        await self._scan_pattern(pattern, process)
         return results
 
     async def getVector(self, id: str, sector: str, user_id: Optional[str] = None) -> Optional[VectorRow]:
@@ -84,9 +87,9 @@ class ValkeyVectorStore(VectorStore):
         return self._parse_item_to_row(item)
 
     async def deleteVectors(self, id: str, user_id: Optional[str] = None):
-        client = await self._get_client()
         uid = user_id or "*"
         pattern = f"{self.prefix}{uid}:vector:*:{id}"
+        client = await self._get_client()
         cursor = 0
         while True:
             cursor, keys = await client.scan(cursor, match=pattern, count=100)
@@ -121,29 +124,18 @@ class ValkeyVectorStore(VectorStore):
             })
         return batch_results
 
-    async def _scan_and_fetch(self, client, pattern, query_vec, q_norm, project_id):
-        cursor = 0
-        results = []
-        while True:
-            cursor, keys = await client.scan(cursor, match=pattern, count=100)
-            if keys:
-                pipe = client.pipeline()
-                for key in keys:
-                    pipe.hgetall(key)
-                items = await pipe.execute()
-                results.extend(self._parse_and_filter_results(items, query_vec, q_norm, project_id))
-            if cursor == 0: break
-        return results
-
     async def search(self, vector: List[float], sector: str, k: int, filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        client = await self._get_client()
         query_vec = np.array(vector, dtype=np.float32)
         q_norm = np.linalg.norm(query_vec)
         project_id = filter.get("project_id") if filter else None
         user_id = filter.get("user_id") if filter else None
         pattern = f"{self.prefix}{user_id or '*'}:vector:{sector}:*"
 
-        results = await self._scan_and_fetch(client, pattern, query_vec, q_norm, project_id)
+        results = []
+        def process(items):
+            results.extend(self._parse_and_filter_results(items, query_vec, q_norm, project_id))
+
+        await self._scan_pattern(pattern, process)
 
         results.sort(key=lambda x: x["similarity"], reverse=True)
         return results[:k]
