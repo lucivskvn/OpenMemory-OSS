@@ -41,6 +41,19 @@ class ValkeyVectorStore(VectorStore):
     def _dec(self, x):
         return x.decode('utf-8') if isinstance(x, bytes) else str(x)
 
+    def _parse_item_to_row(self, item):
+        if not item: return None
+        v_bytes = item.get(b'v') or item.get('v')
+        vec = list(np.frombuffer(v_bytes, dtype=np.float32))
+
+        return VectorRow(
+            self._dec(item.get(b'id') or item.get('id')),
+            self._dec(item.get(b'sector') or item.get('sector')),
+            vec,
+            int(self._dec(item.get(b'dim') or item.get('dim'))),
+            self._dec(item.get(b'user_id') or item.get('user_id'))
+        )
+
     async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]:
         client = await self._get_client()
         uid = user_id or "*"
@@ -57,17 +70,9 @@ class ValkeyVectorStore(VectorStore):
                 items = await pipe.execute()
 
                 for item in items:
-                    if not item: continue
-                    v_bytes = item.get(b'v') or item.get('v')
-                    vec = list(np.frombuffer(v_bytes, dtype=np.float32))
-
-                    results.append(VectorRow(
-                        self._dec(item.get(b'id') or item.get('id')),
-                        self._dec(item.get(b'sector') or item.get('sector')),
-                        vec,
-                        int(self._dec(item.get(b'dim') or item.get('dim'))),
-                        self._dec(item.get(b'user_id') or item.get('user_id'))
-                    ))
+                    row = self._parse_item_to_row(item)
+                    if row:
+                        results.append(row)
             if cursor == 0: break
         return results
 
@@ -76,18 +81,7 @@ class ValkeyVectorStore(VectorStore):
         uid = user_id or "anonymous"
         key = self._key(uid, sector, id)
         item = await client.hgetall(key)
-        if not item: return None
-
-        v_bytes = item.get(b'v') or item.get('v')
-        vec = list(np.frombuffer(v_bytes, dtype=np.float32))
-
-        return VectorRow(
-            self._dec(item.get(b'id') or item.get('id')),
-            self._dec(item.get(b'sector') or item.get('sector')),
-            vec,
-            int(self._dec(item.get(b'dim') or item.get('dim'))),
-            self._dec(item.get(b'user_id') or item.get('user_id'))
-        )
+        return self._parse_item_to_row(item)
 
     async def deleteVectors(self, id: str, user_id: Optional[str] = None):
         client = await self._get_client()
