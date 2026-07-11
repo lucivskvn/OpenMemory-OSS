@@ -1228,7 +1228,7 @@ export async function add_hsg_memory(
         }
         const mean_vec = calc_mean_vec(emb_res, all_sectors);
         const mean_vec_buf = vectorToBuffer(mean_vec);
-        await q.upd_mean_vec.run(id, mean_vec.length, mean_vec_buf);
+        await q.upd_mean_vec.run(mean_vec.length, mean_vec_buf, id);
 
         if (tier === "smart" && mean_vec.length > 128) {
             const comp = compress_vec_for_storage(mean_vec, 128);
@@ -1256,7 +1256,7 @@ export async function delete_memory(id: string): Promise<boolean> {
     try {
         await q.del_mem.run(id);
         await q.del_waypoints.run(id, id);
-        await vector_store.deleteVectors(id);
+        await vector_store.deleteVectors(id, mem.user_id || undefined);
         await transaction.commit();
         return true;
     } catch (error) {
@@ -1295,7 +1295,7 @@ export async function update_memory(
                 classification.primary,
                 ...classification.additional,
             ];
-            await vector_store.deleteVectors(id);
+            await vector_store.deleteVectors(id, mem.user_id || undefined);
             const emb_res = await embedMultiSector(
                 id,
                 new_content,
@@ -1313,7 +1313,7 @@ export async function update_memory(
             }
             const mean_vec = calc_mean_vec(emb_res, all_sectors);
             const mean_vec_buf = vectorToBuffer(mean_vec);
-            await q.upd_mean_vec.run(id, mean_vec.length, mean_vec_buf);
+            await q.upd_mean_vec.run(mean_vec.length, mean_vec_buf, id);
             await q.upd_mem_with_sector.run(
                 new_content,
                 classification.primary,

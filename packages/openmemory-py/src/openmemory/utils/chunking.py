@@ -1,6 +1,11 @@
 import math
 import re
-from typing import List, Dict, TypedDict
+from typing import List, Dict, TypedDict, Optional
+try:
+    import tiktoken
+    _HAS_TIKTOKEN = True
+except ImportError:
+    _HAS_TIKTOKEN = False
 
 class Chunk(TypedDict):
     text: str
@@ -8,46 +13,65 @@ class Chunk(TypedDict):
     end: int
     tokens: int
 
-CPT = 4
-def est(t: str) -> int:
-    return math.ceil(len(t) / CPT)
+def get_tokenizer():
+    if _HAS_TIKTOKEN:
+        try:
+            return tiktoken.get_encoding("cl100k_base")
+        except (ValueError, RuntimeError):
+            return None
+    return None
+
+_tokenizer = get_tokenizer()
+
+def est_tokens(t: str) -> int:
+    if _tokenizer:
+        # Use disallowed_special=() to treat special tokens as normal text
+        return len(_tokenizer.encode(t, disallowed_special=()))
+    # Fallback to character-based estimate if tiktoken is not available
+    return math.ceil(len(t) / 4)
 
 def chunk_text(txt: str, tgt: int = 768, ovr: float = 0.1) -> List[Chunk]:
-    tot = est(txt)
+    tot = est_tokens(txt)
     if tot <= tgt:
         return [{"text": txt, "start": 0, "end": len(txt), "tokens": tot}]
 
-    tch = tgt * CPT
+    tch = tgt * 4
     och = math.floor(tch * ovr)
     paras = re.split(r"\n\n+", txt)
 
     chks: List[Chunk] = []
     cur = ""
     cs = 0
+    cur_tokens = 0
 
     for p in paras:
         sents = re.split(r"(?<=[.!?])\s+", p)
         for s in sents:
-            pot = cur + (" " if cur else "") + s
-            if len(pot) > tch and len(cur) > 0:
+            s_tokens = est_tokens(s)
+            pot_tokens = cur_tokens + (1 if cur else 0) + s_tokens
+
+            if pot_tokens > tgt and len(cur) > 0:
                 chks.append({
                     "text": cur,
                     "start": cs,
                     "end": cs + len(cur),
-                    "tokens": est(cur)
+                    "tokens": cur_tokens
                 })
                 ovt = cur[-och:] if och < len(cur) else cur
+                ovt_tokens = est_tokens(ovt)
                 cur = ovt + " " + s
                 cs = cs + len(cur) - len(ovt) - 1
+                cur_tokens = ovt_tokens + 1 + s_tokens
             else:
-                cur = pot
+                cur = cur + (" " if cur else "") + s
+                cur_tokens = pot_tokens
 
     if len(cur) > 0:
         chks.append({
             "text": cur,
             "start": cs,
             "end": cs + len(cur),
-            "tokens": est(cur)
+            "tokens": cur_tokens
         })
     return chks
 

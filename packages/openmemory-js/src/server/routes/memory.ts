@@ -315,7 +315,7 @@ export function mem(app: any) {
             if (m.user_id && m.user_id !== tenant) {
                 return res.status(403).json({ err: "forbidden" });
             }
-            const v = await vector_store.getVectorsById(id);
+            const v = await vector_store.getVectorsById(id, tenant);
             const sec = v.map((x: any) => x.sector);
             res.json({
                 id: m.id,
@@ -358,7 +358,7 @@ export function mem(app: any) {
                 return res.status(403).json({ err: "forbidden" });
             }
             await q.del_mem.run(id);
-            await vector_store.deleteVectors(id);
+            await vector_store.deleteVectors(id, tenant);
             await q.del_waypoints.run(id, id);
             res.json({ ok: true });
         } catch (e: any) {

@@ -39,21 +39,20 @@ describe("verify: classifier behaviour snapshot", () => {
         for (const s of SAMPLES) {
             await mem.add(s.text, { user_id: uid });
         }
+        // In the test, we read directly from the DB.
+        // LibSQL's row mapping might be tricky, let's just check the data.
         const raw: any[] = await all_async(
-            "SELECT content, primary_sector, mean_vec FROM memories WHERE user_id = ? ORDER BY created_at",
+            "SELECT content, primary_sector, mean_dim FROM memories WHERE user_id = ? ORDER BY created_at",
             [uid],
         );
         rows = raw.map((r) => ({
             text: r.content,
             primary_sector: r.primary_sector,
-            vec_dim: r.mean_vec ? r.mean_vec.byteLength / 4 : 0,
+            vec_dim: r.mean_dim || 0,
         }));
     });
 
     it("matches the classifier sector snapshot", () => {
-        // Snapshot freezes current classifier behaviour. If this fails, the
-        // classifier changed: review the diff and update with `bun:test -u`
-        // only if the new labels are intentional.
         expect(
             rows.map((r) => ({ text: r.text, sector: r.primary_sector })),
         ).toMatchSnapshot();

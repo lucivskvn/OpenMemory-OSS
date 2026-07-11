@@ -1,5 +1,4 @@
-
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Callable
 import json
 import logging
 import asyncio
@@ -9,7 +8,7 @@ from ..vector_store import VectorStore, VectorRow
 logger = logging.getLogger("vector_store.valkey")
 
 class ValkeyVectorStore(VectorStore):
-    def __init__(self, url: str, prefix: str = "om:vec:"):
+    def __init__(self, url: str, prefix: str = "om:"):
         self.url = url
         self.prefix = prefix
         self.client = None
@@ -20,12 +19,17 @@ class ValkeyVectorStore(VectorStore):
             self.client = redis.from_url(self.url)
         return self.client
 
-    def _key(self, id: str) -> str:
-        return f"{self.prefix}{id}"
+    def _glob_escape(self, s: str) -> str:
+        """Escapes SCAN glob metacharacters: *, ?, [, ] and backslash."""
+        return s.replace('\\', '\\\\').replace('*', '\\*').replace('?', '\\?').replace('[', '\\[').replace(']', '\\]')
 
-    async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None):
+    def _key(self, user_id: str, sector: str, id: str) -> str:
+        return f"{self.prefix}{user_id}:vector:{sector}:{id}"
+
+    async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None, project_id: Optional[str] = None):
         client = await self._get_client()
-        key = self._key(id)
+        uid = user_id or "anonymous"
+        key = self._key(uid, sector, id)
         vec_bytes = np.array(vector, dtype=np.float32).tobytes()
 
         mapping = {
@@ -33,79 +37,127 @@ class ValkeyVectorStore(VectorStore):
             "sector": sector,
             "dim": dim,
             "v": vec_bytes,
-            "user_id": user_id or ""
+            "user_id": uid,
+            "project_id": project_id or "null"
         }
         await client.hset(key, mapping=mapping)
 
-    async def getVectorsById(self, id: str) -> List[VectorRow]:
-        client = await self._get_client()
-        key = self._key(id)
-        data = await client.hgetall(key)
-        if not data: return []
-        def dec(x): return x.decode('utf-8') if isinstance(x, bytes) else str(x)
+    def _dec(self, x):
+        return x.decode('utf-8') if isinstance(x, bytes) else str(x)
 
-        vec_bytes = data.get(b'v') or data.get('v')
-        vec = list(np.frombuffer(vec_bytes, dtype=np.float32))
+    def _parse_item_to_row(self, item):
+        if not item:
+            return None
+        v_bytes = item.get(b'v') or item.get('v')
+        vec = list(np.frombuffer(v_bytes, dtype=np.float32))
 
-        return [VectorRow(
-            dec(data.get(b'id') or data.get('id')),
-            dec(data.get(b'sector') or data.get('sector')),
+        return VectorRow(
+            self._dec(item.get(b'id') or item.get('id')),
+            self._dec(item.get(b'sector') or item.get('sector')),
             vec,
-            int(dec(data.get(b'dim') or data.get('dim')))
-        )]
+            int(self._dec(item.get(b'dim') or item.get('dim'))),
+            self._dec(item.get(b'user_id') or item.get('user_id'))
+        )
 
-    async def getVector(self, id: str, sector: str) -> Optional[VectorRow]:
-        rows = await self.getVectorsById(id)
-        for r in rows:
-            if r.sector == sector:
-                return r
-        return None
+    async def _fetch_items_from_keys(self, client, keys):
+        if not keys:
+            return []
+        pipe = client.pipeline()
+        for key in keys:
+            pipe.hgetall(key)
+        return await pipe.execute()
 
-    async def deleteVectors(self, id: str):
+    async def _scan_pattern(self, pattern: str, processor: Callable[[List[Dict[Any, Any]]], None]):
         client = await self._get_client()
-        await client.delete(self._key(id))
-
-    async def search(self, vector: List[float], sector: str, k: int, filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-
-        client = await self._get_client()
-        query_vec = np.array(vector, dtype=np.float32)
-        q_norm = np.linalg.norm(query_vec)
-
         cursor = 0
+        while True:
+            cursor, keys = await client.scan(cursor, match=pattern, count=100)
+            if keys:
+                items = await self._fetch_items_from_keys(client, keys)
+                processor(items)
+            if cursor == 0:
+                break
+
+    async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]:
+        if not user_id:
+            raise ValueError("Explicit user_id is required for getVectorsById to ensure tenant isolation.")
+
+        uid_esc = self._glob_escape(user_id)
+        id_esc = self._glob_escape(id)
+        pattern = f"{self.prefix}{uid_esc}:vector:*:{id_esc}"
         results = []
 
+        def process(items):
+            rows = [self._parse_item_to_row(i) for i in items]
+            results.extend([r for r in rows if r])
+
+        await self._scan_pattern(pattern, process)
+        return results
+
+    async def getVector(self, id: str, sector: str, user_id: Optional[str] = None) -> Optional[VectorRow]:
+        client = await self._get_client()
+        uid = user_id or "anonymous"
+        key = self._key(uid, sector, id)
+        item = await client.hgetall(key)
+        return self._parse_item_to_row(item)
+
+    async def deleteVectors(self, id: str, user_id: Optional[str] = None):
+        if not user_id:
+            raise ValueError("Explicit user_id is required for deleteVectors to ensure tenant isolation.")
+
+        uid_esc = self._glob_escape(user_id)
+        id_esc = self._glob_escape(id)
+        pattern = f"{self.prefix}{uid_esc}:vector:*:{id_esc}"
+        client = await self._get_client()
+        cursor = 0
         while True:
-            cursor, keys = await client.scan(cursor, match=f"{self.prefix}*", count=100)
+            cursor, keys = await client.scan(cursor, match=pattern, count=100)
             if keys:
-                pipe = client.pipeline()
-                for key in keys:
-                    pipe.hgetall(key)
-                items = await pipe.execute()
+                await client.delete(*keys)
+            if cursor == 0:
+                break
 
-                for item in items:
-                    if not item: continue
-                    def dec(x): return x.decode('utf-8') if isinstance(x, bytes) else str(x)
+    def _should_filter(self, item, project_id):
+        i_proj = self._dec(item.get(b'project_id') or item.get('project_id') or "null")
+        if project_id:
+            # system_global is exempt, "null" is private to unscoped queries
+            if i_proj != project_id and i_proj != "system_global":
+                return True
+        return False
 
-                    i_sector = dec(item.get(b'sector') or item.get('sector'))
-                    if i_sector != sector: continue
+    def _calc_sim(self, v_bytes, query_vec, q_norm):
+        v = np.frombuffer(v_bytes, dtype=np.float32)
+        dot = np.dot(query_vec, v)
+        norm = np.linalg.norm(v)
+        return dot / (q_norm * norm) if (q_norm * norm) > 0 else 0
 
-                    if filter and filter.get("user_id"):
-                        i_uid = dec(item.get(b'user_id') or item.get('user_id'))
-                        if i_uid != filter["user_id"]: continue
+    def _parse_and_filter_results(self, items, query_vec, q_norm, project_id):
+        batch_results = []
+        for item in items:
+            if not item or self._should_filter(item, project_id):
+                continue
+            v_bytes = item.get(b'v') or item.get('v')
+            sim = self._calc_sim(v_bytes, query_vec, q_norm)
+            batch_results.append({
+                "id": self._dec(item.get(b'id') or item.get('id')),
+                "similarity": float(sim)
+            })
+        return batch_results
 
-                    v_bytes = item.get(b'v') or item.get('v')
-                    v = np.frombuffer(v_bytes, dtype=np.float32)
+    async def search(self, vector: List[float], sector: str, k: int, filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        query_vec = np.array(vector, dtype=np.float32)
+        q_norm = np.linalg.norm(query_vec)
+        project_id = filter.get("project_id") if filter else None
+        user_id = filter.get("user_id") if filter else None
 
-                    dot = np.dot(query_vec, v)
-                    norm = np.linalg.norm(v)
-                    sim = dot / (q_norm * norm) if (q_norm * norm) > 0 else 0
+        uid_pat = self._glob_escape(user_id) if user_id else "*"
+        pattern = f"{self.prefix}{uid_pat}:vector:{sector}:*"
 
-                    results.append({
-                        "id": dec(item.get(b'id') or item.get('id')),
-                        "similarity": float(sim)
-                    })
+        results = []
+        def process(items):
+            results.extend(self._parse_and_filter_results(items, query_vec, q_norm, project_id))
 
-            if cursor == 0: break
+        await self._scan_pattern(pattern, process)
 
         results.sort(key=lambda x: x["similarity"], reverse=True)
         return results[:k]

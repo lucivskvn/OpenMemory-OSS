@@ -9,31 +9,35 @@ import logging
 
 logger = logging.getLogger("vector_store")
 
+# Constants for common SQL fragments
+USER_ID_CONDITION = " AND user_id=?"
+
 class VectorRow:
-    def __init__(self, id: str, sector: str, vector: List[float], dim: int):
+    def __init__(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None):
         self.id = id
         self.sector = sector
         self.vector = vector
         self.dim = dim
+        self.user_id = user_id
 
 class VectorStore(ABC):
     @abstractmethod
     async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None): pass
 
     @abstractmethod
-    async def getVectorsById(self, id: str) -> List[VectorRow]: pass
+    async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]: pass
 
     @abstractmethod
-    async def getVector(self, id: str, sector: str) -> Optional[VectorRow]: pass
+    async def getVector(self, id: str, sector: str, user_id: Optional[str] = None) -> Optional[VectorRow]: pass
 
     @abstractmethod
-    async def deleteVectors(self, id: str): pass
+    async def deleteVectors(self, id: str, user_id: Optional[str] = None): pass
 
     @abstractmethod
     async def search(self, vector: List[float], sector: str, k: int, filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]: pass
 
 class SQLiteVectorStore(VectorStore):
-    def __init__(self, table_name: str = "vectors"):
+    def __init__(self, table_name: str = "openmemory_vectors"):
         self.table = table_name
 
     async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None):
@@ -42,33 +46,46 @@ class SQLiteVectorStore(VectorStore):
         db.conn.execute(sql, (id, sector, user_id, blob, dim))
         db.commit()
 
-    async def getVectorsById(self, id: str) -> List[VectorRow]:
+    async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]:
         sql = f"SELECT * FROM {self.table} WHERE id=?"
-        rows = db.conn.execute(sql, (id,)).fetchall()
+        params = [id]
+        if user_id:
+            sql += USER_ID_CONDITION
+            params.append(user_id)
+        rows = db.conn.execute(sql, tuple(params)).fetchall()
         res = []
         for r in rows:
             cnt = len(r["v"]) // 4
             vec = list(struct.unpack(f"{cnt}f", r["v"]))
-            res.append(VectorRow(r["id"], r["sector"], vec, r["dim"]))
+            res.append(VectorRow(r["id"], r["sector"], vec, r["dim"], r["user_id"]))
         return res
 
-    async def getVector(self, id: str, sector: str) -> Optional[VectorRow]:
+    async def getVector(self, id: str, sector: str, user_id: Optional[str] = None) -> Optional[VectorRow]:
         sql = f"SELECT * FROM {self.table} WHERE id=? AND sector=?"
-        r = db.conn.execute(sql, (id, sector)).fetchone()
+        params = [id, sector]
+        if user_id:
+            sql += USER_ID_CONDITION
+            params.append(user_id)
+        r = db.conn.execute(sql, tuple(params)).fetchone()
         if not r: return None
         cnt = len(r["v"]) // 4
         vec = list(struct.unpack(f"{cnt}f", r["v"]))
-        return VectorRow(r["id"], r["sector"], vec, r["dim"])
+        return VectorRow(r["id"], r["sector"], vec, r["dim"], r["user_id"])
 
-    async def deleteVectors(self, id: str):
-        db.conn.execute(f"DELETE FROM {self.table} WHERE id=?", (id,))
+    async def deleteVectors(self, id: str, user_id: Optional[str] = None):
+        sql = f"DELETE FROM {self.table} WHERE id=?"
+        params = [id]
+        if user_id:
+            sql += USER_ID_CONDITION
+            params.append(user_id)
+        db.conn.execute(sql, tuple(params))
         db.commit()
 
     async def search(self, vector: List[float], sector: str, k: int, filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         filter_sql = ""
         params = [sector]
         if filter and filter.get("user_id"):
-            filter_sql += " AND user_id=?"
+            filter_sql += USER_ID_CONDITION
             params.append(filter["user_id"])
 
         sql = f"SELECT id, v FROM {self.table} WHERE sector=? {filter_sql}"
@@ -87,6 +104,7 @@ class SQLiteVectorStore(VectorStore):
             results.append({"id": r["id"], "similarity": float(sim)})
         results.sort(key=lambda x: x["similarity"], reverse=True)
         return results[:k]
+
 import os
 
 def get_vector_store() -> VectorStore:
