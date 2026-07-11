@@ -88,15 +88,18 @@ async def calculateCrossSectorResonanceScore(m_sec: str, q_sec: str, fusion_scor
     return fusion_score * rel
 
 async def create_single_waypoint(src_id: str, src_vec: List[float], now: int, user_id: str = None):
+    # Normalize tenant scope before searching and inserting
+    normalized_user_id = user_id or "anonymous"
+
     # Find potential neighbors in semantic space
-    res = await store.search(src_vec, "semantic", 5, {"user_id": user_id})
+    res = await store.search(src_vec, "semantic", 5, {"user_id": normalized_user_id})
     for r in res:
         dst_id = r["id"]
         if dst_id == src_id:
             continue
-        # Multi-tenancy guard: ensured by search filter
+        # Multi-tenancy guard: ensured by search filter and normalized user_id
         db.execute("INSERT INTO waypoints(src_id, dst_id, user_id, weight, created_at, updated_at) VALUES(?,?,?,?,?,?)",
-                   (src_id, dst_id, user_id, r["similarity"], now, now))
+                   (src_id, dst_id, normalized_user_id, r["similarity"], now, now))
     db.commit()
 
 async def calc_multi_vec_fusion_score(mid: str, qe: Dict[str, List[float]], w: Dict[str, float], user_id: Optional[str] = None) -> float:
@@ -256,6 +259,9 @@ async def hsg_query(qt: str, k: int = 10, f: Dict[str, Any] = None) -> List[Dict
     start_q = time.time()
     inc_q()
     try:
+        # Normalize filter argument to ensure safe access
+        f = f or {}
+
         cache_key = f"{qt}:{k}:{json.dumps(f)}"
         if cache_key in cache:
             entry = cache[cache_key]

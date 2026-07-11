@@ -187,12 +187,53 @@ export const init_db = async () => {
             const pkCols = info.filter(c => c.pk > 0);
             const has_dst_id_pk = pkCols.some(c => c.name === "dst_id");
             if (!has_dst_id_pk) {
-                console.warn("[DB] Migrating waypoints table: dropping old schema...");
-                await _exec_direct("DROP TABLE waypoints");
+                console.warn("[DB] Migrating waypoints table to new schema with preserved data...");
+                try {
+                    // Create new table with corrected schema
+                    await _exec_direct(`
+                        create table waypoints_new(
+                            src_id text,
+                            dst_id text not null,
+                            user_id text,
+                            project_id text,
+                            weight real not null,
+                            created_at integer,
+                            updated_at integer,
+                            primary key(src_id,dst_id,user_id)
+                        )
+                    `);
+
+                    // Backfill compatible waypoint relations from old table
+                    await _exec_direct(`
+                        insert into waypoints_new(src_id,dst_id,user_id,project_id,weight,created_at,updated_at)
+                        select src_id,dst_id,user_id,project_id,weight,created_at,updated_at from waypoints
+                        where dst_id is not null
+                    `);
+
+                    // Replace old table
+                    await _exec_direct("drop table waypoints");
+                    await _exec_direct("alter table waypoints_new rename to waypoints");
+
+                    console.log("[DB] Waypoints migration completed successfully");
+                } catch (migrationError: any) {
+                    console.error("[DB] Waypoints migration failed:", migrationError.message);
+                    // Attempt cleanup if migration partially completed
+                    try {
+                        await _exec_direct("drop table if exists waypoints_new");
+                    } catch (cleanupError) {
+                        // Cleanup failed, but log original error
+                    }
+                    throw new DbInitError(`Waypoints migration failed: ${migrationError.message}`);
+                }
             }
         }
-    } catch (e) {
-        // Table might not exist yet, ignore
+    } catch (e: any) {
+        // If table doesn't exist yet, that's fine - schema creation will handle it
+        // But if it's a migration error, rethrow it
+        if (e instanceof DbInitError) {
+            throw e;
+        }
+        // Otherwise ignore (table might not exist yet)
     }
 
     const SCHEMA_TABLES = [
