@@ -1074,15 +1074,21 @@ export async function hsg_query(
         }
 
         // Process on_query_hit callbacks with bounded concurrency (limit: 5)
-        const processBatched = async <T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>) => {
+        const processBatched = async <T>(
+            items: T[],
+            concurrency: number,
+            fn: (item: T) => Promise<void>,
+        ) => {
             for (let i = 0; i < items.length; i += concurrency) {
                 const batch = items.slice(i, i + concurrency);
-                await Promise.all(batch.map(item => fn(item)));
+                await Promise.all(batch.map((item) => fn(item)));
             }
         };
 
         await processBatched(top, 5, async (r) => {
-            await on_query_hit(r.id, r.primary_sector, (text) => embedForSector(text, r.primary_sector)).catch(() => {});
+            await on_query_hit(r.id, r.primary_sector, (text) =>
+                embedForSector(text, r.primary_sector),
+            ).catch(() => {});
         });
 
         cache.set(h, { r: top, t: Date.now() });

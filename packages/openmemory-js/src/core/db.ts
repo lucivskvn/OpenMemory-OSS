@@ -33,10 +33,35 @@ type q_type = {
     all_mem_by_user: {
         all: (user_id: string, limit: number, offset: number) => Promise<any[]>;
     };
-    get_segment_count: { get: (segment: number, user_id?: string, project_id?: string) => Promise<any> };
-    get_max_segment: { get: (user_id?: string, project_id?: string, is_system?: boolean) => Promise<any> };
-    get_segments: { all: (user_id?: string, project_id?: string, is_system?: boolean) => Promise<any[]> };
-    get_mem_by_segment: { all: (segment: number, user_id?: string, project_id?: string, is_system?: boolean) => Promise<any[]> };
+    get_segment_count: {
+        get: (
+            segment: number,
+            user_id?: string,
+            project_id?: string,
+        ) => Promise<any>;
+    };
+    get_max_segment: {
+        get: (
+            user_id?: string,
+            project_id?: string,
+            is_system?: boolean,
+        ) => Promise<any>;
+    };
+    get_segments: {
+        all: (
+            user_id?: string,
+            project_id?: string,
+            is_system?: boolean,
+        ) => Promise<any[]>;
+    };
+    get_mem_by_segment: {
+        all: (
+            segment: number,
+            user_id?: string,
+            project_id?: string,
+            is_system?: boolean,
+        ) => Promise<any[]>;
+    };
 
     ins_waypoint: { run: (...p: any[]) => Promise<void> };
     get_neighbors: { all: (src: string) => Promise<any[]> };
@@ -171,23 +196,26 @@ export const transaction = {
 
 export const memories_table = "memories";
 
-export const vector_store: VectorStore = env.vector_store === "valkey"
-    ? new ValkeyVectorStore()
-    : new PostgresVectorStore(
-        { run_async, get_async, all_async },
-        sqlite_vector_table,
-        !!env.OM_POSTGRES_URL,
-    );
+export const vector_store: VectorStore =
+    env.vector_store === "valkey"
+        ? new ValkeyVectorStore()
+        : new PostgresVectorStore(
+              { run_async, get_async, all_async },
+              sqlite_vector_table,
+              !!env.OM_POSTGRES_URL,
+          );
 
 export const init_db = async () => {
     // Migration check for waypoints table primary key change
     try {
         const info = await all_async_direct("PRAGMA table_info(waypoints)");
         if (info && info.length > 0) {
-            const pkCols = info.filter(c => c.pk > 0);
-            const has_dst_id_pk = pkCols.some(c => c.name === "dst_id");
+            const pkCols = info.filter((c) => c.pk > 0);
+            const has_dst_id_pk = pkCols.some((c) => c.name === "dst_id");
             if (!has_dst_id_pk) {
-                console.warn("[DB] Migrating waypoints table to new schema with preserved data...");
+                console.warn(
+                    "[DB] Migrating waypoints table to new schema with preserved data...",
+                );
                 try {
                     // Create new table with corrected schema
                     await _exec_direct(`
@@ -212,18 +240,29 @@ export const init_db = async () => {
 
                     // Replace old table
                     await _exec_direct("drop table waypoints");
-                    await _exec_direct("alter table waypoints_new rename to waypoints");
+                    await _exec_direct(
+                        "alter table waypoints_new rename to waypoints",
+                    );
 
-                    console.log("[DB] Waypoints migration completed successfully");
+                    console.log(
+                        "[DB] Waypoints migration completed successfully",
+                    );
                 } catch (migrationError: any) {
-                    console.error("[DB] Waypoints migration failed:", migrationError.message);
+                    console.error(
+                        "[DB] Waypoints migration failed:",
+                        migrationError.message,
+                    );
                     // Attempt cleanup if migration partially completed
                     try {
-                        await _exec_direct("drop table if exists waypoints_new");
+                        await _exec_direct(
+                            "drop table if exists waypoints_new",
+                        );
                     } catch (cleanupError) {
                         // Cleanup failed, but log original error
                     }
-                    throw new DbInitError(`Waypoints migration failed: ${migrationError.message}`);
+                    throw new DbInitError(
+                        `Waypoints migration failed: ${migrationError.message}`,
+                    );
                 }
             }
         }
@@ -276,7 +315,8 @@ export const q: q_type = {
             exec("update memories set mean_dim=?,mean_vec=? where id=?", p),
     },
     upd_compressed_vec: {
-        run: (...p) => exec("update memories set compressed_vec=? where id=?", p),
+        run: (...p) =>
+            exec("update memories set compressed_vec=? where id=?", p),
     },
     upd_feedback: {
         run: (...p) =>
@@ -331,14 +371,27 @@ export const q: q_type = {
                 await transaction.begin();
                 let sql = "delete from memories where id=?";
                 const params: any[] = [id];
-                if (user_id) { sql += " and user_id=?"; params.push(user_id); }
-                if (project_id) { sql += " and project_id=?"; params.push(project_id); }
+                if (user_id) {
+                    sql += " and user_id=?";
+                    params.push(user_id);
+                }
+                if (project_id) {
+                    sql += " and project_id=?";
+                    params.push(project_id);
+                }
                 await exec(sql, params);
 
-                let factSql = "delete from temporal_facts where metadata like ?";
+                let factSql =
+                    "delete from temporal_facts where metadata like ?";
                 const factParams: any[] = [`%"source_memory_id":"${id}"%`];
-                if (user_id) { factSql += " and user_id=?"; factParams.push(user_id); }
-                if (project_id) { factSql += " and project_id=?"; factParams.push(project_id); }
+                if (user_id) {
+                    factSql += " and user_id=?";
+                    factParams.push(user_id);
+                }
+                if (project_id) {
+                    factSql += " and project_id=?";
+                    factParams.push(project_id);
+                }
                 await exec(factSql, factParams);
 
                 await transaction.commit();
@@ -346,7 +399,7 @@ export const q: q_type = {
                 await transaction.rollback();
                 throw err;
             }
-        }
+        },
     },
     get_mem: {
         get: (id) => get_async("select * from memories where id=?", [id]),
@@ -376,45 +429,75 @@ export const q: q_type = {
         get: (segment, user_id, project_id) => {
             let sql = "select count(*) as c from memories where segment=?";
             const params: any[] = [segment];
-            if (user_id) { sql += " and user_id=?"; params.push(user_id); }
-            if (project_id) { sql += " and project_id=?"; params.push(project_id); }
+            if (user_id) {
+                sql += " and user_id=?";
+                params.push(user_id);
+            }
+            if (project_id) {
+                sql += " and project_id=?";
+                params.push(project_id);
+            }
             return get_async(sql, params);
-        }
+        },
     },
     get_max_segment: {
         get: (user_id?: string, project_id?: string, is_system?: boolean) => {
-            let sql = "select coalesce(max(segment), 0) as max_seg from memories where 1=1";
+            let sql =
+                "select coalesce(max(segment), 0) as max_seg from memories where 1=1";
             const params: any[] = [];
             if (!is_system) {
-                if (user_id) { sql += " and user_id=?"; params.push(user_id); }
-                if (project_id) { sql += " and project_id=?"; params.push(project_id); }
+                if (user_id) {
+                    sql += " and user_id=?";
+                    params.push(user_id);
+                }
+                if (project_id) {
+                    sql += " and project_id=?";
+                    params.push(project_id);
+                }
             }
             return get_async(sql, params);
-        }
+        },
     },
     get_segments: {
         all: (user_id?: string, project_id?: string, is_system?: boolean) => {
             let sql = "select distinct segment from memories where 1=1";
             const params: any[] = [];
             if (!is_system) {
-                if (user_id) { sql += " and user_id=?"; params.push(user_id); }
-                if (project_id) { sql += " and project_id=?"; params.push(project_id); }
+                if (user_id) {
+                    sql += " and user_id=?";
+                    params.push(user_id);
+                }
+                if (project_id) {
+                    sql += " and project_id=?";
+                    params.push(project_id);
+                }
             }
             sql += " order by segment desc";
             return all_async(sql, params);
-        }
+        },
     },
     get_mem_by_segment: {
-        all: (segment: number, user_id?: string, project_id?: string, is_system?: boolean) => {
+        all: (
+            segment: number,
+            user_id?: string,
+            project_id?: string,
+            is_system?: boolean,
+        ) => {
             let sql = "select * from memories where segment=?";
             const params: any[] = [segment];
             if (!is_system) {
-                if (user_id) { sql += " and user_id=?"; params.push(user_id); }
-                if (project_id) { sql += " and project_id=?"; params.push(project_id); }
+                if (user_id) {
+                    sql += " and user_id=?";
+                    params.push(user_id);
+                }
+                if (project_id) {
+                    sql += " and project_id=?";
+                    params.push(project_id);
+                }
             }
             sql += " order by created_at desc";
             return all_async(sql, params);
-        }
+        },
     },
 
     ins_waypoint: {
@@ -440,10 +523,10 @@ export const q: q_type = {
     },
     get_waypoint: {
         get: (src, dst) =>
-            get_async("select weight from waypoints where src_id=? and dst_id=?", [
-                src,
-                dst,
-            ]),
+            get_async(
+                "select weight from waypoints where src_id=? and dst_id=?",
+                [src, dst],
+            ),
     },
     upd_waypoint: {
         run: (...p) =>
@@ -471,7 +554,8 @@ export const q: q_type = {
             exec("update embed_logs set status=?,err=? where id=?", p),
     },
     get_pending_logs: {
-        all: () => all_async("select * from embed_logs where status=?", ["pending"]),
+        all: () =>
+            all_async("select * from embed_logs where status=?", ["pending"]),
     },
     get_failed_logs: {
         all: () =>
@@ -495,7 +579,8 @@ export const q: q_type = {
             ),
     },
     get_user: {
-        get: (user_id) => get_async("select * from users where user_id=?", [user_id]),
+        get: (user_id) =>
+            get_async("select * from users where user_id=?", [user_id]),
     },
     upd_user_summary: {
         run: (...p) =>

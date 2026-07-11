@@ -39,7 +39,9 @@ const DEV_ALLOW_NO_AUTH =
     process.env.OM_DEV_ALLOW_NO_AUTH === "true";
 
 const auth_config = {
-    api_key: env.api_key,
+    get api_key() {
+        return env.api_key;
+    },
     api_key_header: "x-api-key",
     rate_limit_enabled: env.rate_limit_enabled,
     rate_limit_window_ms: env.rate_limit_window_ms,
@@ -90,9 +92,13 @@ function extract_api_key(req: any): string | null {
 }
 
 function validate_api_key(provided: string, expected: string): boolean {
-    if (!provided || !expected || provided.length !== expected.length)
-        return false;
-    return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+    if (!provided || !expected) return false;
+    // SECURITY: Hash both inputs using SHA-256 to ensure they are of equal length (32 bytes)
+    // before comparing them with timingSafeEqual. This eliminates early return timing
+    // differences due to length differences, completely mitigating key-length leaks.
+    const provided_hash = crypto.createHash("sha256").update(provided).digest();
+    const expected_hash = crypto.createHash("sha256").update(expected).digest();
+    return crypto.timingSafeEqual(provided_hash, expected_hash);
 }
 
 /**

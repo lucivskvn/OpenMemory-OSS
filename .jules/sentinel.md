@@ -1,0 +1,4 @@
+## 2025-02-23 - API Key Timing Attack Vulnerability
+**Vulnerability:** The API key validation used direct early-return length comparison (`provided.length !== expected.length`) and direct `timingSafeEqual` over raw API key buffers. This allowed an attacker to guess the correct API key length through timing variations (since incorrect lengths return immediately while matching lengths proceed to `timingSafeEqual`).
+**Learning:** Even when `crypto.timingSafeEqual` is used, checking the length first or having different buffer lengths that cause timing/error differences can leak key metadata to side-channel timing attacks.
+**Prevention:** Always hash both secret inputs to a fixed-length output (e.g., via SHA-256) before utilizing `crypto.timingSafeEqual`. This ensures that the buffers compared are always of equal length, avoiding early returns on length mismatch and completely eliminating any timing leaks.

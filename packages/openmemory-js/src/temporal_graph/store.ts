@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { all_async, run_async, get_async, transaction, all_async_direct } from "../core/db";
+import {
+    all_async,
+    run_async,
+    get_async,
+    transaction,
+    all_async_direct,
+} from "../core/db";
 import { env } from "../core/config";
 import { TemporalFact, TemporalEdge } from "./types";
 import { clamp_f } from "../utils/math";
@@ -72,7 +78,7 @@ const _insert_fact_impl = async (
     metadata?: Record<string, any>,
     user_id?: string,
     project_id?: string,
-    skip_transaction = false
+    skip_transaction = false,
 ): Promise<string> => {
     if (!user_id) {
         throw new Error(
@@ -92,12 +98,7 @@ const _insert_fact_impl = async (
         WHERE subject = ? AND predicate = ? AND valid_to IS NULL AND user_id = ?${project_id ? " AND (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)" : ""}
         ORDER BY valid_from DESC
     `,
-        [
-            subject,
-            predicate,
-            user_id,
-            ...(project_id ? [project_id] : []),
-        ],
+        [subject, predicate, user_id, ...(project_id ? [project_id] : [])],
     );
 
     if (!skip_transaction) await transaction.begin();
@@ -248,7 +249,7 @@ export const batch_insert_facts = async (
                 fact.metadata,
                 user_id,
                 fact.project_id || project_id,
-                true // skip inner transaction
+                true, // skip inner transaction
             );
             ids.push(id);
         }

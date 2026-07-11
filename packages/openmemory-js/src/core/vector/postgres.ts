@@ -65,7 +65,11 @@ export class PostgresVectorStore implements VectorStore {
         }
     }
 
-    async deleteVector(id: string, sector: string, user_id?: string): Promise<void> {
+    async deleteVector(
+        id: string,
+        sector: string,
+        user_id?: string,
+    ): Promise<void> {
         let sql = `delete from ${this.table} where id=$1 and sector=$2`;
         const params: any[] = [id, sector];
         if (user_id) {
@@ -176,7 +180,9 @@ export class PostgresVectorStore implements VectorStore {
         const rows = await this.db.all_async(sql, params);
         return rows.map((row) => ({
             sector: row.sector,
-            vector: this.usePgVector ? JSON.parse(row.v_val) : bufferToVector(row.v_val),
+            vector: this.usePgVector
+                ? JSON.parse(row.v_val)
+                : bufferToVector(row.v_val),
             dim: row.dim,
         }));
     }
@@ -195,7 +201,9 @@ export class PostgresVectorStore implements VectorStore {
         const rows = await this.db.all_async(sql, params);
         return rows.map((row) => ({
             id: row.id,
-            vector: this.usePgVector ? JSON.parse(row.v_val) : bufferToVector(row.v_val),
+            vector: this.usePgVector
+                ? JSON.parse(row.v_val)
+                : bufferToVector(row.v_val),
             dim: row.dim,
         }));
     }

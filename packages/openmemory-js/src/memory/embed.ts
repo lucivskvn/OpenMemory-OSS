@@ -594,16 +594,18 @@ export async function embedMultiSector(
                 console.error(`[EMBED] Advanced mode (${secs.length} calls)`);
                 const par = env.adv_embed_parallel && env.emb_kind !== "gemini";
                 if (par) {
-                    const p = await Promise.all(secs.map(async (s) => {
-                        let v: number[];
-                        if (chunks && chunks.length > 1) {
-                            const cv: number[][] = [];
-                            for (const c of chunks)
-                                cv.push(await embedForSector(c.text, s));
-                            v = agg_chunks(cv);
-                        } else v = await embedForSector(txt, s);
-                        return { sector: s, vector: v, dim: v.length };
-                    }));
+                    const p = await Promise.all(
+                        secs.map(async (s) => {
+                            let v: number[];
+                            if (chunks && chunks.length > 1) {
+                                const cv: number[][] = [];
+                                for (const c of chunks)
+                                    cv.push(await embedForSector(c.text, s));
+                                v = agg_chunks(cv);
+                            } else v = await embedForSector(txt, s);
+                            return { sector: s, vector: v, dim: v.length };
+                        }),
+                    );
                     r.push(...p);
                 } else {
                     for (let i = 0; i < secs.length; i++) {
