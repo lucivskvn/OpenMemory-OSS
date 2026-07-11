@@ -180,6 +180,21 @@ export const vector_store: VectorStore = env.vector_store === "valkey"
     );
 
 export const init_db = async () => {
+    // Migration check for waypoints table primary key change
+    try {
+        const info = await all_async_direct("PRAGMA table_info(waypoints)");
+        if (info && info.length > 0) {
+            const pkCols = info.filter(c => c.pk > 0);
+            const has_dst_id_pk = pkCols.some(c => c.name === "dst_id");
+            if (!has_dst_id_pk) {
+                console.warn("[DB] Migrating waypoints table: dropping old schema...");
+                await _exec_direct("DROP TABLE waypoints");
+            }
+        }
+    } catch (e) {
+        // Table might not exist yet, ignore
+    }
+
     const SCHEMA_TABLES = [
         "create table if not exists memories(id text primary key,user_id text,project_id text,segment integer default 0,content text not null,summary text,simhash text,primary_sector text not null,tags text,meta text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0,coactivations integer default 0)",
         "create index if not exists idx_mem_user_id on memories(user_id)",
@@ -187,7 +202,7 @@ export const init_db = async () => {
         "create table if not exists openmemory_vectors(id text not null,project_id text,sector text not null,user_id text,v blob not null,dim integer not null,primary key(id,sector))",
         "create index if not exists idx_vectors_user_id on openmemory_vectors(user_id)",
         "create index if not exists idx_vectors_sector on openmemory_vectors(sector)",
-        "create table if not exists waypoints(src_id text,dst_id text not null,user_id text,project_id text,weight real not null,created_at integer,updated_at integer,primary key(src_id,user_id))",
+        "create table if not exists waypoints(src_id text,dst_id text not null,user_id text,project_id text,weight real not null,created_at integer,updated_at integer,primary key(src_id,dst_id,user_id))",
         "create table if not exists embed_logs(id text primary key,model text,status text,ts integer,err text)",
         "create table if not exists users(user_id text primary key,summary text,reflection_count integer default 0,created_at integer,updated_at integer)",
         "create table if not exists stats(id integer primary key autoincrement,type text not null,count integer default 1,ts integer not null)",
@@ -364,7 +379,7 @@ export const q: q_type = {
     ins_waypoint: {
         run: (...p) =>
             exec(
-                "insert into waypoints(src_id,dst_id,user_id,project_id,weight,created_at,updated_at) values(?,?,?,?,?,?,?) on conflict(src_id, user_id) do update set dst_id=excluded.dst_id,project_id=excluded.project_id, weight=excluded.weight, created_at=excluded.created_at, updated_at=excluded.updated_at",
+                "insert into waypoints(src_id,dst_id,user_id,project_id,weight,created_at,updated_at) values(?,?,?,?,?,?,?) on conflict(src_id, dst_id, user_id) do update set dst_id=excluded.dst_id,project_id=excluded.project_id, weight=excluded.weight, created_at=excluded.created_at, updated_at=excluded.updated_at",
                 p,
             ),
     },
