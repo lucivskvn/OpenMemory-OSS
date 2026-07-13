@@ -1,4 +1,5 @@
 import { q } from "../../core/db";
+import { require_tenant } from "../middleware/tenant";
 import {
     calculateDynamicSalienceWithTimeDecay,
     calculateCrossSectorResonanceScore,
@@ -152,6 +153,12 @@ export function dynroutes(app: any) {
         "/dynamics/retrieval/energy-based",
         async (incoming_http_request: any, outgoing_http_response: any) => {
             try {
+                const tenant = require_tenant(
+                    incoming_http_request,
+                    outgoing_http_response,
+                );
+                if (!tenant) return;
+
                 const incoming_request_body_payload =
                     incoming_http_request.body;
                 const query_text_content_from_request =
@@ -179,6 +186,7 @@ export function dynroutes(app: any) {
                         query_vector_embedding_array,
                         query_sector_type_from_request,
                         minimum_energy_threshold_from_request,
+                        tenant,
                     );
 
                 outgoing_http_response.json({
@@ -216,6 +224,12 @@ export function dynroutes(app: any) {
         "/dynamics/reinforcement/trace",
         async (incoming_http_request: any, outgoing_http_response: any) => {
             try {
+                const tenant = require_tenant(
+                    incoming_http_request,
+                    outgoing_http_response,
+                );
+                if (!tenant) return;
+
                 const incoming_request_body_payload =
                     incoming_http_request.body;
                 const target_memory_id_from_request =
@@ -234,6 +248,15 @@ export function dynroutes(app: any) {
                     return outgoing_http_response
                         .status(404)
                         .json({ err: "memory_not_found" });
+                }
+
+                if (
+                    memory_record_from_database.user_id &&
+                    memory_record_from_database.user_id !== tenant
+                ) {
+                    return outgoing_http_response
+                        .status(403)
+                        .json({ err: "forbidden" });
                 }
 
                 const current_salience_before_reinforcement =
@@ -268,6 +291,7 @@ export function dynroutes(app: any) {
                         target_memory_id_from_request,
                         updated_salience_after_reinforcement,
                         linked_nodes_with_weights_array,
+                        tenant,
                     );
 
                 for (const reinforcement_update_record of propagated_reinforcement_updates_list) {
@@ -307,6 +331,12 @@ export function dynroutes(app: any) {
         "/dynamics/activation/spreading",
         async (incoming_http_request: any, outgoing_http_response: any) => {
             try {
+                const tenant = require_tenant(
+                    incoming_http_request,
+                    outgoing_http_response,
+                );
+                if (!tenant) return;
+
                 const incoming_request_body_payload =
                     incoming_http_request.body;
                 const initial_memory_ids_array_from_request =
@@ -323,10 +353,26 @@ export function dynroutes(app: any) {
                         .json({ err: "initial_memory_ids_required" });
                 }
 
+                // Verify ownership of the initial memories
+                for (const mid of initial_memory_ids_array_from_request) {
+                    const m = await q.get_mem.get(mid);
+                    if (!m) {
+                        return outgoing_http_response
+                            .status(404)
+                            .json({ err: `memory_not_found: ${mid}` });
+                    }
+                    if (m.user_id && m.user_id !== tenant) {
+                        return outgoing_http_response
+                            .status(403)
+                            .json({ err: "forbidden" });
+                    }
+                }
+
                 const spreading_activation_results_map =
                     await performSpreadingActivationRetrieval(
                         initial_memory_ids_array_from_request,
                         maximum_spreading_iterations_from_request,
+                        tenant,
                     );
 
                 const activation_results_as_array = Array.from(
@@ -366,8 +412,14 @@ export function dynroutes(app: any) {
         "/dynamics/waypoints/graph",
         async (incoming_http_request: any, outgoing_http_response: any) => {
             try {
+                const tenant = require_tenant(
+                    incoming_http_request,
+                    outgoing_http_response,
+                );
+                if (!tenant) return;
+
                 const waypoint_graph_structure_from_database =
-                    await buildAssociativeWaypointGraphFromMemories();
+                    await buildAssociativeWaypointGraphFromMemories(tenant);
 
                 const graph_statistics_summary = {
                     total_nodes_in_graph:
@@ -433,6 +485,12 @@ export function dynroutes(app: any) {
         "/dynamics/waypoints/calculate-weight",
         async (incoming_http_request: any, outgoing_http_response: any) => {
             try {
+                const tenant = require_tenant(
+                    incoming_http_request,
+                    outgoing_http_response,
+                );
+                if (!tenant) return;
+
                 const incoming_request_body_payload =
                     incoming_http_request.body;
                 const source_memory_id_from_request =
@@ -460,6 +518,17 @@ export function dynroutes(app: any) {
                     return outgoing_http_response
                         .status(404)
                         .json({ err: "one_or_both_memories_not_found" });
+                }
+
+                if (
+                    (source_memory_record.user_id &&
+                        source_memory_record.user_id !== tenant) ||
+                    (target_memory_record.user_id &&
+                        target_memory_record.user_id !== tenant)
+                ) {
+                    return outgoing_http_response
+                        .status(403)
+                        .json({ err: "forbidden" });
                 }
 
                 const source_memory_mean_vector = source_memory_record.mean_vec;

@@ -113,13 +113,15 @@ export async function propagateAssociativeReinforcementToLinkedNodes(
     sid: string,
     ssal: number,
     wps: Array<{ target_id: string; weight: number }>,
+    tenant?: string,
 ): Promise<Array<{ node_id: string; new_salience: number }>> {
     const ups: Array<{ node_id: string; new_salience: number }> = [];
     for (const wp of wps) {
-        const ld = (await get_async(
-            "select salience from memories where id=?",
-            [wp.target_id],
-        )) as any;
+        const sql = tenant
+            ? "select salience from memories where id=? and user_id=?"
+            : "select salience from memories where id=?";
+        const params = tenant ? [wp.target_id, tenant] : [wp.target_id];
+        const ld = (await get_async(sql, params)) as any;
         if (ld) {
             const pr =
                 ETA_REINFORCEMENT_FACTOR_FOR_TRACE_LEARNING * wp.weight * ssal;
@@ -155,26 +157,30 @@ export async function applyDualPhaseDecayToAllMemories(): Promise<void> {
         "select id,salience,decay_lambda,last_seen_at,updated_at,created_at from memories",
     );
     const ts = now();
-    await Promise.all(mems.map(async (m: any) => {
-        const tms = Math.max(0, ts - (m.last_seen_at || m.updated_at));
-        const td = tms / 86400000;
-        const rt = await calculateDualPhaseDecayMemoryRetention(td);
-        const nsal = m.salience * rt;
-        await run_async(
-            `update ${memories_table} set salience=?,updated_at=? where id=?`,
-            [Math.max(0, nsal), ts, m.id],
-        );
-    }));
+    await Promise.all(
+        mems.map(async (m: any) => {
+            const tms = Math.max(0, ts - (m.last_seen_at || m.updated_at));
+            const td = tms / 86400000;
+            const rt = await calculateDualPhaseDecayMemoryRetention(td);
+            const nsal = m.salience * rt;
+            await run_async(
+                `update ${memories_table} set salience=?,updated_at=? where id=?`,
+                [Math.max(0, nsal), ts, m.id],
+            );
+        }),
+    );
     console.log(`[DECAY] Applied to ${mems.length} memories`);
 }
 
-export async function buildAssociativeWaypointGraphFromMemories(): Promise<
-    Map<string, AssociativeWaypointGraphNode>
-> {
+export async function buildAssociativeWaypointGraphFromMemories(
+    tenant?: string,
+): Promise<Map<string, AssociativeWaypointGraphNode>> {
     const gr = new Map<string, AssociativeWaypointGraphNode>();
-    const wps = (await all_async(
-        "select src_id,dst_id,weight,created_at from waypoints",
-    )) as any[];
+    const sql = tenant
+        ? "select src_id,dst_id,weight,created_at from waypoints where user_id=?"
+        : "select src_id,dst_id,weight,created_at from waypoints";
+    const params = tenant ? [tenant] : [];
+    const wps = (await all_async(sql, params)) as any[];
     const ids = new Set<string>();
     for (const wp of wps) {
         ids.add(wp.src_id);
@@ -203,8 +209,9 @@ export async function buildAssociativeWaypointGraphFromMemories(): Promise<
 export async function performSpreadingActivationRetrieval(
     init: string[],
     max: number,
+    tenant?: string,
 ): Promise<Map<string, number>> {
-    const gr = await buildAssociativeWaypointGraphFromMemories();
+    const gr = await buildAssociativeWaypointGraphFromMemories(tenant);
     const act = new Map<string, number>();
     for (const id of init) act.set(id, 1.0);
     for (let i = 0; i < max; i++) {
@@ -234,10 +241,13 @@ export async function retrieveMemoriesWithEnergyThresholding(
     qv: number[],
     qs: string,
     me: number,
+    tenant?: string,
 ): Promise<any[]> {
-    const mems = (await all_async(
-        "select id,content,primary_sector,salience,mean_vec from memories where salience>0.01",
-    )) as any[];
+    const sql = tenant
+        ? "select id,content,primary_sector,salience,mean_vec,user_id from memories where salience>0.01 and user_id=?"
+        : "select id,content,primary_sector,salience,mean_vec,user_id from memories where salience>0.01";
+    const params = tenant ? [tenant] : [];
+    const mems = (await all_async(sql, params)) as any[];
     const sc = new Map<string, number>();
     for (const m of mems) {
         if (!m.mean_vec) continue;
@@ -257,6 +267,7 @@ export async function retrieveMemoriesWithEnergyThresholding(
     const sp = await performSpreadingActivationRetrieval(
         Array.from(sc.keys()).slice(0, 5),
         3,
+        tenant,
     );
     const cmb = new Map<string, number>();
     for (const m of mems)
