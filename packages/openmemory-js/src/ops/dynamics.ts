@@ -113,13 +113,17 @@ export async function propagateAssociativeReinforcementToLinkedNodes(
     sid: string,
     ssal: number,
     wps: Array<{ target_id: string; weight: number }>,
+    tenant?: string,
 ): Promise<Array<{ node_id: string; new_salience: number }>> {
     const ups: Array<{ node_id: string; new_salience: number }> = [];
     for (const wp of wps) {
-        const ld = (await get_async(
-            "select salience from memories where id=?",
-            [wp.target_id],
-        )) as any;
+        let sql = "select salience from memories where id=?";
+        const params: any[] = [wp.target_id];
+        if (tenant) {
+            sql += " and user_id=?";
+            params.push(tenant);
+        }
+        const ld = (await get_async(sql, params)) as any;
         if (ld) {
             const pr =
                 ETA_REINFORCEMENT_FACTOR_FOR_TRACE_LEARNING * wp.weight * ssal;
@@ -168,15 +172,29 @@ export async function applyDualPhaseDecayToAllMemories(): Promise<void> {
     console.log(`[DECAY] Applied to ${mems.length} memories`);
 }
 
-export async function buildAssociativeWaypointGraphFromMemories(): Promise<
-    Map<string, AssociativeWaypointGraphNode>
-> {
+export async function buildAssociativeWaypointGraphFromMemories(
+    tenant?: string,
+): Promise<Map<string, AssociativeWaypointGraphNode>> {
     const gr = new Map<string, AssociativeWaypointGraphNode>();
-    const wps = (await all_async(
-        "select src_id,dst_id,weight,created_at from waypoints",
-    )) as any[];
+    let sql = "select src_id,dst_id,weight,created_at from waypoints";
+    const params: any[] = [];
+    if (tenant) {
+        sql += " where user_id=?";
+        params.push(tenant);
+    }
+    const wps = (await all_async(sql, params)) as any[];
+
+    let valid_ids = new Set<string>();
+    if (tenant) {
+        const mems = await all_async("select id from memories where user_id=?", [tenant]);
+        valid_ids = new Set(mems.map((m: any) => m.id));
+    }
+
     const ids = new Set<string>();
     for (const wp of wps) {
+        if (tenant && (!valid_ids.has(wp.src_id) || !valid_ids.has(wp.dst_id))) {
+            continue;
+        }
         ids.add(wp.src_id);
         ids.add(wp.dst_id);
     }
@@ -187,6 +205,9 @@ export async function buildAssociativeWaypointGraphFromMemories(): Promise<
             connected_waypoint_edges: [],
         });
     for (const wp of wps) {
+        if (tenant && (!valid_ids.has(wp.src_id) || !valid_ids.has(wp.dst_id))) {
+            continue;
+        }
         const sn = gr.get(wp.src_id);
         if (sn) {
             const tg = Math.abs(now() - wp.created_at);
@@ -203,8 +224,9 @@ export async function buildAssociativeWaypointGraphFromMemories(): Promise<
 export async function performSpreadingActivationRetrieval(
     init: string[],
     max: number,
+    tenant?: string,
 ): Promise<Map<string, number>> {
-    const gr = await buildAssociativeWaypointGraphFromMemories();
+    const gr = await buildAssociativeWaypointGraphFromMemories(tenant);
     const act = new Map<string, number>();
     for (const id of init) act.set(id, 1.0);
     for (let i = 0; i < max; i++) {
@@ -234,10 +256,15 @@ export async function retrieveMemoriesWithEnergyThresholding(
     qv: number[],
     qs: string,
     me: number,
+    tenant?: string,
 ): Promise<any[]> {
-    const mems = (await all_async(
-        "select id,content,primary_sector,salience,mean_vec from memories where salience>0.01",
-    )) as any[];
+    let sql = "select id,content,primary_sector,salience,mean_vec from memories where salience>0.01";
+    const params: any[] = [];
+    if (tenant) {
+        sql += " and user_id=?";
+        params.push(tenant);
+    }
+    const mems = (await all_async(sql, params)) as any[];
     const sc = new Map<string, number>();
     for (const m of mems) {
         if (!m.mean_vec) continue;
@@ -257,6 +284,7 @@ export async function retrieveMemoriesWithEnergyThresholding(
     const sp = await performSpreadingActivationRetrieval(
         Array.from(sc.keys()).slice(0, 5),
         3,
+        tenant,
     );
     const cmb = new Map<string, number>();
     for (const m of mems)

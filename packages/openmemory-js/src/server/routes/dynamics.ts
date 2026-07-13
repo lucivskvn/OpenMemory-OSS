@@ -1,4 +1,6 @@
-import { q } from "../../core/db";
+import { q, get_async, all_async } from "../../core/db";
+import { require_tenant } from "../middleware/tenant";
+import { parse_or_400, schema } from "../middleware/validate";
 import {
     calculateDynamicSalienceWithTimeDecay,
     calculateCrossSectorResonanceScore,
@@ -19,10 +21,47 @@ import {
     SECTORAL_INTERDEPENDENCE_MATRIX_FOR_COGNITIVE_RESONANCE,
 } from "../../ops/dynamics";
 
+const salience_schema: schema = {
+    initial_salience: { type: "number", min: 0, max: 1 },
+    decay_lambda: { type: "number", min: 0, max: 100 },
+    recall_count: { type: "integer", min: 0, max: 1000000 },
+    emotional_frequency: { type: "number", min: 0, max: 1000000 },
+    time_elapsed_days: { type: "number", min: 0, max: 1000000 },
+};
+
+const resonance_schema: schema = {
+    memory_sector: { type: "string", max_length: 64 },
+    query_sector: { type: "string", max_length: 64 },
+    base_similarity: { type: "number", min: -1, max: 1 },
+};
+
+const energy_retrieval_schema: schema = {
+    query: { type: "string", required: true, min_length: 1, max_length: 8192 },
+    sector: { type: "string", max_length: 64 },
+    min_energy: { type: "number", min: 0, max: 100 },
+};
+
+const trace_reinforcement_schema: schema = {
+    memory_id: { type: "string", required: true, max_length: 256 },
+};
+
+const spreading_activation_schema: schema = {
+    initial_memory_ids: { type: "array", required: true, items: { type: "string", max_length: 256 } },
+    max_iterations: { type: "integer", min: 1, max: 10 },
+};
+
+const waypoint_weight_schema: schema = {
+    source_memory_id: { type: "string", required: true, max_length: 256 },
+    target_memory_id: { type: "string", required: true, max_length: 256 },
+};
+
 export function dynroutes(app: any) {
     app.get(
         "/dynamics/constants",
         async (incoming_http_request: any, outgoing_http_response: any) => {
+            const tenant = require_tenant(incoming_http_request, outgoing_http_response);
+            if (!tenant) return;
+
             try {
                 const advanced_memory_dynamics_configuration_constants = {
                     alpha_learning_rate_for_recall_reinforcement_value:
@@ -62,19 +101,29 @@ export function dynroutes(app: any) {
     app.post(
         "/dynamics/salience/calculate",
         async (incoming_http_request: any, outgoing_http_response: any) => {
+            const tenant = require_tenant(incoming_http_request, outgoing_http_response);
+            if (!tenant) return;
+
+            const b = parse_or_400<{
+                initial_salience?: number;
+                decay_lambda?: number;
+                recall_count?: number;
+                emotional_frequency?: number;
+                time_elapsed_days?: number;
+            }>(outgoing_http_response, incoming_http_request.body, salience_schema);
+            if (!b) return;
+
             try {
-                const incoming_request_body_payload =
-                    incoming_http_request.body;
                 const initial_salience_value_from_request =
-                    incoming_request_body_payload.initial_salience || 0.5;
+                    b.initial_salience ?? 0.5;
                 const lambda_decay_constant_from_request =
-                    incoming_request_body_payload.decay_lambda || 0.01;
+                    b.decay_lambda ?? 0.01;
                 const recall_reinforcement_count_from_request =
-                    incoming_request_body_payload.recall_count || 0;
+                    b.recall_count ?? 0;
                 const emotional_frequency_metric_from_request =
-                    incoming_request_body_payload.emotional_frequency || 0;
+                    b.emotional_frequency ?? 0;
                 const time_elapsed_in_days_from_request =
-                    incoming_request_body_payload.time_elapsed_days || 0;
+                    b.time_elapsed_days ?? 0;
 
                 const calculated_dynamic_salience_result =
                     await calculateDynamicSalienceWithTimeDecay(
@@ -111,15 +160,23 @@ export function dynroutes(app: any) {
     app.post(
         "/dynamics/resonance/calculate",
         async (incoming_http_request: any, outgoing_http_response: any) => {
+            const tenant = require_tenant(incoming_http_request, outgoing_http_response);
+            if (!tenant) return;
+
+            const b = parse_or_400<{
+                memory_sector?: string;
+                query_sector?: string;
+                base_similarity?: number;
+            }>(outgoing_http_response, incoming_http_request.body, resonance_schema);
+            if (!b) return;
+
             try {
-                const incoming_request_body_payload =
-                    incoming_http_request.body;
                 const memory_sector_type_from_request =
-                    incoming_request_body_payload.memory_sector || "semantic";
+                    b.memory_sector || "semantic";
                 const query_sector_type_from_request =
-                    incoming_request_body_payload.query_sector || "semantic";
+                    b.query_sector || "semantic";
                 const base_cosine_similarity_from_request =
-                    incoming_request_body_payload.base_similarity || 0.8;
+                    b.base_similarity ?? 0.8;
 
                 const calculated_cross_sector_resonance_score =
                     await calculateCrossSectorResonanceScore(
@@ -151,22 +208,22 @@ export function dynroutes(app: any) {
     app.post(
         "/dynamics/retrieval/energy-based",
         async (incoming_http_request: any, outgoing_http_response: any) => {
-            try {
-                const incoming_request_body_payload =
-                    incoming_http_request.body;
-                const query_text_content_from_request =
-                    incoming_request_body_payload.query;
-                const query_sector_type_from_request =
-                    incoming_request_body_payload.sector || "semantic";
-                const minimum_energy_threshold_from_request =
-                    incoming_request_body_payload.min_energy ||
-                    TAU_ENERGY_THRESHOLD_FOR_RETRIEVAL;
+            const tenant = require_tenant(incoming_http_request, outgoing_http_response);
+            if (!tenant) return;
 
-                if (!query_text_content_from_request) {
-                    return outgoing_http_response
-                        .status(400)
-                        .json({ err: "query_required" });
-                }
+            const b = parse_or_400<{
+                query: string;
+                sector?: string;
+                min_energy?: number;
+            }>(outgoing_http_response, incoming_http_request.body, energy_retrieval_schema);
+            if (!b) return;
+
+            try {
+                const query_text_content_from_request = b.query;
+                const query_sector_type_from_request =
+                    b.sector || "semantic";
+                const minimum_energy_threshold_from_request =
+                    b.min_energy ?? TAU_ENERGY_THRESHOLD_FOR_RETRIEVAL;
 
                 const { embedForSector } = await import("../../memory/embed");
                 const query_vector_embedding_array = await embedForSector(
@@ -179,6 +236,7 @@ export function dynroutes(app: any) {
                         query_vector_embedding_array,
                         query_sector_type_from_request,
                         minimum_energy_threshold_from_request,
+                        tenant,
                     );
 
                 outgoing_http_response.json({
@@ -215,20 +273,20 @@ export function dynroutes(app: any) {
     app.post(
         "/dynamics/reinforcement/trace",
         async (incoming_http_request: any, outgoing_http_response: any) => {
+            const tenant = require_tenant(incoming_http_request, outgoing_http_response);
+            if (!tenant) return;
+
+            const b = parse_or_400<{
+                memory_id: string;
+            }>(outgoing_http_response, incoming_http_request.body, trace_reinforcement_schema);
+            if (!b) return;
+
             try {
-                const incoming_request_body_payload =
-                    incoming_http_request.body;
-                const target_memory_id_from_request =
-                    incoming_request_body_payload.memory_id;
+                const target_memory_id_from_request = b.memory_id;
 
-                if (!target_memory_id_from_request) {
-                    return outgoing_http_response
-                        .status(400)
-                        .json({ err: "memory_id_required" });
-                }
-
-                const memory_record_from_database = await q.get_mem.get(
-                    target_memory_id_from_request,
+                const memory_record_from_database = await get_async(
+                    "select * from memories where id=? and user_id=?",
+                    [target_memory_id_from_request, tenant]
                 );
                 if (!memory_record_from_database) {
                     return outgoing_http_response
@@ -252,8 +310,9 @@ export function dynroutes(app: any) {
                 );
 
                 const connected_waypoints_from_database =
-                    await q.get_waypoints_by_src.all(
-                        target_memory_id_from_request,
+                    await all_async(
+                        "select src_id,dst_id,weight,created_at,updated_at from waypoints where src_id=? and user_id=?",
+                        [target_memory_id_from_request, tenant]
                     );
                 const linked_nodes_with_weights_array =
                     connected_waypoints_from_database.map(
@@ -268,6 +327,7 @@ export function dynroutes(app: any) {
                         target_memory_id_from_request,
                         updated_salience_after_reinforcement,
                         linked_nodes_with_weights_array,
+                        tenant,
                     );
 
                 for (const reinforcement_update_record of propagated_reinforcement_updates_list) {
@@ -306,27 +366,43 @@ export function dynroutes(app: any) {
     app.post(
         "/dynamics/activation/spreading",
         async (incoming_http_request: any, outgoing_http_response: any) => {
-            try {
-                const incoming_request_body_payload =
-                    incoming_http_request.body;
-                const initial_memory_ids_array_from_request =
-                    incoming_request_body_payload.initial_memory_ids || [];
-                const maximum_spreading_iterations_from_request =
-                    incoming_request_body_payload.max_iterations || 3;
+            const tenant = require_tenant(incoming_http_request, outgoing_http_response);
+            if (!tenant) return;
 
-                if (
-                    !Array.isArray(initial_memory_ids_array_from_request) ||
-                    initial_memory_ids_array_from_request.length === 0
-                ) {
+            const b = parse_or_400<{
+                initial_memory_ids: string[];
+                max_iterations?: number;
+            }>(outgoing_http_response, incoming_http_request.body, spreading_activation_schema);
+            if (!b) return;
+
+            try {
+                const initial_memory_ids_array_from_request = b.initial_memory_ids;
+                const maximum_spreading_iterations_from_request =
+                    b.max_iterations ?? 3;
+
+                // Validate and filter so only memories owned by this tenant are processed
+                const validated_ids: string[] = [];
+                for (const id of initial_memory_ids_array_from_request) {
+                    const exists = await get_async(
+                        "select 1 from memories where id=? and user_id=?",
+                        [id, tenant]
+                    );
+                    if (exists) {
+                        validated_ids.push(id);
+                    }
+                }
+
+                if (validated_ids.length === 0) {
                     return outgoing_http_response
-                        .status(400)
-                        .json({ err: "initial_memory_ids_required" });
+                        .status(404)
+                        .json({ err: "memories_not_found" });
                 }
 
                 const spreading_activation_results_map =
                     await performSpreadingActivationRetrieval(
-                        initial_memory_ids_array_from_request,
+                        validated_ids,
                         maximum_spreading_iterations_from_request,
+                        tenant,
                     );
 
                 const activation_results_as_array = Array.from(
@@ -345,7 +421,7 @@ export function dynroutes(app: any) {
                 outgoing_http_response.json({
                     success_status_indicator: true,
                     initial_activated_memories_count:
-                        initial_memory_ids_array_from_request.length,
+                        validated_ids.length,
                     maximum_iterations_performed:
                         maximum_spreading_iterations_from_request,
                     total_activated_nodes_count:
@@ -365,9 +441,12 @@ export function dynroutes(app: any) {
     app.get(
         "/dynamics/waypoints/graph",
         async (incoming_http_request: any, outgoing_http_response: any) => {
+            const tenant = require_tenant(incoming_http_request, outgoing_http_response);
+            if (!tenant) return;
+
             try {
                 const waypoint_graph_structure_from_database =
-                    await buildAssociativeWaypointGraphFromMemories();
+                    await buildAssociativeWaypointGraphFromMemories(tenant);
 
                 const graph_statistics_summary = {
                     total_nodes_in_graph:
@@ -432,28 +511,26 @@ export function dynroutes(app: any) {
     app.post(
         "/dynamics/waypoints/calculate-weight",
         async (incoming_http_request: any, outgoing_http_response: any) => {
+            const tenant = require_tenant(incoming_http_request, outgoing_http_response);
+            if (!tenant) return;
+
+            const b = parse_or_400<{
+                source_memory_id: string;
+                target_memory_id: string;
+            }>(outgoing_http_response, incoming_http_request.body, waypoint_weight_schema);
+            if (!b) return;
+
             try {
-                const incoming_request_body_payload =
-                    incoming_http_request.body;
-                const source_memory_id_from_request =
-                    incoming_request_body_payload.source_memory_id;
-                const target_memory_id_from_request =
-                    incoming_request_body_payload.target_memory_id;
+                const source_memory_id_from_request = b.source_memory_id;
+                const target_memory_id_from_request = b.target_memory_id;
 
-                if (
-                    !source_memory_id_from_request ||
-                    !target_memory_id_from_request
-                ) {
-                    return outgoing_http_response
-                        .status(400)
-                        .json({ err: "both_memory_ids_required" });
-                }
-
-                const source_memory_record = await q.get_mem.get(
-                    source_memory_id_from_request,
+                const source_memory_record = await get_async(
+                    "select * from memories where id=? and user_id=?",
+                    [source_memory_id_from_request, tenant]
                 );
-                const target_memory_record = await q.get_mem.get(
-                    target_memory_id_from_request,
+                const target_memory_record = await get_async(
+                    "select * from memories where id=? and user_id=?",
+                    [target_memory_id_from_request, tenant]
                 );
 
                 if (!source_memory_record || !target_memory_record) {
