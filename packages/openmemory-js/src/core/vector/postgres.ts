@@ -117,11 +117,23 @@ export class PostgresVectorStore implements VectorStore {
             const rows = await this.db.all_async(sql, args);
             return rows.map((r) => ({ id: r.id, score: r.similarity }));
         } else {
-            const direct_args: any[] = [sector, user_id];
-            let direct_filter = "where sector=$1 and user_id=$2";
+            const is_postgres = this.usePgVector || !!process.env.OM_POSTGRES_URL;
+            const param = (i: number) => is_postgres ? `$${i}` : "?";
+
+            const direct_args: any[] = [sector];
+            let direct_filter = `where sector=${param(1)}`;
+            let idx = 2;
+
+            if (user_id) {
+                direct_filter += ` and user_id=${param(idx++)}`;
+                direct_args.push(user_id);
+            } else {
+                direct_filter += ` and user_id=${param(idx++)}`;
+                direct_args.push("anonymous");
+            }
 
             if (project_id) {
-                direct_filter += ` and (project_id=$3 or project_id='system_global' or project_id IS NULL)`;
+                direct_filter += ` and (project_id=${param(idx++)} or project_id='system_global' or project_id IS NULL)`;
                 direct_args.push(project_id);
             }
 
