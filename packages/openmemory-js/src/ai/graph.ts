@@ -1,6 +1,6 @@
 import { env } from "../core/config";
 import { add_hsg_memory, hsg_query } from "../memory/hsg";
-import { q, vector_store, all_async } from "../core/db";
+import { q, vector_store } from "../core/db";
 import { now, j } from "../utils";
 import type {
     lgm_store_req,
@@ -259,10 +259,7 @@ export async function retrieve_node_mems(p: lgm_retrieve_req) {
         }
     } else {
         const raw_rows = p.user_id
-            ? (await all_async(
-                  "select * from memories where user_id = ? and primary_sector = ? order by created_at desc limit ? offset ?",
-                  [p.user_id, sec, lim * 4, 0],
-              )) as mem_row[]
+            ? (await q.all_mem_by_user_sector.all(p.user_id, sec, lim * 4, 0)) as mem_row[]
             : (await q.all_mem_by_sector.all(sec, lim * 4, 0)) as mem_row[];
         for (const row of raw_rows) {
             if (p.user_id && row.user_id !== p.user_id) continue;
