@@ -40,7 +40,11 @@ export class ValkeyVectorStore implements VectorStore {
         });
     }
 
-    async deleteVector(id: string, sector: string, user_id: string = "anonymous"): Promise<void> {
+    async deleteVector(
+        id: string,
+        sector: string,
+        user_id: string = "anonymous",
+    ): Promise<void> {
         const key = this.getKey(user_id, id, sector);
         await this.client.del(key);
     }
@@ -98,7 +102,8 @@ export class ValkeyVectorStore implements VectorStore {
                 for (let j = 0; j < fields.length; j += 2) {
                     if (fields[j] === "id") id = fields[j + 1];
                     if (fields[j] === "score") dist = parseFloat(fields[j + 1]);
-                    if (fields[j] === "project_id") vec_project_id = fields[j + 1];
+                    if (fields[j] === "project_id")
+                        vec_project_id = fields[j + 1];
                 }
                 if (!id) id = key.split(":").pop()!;
 
@@ -117,7 +122,10 @@ export class ValkeyVectorStore implements VectorStore {
 
             return results;
         } catch (e) {
-            console.warn(`[Valkey] FT.SEARCH failed for ${sector}, falling back to scan:`, e);
+            console.warn(
+                `[Valkey] FT.SEARCH failed for ${sector}, falling back to scan:`,
+                e,
+            );
             let cursor = "0";
             const allVecs: Array<{
                 id: string;
@@ -136,13 +144,14 @@ export class ValkeyVectorStore implements VectorStore {
                 const keys = res[1];
                 if (keys.length) {
                     const pipe = this.client.pipeline();
-                    keys.forEach((k) =>
-                        pipe.hmget(k, "v", "project_id"),
-                    );
+                    keys.forEach((k) => pipe.hmget(k, "v", "project_id"));
                     const buffers = await pipe.exec();
                     buffers?.forEach((b, idx) => {
                         if (b && b[1]) {
-                            const [buf, vec_project_id] = b[1] as [Buffer, string];
+                            const [buf, vec_project_id] = b[1] as [
+                                Buffer,
+                                string,
+                            ];
                             const id = keys[idx].split(":").pop()!;
 
                             const projectMatch =
@@ -175,7 +184,9 @@ export class ValkeyVectorStore implements VectorStore {
 
     private cosineSimilarity(a: number[], b: number[]) {
         if (a.length !== b.length) return 0;
-        let dot = 0, na = 0, nb = 0;
+        let dot = 0,
+            na = 0,
+            nb = 0;
         for (let i = 0; i < a.length; i++) {
             dot += a[i] * b[i];
             na += a[i] * a[i];
@@ -202,7 +213,11 @@ export class ValkeyVectorStore implements VectorStore {
         id: string,
         user_id: string = "*",
     ): Promise<Array<{ sector: string; vector: number[]; dim: number }>> {
-        const results: Array<{ sector: string; vector: number[]; dim: number }> = [];
+        const results: Array<{
+            sector: string;
+            vector: number[];
+            dim: number;
+        }> = [];
         let cursor = "0";
         do {
             const res = await this.client.scan(
@@ -240,7 +255,8 @@ export class ValkeyVectorStore implements VectorStore {
         sector: string,
         user_id: string = "*",
     ): Promise<Array<{ id: string; vector: number[]; dim: number }>> {
-        const results: Array<{ id: string; vector: number[]; dim: number }> = [];
+        const results: Array<{ id: string; vector: number[]; dim: number }> =
+            [];
         let cursor = "0";
         do {
             const res = await this.client.scan(

@@ -51,10 +51,16 @@ const safe_parse = <T>(val: string | null, fb: T): T => {
         if (Array.isArray(fb)) {
             return Array.isArray(parsed) ? (parsed as unknown as T) : fb;
         }
-        if (typeof fb === 'object' && fb !== null) {
-            return typeof parsed === 'object' && parsed !== null ? (parsed as T) : fb;
+        if (typeof fb === "object" && fb !== null) {
+            return typeof parsed === "object" && parsed !== null
+                ? (parsed as T)
+                : fb;
         }
-        if (typeof fb === 'number' || typeof fb === 'string' || typeof fb === 'boolean') {
+        if (
+            typeof fb === "number" ||
+            typeof fb === "string" ||
+            typeof fb === "boolean"
+        ) {
             return typeof parsed === typeof fb ? (parsed as T) : fb;
         }
         return parsed as T;
@@ -125,7 +131,10 @@ const hydrate_mem_row = async (
     path?: string[],
 ): Promise<hydrated_mem> => {
     const tags = safe_parse<string[]>(row.tags, []);
-    const vecs = await vector_store.getVectorsById(row.id, row.user_id || undefined);
+    const vecs = await vector_store.getVectorsById(
+        row.id,
+        row.user_id || undefined,
+    );
     const secs = vecs.map((v) => v.sector);
     const mem: hydrated_mem = {
         id: row.id,

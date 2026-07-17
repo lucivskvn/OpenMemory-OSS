@@ -184,16 +184,18 @@ export function send_problem(
     detail?: string,
     type: string = "about:blank",
     instance?: string,
-    additional?: Record<string, any>
+    additional?: Record<string, any>,
 ) {
-    res.status(status).set("Content-Type", "application/problem+json").json({
-        ...additional,
-        type,
-        title,
-        status,
-        detail,
-        instance: instance || res.req?.url
-    });
+    res.status(status)
+        .set("Content-Type", "application/problem+json")
+        .json({
+            ...additional,
+            type,
+            title,
+            status,
+            detail,
+            instance: instance || res.req?.url,
+        });
 }
 
 /**
@@ -213,7 +215,7 @@ export function parse_or_400<T = Record<string, unknown>>(
             "The request body failed validation checks.",
             "https://openmemory.dev/errors/invalid_input",
             undefined,
-            { validation_errors: r.errors }
+            { validation_errors: r.errors },
         );
         return null;
     }

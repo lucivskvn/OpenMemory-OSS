@@ -208,7 +208,11 @@ export const create_mcp_srv = (tenant?: string) => {
                 if (proj) flt.project_id = proj;
 
                 const hasFilters = Object.keys(flt).length > 0;
-                const matches = await hsg_query(query, k ?? 8, hasFilters ? flt : undefined);
+                const matches = await hsg_query(
+                    query,
+                    k ?? 8,
+                    hasFilters ? flt : undefined,
+                );
                 results.contextual = matches.map((m: any) => ({
                     source: "hsg",
                     id: m.id,
@@ -251,12 +255,19 @@ export const create_mcp_srv = (tenant?: string) => {
             const fact_count = results.factual?.length || 0;
 
             if (type === "contextual") {
-                summ = ctx_count ? fmt_matches(results.contextual) : "No contextual memories matched the query.";
+                summ = ctx_count
+                    ? fmt_matches(results.contextual)
+                    : "No contextual memories matched the query.";
             } else if (type === "factual") {
                 if (!fact_count) {
                     summ = "No temporal facts matched the query.";
                 } else {
-                    summ = results.factual.map((f: any, idx: number) => `${idx + 1}. [fact] confidence=${f.confidence} id=${f.id}\n${f.content}`).join("\n\n");
+                    summ = results.factual
+                        .map(
+                            (f: any, idx: number) =>
+                                `${idx + 1}. [fact] confidence=${f.confidence} id=${f.id}\n${f.content}`,
+                        )
+                        .join("\n\n");
                 }
             } else {
                 summ = `Found ${ctx_count} contextual memories and ${fact_count} temporal facts.\n\n`;

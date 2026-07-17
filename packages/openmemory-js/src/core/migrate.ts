@@ -227,8 +227,10 @@ export const run_migrations = async () => {
 };
 
 if (require.main === module) {
-    run_migrations().then(() => client.close()).catch((err) => {
-        console.error("Migration failed:", err);
-        process.exit(1);
-    });
+    run_migrations()
+        .then(() => client.close())
+        .catch((err) => {
+            console.error("Migration failed:", err);
+            process.exit(1);
+        });
 }

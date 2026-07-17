@@ -1,8 +1,16 @@
 import { createHash } from "node:crypto";
 import { canonical_tokens_from_text } from "../utils/text";
 
-export const compress_vector = (v: number[], f: number, min_dim: number, max_dim: number): number[] => {
-    const tgt_dim = Math.max(min_dim, Math.min(max_dim, Math.floor(v.length * Math.max(0, Math.min(1, f)))));
+export const compress_vector = (
+    v: number[],
+    f: number,
+    min_dim: number,
+    max_dim: number,
+): number[] => {
+    const tgt_dim = Math.max(
+        min_dim,
+        Math.min(max_dim, Math.floor(v.length * Math.max(0, Math.min(1, f)))),
+    );
     if (tgt_dim >= v.length) return [...v];
 
     const res: number[] = [];
@@ -15,10 +23,14 @@ export const compress_vector = (v: number[], f: number, min_dim: number, max_dim
 
     // Normalize
     const norm = Math.sqrt(res.reduce((a, b) => a + b * b, 0));
-    return norm > 0 ? res.map(x => x / norm) : res;
+    return norm > 0 ? res.map((x) => x / norm) : res;
 };
 
-export const compress_summary = (t: string, f: number, layers: number): string => {
+export const compress_summary = (
+    t: string,
+    f: number,
+    layers: number,
+): string => {
     if (!t || f > 0.8) return t;
     // Simplified regex to avoid potential backtracking performance issues.
     const sentences = t.split(/[.!?]\s+/);
@@ -47,10 +59,13 @@ const hash_to_vec = (s: string, d: number): number[] => {
         vec.push(val);
     }
     const norm = Math.sqrt(vec.reduce((a, b) => a + b * b, 0));
-    return norm > 0 ? vec.map(x => x / norm) : vec;
+    return norm > 0 ? vec.map((x) => x / norm) : vec;
 };
 
-export const fingerprint_mem = (m: any, d: number): { vector: number[], summary: string } => {
+export const fingerprint_mem = (
+    m: any,
+    d: number,
+): { vector: number[]; summary: string } => {
     const content = m.summary || m.content || "";
     const tokens = canonical_tokens_from_text(content);
     const summary = tokens.slice(0, 5).join(" ");

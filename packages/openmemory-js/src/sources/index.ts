@@ -9,7 +9,7 @@ export {
     type source_config,
     rate_limiter,
     with_retry,
-    base_source
+    base_source,
 } from "./base";
 export { google_drive_source } from "./google_drive";
 export { google_sheets_source } from "./google_sheets";

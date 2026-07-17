@@ -11,6 +11,7 @@ import {
     source_content,
     source_config,
 } from "./base";
+import { isSafeUrl } from "../utils/fetch";
 
 export interface web_crawler_config extends source_config {
     max_pages?: number;
@@ -42,6 +43,11 @@ export class web_crawler_source extends base_source {
             throw new source_config_error("start_url is required", this.name);
         }
 
+        // SECURITY: SSRF prevention check
+        if (!(await isSafeUrl(filters.start_url))) {
+            throw new source_config_error("start_url is not safe/allowed", this.name);
+        }
+
         let cheerio: any;
         try {
             cheerio = await import("cheerio");
@@ -67,6 +73,12 @@ export class web_crawler_source extends base_source {
 
             if (this.visited.has(url) || depth > this.max_depth) continue;
             this.visited.add(url);
+
+            // SECURITY: SSRF prevention check
+            if (!(await isSafeUrl(url))) {
+                console.warn(`[web_crawler] skipping unsafe URL: ${url}`);
+                continue;
+            }
 
             try {
                 const controller = new AbortController();
@@ -132,6 +144,11 @@ export class web_crawler_source extends base_source {
     }
 
     async _fetch_item(item_id: string): Promise<source_content> {
+        // SECURITY: SSRF prevention check
+        if (!(await isSafeUrl(item_id))) {
+            throw new Error(`URL is not safe/allowed: ${item_id}`);
+        }
+
         let cheerio: any;
         try {
             cheerio = await import("cheerio");

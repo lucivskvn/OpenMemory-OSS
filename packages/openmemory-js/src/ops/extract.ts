@@ -6,6 +6,7 @@ import * as path from "path";
 import * as os from "os";
 import ffmpeg from "fluent-ffmpeg";
 import OpenAI from "openai";
+import { isSafeUrl } from "../utils/fetch";
 const TurndownService = require("turndown");
 
 const execAsync = promisify(exec);
@@ -80,6 +81,11 @@ export async function extractHTML(html: string): Promise<ExtractionResult> {
 }
 
 export async function extractURL(url: string): Promise<ExtractionResult> {
+    // SECURITY: SSRF prevention check
+    if (!(await isSafeUrl(url))) {
+        throw new Error(`URL is not safe/allowed: ${url}`);
+    }
+
     const response = await fetch(url);
     if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -157,7 +163,9 @@ export async function extractAudio(
             },
         };
     } catch (error: any) {
-        throw new Error(`Audio transcription failed: ${error.message}`, { cause: error });
+        throw new Error(`Audio transcription failed: ${error.message}`, {
+            cause: error,
+        });
     } finally {
         try {
             if (fs.existsSync(tempFilePath)) {
