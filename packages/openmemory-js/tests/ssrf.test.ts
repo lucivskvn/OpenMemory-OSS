@@ -1,6 +1,16 @@
-import { describe, it, expect } from "bun:test";
-import { isIpPrivateOrRestricted, isSafeUrl } from "../src/utils/fetch";
+import { describe, it, expect, mock } from "bun:test";
+import { isIpPrivateOrRestricted, isSafeUrl, fetchWithSsrfProtection } from "../src/utils/fetch";
 import { extractURL } from "../src/ops/extract";
+import dns from "node:dns/promises";
+
+// Mock dns.lookup for fictional safe domains used in testing redirects
+const originalLookup = dns.lookup;
+dns.lookup = mock((hostname: string, options?: any) => {
+    if (hostname === "safe-domain.com" || hostname === "another-safe-domain.com") {
+        return Promise.resolve([{ address: "8.8.8.8", family: 4 }]);
+    }
+    return originalLookup(hostname, options);
+}) as any;
 
 describe("SSRF IP range checks", () => {
     it("identifies IPv4 loopback as restricted", () => {
@@ -71,5 +81,65 @@ describe("extractURL SSRF integration", () => {
     it("throws an error for unsafe URLs in extractURL", async () => {
         expect(extractURL("http://127.0.0.1:3000/api")).rejects.toThrow("URL is not safe/allowed");
         expect(extractURL("http://localhost/stats")).rejects.toThrow("URL is not safe/allowed");
+    });
+});
+
+describe("fetchWithSsrfProtection Redirects", () => {
+    it("follows safe redirects", async () => {
+        const originalFetch = global.fetch;
+        const calls: string[] = [];
+        global.fetch = mock((url: string, init?: any) => {
+            calls.push(url);
+            if (url === "https://safe-domain.com") {
+                return Promise.resolve(new Response("", {
+                    status: 302,
+                    headers: { "location": "https://another-safe-domain.com" }
+                }));
+            }
+            return Promise.resolve(new Response("success", { status: 200 }));
+        }) as any;
+
+        try {
+            const res = await fetchWithSsrfProtection("https://safe-domain.com");
+            expect(await res.text()).toBe("success");
+            expect(calls).toEqual(["https://safe-domain.com", "https://another-safe-domain.com/"]);
+        } finally {
+            global.fetch = originalFetch;
+        }
+    });
+
+    it("blocks redirects to unsafe URLs", async () => {
+        const originalFetch = global.fetch;
+        global.fetch = mock((url: string, init?: any) => {
+            if (url === "https://safe-domain.com") {
+                return Promise.resolve(new Response("", {
+                    status: 302,
+                    headers: { "location": "http://127.0.0.1" }
+                }));
+            }
+            return Promise.resolve(new Response("success", { status: 200 }));
+        }) as any;
+
+        try {
+            await expect(fetchWithSsrfProtection("https://safe-domain.com")).rejects.toThrow("SSRF Prevention: Unsafe URL");
+        } finally {
+            global.fetch = originalFetch;
+        }
+    });
+
+    it("limits maximum number of redirects", async () => {
+        const originalFetch = global.fetch;
+        global.fetch = mock((url: string, init?: any) => {
+            return Promise.resolve(new Response("", {
+                status: 302,
+                headers: { "location": "https://safe-domain.com" }
+            }));
+        }) as any;
+
+        try {
+            await expect(fetchWithSsrfProtection("https://safe-domain.com")).rejects.toThrow("SSRF Prevention: Maximum redirect limit exceeded");
+        } finally {
+            global.fetch = originalFetch;
+        }
     });
 });

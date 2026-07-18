@@ -6,7 +6,7 @@ import * as path from "path";
 import * as os from "os";
 import ffmpeg from "fluent-ffmpeg";
 import OpenAI from "openai";
-import { isSafeUrl } from "../utils/fetch";
+import { isSafeUrl, fetchWithSsrfProtection } from "../utils/fetch";
 const TurndownService = require("turndown");
 
 const execAsync = promisify(exec);
@@ -86,7 +86,7 @@ export async function extractURL(url: string): Promise<ExtractionResult> {
         throw new Error(`URL is not safe/allowed: ${url}`);
     }
 
-    const response = await fetch(url);
+    const response = await fetchWithSsrfProtection(url);
     if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }

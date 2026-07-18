@@ -116,3 +116,55 @@ export async function isSafeUrl(urlStr: string): Promise<boolean> {
         return false;
     }
 }
+
+/**
+ * SECURITY: SSRF-safe fetch wrapper that resolves and validates redirects manual-style.
+ * This prevents attackers from bypassing SSRF checks via HTTP redirects (e.g., redirecting
+ * from a public domain to localhost).
+ */
+export async function fetchWithSsrfProtection(
+    urlStr: string,
+    init?: RequestInit,
+    maxRedirects: number = 5,
+): Promise<Response> {
+    let currentUrl = urlStr;
+    let redirectCount = 0;
+
+    while (true) {
+        if (!(await isSafeUrl(currentUrl))) {
+            throw new Error(`SSRF Prevention: Unsafe URL requested or redirected: ${currentUrl}`);
+        }
+
+        // We use manual redirection to inspect the location header at every hop
+        const response = await fetch(currentUrl, {
+            ...init,
+            redirect: "manual",
+        });
+
+        const status = response.status;
+        const isRedirect =
+            status === 301 ||
+            status === 302 ||
+            status === 303 ||
+            status === 307 ||
+            status === 308;
+
+        if (!isRedirect) {
+            return response;
+        }
+
+        if (redirectCount >= maxRedirects) {
+            throw new Error("SSRF Prevention: Maximum redirect limit exceeded");
+        }
+
+        const location = response.headers.get("location");
+        if (!location) {
+            return response; // No location header, treat as final response or let standard handler fail
+        }
+
+        // Parse absolute or relative redirect URL
+        const parsedUrl = new URL(location, currentUrl);
+        currentUrl = parsedUrl.toString();
+        redirectCount++;
+    }
+}

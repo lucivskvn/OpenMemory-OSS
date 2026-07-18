@@ -11,7 +11,7 @@ import {
     source_content,
     source_config,
 } from "./base";
-import { isSafeUrl } from "../utils/fetch";
+import { isSafeUrl, fetchWithSsrfProtection } from "../utils/fetch";
 
 export interface web_crawler_config extends source_config {
     max_pages?: number;
@@ -87,7 +87,7 @@ export class web_crawler_source extends base_source {
                     this.timeout,
                 );
 
-                const resp = await fetch(url, {
+                const resp = await fetchWithSsrfProtection(url, {
                     headers: {
                         "User-Agent": "OpenMemory-Crawler/1.0 (compatible)",
                     },
@@ -162,7 +162,7 @@ export class web_crawler_source extends base_source {
         const controller = new AbortController();
         const timeout_id = setTimeout(() => controller.abort(), this.timeout);
 
-        const resp = await fetch(item_id, {
+        const resp = await fetchWithSsrfProtection(item_id, {
             headers: { "User-Agent": "OpenMemory-Crawler/1.0 (compatible)" },
             signal: controller.signal,
         });
