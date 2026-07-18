@@ -90,9 +90,10 @@ function extract_api_key(req: any): string | null {
 }
 
 function validate_api_key(provided: string, expected: string): boolean {
-    if (!provided || !expected || provided.length !== expected.length)
-        return false;
-    return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+    if (!provided || !expected) return false;
+    const provided_hash = crypto.createHash("sha256").update(provided).digest();
+    const expected_hash = crypto.createHash("sha256").update(expected).digest();
+    return crypto.timingSafeEqual(provided_hash, expected_hash);
 }
 
 /**

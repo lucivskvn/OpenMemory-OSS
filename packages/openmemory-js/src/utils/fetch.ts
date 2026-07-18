@@ -43,16 +43,21 @@ export async function fetchWithTrace(
 export function isIpPrivateOrRestricted(ip: string): boolean {
     const normalized = ip.toLowerCase().trim();
 
-    // IPv6 Loopback, unspecified, link-local, unique local, or multicast
-    if (
-        normalized === "::1" ||
-        normalized === "::" ||
-        normalized.startsWith("fe80:") ||
-        normalized.startsWith("fc00:") ||
-        normalized.startsWith("fd00:") ||
-        normalized.startsWith("ff00:")
-    ) {
+    // IPv6 Loopback or unspecified
+    if (normalized === "::1" || normalized === "::") {
         return true;
+    }
+
+    // Advanced IPv6 range validation
+    const firstGroup = normalized.split(":")[0];
+    const firstVal = parseInt(firstGroup, 16);
+    if (!isNaN(firstVal)) {
+        // fe80::/10 (Link-local): 0xfe80 to 0xfebf
+        if (firstVal >= 0xfe80 && firstVal <= 0xfebf) return true;
+        // fc00::/7 (Unique Local): 0xfc00 to 0xfdff
+        if (firstVal >= 0xfc00 && firstVal <= 0xfdff) return true;
+        // ff00::/8 (Multicast): 0xff00 to 0xffff
+        if (firstVal >= 0xff00 && firstVal <= 0xffff) return true;
     }
 
     // IPv4-mapped IPv6 addresses (e.g., ::ffff:127.0.0.1)
