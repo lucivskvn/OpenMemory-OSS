@@ -168,13 +168,15 @@ export async function applyDualPhaseDecayToAllMemories(): Promise<void> {
     console.log(`[DECAY] Applied to ${mems.length} memories`);
 }
 
-export async function buildAssociativeWaypointGraphFromMemories(): Promise<
-    Map<string, AssociativeWaypointGraphNode>
-> {
+export async function buildAssociativeWaypointGraphFromMemories(
+    user_id?: string,
+): Promise<Map<string, AssociativeWaypointGraphNode>> {
     const gr = new Map<string, AssociativeWaypointGraphNode>();
-    const wps = (await all_async(
-        "select src_id,dst_id,weight,created_at from waypoints",
-    )) as any[];
+    const sql = user_id
+        ? "select src_id,dst_id,weight,created_at from waypoints where user_id=?"
+        : "select src_id,dst_id,weight,created_at from waypoints";
+    const params = user_id ? [user_id] : [];
+    const wps = (await all_async(sql, params)) as any[];
     const ids = new Set<string>();
     for (const wp of wps) {
         ids.add(wp.src_id);
@@ -203,8 +205,9 @@ export async function buildAssociativeWaypointGraphFromMemories(): Promise<
 export async function performSpreadingActivationRetrieval(
     init: string[],
     max: number,
+    user_id?: string,
 ): Promise<Map<string, number>> {
-    const gr = await buildAssociativeWaypointGraphFromMemories();
+    const gr = await buildAssociativeWaypointGraphFromMemories(user_id);
     const act = new Map<string, number>();
     for (const id of init) act.set(id, 1.0);
     for (let i = 0; i < max; i++) {
@@ -234,10 +237,13 @@ export async function retrieveMemoriesWithEnergyThresholding(
     qv: number[],
     qs: string,
     me: number,
+    user_id?: string,
 ): Promise<any[]> {
-    const mems = (await all_async(
-        "select id,content,primary_sector,salience,mean_vec from memories where salience>0.01",
-    )) as any[];
+    const sql = user_id
+        ? "select id,content,primary_sector,salience,mean_vec from memories where salience>0.01 and user_id=?"
+        : "select id,content,primary_sector,salience,mean_vec from memories where salience>0.01";
+    const params = user_id ? [user_id] : [];
+    const mems = (await all_async(sql, params)) as any[];
     const sc = new Map<string, number>();
     for (const m of mems) {
         if (!m.mean_vec) continue;
@@ -257,6 +263,7 @@ export async function retrieveMemoriesWithEnergyThresholding(
     const sp = await performSpreadingActivationRetrieval(
         Array.from(sc.keys()).slice(0, 5),
         3,
+        user_id,
     );
     const cmb = new Map<string, number>();
     for (const m of mems)
