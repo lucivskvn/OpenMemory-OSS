@@ -284,7 +284,7 @@ export function dynroutes(app: any) {
 
                 for (const reinforcement_update_record of propagated_reinforcement_updates_list) {
                     const linked_mem = await q.get_mem.get(reinforcement_update_record.node_id);
-                    if (linked_mem && linked_mem.user_id === tenant) {
+                    if (linked_mem?.user_id === tenant) {
                         await q.upd_seen.run(
                             reinforcement_update_record.node_id,
                             Date.now(),

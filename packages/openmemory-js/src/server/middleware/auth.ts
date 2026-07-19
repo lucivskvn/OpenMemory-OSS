@@ -90,7 +90,7 @@ function extract_api_key(req: any): string | null {
 }
 
 function validate_api_key(provided: string, expected: string): boolean {
-    if (!provided || !expected || provided.length !== expected.length)
+    if (provided?.length !== expected?.length)
         return false;
     return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
 }
