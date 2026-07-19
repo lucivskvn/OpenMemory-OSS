@@ -1,5 +1,5 @@
 import { q } from "../../core/db";
-import { require_tenant } from "../middleware/tenant";
+import { require_tenant, reject_tenant_mismatch } from "../middleware/tenant";
 import {
     calculateDynamicSalienceWithTimeDecay,
     calculateCrossSectorResonanceScore,
@@ -165,6 +165,8 @@ export function dynroutes(app: any) {
                     incoming_request_body_payload.min_energy ||
                     TAU_ENERGY_THRESHOLD_FOR_RETRIEVAL;
 
+                if (reject_tenant_mismatch(outgoing_http_response, tenant, incoming_request_body_payload.user_id)) return;
+
                 if (!query_text_content_from_request) {
                     return outgoing_http_response
                         .status(400)
@@ -226,6 +228,8 @@ export function dynroutes(app: any) {
                     incoming_http_request.body;
                 const target_memory_id_from_request =
                     incoming_request_body_payload.memory_id;
+
+                if (reject_tenant_mismatch(outgoing_http_response, tenant, incoming_request_body_payload.user_id)) return;
 
                 if (!target_memory_id_from_request) {
                     return outgoing_http_response
@@ -331,6 +335,8 @@ export function dynroutes(app: any) {
                 const maximum_spreading_iterations_from_request =
                     incoming_request_body_payload.max_iterations || 3;
 
+                if (reject_tenant_mismatch(outgoing_http_response, tenant, incoming_request_body_payload.user_id)) return;
+
                 if (
                     !Array.isArray(initial_memory_ids_array_from_request) ||
                     initial_memory_ids_array_from_request.length === 0
@@ -400,6 +406,7 @@ export function dynroutes(app: any) {
             const tenant = require_tenant(incoming_http_request, outgoing_http_response);
             if (!tenant) return;
             try {
+                if (reject_tenant_mismatch(outgoing_http_response, tenant, incoming_http_request.query?.user_id)) return;
                 const waypoint_graph_structure_from_database =
                     await buildAssociativeWaypointGraphFromMemories(tenant);
 
@@ -475,6 +482,8 @@ export function dynroutes(app: any) {
                     incoming_request_body_payload.source_memory_id;
                 const target_memory_id_from_request =
                     incoming_request_body_payload.target_memory_id;
+
+                if (reject_tenant_mismatch(outgoing_http_response, tenant, incoming_request_body_payload.user_id)) return;
 
                 if (
                     !source_memory_id_from_request ||

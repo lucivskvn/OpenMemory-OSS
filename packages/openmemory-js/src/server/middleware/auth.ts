@@ -39,11 +39,11 @@ const DEV_ALLOW_NO_AUTH =
     process.env.OM_DEV_ALLOW_NO_AUTH === "true";
 
 const auth_config = {
-    api_key: env.api_key,
+    get api_key() { return env.api_key; },
     api_key_header: "x-api-key",
-    rate_limit_enabled: env.rate_limit_enabled,
-    rate_limit_window_ms: env.rate_limit_window_ms,
-    rate_limit_max_requests: env.rate_limit_max_requests,
+    get rate_limit_enabled() { return env.rate_limit_enabled; },
+    get rate_limit_window_ms() { return env.rate_limit_window_ms; },
+    get rate_limit_max_requests() { return env.rate_limit_max_requests; },
     public_endpoints: [
         "/health",
         "/api/system/health",
@@ -90,9 +90,11 @@ function extract_api_key(req: any): string | null {
 }
 
 function validate_api_key(provided: string, expected: string): boolean {
-    if (provided?.length !== expected?.length)
-        return false;
-    return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+    if (!provided || !expected) return false;
+    // Hash both values to prevent key length leakage via timing or error channels
+    const provided_hash = crypto.createHash("sha256").update(provided).digest();
+    const expected_hash = crypto.createHash("sha256").update(expected).digest();
+    return crypto.timingSafeEqual(provided_hash, expected_hash);
 }
 
 /**

@@ -250,9 +250,10 @@ export function classify_content(
     content: string,
     metadata?: any,
 ): sector_class {
-    if (metadata?.sector && sectors.includes(metadata.sector)) {
+    const sect = metadata?.sector || metadata?.lgm?.sector;
+    if (sect && sectors.includes(sect)) {
         return {
-            primary: metadata.sector,
+            primary: sect,
             additional: [],
             confidence: 1.0,
         };
