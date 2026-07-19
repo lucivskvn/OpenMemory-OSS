@@ -242,7 +242,7 @@ export function dynroutes(app: any) {
                         .json({ err: "memory_not_found" });
                 }
 
-                if (memory_record_from_database.user_id && memory_record_from_database.user_id !== tenant) {
+                if (memory_record_from_database.user_id !== tenant) {
                     return outgoing_http_response
                         .status(403)
                         .json({ err: "forbidden" });
@@ -269,7 +269,7 @@ export function dynroutes(app: any) {
                     );
                 const linked_nodes_with_weights_array =
                     connected_waypoints_from_database
-                        .filter((waypoint_record: any) => !waypoint_record.user_id || waypoint_record.user_id === tenant)
+                        .filter((waypoint_record: any) => waypoint_record.user_id === tenant)
                         .map((waypoint_record: any) => ({
                             target_id: waypoint_record.dst_id,
                             weight: waypoint_record.weight,
@@ -283,12 +283,15 @@ export function dynroutes(app: any) {
                     );
 
                 for (const reinforcement_update_record of propagated_reinforcement_updates_list) {
-                    await q.upd_seen.run(
-                        reinforcement_update_record.node_id,
-                        Date.now(),
-                        reinforcement_update_record.new_salience,
-                        Date.now(),
-                    );
+                    const linked_mem = await q.get_mem.get(reinforcement_update_record.node_id);
+                    if (linked_mem && linked_mem.user_id === tenant) {
+                        await q.upd_seen.run(
+                            reinforcement_update_record.node_id,
+                            Date.now(),
+                            reinforcement_update_record.new_salience,
+                            Date.now(),
+                        );
+                    }
                 }
 
                 outgoing_http_response.json({
@@ -344,7 +347,7 @@ export function dynroutes(app: any) {
                             .status(404)
                             .json({ err: "memory_not_found" });
                     }
-                    if (m.user_id && m.user_id !== tenant) {
+                    if (m.user_id !== tenant) {
                         return outgoing_http_response
                             .status(403)
                             .json({ err: "forbidden" });
@@ -496,8 +499,8 @@ export function dynroutes(app: any) {
                 }
 
                 if (
-                    (source_memory_record.user_id && source_memory_record.user_id !== tenant) ||
-                    (target_memory_record.user_id && target_memory_record.user_id !== tenant)
+                    source_memory_record.user_id !== tenant ||
+                    target_memory_record.user_id !== tenant
                 ) {
                     return outgoing_http_response
                         .status(403)
