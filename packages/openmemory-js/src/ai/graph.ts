@@ -263,7 +263,7 @@ export async function retrieve_node_mems(p: lgm_retrieve_req) {
             0,
         )) as mem_row[];
         for (const row of raw_rows) {
-            if (row.user_id && row.user_id !== p.user_id) continue;
+            if (p.user_id !== undefined && row.user_id !== p.user_id) continue;
             const meta = safe_parse<Record<string, unknown>>(row.meta, {});
             if (!matches_ns(meta, ns, gid)) continue;
             const hyd = await hydrate_mem_row(row, meta, inc_meta);
