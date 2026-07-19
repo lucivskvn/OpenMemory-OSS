@@ -1,5 +1,7 @@
 import { propagation, context } from "@opentelemetry/api";
 import dns from "node:dns/promises";
+import http from "node:http";
+import https from "node:https";
 
 /**
  * Enhanced fetch with OpenTelemetry trace context propagation and default timeout.
@@ -73,6 +75,8 @@ export function isIpPrivateOrRestricted(ip: string): boolean {
         if (a === 127) return true;
         // 10.0.0.0/8 (private)
         if (a === 10) return true;
+        // 100.64.0.0/10 (carrier-grade NAT)
+        if (a === 100 && b >= 64 && b <= 127) return true;
         // 172.16.0.0/12 (private)
         if (a === 172 && b >= 16 && b <= 31) return true;
         // 192.168.0.0/16 (private)
@@ -126,6 +130,7 @@ export async function isSafeUrl(urlStr: string): Promise<boolean> {
  * SECURITY: SSRF-safe fetch wrapper that resolves and validates redirects manual-style.
  * This prevents attackers from bypassing SSRF checks via HTTP redirects (e.g., redirecting
  * from a public domain to localhost).
+ * It also pins the resolved IP address to prevent TOCTOU (DNS Rebinding) attacks.
  */
 export async function fetchWithSsrfProtection(
     urlStr: string,
@@ -134,19 +139,77 @@ export async function fetchWithSsrfProtection(
 ): Promise<Response> {
     let currentUrl = urlStr;
     let redirectCount = 0;
+    let currentInit = init ? { ...init } : undefined;
 
     while (true) {
-        if (!(await isSafeUrl(currentUrl))) {
-            throw new Error(`SSRF Prevention: Unsafe URL requested or redirected: ${currentUrl}`);
+        const parsedUrl = new URL(currentUrl);
+        if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+            throw new Error(`SSRF Prevention: Unsupported protocol: ${parsedUrl.protocol}`);
         }
 
-        // We use manual redirection to inspect the location header at every hop
-        const response = await fetch(currentUrl, {
-            ...init,
-            redirect: "manual",
+        const hostname = parsedUrl.hostname;
+
+        // Resolve DNS once to pin the IP address (prevents DNS Rebinding / TOCTOU)
+        const addresses = await dns.lookup(hostname, { all: true });
+        let pinnedIp = "";
+        for (const addr of addresses) {
+            if (isIpPrivateOrRestricted(addr.address)) {
+                throw new Error(`SSRF Prevention: Unsafe IP address: ${addr.address} resolved from ${hostname}`);
+            }
+            if (!pinnedIp) {
+                pinnedIp = addr.address;
+            }
+        }
+
+        if (!pinnedIp) {
+            throw new Error(`SSRF Prevention: Could not resolve IP address for hostname: ${hostname}`);
+        }
+
+        // Perform the request pinning the validated IP address
+        const isHttps = parsedUrl.protocol === "https:";
+        const requester = isHttps ? https : http;
+
+        const requestHeaders = new Headers(currentInit?.headers);
+        if (!requestHeaders.has("Host")) {
+            requestHeaders.set("Host", hostname);
+        }
+
+        const options: any = {
+            hostname: pinnedIp,
+            port: parsedUrl.port || (isHttps ? 443 : 80),
+            path: parsedUrl.pathname + parsedUrl.search,
+            method: currentInit?.method || "GET",
+            headers: Object.fromEntries(requestHeaders.entries()),
+        };
+
+        if (isHttps) {
+            options.servername = hostname; // SNI
+        }
+
+        const responsePromise = new Promise<{ status: number; headers: Record<string, string>; body: Buffer }>((resolve, reject) => {
+            const req = requester.request(options, (res) => {
+                const chunks: Buffer[] = [];
+                res.on("data", (chunk) => chunks.push(chunk));
+                res.on("end", () => {
+                    resolve({
+                        status: res.statusCode || 200,
+                        headers: res.headers as Record<string, string>,
+                        body: Buffer.concat(chunks),
+                    });
+                });
+            });
+
+            req.on("error", (err) => reject(err));
+
+            // Write body if present
+            if (currentInit?.body) {
+                req.write(currentInit.body);
+            }
+            req.end();
         });
 
-        const status = response.status;
+        const { status, headers, body } = await responsePromise;
+
         const isRedirect =
             status === 301 ||
             status === 302 ||
@@ -155,21 +218,46 @@ export async function fetchWithSsrfProtection(
             status === 308;
 
         if (!isRedirect) {
-            return response;
+            const headersObj = new Headers(headers);
+            return new Response(body, {
+                status,
+                headers: headersObj,
+            });
         }
 
         if (redirectCount >= maxRedirects) {
             throw new Error("SSRF Prevention: Maximum redirect limit exceeded");
         }
 
-        const location = response.headers.get("location");
+        const location = headers["location"];
         if (!location) {
-            return response; // No location header, treat as final response or let standard handler fail
+            const headersObj = new Headers(headers);
+            return new Response(body, {
+                status,
+                headers: headersObj,
+            });
         }
 
-        // Parse absolute or relative redirect URL
-        const parsedUrl = new URL(location, currentUrl);
-        currentUrl = parsedUrl.toString();
+        const nextUrl = new URL(location, currentUrl);
+
+        // Strip credential-bearing headers if cross-origin
+        if (currentInit && currentInit.headers) {
+            const currentOrigin = new URL(currentUrl).origin;
+            const targetOrigin = nextUrl.origin;
+
+            if (currentOrigin !== targetOrigin) {
+                const newHeaders = new Headers(currentInit.headers);
+                newHeaders.delete("Authorization");
+                newHeaders.delete("Cookie");
+                newHeaders.delete("Proxy-Authorization");
+                currentInit = {
+                    ...currentInit,
+                    headers: newHeaders,
+                };
+            }
+        }
+
+        currentUrl = nextUrl.toString();
         redirectCount++;
     }
 }

@@ -238,11 +238,23 @@ export const init_db = async () => {
                         where dst_id is not null
                     `);
 
-                    // Replace old table
-                    await _exec_direct("drop table waypoints");
-                    await _exec_direct(
-                        "alter table waypoints_new rename to waypoints",
-                    );
+                    // Rename old table to backup
+                    await _exec_direct("alter table waypoints rename to waypoints_backup");
+
+                    // Rename new table to waypoints
+                    try {
+                        await _exec_direct(
+                            "alter table waypoints_new rename to waypoints",
+                        );
+                        // Rename succeeded, drop backup
+                        await _exec_direct("drop table waypoints_backup");
+                    } catch (renameError) {
+                        // Succeeded rename failed, restore backup from waypoints_backup
+                        try {
+                            await _exec_direct("alter table waypoints_backup rename to waypoints");
+                        } catch {}
+                        throw renameError;
+                    }
 
                     console.log(
                         "[DB] Waypoints migration completed successfully",
@@ -252,11 +264,17 @@ export const init_db = async () => {
                         "[DB] Waypoints migration failed:",
                         migrationError.message,
                     );
-                    // Attempt cleanup if migration partially completed
+                    // Attempt cleanup and preserve/restore backup instead of unconditionally dropping waypoints_new
                     try {
-                        await _exec_direct(
-                            "drop table if exists waypoints_new",
-                        );
+                        const tables = await all_async_direct("select name from sqlite_master where type='table'");
+                        const tableNames = tables.map(t => t.name);
+
+                        if (tableNames.includes("waypoints_backup") && !tableNames.includes("waypoints")) {
+                            await _exec_direct("alter table waypoints_backup rename to waypoints");
+                        }
+                        if (tableNames.includes("waypoints_new")) {
+                            await _exec_direct("drop table if exists waypoints_new");
+                        }
                     } catch (cleanupError) {
                         // Cleanup failed, but log original error
                     }
@@ -382,8 +400,8 @@ export const q: q_type = {
                 await exec(sql, params);
 
                 let factSql =
-                    "delete from temporal_facts where metadata like ?";
-                const factParams: any[] = [`%"source_memory_id":"${id}"%`];
+                    "delete from temporal_facts where json_extract(metadata, '$.source_memory_id') = ?";
+                const factParams: any[] = [id];
                 if (user_id) {
                     factSql += " and user_id=?";
                     factParams.push(user_id);

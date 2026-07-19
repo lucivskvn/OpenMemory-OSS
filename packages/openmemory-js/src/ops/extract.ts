@@ -81,11 +81,6 @@ export async function extractHTML(html: string): Promise<ExtractionResult> {
 }
 
 export async function extractURL(url: string): Promise<ExtractionResult> {
-    // SECURITY: SSRF prevention check
-    if (!(await isSafeUrl(url))) {
-        throw new Error(`URL is not safe/allowed: ${url}`);
-    }
-
     const response = await fetchWithSsrfProtection(url);
     if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
