@@ -65,17 +65,15 @@ export class PostgresVectorStore implements VectorStore {
         }
     }
 
-    async deleteVector(id: string, sector: string, user_id?: string): Promise<void> {
-        const resolved_user_id = user_id || "anonymous";
+    async deleteVector(id: string, sector: string, user_id: string = "anonymous"): Promise<void> {
         let sql = `delete from ${this.table} where id=$1 and sector=$2 and user_id=$3`;
-        const params: any[] = [id, sector, resolved_user_id];
+        const params: any[] = [id, sector, user_id];
         await this.db.run_async(sql, params);
     }
 
-    async deleteVectors(id: string, user_id?: string): Promise<void> {
-        const resolved_user_id = user_id || "anonymous";
+    async deleteVectors(id: string, user_id: string = "anonymous"): Promise<void> {
         let sql = `delete from ${this.table} where id=$1 and user_id=$2`;
-        const params: any[] = [id, resolved_user_id];
+        const params: any[] = [id, user_id];
         await this.db.run_async(sql, params);
     }
 
@@ -83,14 +81,13 @@ export class PostgresVectorStore implements VectorStore {
         sector: string,
         queryVec: number[],
         topK: number,
-        user_id?: string,
+        user_id: string = "anonymous",
         project_id?: string,
     ): Promise<Array<{ id: string; score: number }>> {
-        const resolved_user_id = user_id || "anonymous";
         if (this.usePgVector) {
             const v_str = JSON.stringify(queryVec);
             let filter_sql = "where sector = $2 and user_id = $4";
-            const args: any[] = [v_str, sector, topK, resolved_user_id];
+            const args: any[] = [v_str, sector, topK, user_id];
 
             if (project_id) {
                 filter_sql += " and (project_id = $5 or project_id = 'system_global' or project_id IS NULL)";
@@ -110,7 +107,7 @@ export class PostgresVectorStore implements VectorStore {
             const is_postgres = this.usePgVector || !!process.env.OM_POSTGRES_URL;
             const param = (i: number) => is_postgres ? `$${i}` : "?";
 
-            const direct_args: any[] = [sector, resolved_user_id];
+            const direct_args: any[] = [sector, user_id];
             let direct_filter = `where sector=${param(1)} and user_id=${param(2)}`;
             let idx = 3;
 
@@ -137,11 +134,10 @@ export class PostgresVectorStore implements VectorStore {
     async getVector(
         id: string,
         sector: string,
-        user_id?: string,
+        user_id: string = "anonymous",
     ): Promise<{ vector: number[]; dim: number } | null> {
-        const resolved_user_id = user_id || "anonymous";
         let sql = `select v${this.usePgVector ? "::text" : ""} as v_val, dim from ${this.table} where id=$1 and sector=$2 and user_id=$3`;
-        const params: any[] = [id, sector, resolved_user_id];
+        const params: any[] = [id, sector, user_id];
 
         const row = await this.db.get_async(sql, params);
         if (!row) return null;
@@ -155,11 +151,10 @@ export class PostgresVectorStore implements VectorStore {
 
     async getVectorsById(
         id: string,
-        user_id?: string,
+        user_id: string = "anonymous",
     ): Promise<Array<{ sector: string; vector: number[]; dim: number }>> {
-        const resolved_user_id = user_id || "anonymous";
         let sql = `select sector, v${this.usePgVector ? "::text" : ""} as v_val, dim from ${this.table} where id=$1 and user_id=$2`;
-        const params: any[] = [id, resolved_user_id];
+        const params: any[] = [id, user_id];
 
         const rows = await this.db.all_async(sql, params);
         return rows.map((row) => ({
@@ -171,11 +166,10 @@ export class PostgresVectorStore implements VectorStore {
 
     async getVectorsBySector(
         sector: string,
-        user_id?: string,
+        user_id: string = "anonymous",
     ): Promise<Array<{ id: string; vector: number[]; dim: number }>> {
-        const resolved_user_id = user_id || "anonymous";
         let sql = `select id, v${this.usePgVector ? "::text" : ""} as v_val, dim from ${this.table} where sector=$1 and user_id=$2`;
-        const params: any[] = [sector, resolved_user_id];
+        const params: any[] = [sector, user_id];
 
         const rows = await this.db.all_async(sql, params);
         return rows.map((row) => ({
