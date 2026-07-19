@@ -57,26 +57,31 @@ function isIpv6PrivateOrRestricted(normalized: string): boolean {
     return false;
 }
 
+function isPrivateIpv4Octets(a: number, b: number): boolean {
+    // 127.0.0.0/8 (loopback)
+    if (a === 127) return true;
+    // 10.0.0.0/8 (private)
+    if (a === 10) return true;
+    // 100.64.0.0/10 (carrier-grade NAT)
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    // 172.16.0.0/12 (private)
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    // 192.168.0.0/16 (private)
+    if (a === 192 && b === 168) return true;
+    // 169.254.0.0/16 (link-local, cloud metadata)
+    if (a === 169 && b === 254) return true;
+    // 0.0.0.0/8 (unspecified)
+    if (a === 0) return true;
+    // 224.0.0.0/4 (multicast) & 240.0.0.0/4 (reserved)
+    if (a >= 224) return true;
+
+    return false;
+}
+
 function isIpv4PrivateOrRestricted(normalized: string): boolean {
     const parts = normalized.split(".").map(Number);
     if (parts.length === 4 && parts.every((p) => !Number.isNaN(p) && p >= 0 && p <= 255)) {
-        const [a, b] = parts;
-        // 127.0.0.0/8 (loopback)
-        if (a === 127) return true;
-        // 10.0.0.0/8 (private)
-        if (a === 10) return true;
-        // 100.64.0.0/10 (carrier-grade NAT)
-        if (a === 100 && b >= 64 && b <= 127) return true;
-        // 172.16.0.0/12 (private)
-        if (a === 172 && b >= 16 && b <= 31) return true;
-        // 192.168.0.0/16 (private)
-        if (a === 192 && b === 168) return true;
-        // 169.254.0.0/16 (link-local, cloud metadata)
-        if (a === 169 && b === 254) return true;
-        // 0.0.0.0/8 (unspecified)
-        if (a === 0) return true;
-        // 224.0.0.0/4 (multicast) & 240.0.0.0/4 (reserved)
-        if (a >= 224) return true;
+        return isPrivateIpv4Octets(parts[0], parts[1]);
     }
 
     return false;
@@ -201,6 +206,40 @@ async function executeRequestWithPin(
     });
 }
 
+function isRedirectStatus(status: number): boolean {
+    return (
+        status === 301 ||
+        status === 302 ||
+        status === 303 ||
+        status === 307 ||
+        status === 308
+    );
+}
+
+function stripCrossOriginHeaders(
+    currentInit: RequestInit | undefined,
+    currentUrl: string,
+    nextUrl: URL,
+): RequestInit | undefined {
+    if (!currentInit?.headers) return currentInit;
+
+    const currentOrigin = new URL(currentUrl).origin;
+    const targetOrigin = nextUrl.origin;
+
+    if (currentOrigin !== targetOrigin) {
+        const newHeaders = new Headers(currentInit.headers);
+        newHeaders.delete("Authorization");
+        newHeaders.delete("Cookie");
+        newHeaders.delete("Proxy-Authorization");
+        return {
+            ...currentInit,
+            headers: newHeaders,
+        };
+    }
+
+    return currentInit;
+}
+
 /**
  * SECURITY: SSRF-safe fetch wrapper that resolves and validates redirects manual-style.
  * This prevents attackers from bypassing SSRF checks via HTTP redirects (e.g., redirecting
@@ -230,14 +269,7 @@ export async function fetchWithSsrfProtection(
         // Perform the request pinning the validated IP address
         const { status, headers, body } = await executeRequestWithPin(parsedUrl, pinnedIp, currentInit);
 
-        const isRedirect =
-            status === 301 ||
-            status === 302 ||
-            status === 303 ||
-            status === 307 ||
-            status === 308;
-
-        if (!isRedirect) {
+        if (!isRedirectStatus(status)) {
             return new Response(body, {
                 status,
                 headers: new Headers(headers),
@@ -259,21 +291,7 @@ export async function fetchWithSsrfProtection(
         const nextUrl = new URL(location, currentUrl);
 
         // Strip credential-bearing headers if cross-origin
-        if (currentInit?.headers) {
-            const currentOrigin = new URL(currentUrl).origin;
-            const targetOrigin = nextUrl.origin;
-
-            if (currentOrigin !== targetOrigin) {
-                const newHeaders = new Headers(currentInit.headers);
-                newHeaders.delete("Authorization");
-                newHeaders.delete("Cookie");
-                newHeaders.delete("Proxy-Authorization");
-                currentInit = {
-                    ...currentInit,
-                    headers: newHeaders,
-                };
-            }
-        }
+        currentInit = stripCrossOriginHeaders(currentInit, currentUrl, nextUrl);
 
         currentUrl = nextUrl.toString();
         redirectCount++;
