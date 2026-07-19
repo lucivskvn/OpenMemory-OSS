@@ -1,4 +1,5 @@
 import { q } from "../../core/db";
+import { require_tenant, reject_tenant_mismatch } from "../middleware/tenant";
 import {
     calculateDynamicSalienceWithTimeDecay,
     calculateCrossSectorResonanceScore,
@@ -151,6 +152,8 @@ export function dynroutes(app: any) {
     app.post(
         "/dynamics/retrieval/energy-based",
         async (incoming_http_request: any, outgoing_http_response: any) => {
+            const tenant = require_tenant(incoming_http_request, outgoing_http_response);
+            if (!tenant) return;
             try {
                 const incoming_request_body_payload =
                     incoming_http_request.body;
@@ -161,6 +164,8 @@ export function dynroutes(app: any) {
                 const minimum_energy_threshold_from_request =
                     incoming_request_body_payload.min_energy ||
                     TAU_ENERGY_THRESHOLD_FOR_RETRIEVAL;
+
+                if (reject_tenant_mismatch(outgoing_http_response, tenant, incoming_request_body_payload.user_id)) return;
 
                 if (!query_text_content_from_request) {
                     return outgoing_http_response
@@ -179,6 +184,7 @@ export function dynroutes(app: any) {
                         query_vector_embedding_array,
                         query_sector_type_from_request,
                         minimum_energy_threshold_from_request,
+                        tenant,
                     );
 
                 outgoing_http_response.json({
@@ -215,11 +221,15 @@ export function dynroutes(app: any) {
     app.post(
         "/dynamics/reinforcement/trace",
         async (incoming_http_request: any, outgoing_http_response: any) => {
+            const tenant = require_tenant(incoming_http_request, outgoing_http_response);
+            if (!tenant) return;
             try {
                 const incoming_request_body_payload =
                     incoming_http_request.body;
                 const target_memory_id_from_request =
                     incoming_request_body_payload.memory_id;
+
+                if (reject_tenant_mismatch(outgoing_http_response, tenant, incoming_request_body_payload.user_id)) return;
 
                 if (!target_memory_id_from_request) {
                     return outgoing_http_response
@@ -234,6 +244,12 @@ export function dynroutes(app: any) {
                     return outgoing_http_response
                         .status(404)
                         .json({ err: "memory_not_found" });
+                }
+
+                if (memory_record_from_database.user_id && memory_record_from_database.user_id !== tenant) {
+                    return outgoing_http_response
+                        .status(403)
+                        .json({ err: "forbidden" });
                 }
 
                 const current_salience_before_reinforcement =
@@ -306,6 +322,8 @@ export function dynroutes(app: any) {
     app.post(
         "/dynamics/activation/spreading",
         async (incoming_http_request: any, outgoing_http_response: any) => {
+            const tenant = require_tenant(incoming_http_request, outgoing_http_response);
+            if (!tenant) return;
             try {
                 const incoming_request_body_payload =
                     incoming_http_request.body;
@@ -313,6 +331,8 @@ export function dynroutes(app: any) {
                     incoming_request_body_payload.initial_memory_ids || [];
                 const maximum_spreading_iterations_from_request =
                     incoming_request_body_payload.max_iterations || 3;
+
+                if (reject_tenant_mismatch(outgoing_http_response, tenant, incoming_request_body_payload.user_id)) return;
 
                 if (
                     !Array.isArray(initial_memory_ids_array_from_request) ||
@@ -323,10 +343,20 @@ export function dynroutes(app: any) {
                         .json({ err: "initial_memory_ids_required" });
                 }
 
+                for (const id of initial_memory_ids_array_from_request) {
+                    const mem = await q.get_mem.get(id);
+                    if (!mem || (mem.user_id && mem.user_id !== tenant)) {
+                        return outgoing_http_response
+                            .status(403)
+                            .json({ err: "forbidden", message: `Memory ID ${id} is invalid or forbidden` });
+                    }
+                }
+
                 const spreading_activation_results_map =
                     await performSpreadingActivationRetrieval(
                         initial_memory_ids_array_from_request,
                         maximum_spreading_iterations_from_request,
+                        tenant,
                     );
 
                 const activation_results_as_array = Array.from(
@@ -365,9 +395,12 @@ export function dynroutes(app: any) {
     app.get(
         "/dynamics/waypoints/graph",
         async (incoming_http_request: any, outgoing_http_response: any) => {
+            const tenant = require_tenant(incoming_http_request, outgoing_http_response);
+            if (!tenant) return;
             try {
+                if (reject_tenant_mismatch(outgoing_http_response, tenant, incoming_http_request.query?.user_id)) return;
                 const waypoint_graph_structure_from_database =
-                    await buildAssociativeWaypointGraphFromMemories();
+                    await buildAssociativeWaypointGraphFromMemories(tenant);
 
                 const graph_statistics_summary = {
                     total_nodes_in_graph:
@@ -432,6 +465,8 @@ export function dynroutes(app: any) {
     app.post(
         "/dynamics/waypoints/calculate-weight",
         async (incoming_http_request: any, outgoing_http_response: any) => {
+            const tenant = require_tenant(incoming_http_request, outgoing_http_response);
+            if (!tenant) return;
             try {
                 const incoming_request_body_payload =
                     incoming_http_request.body;
@@ -439,6 +474,8 @@ export function dynroutes(app: any) {
                     incoming_request_body_payload.source_memory_id;
                 const target_memory_id_from_request =
                     incoming_request_body_payload.target_memory_id;
+
+                if (reject_tenant_mismatch(outgoing_http_response, tenant, incoming_request_body_payload.user_id)) return;
 
                 if (
                     !source_memory_id_from_request ||
@@ -460,6 +497,15 @@ export function dynroutes(app: any) {
                     return outgoing_http_response
                         .status(404)
                         .json({ err: "one_or_both_memories_not_found" });
+                }
+
+                if (
+                    (source_memory_record.user_id && source_memory_record.user_id !== tenant) ||
+                    (target_memory_record.user_id && target_memory_record.user_id !== tenant)
+                ) {
+                    return outgoing_http_response
+                        .status(403)
+                        .json({ err: "forbidden" });
                 }
 
                 const source_memory_mean_vector = source_memory_record.mean_vec;
