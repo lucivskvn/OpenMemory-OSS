@@ -205,84 +205,83 @@ export const vector_store: VectorStore =
               !!env.OM_POSTGRES_URL,
           );
 
-export const init_db = async () => {
-    // Migration check for waypoints table primary key change
+async function migrateWaypointsTable(): Promise<void> {
     try {
         const info = await all_async_direct("PRAGMA table_info(waypoints)");
-        if (info && info.length > 0) {
-            const pkCols = info.filter((c) => c.pk > 0);
-            const has_dst_id_pk = pkCols.some((c) => c.name === "dst_id");
-            if (!has_dst_id_pk) {
-                console.warn(
-                    "[DB] Migrating waypoints table to new schema with preserved data...",
+        if (!info || info.length === 0) return;
+
+        const pkCols = info.filter((c) => c.pk > 0);
+        const has_dst_id_pk = pkCols.some((c) => c.name === "dst_id");
+        if (has_dst_id_pk) return;
+
+        console.warn(
+            "[DB] Migrating waypoints table to new schema with preserved data...",
+        );
+        try {
+            // Create new table with corrected schema
+            await _exec_direct(`
+                create table waypoints_new(
+                    src_id text,
+                    dst_id text not null,
+                    user_id text,
+                    project_id text,
+                    weight real not null,
+                    created_at integer,
+                    updated_at integer,
+                    primary key(src_id,dst_id,user_id)
+                )
+            `);
+
+            // Backfill compatible waypoint relations from old table
+            await _exec_direct(`
+                insert into waypoints_new(src_id,dst_id,user_id,project_id,weight,created_at,updated_at)
+                select src_id,dst_id,user_id,project_id,weight,created_at,updated_at from waypoints
+                where dst_id is not null
+            `);
+
+            // Rename old table to backup
+            await _exec_direct("alter table waypoints rename to waypoints_backup");
+
+            // Rename new table to waypoints
+            try {
+                await _exec_direct(
+                    "alter table waypoints_new rename to waypoints",
                 );
+                // Rename succeeded, drop backup
+                await _exec_direct("drop table waypoints_backup");
+            } catch (renameError) {
+                // Succeeded rename failed, restore backup from waypoints_backup
                 try {
-                    // Create new table with corrected schema
-                    await _exec_direct(`
-                        create table waypoints_new(
-                            src_id text,
-                            dst_id text not null,
-                            user_id text,
-                            project_id text,
-                            weight real not null,
-                            created_at integer,
-                            updated_at integer,
-                            primary key(src_id,dst_id,user_id)
-                        )
-                    `);
-
-                    // Backfill compatible waypoint relations from old table
-                    await _exec_direct(`
-                        insert into waypoints_new(src_id,dst_id,user_id,project_id,weight,created_at,updated_at)
-                        select src_id,dst_id,user_id,project_id,weight,created_at,updated_at from waypoints
-                        where dst_id is not null
-                    `);
-
-                    // Rename old table to backup
-                    await _exec_direct("alter table waypoints rename to waypoints_backup");
-
-                    // Rename new table to waypoints
-                    try {
-                        await _exec_direct(
-                            "alter table waypoints_new rename to waypoints",
-                        );
-                        // Rename succeeded, drop backup
-                        await _exec_direct("drop table waypoints_backup");
-                    } catch (renameError) {
-                        // Succeeded rename failed, restore backup from waypoints_backup
-                        try {
-                            await _exec_direct("alter table waypoints_backup rename to waypoints");
-                        } catch {}
-                        throw renameError;
-                    }
-
-                    console.log(
-                        "[DB] Waypoints migration completed successfully",
-                    );
-                } catch (migrationError: any) {
-                    console.error(
-                        "[DB] Waypoints migration failed:",
-                        migrationError.message,
-                    );
-                    // Attempt cleanup and preserve/restore backup instead of unconditionally dropping waypoints_new
-                    try {
-                        const tables = await all_async_direct("select name from sqlite_master where type='table'");
-                        const tableNames = tables.map(t => t.name);
-
-                        if (tableNames.includes("waypoints_backup") && !tableNames.includes("waypoints")) {
-                            await _exec_direct("alter table waypoints_backup rename to waypoints");
-                        }
-                        if (tableNames.includes("waypoints_new")) {
-                            await _exec_direct("drop table if exists waypoints_new");
-                        }
-                    } catch (cleanupError) {
-                        // Cleanup failed, but log original error
-                    }
-                    throw new DbInitError(
-                        `Waypoints migration failed: ${migrationError.message}`,
-                    );
-                }
+                    await _exec_direct("alter table waypoints_backup rename to waypoints");
+                } catch {}
+                throw renameError;
             }
+
+            console.log(
+                "[DB] Waypoints migration completed successfully",
+            );
+        } catch (migrationError: any) {
+            console.error(
+                "[DB] Waypoints migration failed:",
+                migrationError.message,
+            );
+            // Attempt cleanup and preserve/restore backup instead of unconditionally dropping waypoints_new
+            try {
+                const tables = await all_async_direct("select name from sqlite_master where type='table'");
+                const tableNames = new Set(tables.map(t => t.name));
+
+                if (tableNames.has("waypoints_backup") && !tableNames.has("waypoints")) {
+                    await _exec_direct("alter table waypoints_backup rename to waypoints");
+                }
+                if (tableNames.has("waypoints_new")) {
+                    await _exec_direct("drop table if exists waypoints_new");
+                }
+            } catch (cleanupError) {
+                // Cleanup failed, but log original error
+            }
+            throw new DbInitError(
+                `Waypoints migration failed: ${migrationError.message}`,
+            );
         }
     } catch (e: any) {
         // If table doesn't exist yet, that's fine - schema creation will handle it
@@ -290,8 +289,12 @@ export const init_db = async () => {
         if (e instanceof DbInitError) {
             throw e;
         }
-        // Otherwise ignore (table might not exist yet)
     }
+}
+
+export const init_db = async () => {
+    // Migration check for waypoints table primary key change
+    await migrateWaypointsTable();
 
     const SCHEMA_TABLES = [
         "create table if not exists memories(id text primary key,user_id text,project_id text,segment integer default 0,content text not null,summary text,simhash text,primary_sector text not null,tags text,meta text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0,coactivations integer default 0)",

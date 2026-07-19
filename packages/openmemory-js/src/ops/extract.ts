@@ -6,7 +6,7 @@ import * as path from "path";
 import * as os from "os";
 import ffmpeg from "fluent-ffmpeg";
 import OpenAI from "openai";
-import { isSafeUrl, fetchWithSsrfProtection } from "../utils/fetch";
+import { fetchWithSsrfProtection } from "../utils/fetch";
 const TurndownService = require("turndown");
 
 const execAsync = promisify(exec);

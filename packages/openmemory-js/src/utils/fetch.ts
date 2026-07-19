@@ -38,22 +38,14 @@ export async function fetchWithTrace(
     }
 }
 
-/**
- * SECURITY: SSRF (Server-Side Request Forgery) protection.
- * Checks whether an IP address belongs to loopback, private, link-local, or restricted ranges.
- */
-export function isIpPrivateOrRestricted(ip: string): boolean {
-    const normalized = ip.toLowerCase().trim();
-
-    // IPv6 Loopback or unspecified
+function isIpv6PrivateOrRestricted(normalized: string): boolean {
     if (normalized === "::1" || normalized === "::") {
         return true;
     }
 
-    // Advanced IPv6 range validation
     const firstGroup = normalized.split(":")[0];
-    const firstVal = parseInt(firstGroup, 16);
-    if (!isNaN(firstVal)) {
+    const firstVal = Number.parseInt(firstGroup, 16);
+    if (!Number.isNaN(firstVal)) {
         // fe80::/10 (Link-local): 0xfe80 to 0xfebf
         if (firstVal >= 0xfe80 && firstVal <= 0xfebf) return true;
         // fc00::/7 (Unique Local): 0xfc00 to 0xfdff
@@ -62,15 +54,13 @@ export function isIpPrivateOrRestricted(ip: string): boolean {
         if (firstVal >= 0xff00 && firstVal <= 0xffff) return true;
     }
 
-    // IPv4-mapped IPv6 addresses (e.g., ::ffff:127.0.0.1)
-    if (normalized.startsWith("::ffff:")) {
-        return isIpPrivateOrRestricted(normalized.substring(7));
-    }
+    return false;
+}
 
-    // IPv4 address parsing and range validation
+function isIpv4PrivateOrRestricted(normalized: string): boolean {
     const parts = normalized.split(".").map(Number);
-    if (parts.length === 4 && parts.every((p) => !isNaN(p) && p >= 0 && p <= 255)) {
-        const [a, b, c, d] = parts;
+    if (parts.length === 4 && parts.every((p) => !Number.isNaN(p) && p >= 0 && p <= 255)) {
+        const [a, b] = parts;
         // 127.0.0.0/8 (loopback)
         if (a === 127) return true;
         // 10.0.0.0/8 (private)
@@ -90,6 +80,25 @@ export function isIpPrivateOrRestricted(ip: string): boolean {
     }
 
     return false;
+}
+
+/**
+ * SECURITY: SSRF (Server-Side Request Forgery) protection.
+ * Checks whether an IP address belongs to loopback, private, link-local, or restricted ranges.
+ */
+export function isIpPrivateOrRestricted(ip: string): boolean {
+    const normalized = ip.toLowerCase().trim();
+
+    if (isIpv6PrivateOrRestricted(normalized)) {
+        return true;
+    }
+
+    // IPv4-mapped IPv6 addresses (e.g., ::ffff:127.0.0.1)
+    if (normalized.startsWith("::ffff:")) {
+        return isIpPrivateOrRestricted(normalized.substring(7));
+    }
+
+    return isIpv4PrivateOrRestricted(normalized);
 }
 
 /**
@@ -126,6 +135,72 @@ export async function isSafeUrl(urlStr: string): Promise<boolean> {
     }
 }
 
+async function resolveAndValidateHostname(hostname: string): Promise<string> {
+    const addresses = await dns.lookup(hostname, { all: true });
+    let pinnedIp = "";
+    for (const addr of addresses) {
+        if (isIpPrivateOrRestricted(addr.address)) {
+            throw new Error(`SSRF Prevention: Unsafe IP address: ${addr.address} resolved from ${hostname}`);
+        }
+        if (!pinnedIp) {
+            pinnedIp = addr.address;
+        }
+    }
+
+    if (!pinnedIp) {
+        throw new Error(`SSRF Prevention: Could not resolve IP address for hostname: ${hostname}`);
+    }
+
+    return pinnedIp;
+}
+
+async function executeRequestWithPin(
+    parsedUrl: URL,
+    pinnedIp: string,
+    currentInit?: RequestInit,
+): Promise<{ status: number; headers: Record<string, string>; body: Buffer }> {
+    const isHttps = parsedUrl.protocol === "https:";
+    const requester = isHttps ? https : http;
+
+    const requestHeaders = new Headers(currentInit?.headers);
+    if (!requestHeaders.has("Host")) {
+        requestHeaders.set("Host", parsedUrl.hostname);
+    }
+
+    const options: any = {
+        hostname: pinnedIp,
+        port: parsedUrl.port || (isHttps ? 443 : 80),
+        path: parsedUrl.pathname + parsedUrl.search,
+        method: currentInit?.method || "GET",
+        headers: Object.fromEntries(requestHeaders.entries()),
+    };
+
+    if (isHttps) {
+        options.servername = parsedUrl.hostname; // SNI
+    }
+
+    return new Promise<{ status: number; headers: Record<string, string>; body: Buffer }>((resolve, reject) => {
+        const req = requester.request(options, (res) => {
+            const chunks: Buffer[] = [];
+            res.on("data", (chunk) => chunks.push(chunk));
+            res.on("end", () => {
+                resolve({
+                    status: res.statusCode || 200,
+                    headers: res.headers as Record<string, string>,
+                    body: Buffer.concat(chunks),
+                });
+            });
+        });
+
+        req.on("error", (err) => reject(err));
+
+        if (currentInit?.body) {
+            req.write(currentInit.body);
+        }
+        req.end();
+    });
+}
+
 /**
  * SECURITY: SSRF-safe fetch wrapper that resolves and validates redirects manual-style.
  * This prevents attackers from bypassing SSRF checks via HTTP redirects (e.g., redirecting
@@ -150,65 +225,10 @@ export async function fetchWithSsrfProtection(
         const hostname = parsedUrl.hostname;
 
         // Resolve DNS once to pin the IP address (prevents DNS Rebinding / TOCTOU)
-        const addresses = await dns.lookup(hostname, { all: true });
-        let pinnedIp = "";
-        for (const addr of addresses) {
-            if (isIpPrivateOrRestricted(addr.address)) {
-                throw new Error(`SSRF Prevention: Unsafe IP address: ${addr.address} resolved from ${hostname}`);
-            }
-            if (!pinnedIp) {
-                pinnedIp = addr.address;
-            }
-        }
-
-        if (!pinnedIp) {
-            throw new Error(`SSRF Prevention: Could not resolve IP address for hostname: ${hostname}`);
-        }
+        const pinnedIp = await resolveAndValidateHostname(hostname);
 
         // Perform the request pinning the validated IP address
-        const isHttps = parsedUrl.protocol === "https:";
-        const requester = isHttps ? https : http;
-
-        const requestHeaders = new Headers(currentInit?.headers);
-        if (!requestHeaders.has("Host")) {
-            requestHeaders.set("Host", hostname);
-        }
-
-        const options: any = {
-            hostname: pinnedIp,
-            port: parsedUrl.port || (isHttps ? 443 : 80),
-            path: parsedUrl.pathname + parsedUrl.search,
-            method: currentInit?.method || "GET",
-            headers: Object.fromEntries(requestHeaders.entries()),
-        };
-
-        if (isHttps) {
-            options.servername = hostname; // SNI
-        }
-
-        const responsePromise = new Promise<{ status: number; headers: Record<string, string>; body: Buffer }>((resolve, reject) => {
-            const req = requester.request(options, (res) => {
-                const chunks: Buffer[] = [];
-                res.on("data", (chunk) => chunks.push(chunk));
-                res.on("end", () => {
-                    resolve({
-                        status: res.statusCode || 200,
-                        headers: res.headers as Record<string, string>,
-                        body: Buffer.concat(chunks),
-                    });
-                });
-            });
-
-            req.on("error", (err) => reject(err));
-
-            // Write body if present
-            if (currentInit?.body) {
-                req.write(currentInit.body);
-            }
-            req.end();
-        });
-
-        const { status, headers, body } = await responsePromise;
+        const { status, headers, body } = await executeRequestWithPin(parsedUrl, pinnedIp, currentInit);
 
         const isRedirect =
             status === 301 ||
@@ -218,10 +238,9 @@ export async function fetchWithSsrfProtection(
             status === 308;
 
         if (!isRedirect) {
-            const headersObj = new Headers(headers);
             return new Response(body, {
                 status,
-                headers: headersObj,
+                headers: new Headers(headers),
             });
         }
 
@@ -231,17 +250,16 @@ export async function fetchWithSsrfProtection(
 
         const location = headers["location"];
         if (!location) {
-            const headersObj = new Headers(headers);
             return new Response(body, {
                 status,
-                headers: headersObj,
+                headers: new Headers(headers),
             });
         }
 
         const nextUrl = new URL(location, currentUrl);
 
         // Strip credential-bearing headers if cross-origin
-        if (currentInit && currentInit.headers) {
+        if (currentInit?.headers) {
             const currentOrigin = new URL(currentUrl).origin;
             const targetOrigin = nextUrl.origin;
 

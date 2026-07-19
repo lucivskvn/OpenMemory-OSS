@@ -11,7 +11,7 @@ import {
     source_content,
     source_config,
 } from "./base";
-import { isSafeUrl, fetchWithSsrfProtection } from "../utils/fetch";
+import { fetchWithSsrfProtection } from "../utils/fetch";
 
 export interface web_crawler_config extends source_config {
     max_pages?: number;
