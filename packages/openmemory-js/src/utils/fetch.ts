@@ -164,12 +164,17 @@ async function executeRequestWithPin(
     pinnedIp: string,
     currentInit?: RequestInit,
 ): Promise<{ status: number; headers: Record<string, string>; body: Buffer }> {
+    const signal = currentInit?.signal;
+    if (signal?.aborted) {
+        throw new DOMException("The operation was aborted.", "AbortError");
+    }
+
     const isHttps = parsedUrl.protocol === "https:";
     const requester = isHttps ? https : http;
 
     const requestHeaders = new Headers(currentInit?.headers);
     if (!requestHeaders.has("Host")) {
-        requestHeaders.set("Host", parsedUrl.hostname);
+        requestHeaders.set("Host", parsedUrl.host);
     }
 
     const options: any = {
@@ -187,8 +192,26 @@ async function executeRequestWithPin(
     return new Promise<{ status: number; headers: Record<string, string>; body: Buffer }>((resolve, reject) => {
         const req = requester.request(options, (res) => {
             const chunks: Buffer[] = [];
-            res.on("data", (chunk) => chunks.push(chunk));
+            let totalBytes = 0;
+            const maxResponseSize = 50 * 1024 * 1024; // 50MB safety limit
+
+            res.on("data", (chunk) => {
+                totalBytes += chunk.length;
+                if (totalBytes > maxResponseSize) {
+                    req.destroy(new Error("Response too large"));
+                    if (signal && abortHandler) {
+                        signal.removeEventListener("abort", abortHandler);
+                    }
+                    reject(new Error("Response too large"));
+                    return;
+                }
+                chunks.push(chunk);
+            });
+
             res.on("end", () => {
+                if (signal && abortHandler) {
+                    signal.removeEventListener("abort", abortHandler);
+                }
                 resolve({
                     status: res.statusCode || 200,
                     headers: res.headers as Record<string, string>,
@@ -197,7 +220,21 @@ async function executeRequestWithPin(
             });
         });
 
-        req.on("error", (err) => reject(err));
+        let abortHandler: (() => void) | null = null;
+        if (signal) {
+            abortHandler = () => {
+                req.destroy(new DOMException("The operation was aborted.", "AbortError"));
+                reject(new DOMException("The operation was aborted.", "AbortError"));
+            };
+            signal.addEventListener("abort", abortHandler);
+        }
+
+        req.on("error", (err) => {
+            if (signal && abortHandler) {
+                signal.removeEventListener("abort", abortHandler);
+            }
+            reject(err);
+        });
 
         if (currentInit?.body) {
             req.write(currentInit.body);

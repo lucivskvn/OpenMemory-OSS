@@ -294,6 +294,8 @@ async function migrateWaypointsTable(): Promise<void> {
         if (e instanceof DbInitError) {
             throw e;
         }
+        console.error("[DB] Unexpected error during waypoints migration check:", e);
+        throw e;
     }
 }
 
@@ -408,7 +410,7 @@ export const q: q_type = {
                 await exec(sql, params);
 
                 let factSql =
-                    "delete from temporal_facts where json_extract(metadata, '$.source_memory_id') = ?";
+                    "delete from temporal_facts where json_extract(metadata, '$.source_memory') = ?";
                 const factParams: any[] = [id];
                 if (user_id) {
                     factSql += " and user_id=?";
