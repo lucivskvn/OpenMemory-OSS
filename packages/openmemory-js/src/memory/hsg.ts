@@ -250,9 +250,10 @@ export function classify_content(
     content: string,
     metadata?: any,
 ): sector_class {
-    if (metadata?.sector && sectors.includes(metadata.sector)) {
+    const sect = metadata?.sector || metadata?.lgm?.sector;
+    if (sect && sectors.includes(sect)) {
         return {
-            primary: metadata.sector,
+            primary: sect,
             additional: [],
             confidence: 1.0,
         };
@@ -1020,7 +1021,7 @@ export async function hsg_query(
         for (const r of top) {
             const cur_fb = (await q.get_mem.get(r.id))?.feedback_score || 0;
             const new_fb = cur_fb * 0.9 + r.score * 0.1;
-            await q.upd_feedback.run(r.id, new_fb);
+            await q.upd_feedback.run(new_fb, Date.now(), r.id);
         }
 
         for (let i = 0; i < tids.length; i++) {

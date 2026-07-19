@@ -239,10 +239,12 @@ export async function retrieve_node_mems(p: lgm_retrieve_req) {
     if (p.query) {
         const matches = await hsg_query(p.query, Math.max(lim * 2, lim), {
             sectors: [sec],
+            user_id: p.user_id,
         });
         for (const match of matches) {
             const row = (await q.get_mem.get(match.id)) as mem_row | undefined;
             if (!row) continue;
+            if (p.user_id && row.user_id !== p.user_id) continue;
             const meta = safe_parse<Record<string, unknown>>(row.meta, {});
             if (!matches_ns(meta, ns, gid)) continue;
             const hyd = await hydrate_mem_row(
@@ -256,12 +258,11 @@ export async function retrieve_node_mems(p: lgm_retrieve_req) {
             if (items.length >= lim) break;
         }
     } else {
-        const raw_rows = (await q.all_mem_by_sector.all(
-            sec,
-            lim * 4,
-            0,
-        )) as mem_row[];
+        const raw_rows = p.user_id
+            ? (await q.all_mem_by_user_sector.all(p.user_id, sec, lim * 4, 0)) as mem_row[]
+            : (await q.all_mem_by_sector.all(sec, lim * 4, 0)) as mem_row[];
         for (const row of raw_rows) {
+            if (p.user_id && row.user_id !== p.user_id) continue;
             const meta = safe_parse<Record<string, unknown>>(row.meta, {});
             if (!matches_ns(meta, ns, gid)) continue;
             const hyd = await hydrate_mem_row(row, meta, inc_meta);
@@ -295,6 +296,7 @@ export async function get_graph_ctx(p: lgm_context_req) {
             graph_id: gid,
             limit: per_node_lim,
             include_metadata: true,
+            user_id: p.user_id,
         });
         node_ctxs.push({ node, sector: res.sector, items: res.items });
     }
@@ -319,11 +321,12 @@ export async function get_graph_ctx(p: lgm_context_req) {
     };
 }
 
-const build_ctx_refl = async (ns: string, gid?: string) => {
+const build_ctx_refl = async (ns: string, gid?: string, user_id?: string) => {
     const ctx = await get_graph_ctx({
         namespace: ns,
         graph_id: gid,
         limit: env.lg_max_context,
+        user_id,
     });
     const lns = ctx.nodes.flatMap((e) =>
         e.items.map((i) => ({
@@ -343,7 +346,7 @@ const build_ctx_refl = async (ns: string, gid?: string) => {
 export async function create_refl(p: lgm_reflection_req) {
     const ns = resolve_ns(p.namespace);
     const node = (p.node || "reflect").toLowerCase();
-    const base_content = p.content || (await build_ctx_refl(ns, p.graph_id));
+    const base_content = p.content || (await build_ctx_refl(ns, p.graph_id, p.user_id));
     if (!base_content)
         throw new Error("reflection content could not be derived");
     const tags = [
@@ -361,6 +364,7 @@ export async function create_refl(p: lgm_reflection_req) {
         tags,
         metadata: meta,
         reflective: false,
+        user_id: p.user_id,
     });
     return res;
 }
