@@ -244,6 +244,7 @@ export async function retrieve_node_mems(p: lgm_retrieve_req) {
         for (const match of matches) {
             const row = (await q.get_mem.get(match.id)) as mem_row | undefined;
             if (!row) continue;
+            if (p.user_id && row.user_id !== p.user_id) continue;
             const meta = safe_parse<Record<string, unknown>>(row.meta, {});
             if (!matches_ns(meta, ns, gid)) continue;
             const hyd = await hydrate_mem_row(
@@ -257,13 +258,11 @@ export async function retrieve_node_mems(p: lgm_retrieve_req) {
             if (items.length >= lim) break;
         }
     } else {
-        const raw_rows = (await q.all_mem_by_sector.all(
-            sec,
-            lim * 4,
-            0,
-        )) as mem_row[];
+        const raw_rows = p.user_id
+            ? (await q.all_mem_by_user_sector.all(p.user_id, sec, lim * 4, 0)) as mem_row[]
+            : (await q.all_mem_by_sector.all(sec, lim * 4, 0)) as mem_row[];
         for (const row of raw_rows) {
-            if (p.user_id !== undefined && row.user_id !== p.user_id) continue;
+            if (p.user_id && row.user_id !== p.user_id) continue;
             const meta = safe_parse<Record<string, unknown>>(row.meta, {});
             if (!matches_ns(meta, ns, gid)) continue;
             const hyd = await hydrate_mem_row(row, meta, inc_meta);

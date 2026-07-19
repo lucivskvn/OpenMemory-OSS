@@ -91,6 +91,7 @@ function extract_api_key(req: any): string | null {
 
 function validate_api_key(provided: string, expected: string): boolean {
     if (!provided || !expected) return false;
+    // Hash both values to prevent key length leakage via timing or error channels
     const provided_hash = crypto.createHash("sha256").update(provided).digest();
     const expected_hash = crypto.createHash("sha256").update(expected).digest();
     return crypto.timingSafeEqual(provided_hash, expected_hash);
