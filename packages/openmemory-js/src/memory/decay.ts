@@ -75,6 +75,10 @@ const safe_clamp = (val: number | undefined, def: number) => {
 
 const sleep_local = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+export const reset_last_decay = () => {
+    last_decay = 0;
+};
+
 export const apply_decay = async () => {
     if (active_q > 0) {
         console.log(`[decay] skipped - ${active_q} active queries`);

@@ -4,6 +4,7 @@ import { all_async } from "../../core/db";
 import { sector_configs } from "../../memory/hsg";
 import { getEmbeddingInfo } from "../../memory/embed";
 import { tier, env } from "../../core/config";
+import { require_tenant } from "../middleware/tenant";
 
 const TIER_BENEFITS = {
     hybrid: {
@@ -177,12 +178,15 @@ export function sys(app: any) {
     app.get(
         "/sectors",
         async (incoming_http_request: any, outgoing_http_response: any) => {
+            const tenant = require_tenant(incoming_http_request, outgoing_http_response);
+            if (!tenant) return;
             try {
                 const database_sector_statistics_rows = await all_async(`
                 select primary_sector as sector, count(*) as count, avg(salience) as avg_salience
                 from memories
+                where user_id = ?
                 group by primary_sector
-            `);
+            `, [tenant]);
                 outgoing_http_response.json({
                     sectors: Object.keys(sector_configs),
                     configs: sector_configs,
