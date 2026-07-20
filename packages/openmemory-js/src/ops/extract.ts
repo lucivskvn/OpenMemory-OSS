@@ -81,7 +81,7 @@ export async function extractHTML(html: string): Promise<ExtractionResult> {
 }
 
 export async function extractURL(url: string): Promise<ExtractionResult> {
-    const response = await fetchWithSsrfProtection(url);
+    const response = await fetchWithSsrfProtection(url, { timeout: 30000 });
     if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }

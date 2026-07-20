@@ -40,13 +40,20 @@ class SsrfProtectedNetworkBackend(httpcore.AsyncNetworkBackend):
         host: str,
         port: int,
         timeout: Optional[float] = None,
-        local_address: Optional[str] = None
+        local_address: Optional[str] = None,
+        socket_options: Optional[Any] = None,
     ) -> httpcore.AsyncNetworkStream:
         try:
             clean_host = host.strip("[]")
-            addr_info = await anyio.to_thread.run_sync(
-                socket.getaddrinfo, clean_host, port
-            )
+            if timeout is not None:
+                with anyio.fail_after(timeout):
+                    addr_info = await anyio.to_thread.run_sync(
+                        socket.getaddrinfo, clean_host, port
+                    )
+            else:
+                addr_info = await anyio.to_thread.run_sync(
+                    socket.getaddrinfo, clean_host, port
+                )
             if not addr_info:
                 raise httpcore.ConnectError(f"DNS resolution failed for {host}")
             ip_address = addr_info[0][4][0]
@@ -60,7 +67,8 @@ class SsrfProtectedNetworkBackend(httpcore.AsyncNetworkBackend):
             host=ip_address,
             port=port,
             timeout=timeout,
-            local_address=local_address
+            local_address=local_address,
+            socket_options=socket_options,
         )
 
     async def connect_unix_socket(
@@ -87,13 +95,14 @@ async def fetch_with_ssrf_protection(url: str, **kwargs: Any) -> httpx.Response:
     client = create_ssrf_protected_client()
     async with client:
         async with client.stream("GET", url, follow_redirects=follow_redirects, timeout=timeout, **kwargs) as response:
-            content_length = response.headers.get("content-length")
-            if content_length:
+            content_length_str = response.headers.get("content-length")
+            if content_length_str:
                 try:
-                    if int(content_length) > 50 * 1024 * 1024:
-                        raise ValueError("Response size exceeded 50MB limit")
+                    content_length = int(content_length_str)
                 except ValueError:
-                    pass
+                    content_length = None
+                if content_length is not None and content_length > 50 * 1024 * 1024:
+                    raise ValueError("Response size exceeded 50MB limit")
 
             chunks = []
             total_bytes = 0

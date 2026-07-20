@@ -292,8 +292,9 @@ export async function fetchWithSsrfProtection(
                     return;
                 }
 
-                if (redirectCount >= 5) {
-                    reject(new Error("Too many redirects (max 5)"));
+                const maxRedirects = options.maxRedirects ?? 5;
+                if (redirectCount >= maxRedirects) {
+                    reject(new Error(`Too many redirects (max ${maxRedirects})`));
                     return;
                 }
 
@@ -374,12 +375,10 @@ export async function fetchWithSsrfProtection(
                     buffer: async () => buffer,
                     json: async () => JSON.parse(buffer.toString("utf8")),
                     arrayBuffer: async () => {
-                        const ab = new ArrayBuffer(buffer.length);
-                        const view = new Uint8Array(ab);
-                        for (let i = 0; i < buffer.length; i++) {
-                            view[i] = buffer[i];
-                        }
-                        return ab;
+                        return buffer.buffer.slice(
+                            buffer.byteOffset,
+                            buffer.byteOffset + buffer.byteLength,
+                        );
                     },
                 });
             });

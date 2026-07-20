@@ -64,29 +64,29 @@ describe("SSRF IP Validation - IPv6", () => {
 
 describe("fetchWithSsrfProtection client checks", () => {
     it("rejects non-http/https protocols", async () => {
-        expect(fetchWithSsrfProtection("ftp://example.com")).rejects.toThrow(
+        await expect(fetchWithSsrfProtection("ftp://example.com")).rejects.toThrow(
             "Unsupported protocol",
         );
-        expect(fetchWithSsrfProtection("file:///etc/passwd")).rejects.toThrow(
+        await expect(fetchWithSsrfProtection("file:///etc/passwd")).rejects.toThrow(
             "Unsupported protocol",
         );
     });
 
     it("blocks immediate private IPv4/IPv6 URLs", async () => {
-        expect(
+        await expect(
             fetchWithSsrfProtection("http://127.0.0.1/health"),
         ).rejects.toThrow("Access to private/restricted IP range blocked");
-        expect(fetchWithSsrfProtection("http://[::1]/health")).rejects.toThrow(
+        await expect(fetchWithSsrfProtection("http://[::1]/health")).rejects.toThrow(
             "Access to private/restricted IP range blocked",
         );
-        expect(
+        await expect(
             fetchWithSsrfProtection("http://10.0.0.1:8080/stats"),
         ).rejects.toThrow("Access to private/restricted IP range blocked");
     });
 
     it("respects and enforces timeout options", async () => {
         // Safe but non-routable IP to simulate timeout/hang
-        expect(
+        await expect(
             fetchWithSsrfProtection("http://192.0.2.1", { timeout: 10 }),
         ).rejects.toThrow("Request timed out");
     });

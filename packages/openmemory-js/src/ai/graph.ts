@@ -52,7 +52,7 @@ const safe_parse = <T>(val: string | null, fb: T): T => {
             return Array.isArray(parsed) ? (parsed as unknown as T) : fb;
         }
         if (typeof fb === "object" && fb !== null) {
-            return typeof parsed === "object" && parsed !== null
+            return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
                 ? (parsed as T)
                 : fb;
         }
