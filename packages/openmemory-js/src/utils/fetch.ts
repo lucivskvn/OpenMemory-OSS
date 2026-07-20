@@ -190,28 +190,38 @@ async function executeRequestWithPin(
     }
 
     return new Promise<{ status: number; headers: Record<string, string>; body: Buffer }>((resolve, reject) => {
-        const req = requester.request(options, (res) => {
+        let abortHandler: (() => void) | null = null;
+        let req: any;
+
+        const cleanupSignal = () => {
+            if (signal && abortHandler) {
+                signal.removeEventListener("abort", abortHandler);
+            }
+        };
+
+        const handleData = (chunk: Buffer, chunks: Buffer[], state: { totalBytes: number }, maxResponseSize: number) => {
+            state.totalBytes += chunk.length;
+            if (state.totalBytes > maxResponseSize) {
+                req.destroy(new Error("Response too large"));
+                cleanupSignal();
+                reject(new Error("Response too large"));
+                return false; // stop processing
+            }
+            chunks.push(chunk);
+            return true;
+        };
+
+        req = requester.request(options, (res) => {
             const chunks: Buffer[] = [];
-            let totalBytes = 0;
+            const state = { totalBytes: 0 };
             const maxResponseSize = 50 * 1024 * 1024; // 50MB safety limit
 
             res.on("data", (chunk) => {
-                totalBytes += chunk.length;
-                if (totalBytes > maxResponseSize) {
-                    req.destroy(new Error("Response too large"));
-                    if (signal && abortHandler) {
-                        signal.removeEventListener("abort", abortHandler);
-                    }
-                    reject(new Error("Response too large"));
-                    return;
-                }
-                chunks.push(chunk);
+                handleData(chunk, chunks, state, maxResponseSize);
             });
 
             res.on("end", () => {
-                if (signal && abortHandler) {
-                    signal.removeEventListener("abort", abortHandler);
-                }
+                cleanupSignal();
                 resolve({
                     status: res.statusCode || 200,
                     headers: res.headers as Record<string, string>,
@@ -220,7 +230,6 @@ async function executeRequestWithPin(
             });
         });
 
-        let abortHandler: (() => void) | null = null;
         if (signal) {
             abortHandler = () => {
                 req.destroy(new DOMException("The operation was aborted.", "AbortError"));
@@ -229,10 +238,8 @@ async function executeRequestWithPin(
             signal.addEventListener("abort", abortHandler);
         }
 
-        req.on("error", (err) => {
-            if (signal && abortHandler) {
-                signal.removeEventListener("abort", abortHandler);
-            }
+        req.on("error", (err: Error) => {
+            cleanupSignal();
             reject(err);
         });
 
