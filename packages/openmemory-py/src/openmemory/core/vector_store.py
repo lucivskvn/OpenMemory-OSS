@@ -38,6 +38,9 @@ class VectorStore(ABC):
 
 class SQLiteVectorStore(VectorStore):
     def __init__(self, table_name: str = "openmemory_vectors"):
+        import re
+        if not re.match(r'^[a-zA-Z0-9_]+$', str(table_name)):
+            raise ValueError("Invalid input")
         self.table = table_name
 
     async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None):
