@@ -20,3 +20,8 @@ This vulnerability existed because LangGraph routes did not apply `require_tenan
 
 **Prevention:**
 Always enforce a standard "defense-in-depth" rule where *all* user-interactive endpoints call middleware that maps the request to an authenticated tenant scope, and pass that `user_id` down to every single database query, search, and list operation. Validate and reject any explicit payload-supplied `user_id` that disagrees with the authenticated key.
+
+## 2026-07-19 - [Server-Side Request Forgery (SSRF) and DNS Rebinding Protection]
+**Vulnerability:** Retrieving user-provided URLs using unvalidated, raw global `fetch` is vulnerable to Server-Side Request Forgery (SSRF) and DNS Rebinding (TOCTOU) attacks, potentially exposing internal-only network endpoints and loopback services. Additionally, redirection without case-insensitive credential stripping can result in sensitive token/cookie leakage to untrusted third-party hosts.
+**Learning:** Preventing SSRF requires resolving the domain name exactly once, verifying that the IP family (v4 or v6) does not fall into standard private/restricted ranges (including loopback, carrier-grade NAT `100.64.0.0/10`, and link-local subnets), and pinning the connection to the validated IP using native http/https requester clients with proper SNI headers.
+**Prevention:** Always use `fetchWithSsrfProtection` when fetching untrusted, user-provided URLs, perform case-insensitive header checks before redirecting cross-origin, and enforce payload and timeout limits.

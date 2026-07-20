@@ -113,9 +113,12 @@ export async function with_retry<T>(
         if (attempt >= max_attempts - 1) return;
 
         let delay = Math.min(base_delay * Math.pow(2, attempt), max_delay);
-        if (e instanceof source_rate_limit_error && e.retry_after) delay = e.retry_after * 1000;
+        if (e instanceof source_rate_limit_error && e.retry_after)
+            delay = e.retry_after * 1000;
 
-        console.warn(`[retry] attempt ${attempt + 1}/${max_attempts} failed: ${e.message}, retrying in ${delay}ms`);
+        console.warn(
+            `[retry] attempt ${attempt + 1}/${max_attempts} failed: ${e.message}, retrying in ${delay}ms`,
+        );
     };
 
     for (let attempt = 0; attempt < max_attempts; attempt++) {
@@ -149,7 +152,7 @@ export abstract class base_source {
         return this._connected;
     }
 
-        async connect(creds?: Record<string, any>): Promise<boolean> {
+    async connect(creds?: Record<string, any>): Promise<boolean> {
         console.log(`[${this.name}] connecting...`);
         const result = await this._connect(creds || {});
         this._connected = result;

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from "zod";
 import {
     store_node_mem,
     retrieve_node_mems,
@@ -14,28 +14,35 @@ import type {
     lgm_reflection_req,
 } from "../../core/types";
 
+const LgmStoreReqSchema = z
+    .object({
+        memory: z.record(z.any()).optional(),
+        content: z.string().optional(),
+        metadata: z.record(z.any()).optional(),
+        session_id: z.string().optional(),
+        tags: z.array(z.string()).optional(),
+    })
+    .passthrough();
 
-const LgmStoreReqSchema = z.object({
-    memory: z.record(z.any()).optional(),
-    content: z.string().optional(),
-    metadata: z.record(z.any()).optional(),
-    session_id: z.string().optional(),
-    tags: z.array(z.string()).optional()
-}).passthrough();
+const LgmRetrieveReqSchema = z
+    .object({
+        query: z.string().optional(),
+        session_id: z.string().optional(),
+        limit: z.number().optional(),
+    })
+    .passthrough();
 
-const LgmRetrieveReqSchema = z.object({
-    query: z.string().optional(),
-    session_id: z.string().optional(),
-    limit: z.number().optional()
-}).passthrough();
+const LgmContextReqSchema = z
+    .object({
+        session_id: z.string().optional(),
+    })
+    .passthrough();
 
-const LgmContextReqSchema = z.object({
-    session_id: z.string().optional()
-}).passthrough();
-
-const LgmReflectionReqSchema = z.object({
-    session_id: z.string().optional()
-}).passthrough();
+const LgmReflectionReqSchema = z
+    .object({
+        session_id: z.string().optional(),
+    })
+    .passthrough();
 
 export function lg(app: any) {
     app.get("/lgm/config", (_req: any, res: any) => {
@@ -48,7 +55,10 @@ export function lg(app: any) {
         try {
             const parsedBody = LgmStoreReqSchema.parse(req.body);
             if (reject_tenant_mismatch(res, tenant, parsedBody.user_id)) return;
-            const r = await store_node_mem({ ...parsedBody, user_id: tenant } as lgm_store_req);
+            const r = await store_node_mem({
+                ...parsedBody,
+                user_id: tenant,
+            } as lgm_store_req);
             res.json(r);
         } catch (e) {
             console.error("[LGM] store error:", e);
@@ -65,7 +75,10 @@ export function lg(app: any) {
         try {
             const parsedBody = LgmRetrieveReqSchema.parse(req.body);
             if (reject_tenant_mismatch(res, tenant, parsedBody.user_id)) return;
-            const r = await retrieve_node_mems({ ...parsedBody, user_id: tenant } as lgm_retrieve_req);
+            const r = await retrieve_node_mems({
+                ...parsedBody,
+                user_id: tenant,
+            } as lgm_retrieve_req);
             res.json(r);
         } catch (e) {
             console.error("[LGM] retrieve error:", e);
@@ -82,7 +95,10 @@ export function lg(app: any) {
         try {
             const parsedBody = LgmContextReqSchema.parse(req.body);
             if (reject_tenant_mismatch(res, tenant, parsedBody.user_id)) return;
-            const r = await get_graph_ctx({ ...parsedBody, user_id: tenant } as lgm_context_req);
+            const r = await get_graph_ctx({
+                ...parsedBody,
+                user_id: tenant,
+            } as lgm_context_req);
             res.json(r);
         } catch (e) {
             console.error("[LGM] context error:", e);
@@ -99,7 +115,10 @@ export function lg(app: any) {
         try {
             const parsedBody = LgmReflectionReqSchema.parse(req.body);
             if (reject_tenant_mismatch(res, tenant, parsedBody.user_id)) return;
-            const r = await create_refl({ ...parsedBody, user_id: tenant } as lgm_reflection_req);
+            const r = await create_refl({
+                ...parsedBody,
+                user_id: tenant,
+            } as lgm_reflection_req);
             res.json(r);
         } catch (e) {
             console.error("[LGM] reflection error:", e);

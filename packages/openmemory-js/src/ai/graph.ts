@@ -51,10 +51,16 @@ const safe_parse = <T>(val: string | null, fb: T): T => {
         if (Array.isArray(fb)) {
             return Array.isArray(parsed) ? (parsed as unknown as T) : fb;
         }
-        if (typeof fb === 'object' && fb !== null) {
-            return typeof parsed === 'object' && parsed !== null ? (parsed as T) : fb;
+        if (typeof fb === "object" && fb !== null) {
+            return typeof parsed === "object" && parsed !== null
+                ? (parsed as T)
+                : fb;
         }
-        if (typeof fb === 'number' || typeof fb === 'string' || typeof fb === 'boolean') {
+        if (
+            typeof fb === "number" ||
+            typeof fb === "string" ||
+            typeof fb === "boolean"
+        ) {
             return typeof parsed === typeof fb ? (parsed as T) : fb;
         }
         return parsed as T;
@@ -125,7 +131,10 @@ const hydrate_mem_row = async (
     path?: string[],
 ): Promise<hydrated_mem> => {
     const tags = safe_parse<string[]>(row.tags, []);
-    const vecs = await vector_store.getVectorsById(row.id, row.user_id || undefined);
+    const vecs = await vector_store.getVectorsById(
+        row.id,
+        row.user_id || undefined,
+    );
     const secs = vecs.map((v) => v.sector);
     const mem: hydrated_mem = {
         id: row.id,
@@ -259,8 +268,13 @@ export async function retrieve_node_mems(p: lgm_retrieve_req) {
         }
     } else {
         const raw_rows = p.user_id
-            ? (await q.all_mem_by_user_sector.all(p.user_id, sec, lim * 4, 0)) as mem_row[]
-            : (await q.all_mem_by_sector.all(sec, lim * 4, 0)) as mem_row[];
+            ? ((await q.all_mem_by_user_sector.all(
+                  p.user_id,
+                  sec,
+                  lim * 4,
+                  0,
+              )) as mem_row[])
+            : ((await q.all_mem_by_sector.all(sec, lim * 4, 0)) as mem_row[]);
         for (const row of raw_rows) {
             if (p.user_id && row.user_id !== p.user_id) continue;
             const meta = safe_parse<Record<string, unknown>>(row.meta, {});
@@ -346,7 +360,8 @@ const build_ctx_refl = async (ns: string, gid?: string, user_id?: string) => {
 export async function create_refl(p: lgm_reflection_req) {
     const ns = resolve_ns(p.namespace);
     const node = (p.node || "reflect").toLowerCase();
-    const base_content = p.content || (await build_ctx_refl(ns, p.graph_id, p.user_id));
+    const base_content =
+        p.content || (await build_ctx_refl(ns, p.graph_id, p.user_id));
     if (!base_content)
         throw new Error("reflection content could not be derived");
     const tags = [

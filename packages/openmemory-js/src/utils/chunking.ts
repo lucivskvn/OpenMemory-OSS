@@ -15,7 +15,10 @@ function get_encoder(): Tiktoken | null {
         encoder = getEncoding("cl100k_base");
         return encoder;
     } catch (e) {
-        console.warn("[CHUNKING] Failed to initialize tiktoken encoder, falling back to character estimate:", e);
+        console.warn(
+            "[CHUNKING] Failed to initialize tiktoken encoder, falling back to character estimate:",
+            e,
+        );
         return null;
     }
 }
@@ -37,7 +40,7 @@ function process_paragraph_sentences(
     chks: chunk[],
     tgt: number,
     och: number,
-    state: { cur: string; cs: number; cur_tokens: number }
+    state: { cur: string; cs: number; cur_tokens: number },
 ) {
     const sents = p.split(/(?<=[.!?])\s+/);
     for (const s of sents) {

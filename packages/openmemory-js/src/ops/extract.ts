@@ -1,6 +1,7 @@
 import { exec } from "child_process";
 import { promisify } from "util";
 import mammoth from "mammoth";
+import { fetchWithSsrfProtection } from "../utils/fetch";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -80,7 +81,7 @@ export async function extractHTML(html: string): Promise<ExtractionResult> {
 }
 
 export async function extractURL(url: string): Promise<ExtractionResult> {
-    const response = await fetch(url);
+    const response = await fetchWithSsrfProtection(url);
     if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
@@ -157,7 +158,9 @@ export async function extractAudio(
             },
         };
     } catch (error: any) {
-        throw new Error(`Audio transcription failed: ${error.message}`, { cause: error });
+        throw new Error(`Audio transcription failed: ${error.message}`, {
+            cause: error,
+        });
     } finally {
         try {
             if (fs.existsSync(tempFilePath)) {

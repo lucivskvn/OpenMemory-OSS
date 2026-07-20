@@ -155,29 +155,31 @@ export async function applyDualPhaseDecayToAllMemories(): Promise<void> {
         "select id,salience,decay_lambda,last_seen_at,updated_at,created_at from memories",
     );
     const ts = now();
-    await Promise.all(mems.map(async (m: any) => {
-        const tms = Math.max(0, ts - (m.last_seen_at || m.updated_at));
-        const td = tms / 86400000;
-        const rt = await calculateDualPhaseDecayMemoryRetention(td);
-        const nsal = m.salience * rt;
-        await run_async(
-            `update ${memories_table} set salience=?,updated_at=? where id=?`,
-            [Math.max(0, nsal), ts, m.id],
-        );
-    }));
+    await Promise.all(
+        mems.map(async (m: any) => {
+            const tms = Math.max(0, ts - (m.last_seen_at || m.updated_at));
+            const td = tms / 86400000;
+            const rt = await calculateDualPhaseDecayMemoryRetention(td);
+            const nsal = m.salience * rt;
+            await run_async(
+                `update ${memories_table} set salience=?,updated_at=? where id=?`,
+                [Math.max(0, nsal), ts, m.id],
+            );
+        }),
+    );
     console.log(`[DECAY] Applied to ${mems.length} memories`);
 }
 
-export async function buildAssociativeWaypointGraphFromMemories(tenant: string): Promise<
-    Map<string, AssociativeWaypointGraphNode>
-> {
+export async function buildAssociativeWaypointGraphFromMemories(
+    tenant: string,
+): Promise<Map<string, AssociativeWaypointGraphNode>> {
     const gr = new Map<string, AssociativeWaypointGraphNode>();
     const wps = (await all_async(
         "select w.src_id, w.dst_id, w.weight, w.created_at " +
-        "from waypoints w " +
-        "join memories m1 on w.src_id = m1.id " +
-        "left join memories m2 on w.dst_id = m2.id " +
-        "where w.user_id = ? and m1.user_id = ? and (m2.user_id = ? or (w.dst_id like '%:%' and exists (select 1 from memories m3 where m3.user_id = ? and w.dst_id like m3.id || ':%')))",
+            "from waypoints w " +
+            "join memories m1 on w.src_id = m1.id " +
+            "left join memories m2 on w.dst_id = m2.id " +
+            "where w.user_id = ? and m1.user_id = ? and (m2.user_id = ? or (w.dst_id like '%:%' and exists (select 1 from memories m3 where m3.user_id = ? and w.dst_id like m3.id || ':%')))",
         [tenant, tenant, tenant, tenant],
     )) as any[];
     const ids = new Set<string>();

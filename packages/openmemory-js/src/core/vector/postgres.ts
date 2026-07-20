@@ -65,13 +65,20 @@ export class PostgresVectorStore implements VectorStore {
         }
     }
 
-    async deleteVector(id: string, sector: string, user_id: string = "anonymous"): Promise<void> {
+    async deleteVector(
+        id: string,
+        sector: string,
+        user_id: string = "anonymous",
+    ): Promise<void> {
         let sql = `delete from ${this.table} where id=$1 and sector=$2 and user_id=$3`;
         const params: any[] = [id, sector, user_id];
         await this.db.run_async(sql, params);
     }
 
-    async deleteVectors(id: string, user_id: string = "anonymous"): Promise<void> {
+    async deleteVectors(
+        id: string,
+        user_id: string = "anonymous",
+    ): Promise<void> {
         let sql = `delete from ${this.table} where id=$1 and user_id=$2`;
         const params: any[] = [id, user_id];
         await this.db.run_async(sql, params);
@@ -90,7 +97,8 @@ export class PostgresVectorStore implements VectorStore {
             const args: any[] = [v_str, sector, topK, user_id];
 
             if (project_id) {
-                filter_sql += " and (project_id = $5 or project_id = 'system_global' or project_id IS NULL)";
+                filter_sql +=
+                    " and (project_id = $5 or project_id = 'system_global' or project_id IS NULL)";
                 args.push(project_id);
             }
 
@@ -104,8 +112,9 @@ export class PostgresVectorStore implements VectorStore {
             const rows = await this.db.all_async(sql, args);
             return rows.map((r) => ({ id: r.id, score: r.similarity }));
         } else {
-            const is_postgres = this.usePgVector || !!process.env.OM_POSTGRES_URL;
-            const param = (i: number) => is_postgres ? `$${i}` : "?";
+            const is_postgres =
+                this.usePgVector || !!process.env.OM_POSTGRES_URL;
+            const param = (i: number) => (is_postgres ? `$${i}` : "?");
 
             const direct_args: any[] = [sector, user_id];
             let direct_filter = `where sector=${param(1)} and user_id=${param(2)}`;
@@ -159,7 +168,9 @@ export class PostgresVectorStore implements VectorStore {
         const rows = await this.db.all_async(sql, params);
         return rows.map((row) => ({
             sector: row.sector,
-            vector: this.usePgVector ? JSON.parse(row.v_val) : bufferToVector(row.v_val),
+            vector: this.usePgVector
+                ? JSON.parse(row.v_val)
+                : bufferToVector(row.v_val),
             dim: row.dim,
         }));
     }
@@ -174,7 +185,9 @@ export class PostgresVectorStore implements VectorStore {
         const rows = await this.db.all_async(sql, params);
         return rows.map((row) => ({
             id: row.id,
-            vector: this.usePgVector ? JSON.parse(row.v_val) : bufferToVector(row.v_val),
+            vector: this.usePgVector
+                ? JSON.parse(row.v_val)
+                : bufferToVector(row.v_val),
             dim: row.dim,
         }));
     }
