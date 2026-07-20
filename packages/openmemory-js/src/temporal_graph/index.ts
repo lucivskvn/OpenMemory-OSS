@@ -1,4 +1,9 @@
-export { type TemporalFact, type TemporalEdge, type TimelineEntry, type TemporalQuery } from "./types";
+export {
+    type TemporalFact,
+    type TemporalEdge,
+    type TimelineEntry,
+    type TemporalQuery,
+} from "./types";
 export {
     type InsertFactOptions,
     insert_fact,
@@ -11,7 +16,7 @@ export {
     apply_confidence_decay,
     get_active_facts_count,
     get_total_facts_count,
-    get_fact_by_id_for_user
+    get_fact_by_id_for_user,
 } from "./store";
 export {
     query_facts_at_time,
@@ -20,7 +25,7 @@ export {
     find_conflicting_facts,
     get_facts_by_subject,
     search_facts,
-    get_related_facts
+    get_related_facts,
 } from "./query";
 export {
     get_subject_timeline,
@@ -28,5 +33,5 @@ export {
     get_changes_in_window,
     compare_time_points,
     get_change_frequency,
-    get_volatile_facts
+    get_volatile_facts,
 } from "./timeline";

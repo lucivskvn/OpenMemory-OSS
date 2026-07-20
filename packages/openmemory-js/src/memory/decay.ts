@@ -152,7 +152,11 @@ export const apply_decay = async () => {
 
                         if (f < 0.7) {
                             const sector = m.primary_sector || "semantic";
-                            const vec_row = await vector_store.getVector(m.id, sector, m.user_id || undefined);
+                            const vec_row = await vector_store.getVector(
+                                m.id,
+                                sector,
+                                m.user_id || undefined,
+                            );
 
                             if (vec_row && vec_row.vector) {
                                 const vec =
@@ -177,7 +181,14 @@ export const apply_decay = async () => {
                                     );
 
                                     if (new_vec.length < before_len) {
-                                        await vector_store.storeVector(m.id, sector, new_vec, new_vec.length, m.user_id || undefined, m.project_id || undefined);
+                                        await vector_store.storeVector(
+                                            m.id,
+                                            sector,
+                                            new_vec,
+                                            new_vec.length,
+                                            m.user_id || undefined,
+                                            m.project_id || undefined,
+                                        );
                                         compressed = true;
                                         tot_comp++;
                                     }
@@ -196,7 +207,14 @@ export const apply_decay = async () => {
                         if (f < Math.max(0.3, cfg.cold_threshold)) {
                             const sector = m.primary_sector || "semantic";
                             const fp = fingerprint_mem(m, cfg.max_vec_dim);
-                            await vector_store.storeVector(m.id, sector, fp.vector, fp.vector.length, m.user_id || undefined, m.project_id || undefined);
+                            await vector_store.storeVector(
+                                m.id,
+                                sector,
+                                fp.vector,
+                                fp.vector.length,
+                                m.user_id || undefined,
+                                m.project_id || undefined,
+                            );
                             await run_async(
                                 "update memories set summary=? where id=?",
                                 [fp.summary, m.id],
@@ -250,7 +268,11 @@ export const on_query_hit = async (
     let updated = false;
 
     if (cfg.regeneration_enabled && reembed) {
-        const vec_row = await vector_store.getVector(mem_id, sector, m.user_id || undefined);
+        const vec_row = await vector_store.getVector(
+            mem_id,
+            sector,
+            m.user_id || undefined,
+        );
         if (vec_row && vec_row.vector) {
             const vec =
                 typeof vec_row.vector === "string"
@@ -260,7 +282,14 @@ export const on_query_hit = async (
                 try {
                     const base = m.summary || m.content || "";
                     const new_vec = await reembed(base);
-                    await vector_store.storeVector(mem_id, sector, new_vec, new_vec.length, m.user_id || undefined, m.project_id || undefined);
+                    await vector_store.storeVector(
+                        mem_id,
+                        sector,
+                        new_vec,
+                        new_vec.length,
+                        m.user_id || undefined,
+                        m.project_id || undefined,
+                    );
                     updated = true;
                 } catch (e) {}
             }

@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from "zod";
 import {
     store_node_mem,
     retrieve_node_mems,
@@ -14,28 +14,35 @@ import type {
     lgm_reflection_req,
 } from "../../core/types";
 
+const LgmStoreReqSchema = z
+    .object({
+        memory: z.record(z.any()).optional(),
+        content: z.string().optional(),
+        metadata: z.record(z.any()).optional(),
+        session_id: z.string().optional(),
+        tags: z.array(z.string()).optional(),
+    })
+    .passthrough();
 
-const LgmStoreReqSchema = z.object({
-    memory: z.record(z.any()).optional(),
-    content: z.string().optional(),
-    metadata: z.record(z.any()).optional(),
-    session_id: z.string().optional(),
-    tags: z.array(z.string()).optional()
-}).passthrough();
+const LgmRetrieveReqSchema = z
+    .object({
+        query: z.string().optional(),
+        session_id: z.string().optional(),
+        limit: z.number().optional(),
+    })
+    .passthrough();
 
-const LgmRetrieveReqSchema = z.object({
-    query: z.string().optional(),
-    session_id: z.string().optional(),
-    limit: z.number().optional()
-}).passthrough();
+const LgmContextReqSchema = z
+    .object({
+        session_id: z.string().optional(),
+    })
+    .passthrough();
 
-const LgmContextReqSchema = z.object({
-    session_id: z.string().optional()
-}).passthrough();
-
-const LgmReflectionReqSchema = z.object({
-    session_id: z.string().optional()
-}).passthrough();
+const LgmReflectionReqSchema = z
+    .object({
+        session_id: z.string().optional(),
+    })
+    .passthrough();
 
 export function lg(app: any) {
     app.get("/lgm/config", (_req: any, res: any) => {

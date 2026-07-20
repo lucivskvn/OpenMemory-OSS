@@ -33,6 +33,35 @@ type q_type = {
     all_mem_by_user: {
         all: (user_id: string, limit: number, offset: number) => Promise<any[]>;
     };
+    get_segment_count: {
+        get: (
+            segment: number,
+            user_id?: string,
+            project_id?: string,
+        ) => Promise<any>;
+    };
+    get_max_segment: {
+        get: (
+            user_id?: string,
+            project_id?: string,
+            is_system?: boolean,
+        ) => Promise<any>;
+    };
+    get_segments: {
+        all: (
+            user_id?: string,
+            project_id?: string,
+            is_system?: boolean,
+        ) => Promise<any[]>;
+    };
+    get_mem_by_segment: {
+        all: (
+            segment: number,
+            user_id?: string,
+            project_id?: string,
+            is_system?: boolean,
+        ) => Promise<any[]>;
+    };
     all_mem_by_user_sector: {
         all: (user_id: string, sector: string, limit: number, offset: number) => Promise<any[]>;
     };
@@ -174,70 +203,112 @@ export const transaction = {
 
 export const memories_table = "memories";
 
-export const vector_store: VectorStore = env.vector_store === "valkey"
-    ? new ValkeyVectorStore()
-    : new PostgresVectorStore(
-        { run_async, get_async, all_async },
-        sqlite_vector_table,
-        !!env.OM_POSTGRES_URL,
-    );
+export const vector_store: VectorStore =
+    env.vector_store === "valkey"
+        ? new ValkeyVectorStore()
+        : new PostgresVectorStore(
+              { run_async, get_async, all_async },
+              sqlite_vector_table,
+              !!env.OM_POSTGRES_URL,
+          );
 
-export const init_db = async () => {
-    // Migration check for waypoints table primary key change
+async function performWaypointsMigration(): Promise<void> {
+    // Create new table with corrected schema
+    await _exec_direct(`
+        create table waypoints_new(
+            src_id text,
+            dst_id text not null,
+            user_id text,
+            project_id text,
+            weight real not null,
+            created_at integer,
+            updated_at integer,
+            primary key(src_id,dst_id,user_id)
+        )
+    `);
+
+    // Backfill compatible waypoint relations from old table
+    await _exec_direct(`
+        insert into waypoints_new(src_id,dst_id,user_id,project_id,weight,created_at,updated_at)
+        select src_id,dst_id,user_id,project_id,weight,created_at,updated_at from waypoints
+        where dst_id is not null
+    `);
+
+    // Rename old table to backup
+    await _exec_direct("alter table waypoints rename to waypoints_backup");
+
+    // Rename new table to waypoints
+    try {
+        await _exec_direct(
+            "alter table waypoints_new rename to waypoints",
+        );
+        // Rename succeeded, drop backup
+        await _exec_direct("drop table waypoints_backup");
+    } catch (renameError) {
+        // Succeeded rename failed, restore backup from waypoints_backup
+        try {
+            await _exec_direct("alter table waypoints_backup rename to waypoints");
+        } catch {}
+        throw renameError;
+    }
+}
+
+async function handleMigrationFailure(migrationError: any): Promise<void> {
+    console.error(
+        "[DB] Waypoints migration failed:",
+        migrationError.message,
+    );
+    // Attempt cleanup and preserve/restore backup instead of unconditionally dropping waypoints_new
+    try {
+        const tables = await all_async_direct("select name from sqlite_master where type='table'");
+        const tableNames = new Set(tables.map(t => t.name));
+
+        if (tableNames.has("waypoints_backup") && !tableNames.has("waypoints")) {
+            await _exec_direct("alter table waypoints_backup rename to waypoints");
+        }
+        if (tableNames.has("waypoints_new")) {
+            await _exec_direct("drop table if exists waypoints_new");
+        }
+    } catch (cleanupError) {
+        // Cleanup failed, but log original error
+    }
+    throw new DbInitError(
+        `Waypoints migration failed: ${migrationError.message}`,
+    );
+}
+
+async function migrateWaypointsTable(): Promise<void> {
     try {
         const info = await all_async_direct("PRAGMA table_info(waypoints)");
-        if (info && info.length > 0) {
-            const pkCols = info.filter(c => c.pk > 0);
-            const has_dst_id_pk = pkCols.some(c => c.name === "dst_id");
-            if (!has_dst_id_pk) {
-                console.warn("[DB] Migrating waypoints table to new schema with preserved data...");
-                try {
-                    // Create new table with corrected schema
-                    await _exec_direct(`
-                        create table waypoints_new(
-                            src_id text,
-                            dst_id text not null,
-                            user_id text,
-                            project_id text,
-                            weight real not null,
-                            created_at integer,
-                            updated_at integer,
-                            primary key(src_id,dst_id,user_id)
-                        )
-                    `);
+        if (!info || info.length === 0) return;
 
-                    // Backfill compatible waypoint relations from old table
-                    await _exec_direct(`
-                        insert into waypoints_new(src_id,dst_id,user_id,project_id,weight,created_at,updated_at)
-                        select src_id,dst_id,user_id,project_id,weight,created_at,updated_at from waypoints
-                        where dst_id is not null
-                    `);
+        const pkCols = info.filter((c) => c.pk > 0);
+        const has_dst_id_pk = pkCols.some((c) => c.name === "dst_id");
+        if (has_dst_id_pk) return;
 
-                    // Replace old table
-                    await _exec_direct("drop table waypoints");
-                    await _exec_direct("alter table waypoints_new rename to waypoints");
-
-                    console.log("[DB] Waypoints migration completed successfully");
-                } catch (migrationError: any) {
-                    console.error("[DB] Waypoints migration failed:", migrationError.message);
-                    // Attempt cleanup if migration partially completed
-                    try {
-                        await _exec_direct("drop table if exists waypoints_new");
-                    } catch (cleanupError) {
-                        // Cleanup failed, but log original error
-                    }
-                    throw new DbInitError(`Waypoints migration failed: ${migrationError.message}`);
-                }
-            }
+        console.warn(
+            "[DB] Migrating waypoints table to new schema with preserved data...",
+        );
+        try {
+            await performWaypointsMigration();
+            console.log(
+                "[DB] Waypoints migration completed successfully",
+            );
+        } catch (migrationError: any) {
+            await handleMigrationFailure(migrationError);
         }
     } catch (e: any) {
-        // If table doesn't exist yet, that's fine - schema creation will handle it
-        // But if it's a migration error, rethrow it
         if (e instanceof DbInitError) {
             throw e;
         }
-        // Otherwise ignore (table might not exist yet)
+        console.error("[DB] Unexpected error during waypoints migration check:", e);
+        throw e;
     }
+}
+
+export const init_db = async () => {
+    // Migration check for waypoints table primary key change
+    await migrateWaypointsTable();
 
     const SCHEMA_TABLES = [
         "create table if not exists memories(id text primary key,user_id text,project_id text,segment integer default 0,content text not null,summary text,simhash text,primary_sector text not null,tags text,meta text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0,coactivations integer default 0)",
@@ -279,7 +350,8 @@ export const q: q_type = {
             exec("update memories set mean_dim=?,mean_vec=? where id=?", p),
     },
     upd_compressed_vec: {
-        run: (...p) => exec("update memories set compressed_vec=? where id=?", p),
+        run: (...p) =>
+            exec("update memories set compressed_vec=? where id=?", p),
     },
     upd_feedback: {
         run: (...p) =>
@@ -334,14 +406,27 @@ export const q: q_type = {
                 await transaction.begin();
                 let sql = "delete from memories where id=?";
                 const params: any[] = [id];
-                if (user_id) { sql += " and user_id=?"; params.push(user_id); }
-                if (project_id) { sql += " and project_id=?"; params.push(project_id); }
+                if (user_id) {
+                    sql += " and user_id=?";
+                    params.push(user_id);
+                }
+                if (project_id) {
+                    sql += " and project_id=?";
+                    params.push(project_id);
+                }
                 await exec(sql, params);
 
-                let factSql = "delete from temporal_facts where metadata like ?";
-                const factParams: any[] = [`%"source_memory_id":"${id}"%`];
-                if (user_id) { factSql += " and user_id=?"; factParams.push(user_id); }
-                if (project_id) { factSql += " and project_id=?"; factParams.push(project_id); }
+                let factSql =
+                    "delete from temporal_facts where json_extract(metadata, '$.source_memory') = ?";
+                const factParams: any[] = [id];
+                if (user_id) {
+                    factSql += " and user_id=?";
+                    factParams.push(user_id);
+                }
+                if (project_id) {
+                    factSql += " and project_id=?";
+                    factParams.push(project_id);
+                }
                 await exec(factSql, factParams);
 
                 await transaction.commit();
@@ -349,7 +434,7 @@ export const q: q_type = {
                 await transaction.rollback();
                 throw err;
             }
-        }
+        },
     },
     get_mem: {
         get: (id) => get_async("select * from memories where id=?", [id]),
@@ -379,45 +464,75 @@ export const q: q_type = {
         get: (segment, user_id, project_id) => {
             let sql = "select count(*) as c from memories where segment=?";
             const params: any[] = [segment];
-            if (user_id) { sql += " and user_id=?"; params.push(user_id); }
-            if (project_id) { sql += " and project_id=?"; params.push(project_id); }
+            if (user_id) {
+                sql += " and user_id=?";
+                params.push(user_id);
+            }
+            if (project_id) {
+                sql += " and project_id=?";
+                params.push(project_id);
+            }
             return get_async(sql, params);
-        }
+        },
     },
     get_max_segment: {
         get: (user_id?: string, project_id?: string, is_system?: boolean) => {
-            let sql = "select coalesce(max(segment), 0) as max_seg from memories where 1=1";
+            let sql =
+                "select coalesce(max(segment), 0) as max_seg from memories where 1=1";
             const params: any[] = [];
             if (!is_system) {
-                if (user_id) { sql += " and user_id=?"; params.push(user_id); }
-                if (project_id) { sql += " and project_id=?"; params.push(project_id); }
+                if (user_id) {
+                    sql += " and user_id=?";
+                    params.push(user_id);
+                }
+                if (project_id) {
+                    sql += " and project_id=?";
+                    params.push(project_id);
+                }
             }
             return get_async(sql, params);
-        }
+        },
     },
     get_segments: {
         all: (user_id?: string, project_id?: string, is_system?: boolean) => {
             let sql = "select distinct segment from memories where 1=1";
             const params: any[] = [];
             if (!is_system) {
-                if (user_id) { sql += " and user_id=?"; params.push(user_id); }
-                if (project_id) { sql += " and project_id=?"; params.push(project_id); }
+                if (user_id) {
+                    sql += " and user_id=?";
+                    params.push(user_id);
+                }
+                if (project_id) {
+                    sql += " and project_id=?";
+                    params.push(project_id);
+                }
             }
             sql += " order by segment desc";
             return all_async(sql, params);
-        }
+        },
     },
     get_mem_by_segment: {
-        all: (segment: number, user_id?: string, project_id?: string, is_system?: boolean) => {
+        all: (
+            segment: number,
+            user_id?: string,
+            project_id?: string,
+            is_system?: boolean,
+        ) => {
             let sql = "select * from memories where segment=?";
             const params: any[] = [segment];
             if (!is_system) {
-                if (user_id) { sql += " and user_id=?"; params.push(user_id); }
-                if (project_id) { sql += " and project_id=?"; params.push(project_id); }
+                if (user_id) {
+                    sql += " and user_id=?";
+                    params.push(user_id);
+                }
+                if (project_id) {
+                    sql += " and project_id=?";
+                    params.push(project_id);
+                }
             }
             sql += " order by created_at desc";
             return all_async(sql, params);
-        }
+        },
     },
 
     ins_waypoint: {
@@ -443,10 +558,10 @@ export const q: q_type = {
     },
     get_waypoint: {
         get: (src, dst) =>
-            get_async("select weight from waypoints where src_id=? and dst_id=?", [
-                src,
-                dst,
-            ]),
+            get_async(
+                "select weight from waypoints where src_id=? and dst_id=?",
+                [src, dst],
+            ),
     },
     upd_waypoint: {
         run: (...p) =>
@@ -474,7 +589,8 @@ export const q: q_type = {
             exec("update embed_logs set status=?,err=? where id=?", p),
     },
     get_pending_logs: {
-        all: () => all_async("select * from embed_logs where status=?", ["pending"]),
+        all: () =>
+            all_async("select * from embed_logs where status=?", ["pending"]),
     },
     get_failed_logs: {
         all: () =>
@@ -505,7 +621,8 @@ export const q: q_type = {
             ),
     },
     get_user: {
-        get: (user_id) => get_async("select * from users where user_id=?", [user_id]),
+        get: (user_id) =>
+            get_async("select * from users where user_id=?", [user_id]),
     },
     upd_user_summary: {
         run: (...p) =>
