@@ -168,12 +168,17 @@ export async function applyDualPhaseDecayToAllMemories(): Promise<void> {
     console.log(`[DECAY] Applied to ${mems.length} memories`);
 }
 
-export async function buildAssociativeWaypointGraphFromMemories(): Promise<
+export async function buildAssociativeWaypointGraphFromMemories(tenant: string): Promise<
     Map<string, AssociativeWaypointGraphNode>
 > {
     const gr = new Map<string, AssociativeWaypointGraphNode>();
     const wps = (await all_async(
-        "select src_id,dst_id,weight,created_at from waypoints",
+        "select w.src_id, w.dst_id, w.weight, w.created_at " +
+        "from waypoints w " +
+        "join memories m1 on w.src_id = m1.id " +
+        "left join memories m2 on w.dst_id = m2.id " +
+        "where w.user_id = ? and m1.user_id = ? and (m2.user_id = ? or (w.dst_id like '%:%' and exists (select 1 from memories m3 where m3.user_id = ? and w.dst_id like m3.id || ':%')))",
+        [tenant, tenant, tenant, tenant],
     )) as any[];
     const ids = new Set<string>();
     for (const wp of wps) {
@@ -203,8 +208,9 @@ export async function buildAssociativeWaypointGraphFromMemories(): Promise<
 export async function performSpreadingActivationRetrieval(
     init: string[],
     max: number,
+    tenant: string,
 ): Promise<Map<string, number>> {
-    const gr = await buildAssociativeWaypointGraphFromMemories();
+    const gr = await buildAssociativeWaypointGraphFromMemories(tenant);
     const act = new Map<string, number>();
     for (const id of init) act.set(id, 1.0);
     for (let i = 0; i < max; i++) {
@@ -234,9 +240,11 @@ export async function retrieveMemoriesWithEnergyThresholding(
     qv: number[],
     qs: string,
     me: number,
+    tenant: string,
 ): Promise<any[]> {
     const mems = (await all_async(
-        "select id,content,primary_sector,salience,mean_vec from memories where salience>0.01",
+        "select id,content,primary_sector,salience,mean_vec from memories where salience>0.01 and user_id=?",
+        [tenant],
     )) as any[];
     const sc = new Map<string, number>();
     for (const m of mems) {
@@ -257,6 +265,7 @@ export async function retrieveMemoriesWithEnergyThresholding(
     const sp = await performSpreadingActivationRetrieval(
         Array.from(sc.keys()).slice(0, 5),
         3,
+        tenant,
     );
     const cmb = new Map<string, number>();
     for (const m of mems)

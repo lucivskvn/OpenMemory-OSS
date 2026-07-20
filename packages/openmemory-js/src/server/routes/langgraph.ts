@@ -6,6 +6,7 @@ import {
     create_refl,
     get_lg_cfg,
 } from "../../ai/graph";
+import { require_tenant, reject_tenant_mismatch } from "../middleware/tenant";
 import type {
     lgm_store_req,
     lgm_retrieve_req,
@@ -49,9 +50,12 @@ export function lg(app: any) {
     });
 
     app.post("/lgm/store", async (req: any, res: any) => {
+        const tenant = require_tenant(req, res);
+        if (!tenant) return;
         try {
             const parsedBody = LgmStoreReqSchema.parse(req.body);
-            const r = await store_node_mem(parsedBody as lgm_store_req);
+            if (reject_tenant_mismatch(res, tenant, parsedBody.user_id)) return;
+            const r = await store_node_mem({ ...parsedBody, user_id: tenant } as lgm_store_req);
             res.json(r);
         } catch (e) {
             console.error("[LGM] store error:", e);
@@ -63,9 +67,12 @@ export function lg(app: any) {
     });
 
     app.post("/lgm/retrieve", async (req: any, res: any) => {
+        const tenant = require_tenant(req, res);
+        if (!tenant) return;
         try {
             const parsedBody = LgmRetrieveReqSchema.parse(req.body);
-            const r = await retrieve_node_mems(parsedBody as lgm_retrieve_req);
+            if (reject_tenant_mismatch(res, tenant, parsedBody.user_id)) return;
+            const r = await retrieve_node_mems({ ...parsedBody, user_id: tenant } as lgm_retrieve_req);
             res.json(r);
         } catch (e) {
             console.error("[LGM] retrieve error:", e);
@@ -77,9 +84,12 @@ export function lg(app: any) {
     });
 
     app.post("/lgm/context", async (req: any, res: any) => {
+        const tenant = require_tenant(req, res);
+        if (!tenant) return;
         try {
             const parsedBody = LgmContextReqSchema.parse(req.body);
-            const r = await get_graph_ctx(parsedBody as lgm_context_req);
+            if (reject_tenant_mismatch(res, tenant, parsedBody.user_id)) return;
+            const r = await get_graph_ctx({ ...parsedBody, user_id: tenant } as lgm_context_req);
             res.json(r);
         } catch (e) {
             console.error("[LGM] context error:", e);
@@ -91,9 +101,12 @@ export function lg(app: any) {
     });
 
     app.post("/lgm/reflection", async (req: any, res: any) => {
+        const tenant = require_tenant(req, res);
+        if (!tenant) return;
         try {
             const parsedBody = LgmReflectionReqSchema.parse(req.body);
-            const r = await create_refl(parsedBody as lgm_reflection_req);
+            if (reject_tenant_mismatch(res, tenant, parsedBody.user_id)) return;
+            const r = await create_refl({ ...parsedBody, user_id: tenant } as lgm_reflection_req);
             res.json(r);
         } catch (e) {
             console.error("[LGM] reflection error:", e);

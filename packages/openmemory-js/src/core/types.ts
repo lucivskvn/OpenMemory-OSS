@@ -87,6 +87,7 @@ export type lgm_retrieve_req = {
     limit?: number;
     include_metadata?: boolean;
     project_id?: string;
+    user_id?: string;
 };
 
 export type lgm_context_req = {
@@ -94,6 +95,7 @@ export type lgm_context_req = {
     namespace?: string;
     limit?: number;
     project_id?: string;
+    user_id?: string;
 };
 
 export type lgm_reflection_req = {
@@ -103,6 +105,7 @@ export type lgm_reflection_req = {
     content?: string;
     context_ids?: string[];
     project_id?: string;
+    user_id?: string;
 };
 
 export type ide_event_req = {

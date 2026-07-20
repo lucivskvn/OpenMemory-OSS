@@ -62,6 +62,13 @@ type q_type = {
             is_system?: boolean,
         ) => Promise<any[]>;
     };
+    all_mem_by_user_sector: {
+        all: (user_id: string, sector: string, limit: number, offset: number) => Promise<any[]>;
+    };
+    get_segment_count: { get: (segment: number, user_id?: string, project_id?: string) => Promise<any> };
+    get_max_segment: { get: (user_id?: string, project_id?: string, is_system?: boolean) => Promise<any> };
+    get_segments: { all: (user_id?: string, project_id?: string, is_system?: boolean) => Promise<any[]> };
+    get_mem_by_segment: { all: (segment: number, user_id?: string, project_id?: string, is_system?: boolean) => Promise<any[]> };
 
     ins_waypoint: { run: (...p: any[]) => Promise<void> };
     get_neighbors: { all: (src: string) => Promise<any[]> };
@@ -597,6 +604,13 @@ export const q: q_type = {
             all_async(
                 "select * from memories where user_id=? order by created_at desc limit ? offset ?",
                 [user_id, limit, offset],
+            ),
+    },
+    all_mem_by_user_sector: {
+        all: (user_id, sector, limit, offset) =>
+            all_async(
+                "select * from memories where user_id=? and primary_sector=? order by created_at desc limit ? offset ?",
+                [user_id, sector, limit, offset],
             ),
     },
     ins_user: {
