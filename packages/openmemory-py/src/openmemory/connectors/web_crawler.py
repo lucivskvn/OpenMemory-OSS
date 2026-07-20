@@ -37,10 +37,11 @@ class web_crawler_connector(base_connector):
             raise ValueError("start_url is required")
 
         try:
-            import httpx
             from bs4 import BeautifulSoup
         except ImportError:
             raise ImportError("pip install httpx beautifulsoup4")
+
+        from ..utils.fetch import create_ssrf_protected_client
 
         self.visited.clear()
         self.crawled.clear()
@@ -48,7 +49,7 @@ class web_crawler_connector(base_connector):
         base_domain = urlparse(start_url).netloc
         to_visit = [(start_url, 0)]
 
-        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+        async with create_ssrf_protected_client(follow_redirects=True, timeout=30.0) as client:
             while to_visit and len(self.crawled) < self.max_pages:
                 url, depth = to_visit.pop(0)
 
@@ -105,12 +106,13 @@ class web_crawler_connector(base_connector):
         item_id is the url to fetch
         """
         try:
-            import httpx
             from bs4 import BeautifulSoup
         except ImportError:
             raise ImportError("pip install httpx beautifulsoup4")
 
-        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+        from ..utils.fetch import create_ssrf_protected_client
+
+        async with create_ssrf_protected_client(follow_redirects=True, timeout=30.0) as client:
             resp = await client.get(item_id, headers={
                 "User-Agent": "OpenMemory-Crawler/1.0 (compatible)"
             })

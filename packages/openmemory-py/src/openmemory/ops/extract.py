@@ -63,11 +63,12 @@ async def extract_html(html: str) -> Dict[str, Any]:
         }
     }
 
+from ..utils.fetch import fetch_with_ssrf_protection
+
 async def extract_url(url: str) -> Dict[str, Any]:
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(url, follow_redirects=True)
-        resp.raise_for_status()
-        html = resp.text
+    resp = await fetch_with_ssrf_protection(url)
+    resp.raise_for_status()
+    html = resp.text
 
     return await extract_html(html)
 
