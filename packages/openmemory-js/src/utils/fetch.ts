@@ -79,9 +79,22 @@ function isPrivateIpv4Octets(a: number, b: number): boolean {
 }
 
 function isIpv4PrivateOrRestricted(normalized: string): boolean {
-    const parts = normalized.split(".").map(Number);
-    if (parts.length === 4 && parts.every((p) => !Number.isNaN(p) && p >= 0 && p <= 255)) {
-        return isPrivateIpv4Octets(parts[0], parts[1]);
+    const parts = normalized.split(".");
+    if (parts.length === 4) {
+        // Prevent octal parsing bypass (e.g. 0177.0.0.1 for 127.0.0.1)
+        // Some libraries parse `0177` as `127` base 10 by stripping leading zeroes,
+        // others parse it as octal. URL API parses 0177 -> 127 (base 8).
+        const parsedParts = parts.map((p) => {
+            if (p.length > 1 && p.startsWith("0")) {
+                // Parse octal manually if it starts with 0 to match URL behavior
+                return Number.parseInt(p, 8);
+            }
+            return Number(p);
+        });
+
+        if (parsedParts.every((p) => !Number.isNaN(p) && p >= 0 && p <= 255)) {
+            return isPrivateIpv4Octets(parsedParts[0], parsedParts[1]);
+        }
     }
 
     return false;
@@ -98,9 +111,25 @@ export function isIpPrivateOrRestricted(ip: string): boolean {
         return true;
     }
 
-    // IPv4-mapped IPv6 addresses (e.g., ::ffff:127.0.0.1)
+    // IPv4-mapped IPv6 addresses (e.g., ::ffff:127.0.0.1 or ::ffff:7f00:1)
     if (normalized.startsWith("::ffff:")) {
-        return isIpPrivateOrRestricted(normalized.substring(7));
+        const mapped = normalized.substring(7);
+        // Handle hex notation like 7f00:1 (127.0.0.1)
+        if (mapped.includes(":")) {
+            const parts = mapped.split(":");
+            if (parts.length === 2) {
+                const p1 = Number.parseInt(parts[0], 16);
+                const p2 = Number.parseInt(parts[1], 16);
+                if (!Number.isNaN(p1) && !Number.isNaN(p2)) {
+                    const a = (p1 >> 8) & 0xff;
+                    const b = p1 & 0xff;
+                    const c = (p2 >> 8) & 0xff;
+                    const d = p2 & 0xff;
+                    return isPrivateIpv4Octets(a, b);
+                }
+            }
+        }
+        return isIpPrivateOrRestricted(mapped);
     }
 
     return isIpv4PrivateOrRestricted(normalized);
