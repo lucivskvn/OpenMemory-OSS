@@ -3,9 +3,8 @@ web crawler connector for openmemory
 requires: httpx, beautifulsoup4
 no auth required for public urls
 """
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Optional, Set, Any
 import os
-import asyncio
 from urllib.parse import urljoin, urlparse
 from .base import base_connector
 
@@ -56,57 +55,81 @@ class web_crawler_connector(base_connector):
         while to_visit and len(self.crawled) < self.max_pages:
             url, depth = to_visit.pop(0)
 
-            if url in self.visited:
-                continue
-
-            if depth > self.max_depth:
+            if url in self.visited or depth > self.max_depth:
                 continue
 
             self.visited.add(url)
 
-            try:
-                resp = await fetch_with_ssrf_protection(
-                    url,
-                    headers={
-                        "User-Agent": "OpenMemory-Crawler/1.0 (compatible)"
-                    },
-                    timeout=30.0,
-                )
-
-                if resp.status_code != 200:
-                    continue
-
-                content_type = resp.headers.get("content-type", "")
-                if "text/html" not in content_type:
-                    continue
-
-                soup = await asyncio.to_thread(BeautifulSoup, resp.text, "html.parser")
-                title = soup.title.string if soup.title else url
-
-                self.crawled.append(
-                    {
-                        "id": url,
-                        "name": title.strip() if title else url,
-                        "type": "webpage",
-                        "url": url,
-                        "depth": depth,
-                    }
-                )
-                if follow_links and depth < self.max_depth:
-                    for link in soup.find_all("a", href=True):
-                        href = link["href"]
-                        full_url = urljoin(url, href)
-                        parsed = urlparse(full_url)
-                        if parsed.netloc == base_domain:
-                            clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-                            if clean_url not in self.visited:
-                                to_visit.append((clean_url, depth + 1))
-
-            except Exception as e:
-                print(f"[crawler] failed to fetch {url}: {e}")
-                continue
+            await self._process_crawl_url(
+                url=url,
+                depth=depth,
+                base_domain=base_domain,
+                follow_links=follow_links,
+                to_visit=to_visit,
+                BeautifulSoup=BeautifulSoup,
+                fetch_with_ssrf_protection=fetch_with_ssrf_protection,
+            )
 
         return self.crawled
+
+    async def _process_crawl_url(
+        self,
+        url: str,
+        depth: int,
+        base_domain: str,
+        follow_links: bool,
+        to_visit: List[Any],
+        BeautifulSoup: Any,
+        fetch_with_ssrf_protection: Any,
+    ) -> None:
+        try:
+            resp = await fetch_with_ssrf_protection(
+                url,
+                headers={
+                    "User-Agent": "OpenMemory-Crawler/1.0 (compatible)"
+                },
+                timeout=30.0,
+            )
+
+            if resp.status_code != 200:
+                return
+
+            content_type = resp.headers.get("content-type", "")
+            if "text/html" not in content_type:
+                return
+
+            soup = BeautifulSoup(resp.text, "html.parser")
+            title = soup.title.string if soup.title else url
+
+            self.crawled.append(
+                {
+                    "id": url,
+                    "name": title.strip() if title else url,
+                    "type": "webpage",
+                    "url": url,
+                    "depth": depth,
+                }
+            )
+            if follow_links and depth < self.max_depth:
+                self._extract_links_from_soup(soup, url, base_domain, depth, to_visit)
+
+        except Exception as e:
+            print(f"[crawler] failed to fetch {url}: {e}")
+
+    def _extract_links_from_soup(
+        self, soup: Any, url: str, base_domain: str, depth: int, to_visit: List[Any]
+    ) -> None:
+        for link in soup.find_all("a", href=True):
+            try:
+                href = link["href"]
+                full_url = urljoin(url, href)
+                parsed = urlparse(full_url)
+                if parsed.netloc == base_domain:
+                    clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+                    if clean_url not in self.visited:
+                        to_visit.append((clean_url, depth + 1))
+            except Exception:
+                pass
 
     async def fetch_item(self, item_id: str) -> Dict:
         """
@@ -128,7 +151,7 @@ class web_crawler_connector(base_connector):
         )
         resp.raise_for_status()
 
-        soup = await asyncio.to_thread(BeautifulSoup, resp.text, "html.parser")
+        soup = BeautifulSoup(resp.text, "html.parser")
         for element in soup(["script", "style", "nav", "footer", "header"]):
             element.decompose()
         title = soup.title.string if soup.title else item_id

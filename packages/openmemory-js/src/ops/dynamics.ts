@@ -151,48 +151,21 @@ export async function determineEnergyBasedRetrievalThreshold(
 }
 
 export async function applyDualPhaseDecayToAllMemories(): Promise<void> {
-    const BATCH_SIZE = 100;
+    const mems = await all_async(
+        "select id,salience,decay_lambda,last_seen_at,updated_at,created_at from memories",
+    );
     const ts = now();
-    let offset = 0;
-    let totalProcessed = 0;
-
-    while (true) {
-        const mems = await all_async(
-            "select id,salience,decay_lambda,last_seen_at,updated_at,created_at from memories limit ? offset ?",
-            [BATCH_SIZE, offset],
+    for (const m of mems) {
+        const tms = Math.max(0, ts - (m.last_seen_at || m.updated_at));
+        const td = tms / 86400000;
+        const rt = await calculateDualPhaseDecayMemoryRetention(td);
+        const nsal = m.salience * rt;
+        await run_async(
+            `update ${memories_table} set salience=?,updated_at=? where id=?`,
+            [Math.max(0, nsal), ts, m.id],
         );
-
-        if (mems.length === 0) break;
-
-        const { transaction } = await import("../core/db");
-
-        try {
-            await transaction.begin();
-
-            for (const m of mems) {
-                const tms = Math.max(0, ts - (m.last_seen_at || m.updated_at));
-                const td = tms / 86400000;
-                const rt = await calculateDualPhaseDecayMemoryRetention(td);
-                const nsal = m.salience * rt;
-                await run_async(
-                    `update ${memories_table} set salience=?,updated_at=? where id=?`,
-                    [Math.max(0, nsal), ts, m.id],
-                );
-            }
-
-            await transaction.commit();
-        } catch (err) {
-            await transaction.rollback();
-            throw err;
-        }
-
-        totalProcessed += mems.length;
-        offset += BATCH_SIZE;
-
-        if (mems.length < BATCH_SIZE) break;
     }
-
-    console.log(`[DECAY] Applied to ${totalProcessed} memories`);
+    console.log(`[DECAY] Applied to ${mems.length} memories`);
 }
 
 export async function buildAssociativeWaypointGraphFromMemories(

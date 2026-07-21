@@ -1,7 +1,7 @@
 import { propagation, context } from "@opentelemetry/api";
-import dns from "node:dns/promises";
-import http from "node:http";
-import https from "node:https";
+import dns from "dns";
+import http from "http";
+import https from "https";
 
 /**
  * Enhanced fetch with OpenTelemetry trace context propagation and default timeout.
@@ -39,301 +39,383 @@ export async function fetchWithTrace(
 }
 
 /**
- * SECURITY: SSRF (Server-Side Request Forgery) protection helpers.
+ * SSRF Protection Utilities and Helper Functions
  */
-function isIpv6PrivateOrRestricted(normalized: string): boolean {
-    if (normalized === "::1" || normalized === "::") {
-        return true;
+
+export function isIpv4PrivateOrRestricted(ip: string): boolean {
+    const parts = ip.split(".").map(Number);
+    if (
+        parts.length !== 4 ||
+        parts.some(isNaN) ||
+        parts.some((p) => p < 0 || p > 255)
+    ) {
+        return true; // Treat invalid as restricted
     }
+    const [a, b, c, d] = parts;
 
-    const firstGroup = normalized.split(":")[0];
-    const firstVal = Number.parseInt(firstGroup, 16);
-    if (!Number.isNaN(firstVal)) {
-        // fe80::/10 (Link-local): 0xfe80 to 0xfebf
-        if (firstVal >= 0xfe80 && firstVal <= 0xfebf) return true;
-        // fc00::/7 (Unique Local): 0xfc00 to 0xfdff
-        if (firstVal >= 0xfc00 && firstVal <= 0xfdff) return true;
-        // ff00::/8 (Multicast): 0xff00 to 0xffff
-        if (firstVal >= 0xff00 && firstVal <= 0xffff) return true;
-    }
-
-    return false;
-}
-
-function isPrivateIpv4Octets(a: number, b: number): boolean {
     // 127.0.0.0/8 (loopback)
     if (a === 127) return true;
     // 10.0.0.0/8 (private)
     if (a === 10) return true;
-    // 100.64.0.0/10 (carrier-grade NAT)
-    if (a === 100 && b >= 64 && b <= 127) return true;
-    // 172.16.0.0/12 (private)
-    if (a === 172 && b >= 16 && b <= 31) return true;
+    // 0.0.0.0/8 (broadcast/any)
+    if (a === 0) return true;
+    // 169.254.0.0/16 (link-local)
+    if (a === 169 && b === 254) return true;
     // 192.168.0.0/16 (private)
     if (a === 192 && b === 168) return true;
-    // 169.254.0.0/16 (link-local, cloud metadata)
-    if (a === 169 && b === 254) return true;
-    // 0.0.0.0/8 (unspecified)
-    if (a === 0) return true;
-    // 224.0.0.0/4 (multicast) & 240.0.0.0/4 (reserved)
-    if (a >= 224) return true;
+    // 172.16.0.0/12 (private)
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    // 100.64.0.0/10 (carrier-grade NAT)
+    if (a === 100 && b >= 64 && b <= 127) return true;
 
     return false;
 }
 
-function isIpv4PrivateOrRestricted(normalized: string): boolean {
-    const parts = normalized.split(".").map(Number);
-    if (parts.length === 4 && parts.every((p) => !Number.isNaN(p) && p >= 0 && p <= 255)) {
-        return isPrivateIpv4Octets(parts[0], parts[1]);
+export function parseIpv6(ip: string): number[] | null {
+    let normalized = ip.trim().toLowerCase();
+
+    // Strip square brackets if present
+    if (normalized.startsWith("[") && normalized.endsWith("]")) {
+        normalized = normalized.slice(1, -1);
+    }
+
+    // Handle IPv4-mapped IPv6, e.g. ::ffff:192.168.0.1
+    if (normalized.includes(".")) {
+        const lastColon = normalized.lastIndexOf(":");
+        if (lastColon === -1) return null;
+        const ipv4Part = normalized.slice(lastColon + 1);
+        const parts = ipv4Part.split(".").map(Number);
+        if (
+            parts.length !== 4 ||
+            parts.some(isNaN) ||
+            parts.some((p) => p < 0 || p > 255)
+        )
+            return null;
+        const [a, b, c, d] = parts;
+        const hex1 = ((a << 8) | b).toString(16);
+        const hex2 = ((c << 8) | d).toString(16);
+        normalized = normalized.slice(0, lastColon + 1) + hex1 + ":" + hex2;
+    }
+
+    // Split on double colon to handle shorthand expansion
+    const partsByDoubleColon = normalized.split("::");
+    if (partsByDoubleColon.length > 2) return null; // More than one '::' is invalid
+
+    const left: number[] = [];
+    const right: number[] = [];
+
+    if (partsByDoubleColon[0] !== "") {
+        const leftParts = partsByDoubleColon[0].split(":");
+        for (const part of leftParts) {
+            const val = parseInt(part, 16);
+            if (isNaN(val) || val < 0 || val > 0xffff) return null;
+            left.push(val);
+        }
+    }
+
+    if (partsByDoubleColon[1] !== "") {
+        const rightParts = partsByDoubleColon[1].split(":");
+        for (const part of rightParts) {
+            const val = parseInt(part, 16);
+            if (isNaN(val) || val < 0 || val > 0xffff) return null;
+            right.push(val);
+        }
+    }
+
+    const missingCount = 8 - (left.length + right.length);
+    if (missingCount < 0) return null;
+
+    const middle = new Array(missingCount).fill(0);
+    return [...left, ...middle, ...right];
+}
+
+export function isIpv6PrivateOrRestricted(ip: string): boolean {
+    const words = parseIpv6(ip);
+    if (!words) return true; // Invalid is treated as restricted
+
+    // Unspecified ::/128
+    if (words.every((w) => w === 0)) return true;
+
+    // Loopback ::1/128
+    if (words.slice(0, 7).every((w) => w === 0) && words[7] === 1) return true;
+
+    // fe80::/10 (link-local)
+    if ((words[0] & 0xffc0) === 0xfe80) return true;
+
+    // fc00::/7 (unique local)
+    if ((words[0] & 0xfe00) === 0xfc00) return true;
+
+    // ff00::/8 (multicast)
+    if ((words[0] & 0xff00) === 0xff00) return true;
+
+    // IPv4-mapped IPv6: ::ffff:0:0/96
+    if (words.slice(0, 5).every((w) => w === 0) && words[5] === 0xffff) {
+        const ipv4Str = `${words[6] >> 8}.${words[6] & 0xff}.${words[7] >> 8}.${words[7] & 0xff}`;
+        if (isIpv4PrivateOrRestricted(ipv4Str)) return true;
     }
 
     return false;
 }
 
-/**
- * SECURITY: SSRF (Server-Side Request Forgery) protection.
- * Checks whether an IP address belongs to loopback, private, link-local, or restricted ranges.
- */
-export function isIpPrivateOrRestricted(ip: string): boolean {
-    const normalized = ip.toLowerCase().trim();
+function resolveDns(
+    hostname: string,
+): Promise<{ address: string; family: number }> {
+    // Strip square brackets if present (e.g. standard IPv6 URL literal notation)
+    const cleanHostname =
+        hostname.startsWith("[") && hostname.endsWith("]")
+            ? hostname.slice(1, -1)
+            : hostname;
 
-    if (isIpv6PrivateOrRestricted(normalized)) {
-        return true;
-    }
-
-    // IPv4-mapped IPv6 addresses (e.g., ::ffff:127.0.0.1)
-    if (normalized.startsWith("::ffff:")) {
-        return isIpPrivateOrRestricted(normalized.substring(7));
-    }
-
-    return isIpv4PrivateOrRestricted(normalized);
+    return new Promise((resolve, reject) => {
+        dns.lookup(cleanHostname, { all: false }, (err, address, family) => {
+            if (err) {
+                reject(err);
+            } else {
+                resolve({ address, family });
+            }
+        });
+    });
 }
 
-/**
- * SECURITY: SSRF prevention.
- * Validates that the protocol is strictly http or https and that the URL
- * does not resolve to any loopback, private, or restricted IP address.
- */
-export async function isSafeUrl(urlStr: string): Promise<boolean> {
+export interface FetchSsrfOptions {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string | Buffer;
+    signal?: AbortSignal;
+    maxRedirects?: number;
+    timeout?: number;
+}
+
+export interface FetchSsrfResponse {
+    status: number;
+    statusText: string;
+    headers: Headers;
+    ok: boolean;
+    text: () => Promise<string>;
+    buffer: () => Promise<Buffer>;
+    json: () => Promise<any>;
+    arrayBuffer: () => Promise<ArrayBuffer>;
+}
+
+export async function fetchWithSsrfProtection(
+    url: string,
+    options: FetchSsrfOptions = {},
+    redirectCount = 0,
+): Promise<FetchSsrfResponse> {
+    let urlObj: URL;
     try {
-        const parsed = new URL(urlStr);
-        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-            return false;
+        urlObj = new URL(url);
+    } catch (e: any) {
+        throw new Error(`Invalid URL: ${url}`);
+    }
+
+    // Only support http and https protocols
+    if (urlObj.protocol !== "http:" && urlObj.protocol !== "https:") {
+        throw new Error(`Unsupported protocol: ${urlObj.protocol}`);
+    }
+
+    // Resolve hostname once
+    const { address, family } = await resolveDns(urlObj.hostname);
+
+    // Check IP
+    if (family === 4) {
+        if (isIpv4PrivateOrRestricted(address)) {
+            throw new Error(
+                `Access to private/restricted IP range blocked: ${address}`,
+            );
+        }
+    } else if (family === 6) {
+        if (isIpv6PrivateOrRestricted(address)) {
+            throw new Error(
+                `Access to private/restricted IP range blocked: ${address}`,
+            );
+        }
+    } else {
+        throw new Error(`Unsupported IP family: ${family}`);
+    }
+
+    return new Promise<FetchSsrfResponse>((resolve, reject) => {
+        const isHttps = urlObj.protocol === "https:";
+        const requester = isHttps ? https : http;
+
+        const defaultPort = isHttps ? "443" : "80";
+        const hostHeader =
+            urlObj.port && urlObj.port !== defaultPort
+                ? `${urlObj.hostname}:${urlObj.port}`
+                : urlObj.hostname;
+
+        const headers = { ...options.headers };
+        headers["host"] = hostHeader;
+
+        const reqOptions: any = {
+            method: options.method || "GET",
+            hostname: address,
+            port: urlObj.port ? parseInt(urlObj.port) : isHttps ? 443 : 80,
+            path: urlObj.pathname + urlObj.search,
+            headers,
+        };
+
+        if (isHttps) {
+            reqOptions.servername = urlObj.hostname; // SNI
         }
 
-        const hostname = parsed.hostname;
-
-        // Check if the hostname itself is a private IP address
-        if (isIpPrivateOrRestricted(hostname)) {
-            return false;
-        }
-
-        // Resolve DNS and check all returned IP addresses (IPv4 and IPv6) to prevent DNS rebinding
-        const addresses = await dns.lookup(hostname, { all: true });
-        for (const addr of addresses) {
-            if (isIpPrivateOrRestricted(addr.address)) {
-                return false;
+        if (options.signal) {
+            if (options.signal.aborted) {
+                reject(new Error("The operation was aborted."));
+                return;
             }
         }
 
-        return true;
-    } catch {
-        // If parsing or DNS resolution fails, fail closed for security.
-        return false;
-    }
-}
-
-async function resolveAndValidateHostname(hostname: string): Promise<string> {
-    const addresses = await dns.lookup(hostname, { all: true });
-    let pinnedIp = "";
-    for (const addr of addresses) {
-        if (isIpPrivateOrRestricted(addr.address)) {
-            throw new Error(`SSRF Prevention: Unsafe IP address: ${addr.address} resolved from ${hostname}`);
+        // Apply timeout if provided
+        let timeoutId: ReturnType<typeof setTimeout> | null = null;
+        if (options.timeout) {
+            timeoutId = setTimeout(() => {
+                req.destroy();
+                cleanup();
+                reject(new Error("Request timed out"));
+            }, options.timeout);
         }
-        if (!pinnedIp) {
-            pinnedIp = addr.address;
-        }
-    }
 
-    if (!pinnedIp) {
-        throw new Error(`SSRF Prevention: Could not resolve IP address for hostname: ${hostname}`);
-    }
+        const req = requester.request(reqOptions, (res) => {
+            const statusCode = res.statusCode || 200;
+            const isRedirect = [301, 302, 303, 307, 308].includes(statusCode);
 
-    return pinnedIp;
-}
+            if (isRedirect) {
+                cleanup();
+                const location = res.headers.location;
+                if (!location) {
+                    reject(
+                        new Error(
+                            `Redirect status ${statusCode} with no location header`,
+                        ),
+                    );
+                    return;
+                }
 
-async function executeRequestWithPin(
-    parsedUrl: URL,
-    pinnedIp: string,
-    currentInit?: RequestInit,
-): Promise<{ status: number; headers: Record<string, string>; body: Buffer }> {
-    const signal = currentInit?.signal;
-    if (signal?.aborted) {
-        throw new DOMException("The operation was aborted.", "AbortError");
-    }
+                const maxRedirects = options.maxRedirects ?? 5;
+                if (redirectCount >= maxRedirects) {
+                    reject(new Error(`Too many redirects (max ${maxRedirects})`));
+                    return;
+                }
 
-    const isHttps = parsedUrl.protocol === "https:";
-    const requester = isHttps ? https : http;
+                const redirectUrlObj = new URL(location, urlObj.toString());
+                const isCrossOrigin =
+                    redirectUrlObj.protocol !== urlObj.protocol ||
+                    redirectUrlObj.hostname !== urlObj.hostname ||
+                    redirectUrlObj.port !== urlObj.port;
 
-    const requestHeaders = new Headers(currentInit?.headers);
-    if (!requestHeaders.has("Host")) {
-        requestHeaders.set("Host", parsedUrl.host);
-    }
+                const nextHeaders = { ...headers };
+                if (isCrossOrigin) {
+                    // Stripping credentials case-insensitively
+                    for (const key of Object.keys(nextHeaders)) {
+                        const lowerKey = key.toLowerCase();
+                        if (
+                            [
+                                "authorization",
+                                "cookie",
+                                "x-api-key",
+                                "cookie2",
+                            ].includes(lowerKey)
+                        ) {
+                            delete nextHeaders[key];
+                        }
+                    }
+                }
 
-    const options: any = {
-        hostname: pinnedIp,
-        port: parsedUrl.port || (isHttps ? 443 : 80),
-        path: parsedUrl.pathname + parsedUrl.search,
-        method: currentInit?.method || "GET",
-        headers: Object.fromEntries(requestHeaders.entries()),
-    };
+                resolve(
+                    fetchWithSsrfProtection(
+                        redirectUrlObj.toString(),
+                        {
+                            ...options,
+                            headers: nextHeaders,
+                        },
+                        redirectCount + 1,
+                    ),
+                );
+                return;
+            }
 
-    if (isHttps) {
-        options.servername = parsedUrl.hostname; // SNI
-    }
-
-    return new Promise<{ status: number; headers: Record<string, string>; body: Buffer }>((resolve, reject) => {
-        const req = requester.request(options, (res) => {
             const chunks: Buffer[] = [];
             let totalBytes = 0;
-            const maxResponseSize = 50 * 1024 * 1024; // 50MB safety limit
+            const maxBytes = 50 * 1024 * 1024; // 50MB
 
-            res.on("data", (chunk) => {
+            res.on("data", (chunk: Buffer) => {
                 totalBytes += chunk.length;
-                if (totalBytes > maxResponseSize) {
-                    req.destroy(new Error("Response too large"));
-                    if (signal && abortHandler) {
-                        signal.removeEventListener("abort", abortHandler);
-                    }
-                    reject(new Error("Response too large"));
+                if (totalBytes > maxBytes) {
+                    res.destroy();
+                    req.destroy();
+                    cleanup();
+                    reject(new Error("Response size exceeded 50MB limit"));
                     return;
                 }
                 chunks.push(chunk);
             });
 
             res.on("end", () => {
-                if (signal && abortHandler) {
-                    signal.removeEventListener("abort", abortHandler);
+                cleanup();
+                const buffer = Buffer.concat(chunks);
+
+                const responseHeaders = new Headers();
+                for (const [key, val] of Object.entries(res.headers)) {
+                    if (val) {
+                        if (Array.isArray(val)) {
+                            val.forEach((v) => responseHeaders.append(key, v));
+                        } else {
+                            responseHeaders.set(key, val);
+                        }
+                    }
                 }
+
                 resolve({
-                    status: res.statusCode || 200,
-                    headers: res.headers as Record<string, string>,
-                    body: Buffer.concat(chunks),
+                    status: statusCode,
+                    statusText: res.statusMessage || "",
+                    headers: responseHeaders,
+                    ok: statusCode >= 200 && statusCode < 300,
+                    text: async () => buffer.toString("utf8"),
+                    buffer: async () => buffer,
+                    json: async () => JSON.parse(buffer.toString("utf8")),
+                    arrayBuffer: async () => {
+                        return buffer.buffer.slice(
+                            buffer.byteOffset,
+                            buffer.byteOffset + buffer.byteLength,
+                        );
+                    },
                 });
+            });
+
+            res.on("error", (err) => {
+                cleanup();
+                reject(err);
             });
         });
 
         let abortHandler: (() => void) | null = null;
-        if (signal) {
+        if (options.signal) {
             abortHandler = () => {
-                req.destroy(new DOMException("The operation was aborted.", "AbortError"));
-                reject(new DOMException("The operation was aborted.", "AbortError"));
+                req.destroy();
+                cleanup();
+                reject(new Error("The operation was aborted."));
             };
-            signal.addEventListener("abort", abortHandler);
+            options.signal.addEventListener("abort", abortHandler);
         }
 
-        req.on("error", (err) => {
-            if (signal && abortHandler) {
-                signal.removeEventListener("abort", abortHandler);
+        const cleanup = () => {
+            if (options.signal && abortHandler) {
+                options.signal.removeEventListener("abort", abortHandler);
             }
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+            }
+        };
+
+        req.on("error", (err) => {
+            cleanup();
             reject(err);
         });
 
-        if (currentInit?.body) {
-            req.write(currentInit.body);
+        if (options.body) {
+            req.write(options.body);
         }
         req.end();
     });
-}
-
-function isRedirectStatus(status: number): boolean {
-    return (
-        status === 301 ||
-        status === 302 ||
-        status === 303 ||
-        status === 307 ||
-        status === 308
-    );
-}
-
-function stripCrossOriginHeaders(
-    currentInit: RequestInit | undefined,
-    currentUrl: string,
-    nextUrl: URL,
-): RequestInit | undefined {
-    if (!currentInit?.headers) return currentInit;
-
-    const currentOrigin = new URL(currentUrl).origin;
-    const targetOrigin = nextUrl.origin;
-
-    if (currentOrigin !== targetOrigin) {
-        const newHeaders = new Headers(currentInit.headers);
-        newHeaders.delete("Authorization");
-        newHeaders.delete("Cookie");
-        newHeaders.delete("Proxy-Authorization");
-        return {
-            ...currentInit,
-            headers: newHeaders,
-        };
-    }
-
-    return currentInit;
-}
-
-/**
- * SECURITY: SSRF-safe fetch wrapper that resolves and validates redirects manual-style.
- * This prevents attackers from bypassing SSRF checks via HTTP redirects (e.g., redirecting
- * from a public domain to localhost).
- * It also pins the resolved IP address to prevent TOCTOU (DNS Rebinding) attacks.
- */
-export async function fetchWithSsrfProtection(
-    urlStr: string,
-    init?: RequestInit,
-    maxRedirects: number = 5,
-): Promise<Response> {
-    let currentUrl = urlStr;
-    let redirectCount = 0;
-    let currentInit = init ? { ...init } : undefined;
-
-    while (true) {
-        const parsedUrl = new URL(currentUrl);
-        if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
-            throw new Error(`SSRF Prevention: Unsupported protocol: ${parsedUrl.protocol}`);
-        }
-
-        const hostname = parsedUrl.hostname;
-
-        // Resolve DNS once to pin the IP address (prevents DNS Rebinding / TOCTOU)
-        const pinnedIp = await resolveAndValidateHostname(hostname);
-
-        // Perform the request pinning the validated IP address
-        const { status, headers, body } = await executeRequestWithPin(parsedUrl, pinnedIp, currentInit);
-
-        if (!isRedirectStatus(status)) {
-            return new Response(body, {
-                status,
-                headers: new Headers(headers),
-            });
-        }
-
-        if (redirectCount >= maxRedirects) {
-            throw new Error("SSRF Prevention: Maximum redirect limit exceeded");
-        }
-
-        const location = headers["location"];
-        if (!location) {
-            return new Response(body, {
-                status,
-                headers: new Headers(headers),
-            });
-        }
-
-        const nextUrl = new URL(location, currentUrl);
-
-        // Strip credential-bearing headers if cross-origin
-        currentInit = stripCrossOriginHeaders(currentInit, currentUrl, nextUrl);
-
-        currentUrl = nextUrl.toString();
-        redirectCount++;
-    }
 }

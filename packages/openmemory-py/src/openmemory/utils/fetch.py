@@ -18,6 +18,8 @@ def is_ip_private_or_restricted(ip_str: str) -> bool:
             if is_ip_private_or_restricted(str(mapped_ipv4)):
                 return True
 
+        # Defensive blocklist: 100.64.0.0/10 is the CG-NAT private subnet (RFC 6598).
+        # We explicitly block it to prevent SSRF against carrier-grade NAT loopbacks.
         cg_nat = ipaddress.ip_network("100.64.0.0/10")
         if isinstance(ip, ipaddress.IPv4Address):
             if ip in cg_nat:
