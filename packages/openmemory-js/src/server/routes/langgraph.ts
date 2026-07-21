@@ -55,7 +55,10 @@ export function lg(app: any) {
         try {
             const parsedBody = LgmStoreReqSchema.parse(req.body);
             if (reject_tenant_mismatch(res, tenant, parsedBody.user_id)) return;
-            const r = await store_node_mem({ ...parsedBody, user_id: tenant } as lgm_store_req);
+            const r = await store_node_mem({
+                ...parsedBody,
+                user_id: tenant,
+            } as lgm_store_req);
             res.json(r);
         } catch (e) {
             console.error("[LGM] store error:", e);
@@ -72,7 +75,10 @@ export function lg(app: any) {
         try {
             const parsedBody = LgmRetrieveReqSchema.parse(req.body);
             if (reject_tenant_mismatch(res, tenant, parsedBody.user_id)) return;
-            const r = await retrieve_node_mems({ ...parsedBody, user_id: tenant } as lgm_retrieve_req);
+            const r = await retrieve_node_mems({
+                ...parsedBody,
+                user_id: tenant,
+            } as lgm_retrieve_req);
             res.json(r);
         } catch (e) {
             console.error("[LGM] retrieve error:", e);
@@ -89,7 +95,10 @@ export function lg(app: any) {
         try {
             const parsedBody = LgmContextReqSchema.parse(req.body);
             if (reject_tenant_mismatch(res, tenant, parsedBody.user_id)) return;
-            const r = await get_graph_ctx({ ...parsedBody, user_id: tenant } as lgm_context_req);
+            const r = await get_graph_ctx({
+                ...parsedBody,
+                user_id: tenant,
+            } as lgm_context_req);
             res.json(r);
         } catch (e) {
             console.error("[LGM] context error:", e);
@@ -106,7 +115,10 @@ export function lg(app: any) {
         try {
             const parsedBody = LgmReflectionReqSchema.parse(req.body);
             if (reject_tenant_mismatch(res, tenant, parsedBody.user_id)) return;
-            const r = await create_refl({ ...parsedBody, user_id: tenant } as lgm_reflection_req);
+            const r = await create_refl({
+                ...parsedBody,
+                user_id: tenant,
+            } as lgm_reflection_req);
             res.json(r);
         } catch (e) {
             console.error("[LGM] reflection error:", e);
