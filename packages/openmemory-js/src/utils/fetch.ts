@@ -85,7 +85,7 @@ function isIpv4PrivateOrRestricted(normalized: string): boolean {
         // Some libraries parse `0177` as `127` base 10 by stripping leading zeroes,
         // others parse it as octal. URL API parses 0177 -> 127 (base 8).
         const parsedParts = parts.map((p) => {
-            if (p.length > 1 && p.startsWith("0")) {
+            if (p.length > 1 && p.startsWith("0") && !p.startsWith("0x") && !p.startsWith("0X")) {
                 // Parse octal manually if it starts with 0 to match URL behavior
                 return Number.parseInt(p, 8);
             }
