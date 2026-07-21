@@ -39,11 +39,19 @@ const DEV_ALLOW_NO_AUTH =
     process.env.OM_DEV_ALLOW_NO_AUTH === "true";
 
 const auth_config = {
-    get api_key() { return env.api_key; },
+    get api_key() {
+        return env.api_key;
+    },
     api_key_header: "x-api-key",
-    get rate_limit_enabled() { return env.rate_limit_enabled; },
-    get rate_limit_window_ms() { return env.rate_limit_window_ms; },
-    get rate_limit_max_requests() { return env.rate_limit_max_requests; },
+    get rate_limit_enabled() {
+        return env.rate_limit_enabled;
+    },
+    get rate_limit_window_ms() {
+        return env.rate_limit_window_ms;
+    },
+    get rate_limit_max_requests() {
+        return env.rate_limit_max_requests;
+    },
     public_endpoints: [
         "/health",
         "/api/system/health",

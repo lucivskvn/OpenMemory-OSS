@@ -44,6 +44,9 @@ const cfg: DecayCfg = {
 };
 
 let last_decay = 0;
+export const reset_last_decay = () => {
+    last_decay = 0;
+};
 const cooldown = 60000;
 let active_q = 0;
 

@@ -1,12 +1,12 @@
 import { exec } from "child_process";
 import { promisify } from "util";
 import mammoth from "mammoth";
+import { fetchWithSsrfProtection } from "../utils/fetch";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import ffmpeg from "fluent-ffmpeg";
 import OpenAI from "openai";
-import { fetchWithSsrfProtection } from "../utils/fetch";
 const TurndownService = require("turndown");
 
 const execAsync = promisify(exec);
@@ -81,7 +81,7 @@ export async function extractHTML(html: string): Promise<ExtractionResult> {
 }
 
 export async function extractURL(url: string): Promise<ExtractionResult> {
-    const response = await fetchWithSsrfProtection(url);
+    const response = await fetchWithSsrfProtection(url, { timeout: 30000 });
     if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }

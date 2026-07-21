@@ -40,7 +40,7 @@ describe("Authentication Middleware", () => {
         const req: any = {
             path: "/api/memory",
             headers: {
-                "authorization": "Bearer test-secret-api-key-999",
+                authorization: "Bearer test-secret-api-key-999",
             },
         };
         let next_called = false;
@@ -60,7 +60,7 @@ describe("Authentication Middleware", () => {
         const req: any = {
             path: "/api/memory",
             headers: {
-                "authorization": "ApiKey test-secret-api-key-999",
+                authorization: "ApiKey test-secret-api-key-999",
             },
         };
         let next_called = false;

@@ -152,7 +152,10 @@ export function dynroutes(app: any) {
     app.post(
         "/dynamics/retrieval/energy-based",
         async (incoming_http_request: any, outgoing_http_response: any) => {
-            const tenant = require_tenant(incoming_http_request, outgoing_http_response);
+            const tenant = require_tenant(
+                incoming_http_request,
+                outgoing_http_response,
+            );
             if (!tenant) return;
             try {
                 const incoming_request_body_payload =
@@ -165,7 +168,14 @@ export function dynroutes(app: any) {
                     incoming_request_body_payload.min_energy ||
                     TAU_ENERGY_THRESHOLD_FOR_RETRIEVAL;
 
-                if (reject_tenant_mismatch(outgoing_http_response, tenant, incoming_request_body_payload.user_id)) return;
+                if (
+                    reject_tenant_mismatch(
+                        outgoing_http_response,
+                        tenant,
+                        incoming_request_body_payload.user_id,
+                    )
+                )
+                    return;
 
                 if (!query_text_content_from_request) {
                     return outgoing_http_response
@@ -221,7 +231,10 @@ export function dynroutes(app: any) {
     app.post(
         "/dynamics/reinforcement/trace",
         async (incoming_http_request: any, outgoing_http_response: any) => {
-            const tenant = require_tenant(incoming_http_request, outgoing_http_response);
+            const tenant = require_tenant(
+                incoming_http_request,
+                outgoing_http_response,
+            );
             if (!tenant) return;
             try {
                 const incoming_request_body_payload =
@@ -229,7 +242,14 @@ export function dynroutes(app: any) {
                 const target_memory_id_from_request =
                     incoming_request_body_payload.memory_id;
 
-                if (reject_tenant_mismatch(outgoing_http_response, tenant, incoming_request_body_payload.user_id)) return;
+                if (
+                    reject_tenant_mismatch(
+                        outgoing_http_response,
+                        tenant,
+                        incoming_request_body_payload.user_id,
+                    )
+                )
+                    return;
 
                 if (!target_memory_id_from_request) {
                     return outgoing_http_response
@@ -273,7 +293,10 @@ export function dynroutes(app: any) {
                     );
                 const linked_nodes_with_weights_array =
                     connected_waypoints_from_database
-                        .filter((waypoint_record: any) => waypoint_record.user_id === tenant)
+                        .filter(
+                            (waypoint_record: any) =>
+                                waypoint_record.user_id === tenant,
+                        )
                         .map((waypoint_record: any) => ({
                             target_id: waypoint_record.dst_id,
                             weight: waypoint_record.weight,
@@ -287,7 +310,9 @@ export function dynroutes(app: any) {
                     );
 
                 for (const reinforcement_update_record of propagated_reinforcement_updates_list) {
-                    const linked_mem = await q.get_mem.get(reinforcement_update_record.node_id);
+                    const linked_mem = await q.get_mem.get(
+                        reinforcement_update_record.node_id,
+                    );
                     if (linked_mem?.user_id === tenant) {
                         await q.upd_seen.run(
                             reinforcement_update_record.node_id,
@@ -325,7 +350,10 @@ export function dynroutes(app: any) {
     app.post(
         "/dynamics/activation/spreading",
         async (incoming_http_request: any, outgoing_http_response: any) => {
-            const tenant = require_tenant(incoming_http_request, outgoing_http_response);
+            const tenant = require_tenant(
+                incoming_http_request,
+                outgoing_http_response,
+            );
             if (!tenant) return;
             try {
                 const incoming_request_body_payload =
@@ -335,7 +363,14 @@ export function dynroutes(app: any) {
                 const maximum_spreading_iterations_from_request =
                     incoming_request_body_payload.max_iterations || 3;
 
-                if (reject_tenant_mismatch(outgoing_http_response, tenant, incoming_request_body_payload.user_id)) return;
+                if (
+                    reject_tenant_mismatch(
+                        outgoing_http_response,
+                        tenant,
+                        incoming_request_body_payload.user_id,
+                    )
+                )
+                    return;
 
                 if (
                     !Array.isArray(initial_memory_ids_array_from_request) ||
@@ -403,10 +438,20 @@ export function dynroutes(app: any) {
     app.get(
         "/dynamics/waypoints/graph",
         async (incoming_http_request: any, outgoing_http_response: any) => {
-            const tenant = require_tenant(incoming_http_request, outgoing_http_response);
+            const tenant = require_tenant(
+                incoming_http_request,
+                outgoing_http_response,
+            );
             if (!tenant) return;
             try {
-                if (reject_tenant_mismatch(outgoing_http_response, tenant, incoming_http_request.query?.user_id)) return;
+                if (
+                    reject_tenant_mismatch(
+                        outgoing_http_response,
+                        tenant,
+                        incoming_http_request.query?.user_id,
+                    )
+                )
+                    return;
                 const waypoint_graph_structure_from_database =
                     await buildAssociativeWaypointGraphFromMemories(tenant);
 
@@ -473,7 +518,10 @@ export function dynroutes(app: any) {
     app.post(
         "/dynamics/waypoints/calculate-weight",
         async (incoming_http_request: any, outgoing_http_response: any) => {
-            const tenant = require_tenant(incoming_http_request, outgoing_http_response);
+            const tenant = require_tenant(
+                incoming_http_request,
+                outgoing_http_response,
+            );
             if (!tenant) return;
             try {
                 const incoming_request_body_payload =
@@ -483,7 +531,14 @@ export function dynroutes(app: any) {
                 const target_memory_id_from_request =
                     incoming_request_body_payload.target_memory_id;
 
-                if (reject_tenant_mismatch(outgoing_http_response, tenant, incoming_request_body_payload.user_id)) return;
+                if (
+                    reject_tenant_mismatch(
+                        outgoing_http_response,
+                        tenant,
+                        incoming_request_body_payload.user_id,
+                    )
+                )
+                    return;
 
                 if (
                     !source_memory_id_from_request ||
