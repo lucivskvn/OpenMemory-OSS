@@ -5,6 +5,7 @@ no auth required for public urls
 """
 from typing import List, Dict, Optional, Set
 import os
+import asyncio
 from urllib.parse import urljoin, urlparse
 from .base import base_connector
 
@@ -79,7 +80,7 @@ class web_crawler_connector(base_connector):
                 if "text/html" not in content_type:
                     continue
 
-                soup = BeautifulSoup(resp.text, "html.parser")
+                soup = await asyncio.to_thread(BeautifulSoup, resp.text, "html.parser")
                 title = soup.title.string if soup.title else url
 
                 self.crawled.append(
@@ -127,7 +128,7 @@ class web_crawler_connector(base_connector):
         )
         resp.raise_for_status()
 
-        soup = BeautifulSoup(resp.text, "html.parser")
+        soup = await asyncio.to_thread(BeautifulSoup, resp.text, "html.parser")
         for element in soup(["script", "style", "nav", "footer", "header"]):
             element.decompose()
         title = soup.title.string if soup.title else item_id
