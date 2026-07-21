@@ -320,6 +320,7 @@ export async function fetchWithSsrfProtection(
 
             if (isRedirect) {
                 cleanup();
+                res.resume(); // Drain current response stream before following recursively
                 const location = res.headers.location;
                 if (!location) {
                     reject(
