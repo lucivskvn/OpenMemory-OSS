@@ -5,6 +5,7 @@ no auth required for public urls
 """
 from typing import List, Dict, Optional, Set, Any
 import os
+import asyncio
 from urllib.parse import urljoin, urlparse
 from .base import base_connector
 
@@ -39,13 +40,6 @@ class web_crawler_connector(base_connector):
         if not start_url:
             raise ValueError("start_url is required")
 
-        try:
-            from bs4 import BeautifulSoup
-        except ImportError:
-            raise ImportError("pip install httpx beautifulsoup4")
-
-        from ..utils.fetch import fetch_with_ssrf_protection
-
         self.visited.clear()
         self.crawled.clear()
 
@@ -66,8 +60,6 @@ class web_crawler_connector(base_connector):
                 base_domain=base_domain,
                 follow_links=follow_links,
                 to_visit=to_visit,
-                soup_parser=BeautifulSoup,
-                fetch_with_ssrf_protection=fetch_with_ssrf_protection,
             )
 
         return self.crawled
@@ -79,9 +71,10 @@ class web_crawler_connector(base_connector):
         base_domain: str,
         follow_links: bool,
         to_visit: List[Any],
-        soup_parser: Any,
-        fetch_with_ssrf_protection: Any,
     ) -> None:
+        from bs4 import BeautifulSoup
+        from ..utils.fetch import fetch_with_ssrf_protection
+
         try:
             resp = await fetch_with_ssrf_protection(
                 url,
@@ -98,7 +91,7 @@ class web_crawler_connector(base_connector):
             if "text/html" not in content_type:
                 return
 
-            soup = soup_parser(resp.text, "html.parser")
+            soup = await asyncio.to_thread(BeautifulSoup, resp.text, "html.parser")
             title = soup.title.string if soup.title else url
 
             self.crawled.append(
@@ -128,8 +121,8 @@ class web_crawler_connector(base_connector):
                     clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
                     if clean_url not in self.visited:
                         to_visit.append((clean_url, depth + 1))
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[crawler] failed to extract link from {url}: {e}")
 
     async def fetch_item(self, item_id: str) -> Dict:
         """
@@ -140,7 +133,7 @@ class web_crawler_connector(base_connector):
         try:
             from bs4 import BeautifulSoup
         except ImportError:
-            raise ImportError("pip install httpx beautifulsoup4")
+            raise ImportError("pip install beautifulsoup4")
 
         from ..utils.fetch import fetch_with_ssrf_protection
 
@@ -151,7 +144,7 @@ class web_crawler_connector(base_connector):
         )
         resp.raise_for_status()
 
-        soup = BeautifulSoup(resp.text, "html.parser")
+        soup = await asyncio.to_thread(BeautifulSoup, resp.text, "html.parser")
         for element in soup(["script", "style", "nav", "footer", "header"]):
             element.decompose()
         title = soup.title.string if soup.title else item_id
