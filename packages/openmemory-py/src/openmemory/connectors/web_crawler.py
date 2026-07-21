@@ -66,7 +66,7 @@ class web_crawler_connector(base_connector):
                 base_domain=base_domain,
                 follow_links=follow_links,
                 to_visit=to_visit,
-                BeautifulSoup=BeautifulSoup,
+                soup_parser=BeautifulSoup,
                 fetch_with_ssrf_protection=fetch_with_ssrf_protection,
             )
 
@@ -79,7 +79,7 @@ class web_crawler_connector(base_connector):
         base_domain: str,
         follow_links: bool,
         to_visit: List[Any],
-        BeautifulSoup: Any,
+        soup_parser: Any,
         fetch_with_ssrf_protection: Any,
     ) -> None:
         try:
@@ -98,7 +98,7 @@ class web_crawler_connector(base_connector):
             if "text/html" not in content_type:
                 return
 
-            soup = BeautifulSoup(resp.text, "html.parser")
+            soup = soup_parser(resp.text, "html.parser")
             title = soup.title.string if soup.title else url
 
             self.crawled.append(

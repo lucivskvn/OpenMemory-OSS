@@ -64,21 +64,21 @@ describe("SSRF IP Validation - IPv6", () => {
 
 describe("fetchWithSsrfProtection client checks", () => {
     it("rejects non-http/https protocols", async () => {
-        await expect(fetchWithSsrfProtection("ftp://example.com")).rejects.toThrow(
-            "Unsupported protocol",
-        );
-        await expect(fetchWithSsrfProtection("file:///etc/passwd")).rejects.toThrow(
-            "Unsupported protocol",
-        );
+        await expect(
+            fetchWithSsrfProtection("ftp://example.com"),
+        ).rejects.toThrow("Unsupported protocol");
+        await expect(
+            fetchWithSsrfProtection("file:///etc/passwd"),
+        ).rejects.toThrow("Unsupported protocol");
     });
 
     it("blocks immediate private IPv4/IPv6 URLs", async () => {
         await expect(
             fetchWithSsrfProtection("http://127.0.0.1/health"),
         ).rejects.toThrow("Access to private/restricted IP range blocked");
-        await expect(fetchWithSsrfProtection("http://[::1]/health")).rejects.toThrow(
-            "Access to private/restricted IP range blocked",
-        );
+        await expect(
+            fetchWithSsrfProtection("http://[::1]/health"),
+        ).rejects.toThrow("Access to private/restricted IP range blocked");
         await expect(
             fetchWithSsrfProtection("http://10.0.0.1:8080/stats"),
         ).rejects.toThrow("Access to private/restricted IP range blocked");

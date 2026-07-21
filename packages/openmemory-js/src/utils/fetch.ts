@@ -1,7 +1,7 @@
 import { propagation, context } from "@opentelemetry/api";
-import dns from "dns";
-import http from "http";
-import https from "https";
+import dns from "node:dns";
+import http from "node:http";
+import https from "node:https";
 
 /**
  * Enhanced fetch with OpenTelemetry trace context propagation and default timeout.
@@ -46,12 +46,12 @@ export function isIpv4PrivateOrRestricted(ip: string): boolean {
     const parts = ip.split(".").map(Number);
     if (
         parts.length !== 4 ||
-        parts.some(isNaN) ||
+        parts.some(Number.isNaN) ||
         parts.some((p) => p < 0 || p > 255)
     ) {
         return true; // Treat invalid as restricted
     }
-    const [a, b, c, d] = parts;
+    const [a, b] = parts;
 
     // 127.0.0.0/8 (loopback)
     if (a === 127) return true;
@@ -71,6 +71,35 @@ export function isIpv4PrivateOrRestricted(ip: string): boolean {
     return false;
 }
 
+function expandIpv4Mapped(normalized: string): string | null {
+    const lastColon = normalized.lastIndexOf(":");
+    if (lastColon === -1) return null;
+    const ipv4Part = normalized.slice(lastColon + 1);
+    const parts = ipv4Part.split(".").map(Number);
+    if (
+        parts.length !== 4 ||
+        parts.some(Number.isNaN) ||
+        parts.some((p) => p < 0 || p > 255)
+    ) {
+        return null;
+    }
+    const [a, b] = parts;
+    const hex1 = ((a << 8) | b).toString(16);
+    const hex2 = ((parts[2] << 8) | parts[3]).toString(16);
+    return normalized.slice(0, lastColon + 1) + hex1 + ":" + hex2;
+}
+
+function parseHexParts(partStr: string): number[] | null {
+    const parts = partStr.split(":");
+    const result: number[] = [];
+    for (const part of parts) {
+        const val = Number.parseInt(part, 16);
+        if (Number.isNaN(val) || val < 0 || val > 0xffff) return null;
+        result.push(val);
+    }
+    return result;
+}
+
 export function parseIpv6(ip: string): number[] | null {
     let normalized = ip.trim().toLowerCase();
 
@@ -81,20 +110,9 @@ export function parseIpv6(ip: string): number[] | null {
 
     // Handle IPv4-mapped IPv6, e.g. ::ffff:192.168.0.1
     if (normalized.includes(".")) {
-        const lastColon = normalized.lastIndexOf(":");
-        if (lastColon === -1) return null;
-        const ipv4Part = normalized.slice(lastColon + 1);
-        const parts = ipv4Part.split(".").map(Number);
-        if (
-            parts.length !== 4 ||
-            parts.some(isNaN) ||
-            parts.some((p) => p < 0 || p > 255)
-        )
-            return null;
-        const [a, b, c, d] = parts;
-        const hex1 = ((a << 8) | b).toString(16);
-        const hex2 = ((c << 8) | d).toString(16);
-        normalized = normalized.slice(0, lastColon + 1) + hex1 + ":" + hex2;
+        const expanded = expandIpv4Mapped(normalized);
+        if (expanded === null) return null;
+        normalized = expanded;
     }
 
     // Split on double colon to handle shorthand expansion
@@ -105,21 +123,15 @@ export function parseIpv6(ip: string): number[] | null {
     const right: number[] = [];
 
     if (partsByDoubleColon[0] !== "") {
-        const leftParts = partsByDoubleColon[0].split(":");
-        for (const part of leftParts) {
-            const val = parseInt(part, 16);
-            if (isNaN(val) || val < 0 || val > 0xffff) return null;
-            left.push(val);
-        }
+        const parsedLeft = parseHexParts(partsByDoubleColon[0]);
+        if (parsedLeft === null) return null;
+        left.push(...parsedLeft);
     }
 
-    if (partsByDoubleColon[1] !== "") {
-        const rightParts = partsByDoubleColon[1].split(":");
-        for (const part of rightParts) {
-            const val = parseInt(part, 16);
-            if (isNaN(val) || val < 0 || val > 0xffff) return null;
-            right.push(val);
-        }
+    if (partsByDoubleColon.length === 2 && partsByDoubleColon[1] !== "") {
+        const parsedRight = parseHexParts(partsByDoubleColon[1]);
+        if (parsedRight === null) return null;
+        right.push(...parsedRight);
     }
 
     const missingCount = 8 - (left.length + right.length);
@@ -197,6 +209,28 @@ export interface FetchSsrfResponse {
     arrayBuffer: () => Promise<ArrayBuffer>;
 }
 
+function createFetchResponse(
+    statusCode: number,
+    statusMessage: string,
+    responseHeaders: Headers,
+    buffer: Buffer,
+): FetchSsrfResponse {
+    return {
+        status: statusCode,
+        statusText: statusMessage,
+        headers: responseHeaders,
+        ok: statusCode >= 200 && statusCode < 300,
+        text: async () => buffer.toString("utf8"),
+        buffer: async () => buffer,
+        json: async () => JSON.parse(buffer.toString("utf8")),
+        arrayBuffer: async () =>
+            buffer.buffer.slice(
+                buffer.byteOffset,
+                buffer.byteOffset + buffer.byteLength,
+            ),
+    };
+}
+
 export async function fetchWithSsrfProtection(
     url: string,
     options: FetchSsrfOptions = {},
@@ -239,10 +273,10 @@ export async function fetchWithSsrfProtection(
         const requester = isHttps ? https : http;
 
         const defaultPort = isHttps ? "443" : "80";
-        const hostHeader =
-            urlObj.port && urlObj.port !== defaultPort
-                ? `${urlObj.hostname}:${urlObj.port}`
-                : urlObj.hostname;
+        let hostHeader = urlObj.hostname;
+        if (urlObj.port && urlObj.port !== defaultPort) {
+            hostHeader = `${urlObj.hostname}:${urlObj.port}`;
+        }
 
         const headers = { ...options.headers };
         headers["host"] = hostHeader;
@@ -250,7 +284,11 @@ export async function fetchWithSsrfProtection(
         const reqOptions: any = {
             method: options.method || "GET",
             hostname: address,
-            port: urlObj.port ? parseInt(urlObj.port) : isHttps ? 443 : 80,
+            port: urlObj.port
+                ? Number.parseInt(urlObj.port, 10)
+                : isHttps
+                  ? 443
+                  : 80,
             path: urlObj.pathname + urlObj.search,
             headers,
         };
@@ -294,7 +332,9 @@ export async function fetchWithSsrfProtection(
 
                 const maxRedirects = options.maxRedirects ?? 5;
                 if (redirectCount >= maxRedirects) {
-                    reject(new Error(`Too many redirects (max ${maxRedirects})`));
+                    reject(
+                        new Error(`Too many redirects (max ${maxRedirects})`),
+                    );
                     return;
                 }
 
@@ -366,21 +406,14 @@ export async function fetchWithSsrfProtection(
                     }
                 }
 
-                resolve({
-                    status: statusCode,
-                    statusText: res.statusMessage || "",
-                    headers: responseHeaders,
-                    ok: statusCode >= 200 && statusCode < 300,
-                    text: async () => buffer.toString("utf8"),
-                    buffer: async () => buffer,
-                    json: async () => JSON.parse(buffer.toString("utf8")),
-                    arrayBuffer: async () => {
-                        return buffer.buffer.slice(
-                            buffer.byteOffset,
-                            buffer.byteOffset + buffer.byteLength,
-                        );
-                    },
-                });
+                resolve(
+                    createFetchResponse(
+                        statusCode,
+                        res.statusMessage || "",
+                        responseHeaders,
+                        buffer,
+                    ),
+                );
             });
 
             res.on("error", (err) => {
