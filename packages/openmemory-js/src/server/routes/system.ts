@@ -4,7 +4,7 @@ import { all_async } from "../../core/db";
 import { sector_configs } from "../../memory/hsg";
 import { getEmbeddingInfo } from "../../memory/embed";
 import { tier, env } from "../../core/config";
-import { require_tenant } from "../middleware/tenant";
+import { require_tenant, reject_tenant_mismatch } from "../middleware/tenant";
 
 const TIER_BENEFITS = {
     hybrid: {
@@ -41,6 +41,9 @@ export function sys(app: any) {
             req: import("../server").AppRequest,
             res: import("../server").AppResponse,
         ) => {
+            const tenant = require_tenant(req, res);
+            if (!tenant) return;
+
             try {
                 const SyncSchema = z.object({
                     event: z.literal("memory_sync"),
@@ -70,30 +73,45 @@ export function sys(app: any) {
                 const parsed = SyncSchema.safeParse(req.body);
                 if (parsed.success) {
                     const data = parsed.data.data;
+
+                    if (reject_tenant_mismatch(res, tenant, data.user_id)) return;
+
+                    // Ensure user_id is forced to the verified tenant if not specified
+                    if (!data.user_id) {
+                        data.user_id = tenant;
+                    }
+
                     const existing = await q.get_mem.get(data.id);
+                    if (existing && existing.user_id !== tenant) {
+                        return res.status(403).json({
+                            error: "tenant_mismatch",
+                            message: "Target memory belongs to another tenant.",
+                        });
+                    }
+
                     // Handle version tracker deduplication check
                     if (!existing || (data.version ?? 1) > existing.version) {
-                        // We do an upsert
+                        // We do an upsert, coalescing undefined fields to null to avoid libSQL TypeError
                         await q.ins_mem.run(
                             data.id,
-                            data.user_id,
-                            data.project_id,
-                            data.segment,
+                            data.user_id ?? null,
+                            data.project_id ?? null,
+                            data.segment ?? null,
                             data.content,
-                            data.simhash,
+                            data.simhash ?? null,
                             data.primary_sector,
-                            data.tags,
-                            data.meta,
-                            data.created_at,
-                            data.updated_at,
-                            data.last_seen_at,
-                            data.salience,
-                            data.decay_lambda,
+                            data.tags ?? null,
+                            data.meta ?? null,
+                            data.created_at ?? null,
+                            data.updated_at ?? null,
+                            data.last_seen_at ?? null,
+                            data.salience ?? null,
+                            data.decay_lambda ?? null,
                             data.version ?? 1,
-                            data.mean_dim,
-                            data.mean_vec,
-                            data.compressed_vec,
-                            data.feedback_score,
+                            data.mean_dim ?? null,
+                            data.mean_vec ?? null,
+                            data.compressed_vec ?? null,
+                            data.feedback_score ?? null,
                         );
                         return res.json({ ok: true, message: "Synced" });
                     }
