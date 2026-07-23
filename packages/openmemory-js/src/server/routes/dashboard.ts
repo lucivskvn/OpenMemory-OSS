@@ -110,6 +110,26 @@ function build_tenant_project_where(
     return { where_clause, params };
 }
 
+async function fetch_dashboard_memories(
+    tenant: string,
+    project_id: string | undefined,
+    lim: number,
+    order_by: string,
+) {
+    const mem_table = get_mem_table();
+    const { where_clause, params } = build_tenant_project_where(
+        tenant,
+        project_id,
+        is_pg,
+        lim,
+    );
+    return await all_async(
+        `SELECT id, content, primary_sector, salience, created_at, updated_at, last_seen_at
+         FROM ${mem_table}${where_clause} ORDER BY ${order_by} LIMIT ${is_pg ? `$${params.length}` : "?"}`,
+        params,
+    );
+}
+
 export function dash(app: any) {
     app.get("/dashboard/projects", async (req: any, res: any) => {
         const tenant = require_tenant(req, res);
@@ -315,21 +335,14 @@ export function dash(app: any) {
         const tenant = require_tenant(req, res);
         if (!tenant) return;
         try {
-            const mem_table = get_mem_table();
             const lim = parseInt(req.query.limit || "50");
             const project_id = req.query.project_id;
 
-            const { where_clause, params } = build_tenant_project_where(
+            const recmem = await fetch_dashboard_memories(
                 tenant,
                 project_id,
-                is_pg,
                 lim,
-            );
-
-            const recmem = await all_async(
-                `SELECT id, content, primary_sector, salience, created_at, updated_at, last_seen_at
-                 FROM ${mem_table}${where_clause} ORDER BY updated_at DESC LIMIT ${is_pg ? `$${params.length}` : "?"}`,
-                params,
+                "updated_at DESC",
             );
             res.json({
                 activities: recmem.map((m: any) => ({
@@ -414,21 +427,14 @@ export function dash(app: any) {
         const tenant = require_tenant(req, res);
         if (!tenant) return;
         try {
-            const mem_table = get_mem_table();
             const lim = parseInt(req.query.limit || "10");
             const project_id = req.query.project_id;
 
-            const { where_clause, params } = build_tenant_project_where(
+            const topm = await fetch_dashboard_memories(
                 tenant,
                 project_id,
-                is_pg,
                 lim,
-            );
-
-            const topm = await all_async(
-                `SELECT id, content, primary_sector, salience, last_seen_at
-                 FROM ${mem_table}${where_clause} ORDER BY salience DESC LIMIT ${is_pg ? `$${params.length}` : "?"}`,
-                params,
+                "salience DESC",
             );
             res.json({
                 memories: topm.map((m: any) => ({
