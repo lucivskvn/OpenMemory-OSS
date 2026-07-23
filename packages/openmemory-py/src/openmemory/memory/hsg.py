@@ -7,7 +7,7 @@ from ..core.db import db, q
 from ..core.config import env
 from ..core.vector_store import VectorStore
 from ..utils.chunking import chunk_text
-from ..utils.math import cosine_similarity, vec_to_buf, buf_to_vec
+from ..utils.vectors import cos_sim as cosine_similarity, vec_to_buf, buf_to_vec
 from .embed import (
     classify_content,
     embed_multi_sector,
@@ -182,7 +182,7 @@ async def hsg_store(mid: str, content: str, user_id: str = None, tags: str = "[]
 
         from .embed import calc_mean_vec
         mean_vec = calc_mean_vec(emb_res, all_secs)
-        from ..utils.math import vec_to_buf
+        from ..utils.vectors import vec_to_buf
         mean_buf = vec_to_buf(mean_vec)
         db.execute("UPDATE memories SET mean_dim=?, mean_vec=? WHERE id=?", (len(mean_vec), mean_buf, mid))
 
