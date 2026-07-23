@@ -90,6 +90,26 @@ const get_db_sz = async (): Promise<number> => {
     }
 };
 
+function build_tenant_project_where(
+    tenant: string,
+    project_id: string | undefined,
+    is_pg: boolean,
+    limit: number,
+) {
+    let where_clause = is_pg ? " WHERE user_id = $1" : " WHERE user_id = ?";
+    const params: any[] = [tenant];
+
+    if (project_id) {
+        where_clause += is_pg
+            ? " AND (project_id = $2 OR project_id = 'system_global' OR project_id IS NULL)"
+            : " AND (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)";
+        params.push(project_id);
+    }
+
+    params.push(limit);
+    return { where_clause, params };
+}
+
 export function dash(app: any) {
     app.get("/dashboard/projects", async (req: any, res: any) => {
         const tenant = require_tenant(req, res);
@@ -299,17 +319,12 @@ export function dash(app: any) {
             const lim = parseInt(req.query.limit || "50");
             const project_id = req.query.project_id;
 
-            let where_clause = is_pg ? " WHERE user_id = $1" : " WHERE user_id = ?";
-            let params: any[] = [tenant];
-
-            if (project_id) {
-                where_clause += is_pg
-                    ? " AND (project_id = $2 OR project_id = 'system_global' OR project_id IS NULL)"
-                    : " AND (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)";
-                params.push(project_id);
-            }
-
-            params.push(lim);
+            const { where_clause, params } = build_tenant_project_where(
+                tenant,
+                project_id,
+                is_pg,
+                lim,
+            );
 
             const recmem = await all_async(
                 `SELECT id, content, primary_sector, salience, created_at, updated_at, last_seen_at
@@ -403,17 +418,12 @@ export function dash(app: any) {
             const lim = parseInt(req.query.limit || "10");
             const project_id = req.query.project_id;
 
-            let where_clause = is_pg ? " WHERE user_id = $1" : " WHERE user_id = ?";
-            let params: any[] = [tenant];
-
-            if (project_id) {
-                where_clause += is_pg
-                    ? " AND (project_id = $2 OR project_id = 'system_global' OR project_id IS NULL)"
-                    : " AND (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)";
-                params.push(project_id);
-            }
-
-            params.push(lim);
+            const { where_clause, params } = build_tenant_project_where(
+                tenant,
+                project_id,
+                is_pg,
+                lim,
+            );
 
             const topm = await all_async(
                 `SELECT id, content, primary_sector, salience, last_seen_at

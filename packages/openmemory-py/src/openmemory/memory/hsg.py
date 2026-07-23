@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional
 from ..core.db import db, q
 from ..core.config import env
 from ..core.vector_store import VectorStore
-from ..utils.text import chunk_text
+from ..utils.chunking import chunk_text
 from ..utils.math import cosine_similarity, vec_to_buf, buf_to_vec
 from .embed import (
     classify_content,
