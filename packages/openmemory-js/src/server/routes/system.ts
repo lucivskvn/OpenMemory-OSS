@@ -131,7 +131,7 @@ export function sys(app: any) {
     const TrainSchema = z.object({
         data: z.array(
             z.object({
-                text: z.string().min(1),
+                text: z.string().min(1).max(10000),
                 sector: z.enum([
                     "episodic",
                     "semantic",
@@ -140,7 +140,7 @@ export function sys(app: any) {
                     "reflective",
                 ]),
             }),
-        ),
+        ).max(1000),
     });
 
     app.post(
