@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "bun:test";
 import { sys } from "../src/server/routes/system";
+import { dash } from "../src/server/routes/dashboard";
 import { run_async, q, all_async } from "../src/core/db";
 
 async function cleanup() {
@@ -295,5 +296,115 @@ describe("Cluster sync tenant scoping", () => {
         expect(unchanged_mem).toBeTruthy();
         expect(unchanged_mem.user_id).toBe(t_bob);
         expect(unchanged_mem.content).toContain("Bob private memory");
+    });
+});
+
+describe("Dashboard route tenant scoping", () => {
+    beforeEach(async () => {
+        await cleanup();
+    });
+
+    it("enforces tenant boundaries on /dashboard routes", async () => {
+        let projects_handler: any = null;
+        let stats_handler: any = null;
+        let activity_handler: any = null;
+        let top_memories_handler: any = null;
+
+        const app_mock = {
+            get: (path: string, handler: any) => {
+                if (path === "/dashboard/projects") projects_handler = handler;
+                else if (path === "/dashboard/stats") stats_handler = handler;
+                else if (path === "/dashboard/activity") activity_handler = handler;
+                else if (path === "/dashboard/top-memories") top_memories_handler = handler;
+            },
+            post: () => {},
+        };
+
+        dash(app_mock);
+        expect(projects_handler).toBeTruthy();
+        expect(stats_handler).toBeTruthy();
+        expect(activity_handler).toBeTruthy();
+        expect(top_memories_handler).toBeTruthy();
+
+        // Populate memories for Alice and Bob
+        const t_alice = "tenant-alice";
+        const t_bob = "tenant-bob";
+
+        await q.ins_mem.run(
+            "mem-alice-1",
+            t_alice,
+            "project-alice",
+            0,
+            "Alice private diary",
+            null,
+            "semantic",
+            null,
+            null,
+            Date.now(),
+            Date.now(),
+            Date.now(),
+            0.9,
+            0.01,
+            1,
+            null,
+            null,
+            null,
+            0
+        );
+
+        await q.ins_mem.run(
+            "mem-bob-1",
+            t_bob,
+            "project-bob",
+            0,
+            "Bob private diary",
+            null,
+            "episodic",
+            null,
+            null,
+            Date.now(),
+            Date.now(),
+            Date.now(),
+            0.95,
+            0.01,
+            1,
+            null,
+            null,
+            null,
+            0
+        );
+
+        // 1. Check projects for Alice
+        const alice_req = { tenant: t_alice, query: {} };
+        let alice_json: any = null;
+        const res_mock = {
+            status: function() { return this; },
+            json: (data: any) => { alice_json = data; },
+        };
+
+        await projects_handler(alice_req, res_mock);
+        expect(alice_json).toBeTruthy();
+        expect(alice_json.projects).toContain("project-alice");
+        expect(alice_json.projects).not.toContain("project-bob");
+
+        // 2. Check stats for Alice
+        alice_json = null;
+        await stats_handler(alice_req, res_mock);
+        expect(alice_json).toBeTruthy();
+        expect(alice_json.totalMemories).toBe(1); // Only Alice's 1 memory, not 2
+
+        // 3. Check activity for Alice
+        alice_json = null;
+        await activity_handler(alice_req, res_mock);
+        expect(alice_json).toBeTruthy();
+        expect(alice_json.activities).toHaveLength(1);
+        expect(alice_json.activities[0].content).toContain("Alice private diary");
+
+        // 4. Check top-memories for Alice
+        alice_json = null;
+        await top_memories_handler(alice_req, res_mock);
+        expect(alice_json).toBeTruthy();
+        expect(alice_json.memories).toHaveLength(1);
+        expect(alice_json.memories[0].content).toContain("Alice private diary");
     });
 });

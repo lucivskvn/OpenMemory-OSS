@@ -1,5 +1,6 @@
 import { q, all_async, run_async } from "../../core/db";
 import { env } from "../../core/config";
+import { require_tenant } from "../middleware/tenant";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -90,11 +91,16 @@ const get_db_sz = async (): Promise<number> => {
 };
 
 export function dash(app: any) {
-    app.get("/dashboard/projects", async (_req: any, res: any) => {
+    app.get("/dashboard/projects", async (req: any, res: any) => {
+        const tenant = require_tenant(req, res);
+        if (!tenant) return;
         try {
             const mem_table = get_mem_table();
             const projs = await all_async(
-                `SELECT DISTINCT project_id FROM ${mem_table} WHERE project_id IS NOT NULL AND project_id != 'system_global'`,
+                is_pg
+                    ? `SELECT DISTINCT project_id FROM ${mem_table} WHERE user_id = $1 AND project_id IS NOT NULL AND project_id != 'system_global'`
+                    : `SELECT DISTINCT project_id FROM ${mem_table} WHERE user_id = ? AND project_id IS NOT NULL AND project_id != 'system_global'`,
+                [tenant],
             );
             res.json({
                 projects: projs.map((p: any) => p.project_id),
@@ -105,18 +111,20 @@ export function dash(app: any) {
     });
 
     app.get("/dashboard/stats", async (req: any, res: any) => {
+        const tenant = require_tenant(req, res);
+        if (!tenant) return;
         try {
             const mem_table = get_mem_table();
             const project_id = req.query.project_id;
 
-            let where_clause = "";
-            let params: any[] = [];
+            let where_clause = is_pg ? " WHERE user_id = $1" : " WHERE user_id = ?";
+            let params: any[] = [tenant];
 
             if (project_id) {
-                where_clause = is_pg
-                    ? " WHERE (project_id = $1 OR project_id = 'system_global' OR project_id IS NULL)"
-                    : " WHERE (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)";
-                params = [project_id];
+                where_clause += is_pg
+                    ? " AND (project_id = $2 OR project_id = 'system_global' OR project_id IS NULL)"
+                    : " AND (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)";
+                params.push(project_id);
             }
 
             const totmem = await all_async(
@@ -133,10 +141,11 @@ export function dash(app: any) {
             );
             const dayago = Date.now() - 24 * 60 * 60 * 1000;
 
-            const recent_where = where_clause
-                ? where_clause +
-                  (is_pg ? " AND created_at > $2" : " AND created_at > ?")
-                : " WHERE created_at > " + (is_pg ? "$1" : "?");
+            const recent_where =
+                where_clause +
+                (is_pg
+                    ? ` AND created_at > $${params.length + 1}`
+                    : " AND created_at > ?");
             const recent_params = [...params, dayago];
 
             const recmem = await all_async(
@@ -283,24 +292,28 @@ export function dash(app: any) {
     });
 
     app.get("/dashboard/activity", async (req: any, res: any) => {
+        const tenant = require_tenant(req, res);
+        if (!tenant) return;
         try {
             const mem_table = get_mem_table();
             const lim = parseInt(req.query.limit || "50");
             const project_id = req.query.project_id;
 
-            let where_clause = "";
-            let params: any[] = [lim];
+            let where_clause = is_pg ? " WHERE user_id = $1" : " WHERE user_id = ?";
+            let params: any[] = [tenant];
 
             if (project_id) {
-                where_clause = is_pg
-                    ? " WHERE (project_id = $2 OR project_id = 'system_global' OR project_id IS NULL)"
-                    : " WHERE (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)";
-                params = [lim, project_id];
+                where_clause += is_pg
+                    ? " AND (project_id = $2 OR project_id = 'system_global' OR project_id IS NULL)"
+                    : " AND (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)";
+                params.push(project_id);
             }
+
+            params.push(lim);
 
             const recmem = await all_async(
                 `SELECT id, content, primary_sector, salience, created_at, updated_at, last_seen_at
-                 FROM ${mem_table}${where_clause} ORDER BY updated_at DESC LIMIT ${is_pg ? "$1" : "?"}`,
+                 FROM ${mem_table}${where_clause} ORDER BY updated_at DESC LIMIT ${is_pg ? `$${params.length}` : "?"}`,
                 params,
             );
             res.json({
@@ -319,6 +332,8 @@ export function dash(app: any) {
     });
 
     app.get("/dashboard/sectors/timeline", async (req: any, res: any) => {
+        const tenant = require_tenant(req, res);
+        if (!tenant) return;
         try {
             const mem_table = get_mem_table();
             const hrs = parseInt(req.query.hours || "24");
@@ -326,13 +341,13 @@ export function dash(app: any) {
             const project_id = req.query.project_id;
 
             let where_clause = is_pg
-                ? " WHERE created_at > $1"
-                : " WHERE created_at > ?";
-            let params: any[] = [strt];
+                ? " WHERE user_id = $1 AND created_at > $2"
+                : " WHERE user_id = ? AND created_at > ?";
+            let params: any[] = [tenant, strt];
 
             if (project_id) {
                 where_clause += is_pg
-                    ? " AND (project_id = $2 OR project_id = 'system_global' OR project_id IS NULL)"
+                    ? " AND (project_id = $3 OR project_id = 'system_global' OR project_id IS NULL)"
                     : " AND (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)";
                 params.push(project_id);
             }
@@ -381,24 +396,28 @@ export function dash(app: any) {
     });
 
     app.get("/dashboard/top-memories", async (req: any, res: any) => {
+        const tenant = require_tenant(req, res);
+        if (!tenant) return;
         try {
             const mem_table = get_mem_table();
             const lim = parseInt(req.query.limit || "10");
             const project_id = req.query.project_id;
 
-            let where_clause = "";
-            let params: any[] = [lim];
+            let where_clause = is_pg ? " WHERE user_id = $1" : " WHERE user_id = ?";
+            let params: any[] = [tenant];
 
             if (project_id) {
-                where_clause = is_pg
-                    ? " WHERE (project_id = $2 OR project_id = 'system_global' OR project_id IS NULL)"
-                    : " WHERE (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)";
-                params = [lim, project_id];
+                where_clause += is_pg
+                    ? " AND (project_id = $2 OR project_id = 'system_global' OR project_id IS NULL)"
+                    : " AND (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)";
+                params.push(project_id);
             }
+
+            params.push(lim);
 
             const topm = await all_async(
                 `SELECT id, content, primary_sector, salience, last_seen_at
-                 FROM ${mem_table}${where_clause} ORDER BY salience DESC LIMIT ${is_pg ? "$1" : "?"}`,
+                 FROM ${mem_table}${where_clause} ORDER BY salience DESC LIMIT ${is_pg ? `$${params.length}` : "?"}`,
                 params,
             );
             res.json({
@@ -416,6 +435,8 @@ export function dash(app: any) {
     });
 
     app.get("/dashboard/maintenance", async (req: any, res: any) => {
+        const tenant = require_tenant(req, res);
+        if (!tenant) return;
         try {
             const hrs = parseInt(req.query.hours || "24");
             const strt = Date.now() - hrs * 60 * 60 * 1000;
