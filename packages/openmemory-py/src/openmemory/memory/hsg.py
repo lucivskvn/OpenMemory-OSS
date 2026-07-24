@@ -6,8 +6,9 @@ from typing import List, Dict, Any, Optional
 from ..core.db import db, q
 from ..core.config import env
 from ..core.vector_store import VectorStore
-from ..utils.text import chunk_text
-from ..utils.math import cosine_similarity, vec_to_buf, buf_to_vec
+from ..utils.chunking import chunk_text
+from ..utils.vectors import cos_sim as cosine_similarity, vec_to_buf, buf_to_vec
+
 from .embed import (
     classify_content,
     embed_multi_sector,
@@ -17,13 +18,13 @@ from .embed import (
     SECTOR_RELATIONSHIPS
 )
 from .decay import calc_decay
-from .reflect import update_user_summary
+from .user_summary import update_user_summary
 
 logger = logging.getLogger("hsg")
 
 # Global singleton or dependency injected? Assuming global for now.
 # In a real app, this should be part of an app context.
-from ..core.db import vector_store as store
+from ..core.vector_store import vector_store as store
 
 HYBRID_PARAMS = {
     "alpha": 0.5, # text overlap weight
@@ -40,6 +41,39 @@ REINFORCEMENT = {
 def canonical_token_set(text: str) -> set:
     from ..utils.text import canonical_tokens_from_text
     return set(canonical_tokens_from_text(text))
+
+def compute_simhash(text: str) -> str:
+    from ..utils.text import stable_text_fallback_hash
+    tokens = canonical_token_set(text)
+    if not tokens:
+        return stable_text_fallback_hash(text)
+
+    hashes = []
+    for t in tokens:
+        h = 0
+        for char in t:
+            h = (h << 5) - h + ord(char)
+            h = h & 0xffffffff
+        hashes.append(h)
+
+    vec = [0] * 64
+    for h in hashes:
+        for i in range(64):
+            if h & (1 << i):
+                vec[i] += 1
+            else:
+                vec[i] -= 1
+
+    hash_str = ""
+    for i in range(0, 64, 4):
+        nibble = (
+            (8 if vec[i] > 0 else 0) +
+            (4 if vec[i + 1] > 0 else 0) +
+            (2 if vec[i + 2] > 0 else 0) +
+            (1 if vec[i + 3] > 0 else 0)
+        )
+        hash_str += hex(nibble)[2:]
+    return hash_str
 
 def compute_token_overlap(q_tokens: set, m_tokens: set) -> float:
     if not q_tokens or not m_tokens:
@@ -129,6 +163,33 @@ async def calc_multi_vec_fusion_score(mid: str, qe: Dict[str, List[float]], w: D
 
     return s / tot if tot > 0 else 0.0
 
+async def add_hsg_memory(
+    content: str,
+    tags: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    user_id: Optional[str] = None,
+    project_id: Optional[str] = None
+) -> Dict[str, Any]:
+    simhash = compute_simhash(content)
+    existing = db.fetchone("SELECT * FROM memories WHERE simhash=?", (simhash,))
+    if existing:
+        now_ts = int(time.time() * 1000)
+        boosted_sal = min(1.0, (existing["salience"] or 0) + 0.15)
+        db.execute("UPDATE memories SET salience=?, last_seen_at=? WHERE id=?", (boosted_sal, now_ts, existing["id"]))
+        db.commit()
+        return {
+            "id": existing["id"],
+            "primary_sector": existing["primary_sector"],
+            "sectors": [existing["primary_sector"]],
+            "deduplicated": True
+        }
+
+    import uuid
+    mid = str(uuid.uuid4())
+    res = await hsg_store(mid, content, user_id, tags or "[]", metadata)
+    res["deduplicated"] = False
+    return res
+
 async def hsg_store(mid: str, content: str, user_id: str = None, tags: str = "[]", metadata: Dict[str, Any] = None):
     now = int(time.time() * 1000)
     simhash = "0" # Stub
@@ -182,7 +243,7 @@ async def hsg_store(mid: str, content: str, user_id: str = None, tags: str = "[]
 
         from .embed import calc_mean_vec
         mean_vec = calc_mean_vec(emb_res, all_secs)
-        from ..utils.math import vec_to_buf
+        from ..utils.vectors import vec_to_buf
         mean_buf = vec_to_buf(mean_vec)
         db.execute("UPDATE memories SET mean_dim=?, mean_vec=? WHERE id=?", (len(mean_vec), mean_buf, mid))
 

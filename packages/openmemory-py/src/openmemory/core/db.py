@@ -138,3 +138,6 @@ q = Queries()
 
 def transaction():
     return db.conn
+
+def log_maint_op(op: str, count: int):
+    logger.info(f"[MAINT] {op} processed {count} items")

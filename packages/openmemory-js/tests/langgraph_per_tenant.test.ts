@@ -4,7 +4,6 @@ process.env.OM_METADATA_BACKEND = process.env.OM_METADATA_BACKEND || "sqlite";
 process.env.OM_VECTOR_BACKEND = process.env.OM_VECTOR_BACKEND || "sqlite";
 
 import { beforeEach, describe, expect, it } from "bun:test";
-import { run_async, q } from "../src/core/db";
 import {
     store_node_mem,
     retrieve_node_mems,
@@ -16,19 +15,20 @@ const T_ALICE = "tenant-alice-lg";
 const T_BOB = "tenant-bob-lg";
 
 async function cleanup() {
-    await run_async(`DELETE FROM memories`);
+    const db = await import("../src/core/db");
+    await db.run_async(`DELETE FROM memories`);
     try {
-        await run_async(`DELETE FROM vectors`);
+        await db.run_async(`DELETE FROM vectors`);
     } catch {
         /* schema variant */
     }
     try {
-        await run_async(`DELETE FROM openmemory_vectors`);
+        await db.run_async(`DELETE FROM openmemory_vectors`);
     } catch {
         /* schema variant */
     }
     try {
-        await run_async(`DELETE FROM waypoints`);
+        await db.run_async(`DELETE FROM waypoints`);
     } catch {
         /* schema variant */
     }
@@ -49,7 +49,8 @@ describe("LangGraph per-tenant scoping", () => {
         const id = res.memory.id;
         expect(id).toBeTruthy();
 
-        const row = await q.get_mem.get(id);
+        const db = await import("../src/core/db");
+        const row = await db.q.get_mem.get(id);
         expect(row).toBeTruthy();
         expect(row.user_id).toBe(T_ALICE);
     }, 25000);
@@ -171,7 +172,8 @@ describe("LangGraph per-tenant scoping", () => {
         });
 
         // Verify the DB record has the correct user_id and content
-        const row = await q.get_mem.get(alice_refl.memory.id);
+        const db = await import("../src/core/db");
+        const row = await db.q.get_mem.get(alice_refl.memory.id);
         expect(row).toBeTruthy();
         expect(row.user_id).toBe(T_ALICE);
         expect(row.content).toContain("Alice");

@@ -8,7 +8,6 @@ from typing import List, Dict, Any, Optional
 from ..core.db import q, db, log_maint_op
 from ..core.config import env
 from ..utils.vectors import cos_sim
-from .hsg import add_hsg_memory
 
 logger = logging.getLogger("reflect")
 
@@ -115,6 +114,7 @@ async def run_reflection() -> Dict[str, Any]:
         }
 
         print(f"[REFLECT] Creating reflection: {c['n']} mems, sal={s:.3f}, sec={c['mem'][0]['primary_sector']}")
+        from .hsg import add_hsg_memory
         await add_hsg_memory(txt, json.dumps(["reflect:auto"]), meta)
         await mark_consolidated(src)
         await boost(src)
