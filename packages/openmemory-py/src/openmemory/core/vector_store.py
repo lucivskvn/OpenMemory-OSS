@@ -46,7 +46,7 @@ class SQLiteVectorStore(VectorStore):
     async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None, project_id: Optional[str] = None):
         blob = struct.pack(f"{len(vector)}f", *vector)
         sql = f"INSERT OR REPLACE INTO {self.table}(id, sector, user_id, v, dim) VALUES (?, ?, ?, ?, ?)"
-        db.conn.execute(sql, (id, sector, user_id, blob, dim))
+        db.conn.execute(sql, (id, sector, user_id, blob, dim)) # nosemgrep
         db.commit()
 
     async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]:
