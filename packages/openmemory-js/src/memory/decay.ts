@@ -8,8 +8,6 @@ import {
     fingerprint_mem,
 } from "./decay_utils";
 
-const memories_table = dbModule.memories_table;
-
 interface DecayCfg {
     threads: number;
     cold_threshold: number;
@@ -100,7 +98,7 @@ export const apply_decay = async () => {
         try {
             const segment = seg.segment;
             const rows = await dbModule.all_async(
-                `select id,user_id,project_id,content,summary,salience,decay_lambda,last_seen_at,updated_at,primary_sector,coactivations,feedback_score from ${memories_table} where segment=?`,
+                "select id,user_id,project_id,content,summary,salience,decay_lambda,last_seen_at,updated_at,primary_sector,coactivations,feedback_score from memories where segment=?",
                 [segment],
             );
 
@@ -193,7 +191,7 @@ export const apply_decay = async () => {
 
                                     if (new_summary !== (m.summary || "")) {
                                         await dbModule.run_async(
-                                            `update ${memories_table} set summary=? where id=?`,
+                                            "update memories set summary=? where id=?",
                                             [new_summary, m.id],
                                         );
                                     }
@@ -214,7 +212,7 @@ export const apply_decay = async () => {
                                 m.project_id || undefined,
                             );
                             await dbModule.run_async(
-                                `update ${memories_table} set summary=? where id=?`,
+                                "update memories set summary=? where id=?",
                                 [fp.summary, m.id],
                             );
                             fingerprinted = true;
@@ -224,7 +222,7 @@ export const apply_decay = async () => {
 
                         if (changed) {
                             await dbModule.run_async(
-                                `update ${memories_table} set salience=?,feedback_score=?,updated_at=? where id=?`,
+                                `update memories set salience=?,feedback_score=?,updated_at=? where id=?`,
                                 [new_sal, new_feedback, now(), m.id],
                             );
                             tot_chg++;
@@ -297,7 +295,7 @@ export const on_query_hit = async (
     if (cfg.reinforce_on_query) {
         const new_sal = clamp_f((m.salience || 0.5) + 0.5, 0, 1);
         await dbModule.run_async(
-            `update ${memories_table} set salience=?,last_seen_at=? where id=?`,
+            `update memories set salience=?,last_seen_at=? where id=?`,
             [new_sal, now(), mem_id],
         );
         updated = true;

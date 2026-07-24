@@ -41,7 +41,7 @@ class PostgresVectorStore(VectorStore):
                 logger.info(f"HNSW index created on {self.table} for fast ANN queries")
         return self.pool
 
-    async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None):
+    async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None, project_id: Optional[str] = None):
         pool = await self._get_pool()
         vec_str = str(vector)
         uid = user_id or "anonymous"

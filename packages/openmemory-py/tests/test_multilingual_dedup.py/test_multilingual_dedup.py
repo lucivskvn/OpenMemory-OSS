@@ -92,7 +92,6 @@ def _load_text_and_hsg():
             propagateAssociativeReinforcementToLinkedNodes=lambda *args, **kwargs: None,
         )
         _stub_module("openmemory.memory.reflect", update_user_summary=lambda *args, **kwargs: None)
-        _stub_module("openmemory.memory.user_summary", update_user_summary=lambda *args, **kwargs: None)
 
         print("STUB EMBED:", getattr(sys.modules.get("openmemory.memory.embed"), "classify_content", None))
         print("STUB DECAY:", getattr(sys.modules.get("openmemory.memory.decay"), "calc_decay", None))

@@ -6,8 +6,11 @@ from typing import List, Dict, Any, Optional
 from ..core.db import db, q
 from ..core.config import env
 from ..core.vector_store import VectorStore
+
+UPDATE_SALIENCE_QUERY = "UPDATE memories SET salience=?, last_seen_at=? WHERE id=?"
 from ..utils.chunking import chunk_text
 from ..utils.vectors import cos_sim as cosine_similarity, vec_to_buf, buf_to_vec
+
 from .embed import (
     classify_content,
     embed_multi_sector,
@@ -52,7 +55,7 @@ def compute_simhash(text: str) -> str:
         h = 0
         for char in t:
             h = (h << 5) - h + ord(char)
-            h = h & 0xffffffffffffffff
+            h = h & 0xffffffff
         hashes.append(h)
 
     vec = [0] * 64
@@ -170,24 +173,11 @@ async def add_hsg_memory(
     project_id: Optional[str] = None
 ) -> Dict[str, Any]:
     simhash = compute_simhash(content)
-
-    normalized_user_id = user_id or "anonymous"
-
-    if project_id:
-        existing = db.fetchone(
-            "SELECT * FROM memories WHERE simhash=? AND user_id=? AND project_id=?",
-            (simhash, normalized_user_id, project_id)
-        )
-    else:
-        existing = db.fetchone(
-            "SELECT * FROM memories WHERE simhash=? AND user_id=?",
-            (simhash, normalized_user_id)
-        )
-
+    existing = db.fetchone("SELECT * FROM memories WHERE simhash=?", (simhash,))
     if existing:
         now_ts = int(time.time() * 1000)
         boosted_sal = min(1.0, (existing["salience"] or 0) + 0.15)
-        db.execute("UPDATE memories SET salience=?, last_seen_at=? WHERE id=?", (boosted_sal, now_ts, existing["id"]))
+        db.execute(UPDATE_SALIENCE_QUERY, (boosted_sal, now_ts, existing["id"]))
         db.commit()
         return {
             "id": existing["id"],
@@ -198,7 +188,7 @@ async def add_hsg_memory(
 
     import uuid
     mid = str(uuid.uuid4())
-    res = await hsg_store(mid, content, user_id, tags or "[]", metadata, project_id)
+    res = await hsg_store(mid, content, user_id, tags or "[]", metadata)
     res["deduplicated"] = False
     return res
 
@@ -226,7 +216,7 @@ async def hsg_store(mid: str, content: str, user_id: str = None, tags: str = "[]
             print(f"[HSG] Rotated to segment {cur_seg}")
 
         from .embed import extract_essence
-        stored = extract_essence(content, env.summary_max_length)
+        stored = extract_essence(content, cls["primary"], env.summary_max_length)
         sec_cfg = SECTOR_CONFIGS[cls["primary"]]
         init_sal = max(0.0, min(1.0, 0.4 + 0.1 * len(cls["additional"])))
         q.ins_mem(
@@ -456,7 +446,7 @@ async def hsg_query(qt: str, k: int = 10, f: Dict[str, Any] = None) -> List[Dict
         for r in top:
              rsal = await applyRetrievalTraceReinforcementToMemory(r["id"], r["salience"])
              now = int(time.time()*1000)
-             db.execute("UPDATE memories SET salience=?, last_seen_at=? WHERE id=?", (rsal, now, r["id"]))
+             db.execute(UPDATE_SALIENCE_QUERY, (rsal, now, r["id"]))
              if len(r["path"]) > 1:
                  wps_rows = db.fetchall("SELECT dst_id, weight FROM waypoints WHERE src_id=?", (r["id"],))
                  wps = [{"target_id": row["dst_id"], "weight": row["weight"]} for row in wps_rows]
@@ -469,7 +459,7 @@ async def hsg_query(qt: str, k: int = 10, f: Dict[str, Any] = None) -> List[Dict
                          decay_fact = math.exp(-0.02 * time_diff)
                          ctx_boost = HYBRID_PARAMS["gamma"] * (rsal - (linked_mem["salience"] or 0)) * decay_fact
                          new_sal = max(0.0, min(1.0, (linked_mem["salience"] or 0) + ctx_boost))
-                         db.execute("UPDATE memories SET salience=?, last_seen_at=? WHERE id=?", (new_sal, now, u["node_id"]))
+                         db.execute(UPDATE_SALIENCE_QUERY, (new_sal, now, u["node_id"]))
 
              from .decay import on_query_hit
              await on_query_hit(r["id"], r["primary_sector"], lambda t: embed_for_sector(t, r["primary_sector"]))

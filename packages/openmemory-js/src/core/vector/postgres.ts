@@ -127,9 +127,6 @@ export class PostgresVectorStore implements VectorStore {
             const queryF32 = new Float32Array(queryVec);
             for (const row of rows) {
                 const vec = buf_to_vec(row.v);
-                if (vec.length !== queryF32.length) {
-                    continue;
-                }
                 const sim = cos_sim(queryF32, vec);
                 sims.push({ id: row.id, score: sim });
             }

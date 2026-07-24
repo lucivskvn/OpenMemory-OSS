@@ -15,6 +15,8 @@ from pydantic import BaseModel
 logger = logging.getLogger("server.sources")
 router = APIRouter(prefix="/sources", tags=["sources"])
 
+SHA256_PREFIX = "sha256="
+
 class ingest_req(BaseModel):
     creds: Dict[str, Any] = {}
     filters: Dict[str, Any] = {}
@@ -30,7 +32,13 @@ async def list_sources():
         }
     }
 
-@router.post("/{source}/ingest", responses={500: {"description": "Internal Server Error"}})
+@router.post(
+    "/{source}/ingest",
+    responses={
+        400: {"description": "Bad Request / Unknown Source"},
+        500: {"description": "Internal Server Error"}
+    }
+)
 async def ingest_source(source: str, req: ingest_req):
     from ..connectors import (
         github_connector, notion_connector, google_drive_connector,
@@ -60,7 +68,15 @@ async def ingest_source(source: str, req: ingest_req):
         logger.exception("Source ingestion failed")
         raise HTTPException(500, "Source ingestion failed") from None
 
-@router.post("/webhook/github", responses={500: {"description": "Internal Server Error"}})
+@router.post(
+    "/webhook/github",
+    responses={
+        400: {"description": "Bad Request / Missing Payload"},
+        401: {"description": "Unauthorized / Invalid Signature"},
+        500: {"description": "Internal Server Error"},
+        503: {"description": "Service Unavailable / Webhook Not Configured"}
+    }
+)
 async def github_webhook(request: Request):
     from ...ops.ingest import ingest_document
     import os
@@ -84,7 +100,7 @@ async def github_webhook(request: Request):
             detail="invalid_signature: header_missing"
         )
 
-    if not sig.startswith("sha256="):
+    if not sig.startswith(SHA256_PREFIX):
         raise HTTPException(
             status_code=401,
             detail="invalid_signature: bad_format"
@@ -98,7 +114,7 @@ async def github_webhook(request: Request):
         hashlib.sha256
     ).hexdigest()
 
-    provided = sig[len("sha256="):]
+    provided = sig[len(SHA256_PREFIX):]
     if not hmac.compare_digest(provided, expected):
         raise HTTPException(
             status_code=401,
@@ -144,7 +160,14 @@ async def github_webhook(request: Request):
         logger.exception("GitHub webhook processing failed")
         raise HTTPException(500, "Webhook processing failed") from None
 
-@router.post("/webhook/notion", responses={500: {"description": "Internal Server Error"}})
+@router.post(
+    "/webhook/notion",
+    responses={
+        401: {"description": "Unauthorized / Invalid Signature"},
+        500: {"description": "Internal Server Error"},
+        503: {"description": "Service Unavailable / Webhook Not Configured"}
+    }
+)
 async def notion_webhook(request: Request):
     from ...ops.ingest import ingest_document
     import os
@@ -176,7 +199,7 @@ async def notion_webhook(request: Request):
         hashlib.sha256
     ).hexdigest()
 
-    provided = sig[len("sha256="):] if sig.startswith("sha256=") else sig
+    provided = sig[len(SHA256_PREFIX):] if sig.startswith(SHA256_PREFIX) else sig
     if not hmac.compare_digest(provided, expected):
         raise HTTPException(
             status_code=401,
@@ -186,10 +209,7 @@ async def notion_webhook(request: Request):
     try:
         payload = json.loads(raw_body) if raw_body else None
     except Exception:
-        raise HTTPException(400, "Invalid JSON payload") from None
-
-    if not payload:
-        raise HTTPException(400, "Empty payload")
+        payload = None
 
     try:
         content = json.dumps(payload, indent=2)

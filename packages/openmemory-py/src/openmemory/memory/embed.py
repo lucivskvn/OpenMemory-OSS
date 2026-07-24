@@ -100,14 +100,19 @@ SECTOR_RELATIONSHIPS = {
     },
 }
 
-def classify_content(content: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    sect = None
-    if metadata:
-        sect = metadata.get("sector")
-        if not sect and isinstance(metadata.get("lgm"), dict):
-            sect = metadata["lgm"].get("sector")
+def _get_preset_sector(metadata: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not metadata:
+        return None
+    sect = metadata.get("sector")
+    if not sect and isinstance(metadata.get("lgm"), dict):
+        sect = metadata["lgm"].get("sector")
+    if sect in SECTOR_CONFIGS:
+        return sect
+    return None
 
-    if sect and sect in SECTOR_CONFIGS:
+def classify_content(content: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    sect = _get_preset_sector(metadata)
+    if sect:
         return {
             "primary": sect,
             "additional": [],
@@ -130,14 +135,11 @@ def classify_content(content: str, metadata: Optional[Dict[str, Any]] = None) ->
     threshold = max(1.0, primary_score * 0.3)
     additional = [s for s, sc in sorted_scores[1:] if sc > 0 and sc >= threshold]
 
-    if len(sorted_scores) < 2:
-        confidence = 1.0 if primary_score > 0 else 0.2
-    else:
-        confidence = (
-            min(1.0, primary_score / (primary_score + sorted_scores[1][1] + 1.0))
-            if primary_score > 0
-            else 0.2
-        )
+    confidence = (
+        min(1.0, primary_score / (primary_score + sorted_scores[1][1] + 1.0))
+        if primary_score > 0
+        else 0.2
+    )
 
     return {
         "primary": primary if primary_score > 0 else "semantic",
@@ -165,30 +167,38 @@ def compress_vec_for_storage(vec: List[float], target_dim: int) -> List[float]:
         compressed /= norm
     return compressed.tolist()
 
-def _extract_sentences(raw: str) -> list:
-    """Split raw text into sentences, filtering out very short ones."""
+def extract_essence(raw: str, sec: str, max_len: int) -> str:
+    if not env.use_summary_only or len(raw) <= max_len:
+        return raw
+
     sents = [s.strip() for s in re.split(r"(?<=[.!?])\s+", raw) if len(s.strip()) > 10]
-    return sents
+    if not sents:
+        return raw[:max_len]
 
-def _score_sentence(s: str, idx: int) -> float:
-    """Compute importance score for a sentence based on position and content patterns."""
-    sc = 0.0
-    if idx == 0: sc += 10
-    if idx == 1: sc += 5
-    if re.match(r"^#+\s", s) or re.match(r"^[A-Z][A-Z\s]+:", s): sc += 8
-    if re.match(r"^[A-Z][a-z]+:", s): sc += 6
-    if re.search(r"\d{4}-\d{2}-\d{2}", s): sc += 7
-    if re.search(r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d+", s, re.I): sc += 5
-    if re.search(r"\$\d+|\d+\s*(miles|dollars|years|months|km)", s): sc += 4
-    if re.search(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+", s): sc += 3
-    if re.search(r"\b(bought|purchased|serviced|visited|went|got|received|paid|earned|learned|discovered|found|saw|met|completed|finished|fixed|implemented|created|updated|added|removed|resolved)\b", s, re.I): sc += 4
-    if re.search(r"\b(who|what|when|where|why|how)\b", s, re.I): sc += 2
-    if len(s) < 80: sc += 2
-    if "I" in s or "my" in s or "me" in s: sc += 1
-    return sc
+    def score_sent(s: str, idx: int) -> float:
+        sc = 0.0
+        if idx == 0: sc += 10
+        if idx == 1: sc += 5
+        if re.match(r"^#+\s", s) or re.match(r"^[A-Z][A-Z\s]+:", s): sc += 8
+        if re.match(r"^[A-Z][a-z]+:", s): sc += 6
+        if re.search(r"\d{4}-\d{2}-\d{2}", s): sc += 7
+        if re.search(r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d+", s, re.I): sc += 5
+        if re.search(r"\$\d+|\d+\s*(miles|dollars|years|months|km)", s): sc += 4
+        if re.search(r"\b[A-Z][a-z]+\s[A-Z][a-z]+", s): sc += 3
+        tokens = set(canonical_tokens_from_text(s.lower()))
+        action_words = {"bought", "purchased", "serviced", "visited", "went", "got", "received", "paid",
+                        "earned", "learned", "discovered", "found", "saw", "met", "completed", "finished",
+                        "fixed", "implemented", "created", "updated", "added", "removed", "resolved"}
+        if tokens.intersection(action_words): sc += 4
+        question_words = {"who", "what", "when", "where", "why", "how"}
+        if tokens.intersection(question_words): sc += 2
+        if len(s) < 80: sc += 2
+        if "I" in s or "my" in s or "me" in s: sc += 1
+        return sc
 
-def _select_top_sentences(scored: list, max_len: int) -> list:
-    """Select highest scoring sentences that fit within max_len."""
+    scored = [{"text": s, "score": score_sent(s, idx), "idx": idx} for idx, s in enumerate(sents)]
+    scored.sort(key=lambda x: x["score"], reverse=True)
+
     selected = []
     current_len = 0
 
@@ -204,19 +214,4 @@ def _select_top_sentences(scored: list, max_len: int) -> list:
             current_len += len(item["text"]) + 2
 
     selected.sort(key=lambda x: x["idx"])
-    return selected
-
-def extract_essence(raw: str, max_len: int) -> str:
-    """Extract most important sentences from raw text, respecting max_len limit."""
-    if not env.use_summary_only or len(raw) <= max_len:
-        return raw
-
-    sents = _extract_sentences(raw)
-    if not sents:
-        return raw[:max_len]
-
-    scored = [{"text": s, "score": _score_sentence(s, idx), "idx": idx} for idx, s in enumerate(sents)]
-    scored.sort(key=lambda x: x["score"], reverse=True)
-
-    selected = _select_top_sentences(scored, max_len)
     return " ".join([s["text"] for s in selected])
