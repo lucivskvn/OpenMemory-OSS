@@ -8,7 +8,6 @@ from ..core.config import env
 from ..core.vector_store import VectorStore
 from ..utils.chunking import chunk_text
 from ..utils.vectors import cos_sim as cosine_similarity, vec_to_buf, buf_to_vec
-
 from .embed import (
     classify_content,
     embed_multi_sector,
