@@ -4,7 +4,7 @@ import { all_async } from "../../core/db";
 import { sector_configs } from "../../memory/hsg";
 import { getEmbeddingInfo } from "../../memory/embed";
 import { tier, env } from "../../core/config";
-import { require_tenant } from "../middleware/tenant";
+import { require_tenant, reject_tenant_mismatch } from "../middleware/tenant";
 
 const TIER_BENEFITS = {
     hybrid: {
@@ -41,6 +41,9 @@ export function sys(app: any) {
             req: import("../server").AppRequest,
             res: import("../server").AppResponse,
         ) => {
+            const tenant = require_tenant(req, res);
+            if (!tenant) return;
+
             try {
                 const SyncSchema = z.object({
                     event: z.literal("memory_sync"),
@@ -70,37 +73,62 @@ export function sys(app: any) {
                 const parsed = SyncSchema.safeParse(req.body);
                 if (parsed.success) {
                     const data = parsed.data.data;
-                    const existing = await q.get_mem.get(data.id);
-                    // Handle version tracker deduplication check
-                    if (!existing || (data.version ?? 1) > existing.version) {
-                        // We do an upsert
-                        await q.ins_mem.run(
-                            data.id,
-                            data.user_id,
-                            data.project_id,
-                            data.segment,
-                            data.content,
-                            data.simhash,
-                            data.primary_sector,
-                            data.tags,
-                            data.meta,
-                            data.created_at,
-                            data.updated_at,
-                            data.last_seen_at,
-                            data.salience,
-                            data.decay_lambda,
-                            data.version ?? 1,
-                            data.mean_dim,
-                            data.mean_vec,
-                            data.compressed_vec,
-                            data.feedback_score,
-                        );
-                        return res.json({ ok: true, message: "Synced" });
+
+                    if (reject_tenant_mismatch(res, tenant, data.user_id)) return;
+
+                    // Ensure user_id is forced to the verified tenant if not specified
+                    if (!data.user_id) {
+                        data.user_id = tenant;
                     }
-                    return res.json({
-                        ok: true,
-                        message: "Ignored due to version deduplication",
-                    });
+
+                    // Atomically attempt upsert with tenant and version constraints enforced in SQL.
+                    // The ON CONFLICT UPDATE now includes a WHERE clause that only allows the update
+                    // if memories.user_id = excluded.user_id AND excluded.version > memories.version.
+                    // This prevents cross-tenant overwrites and enforces version deduplication atomically.
+                    await q.ins_mem.run(
+                        data.id,
+                        data.user_id ?? null,
+                        data.project_id ?? null,
+                        data.segment ?? null,
+                        data.content,
+                        data.simhash ?? null,
+                        data.primary_sector,
+                        data.tags ?? null,
+                        data.meta ?? null,
+                        data.created_at ?? null,
+                        data.updated_at ?? null,
+                        data.last_seen_at ?? null,
+                        data.salience ?? null,
+                        data.decay_lambda ?? null,
+                        data.version ?? 1,
+                        data.mean_dim ?? null,
+                        data.mean_vec ?? null,
+                        data.compressed_vec ?? null,
+                        data.feedback_score ?? null,
+                    );
+
+                    // Re-read the row to determine the actual outcome of the upsert
+                    const result = await q.get_mem.get(data.id);
+
+                    // If row exists but belongs to a different tenant, the conditional upsert did not apply
+                    if (result && result.user_id !== tenant) {
+                        return res.status(403).json({
+                            error: "tenant_mismatch",
+                            message: "Target memory belongs to another tenant.",
+                        });
+                    }
+
+                    // If the stored version doesn't match the incoming version, the conditional update
+                    // was blocked (existing row with same tenant but version check failed)
+                    if (result && result.version !== (data.version ?? 1)) {
+                        return res.json({
+                            ok: true,
+                            message: "Ignored due to version deduplication",
+                        });
+                    }
+
+                    // Otherwise, upsert succeeded (new row or same-tenant update with higher version)
+                    return res.json({ ok: true, message: "Synced" });
                 }
                 res.status(400).json({ error: "Invalid sync event" });
             } catch (e: unknown) {
@@ -113,7 +141,7 @@ export function sys(app: any) {
     const TrainSchema = z.object({
         data: z.array(
             z.object({
-                text: z.string().min(1),
+                text: z.string().min(1).max(10000),
                 sector: z.enum([
                     "episodic",
                     "semantic",
@@ -122,7 +150,7 @@ export function sys(app: any) {
                     "reflective",
                 ]),
             }),
-        ),
+        ).max(1000),
     });
 
     app.post(
