@@ -106,7 +106,7 @@ def _get_preset_sector(metadata: Optional[Dict[str, Any]]) -> Optional[str]:
     sect = metadata.get("sector")
     if not sect and isinstance(metadata.get("lgm"), dict):
         sect = metadata["lgm"].get("sector")
-    if sect in SECTOR_CONFIGS:
+    if isinstance(sect, str) and sect in SECTOR_CONFIGS:
         return sect
     return None
 

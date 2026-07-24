@@ -123,12 +123,15 @@ async def calculateCrossSectorResonanceScore(m_sec: str, q_sec: str, fusion_scor
     rel = SECTOR_RELATIONSHIPS.get(q_sec, {}).get(m_sec, 0.5)
     return fusion_score * rel
 
-async def create_single_waypoint(src_id: str, src_vec: List[float], now: int, user_id: str = None):
+async def create_single_waypoint(src_id: str, src_vec: List[float], now: int, user_id: str = None, project_id: str = None):
     # Normalize tenant scope before searching and inserting
     normalized_user_id = user_id or "anonymous"
 
     # Find potential neighbors in semantic space
-    res = await store.search(src_vec, "semantic", 5, {"user_id": normalized_user_id})
+    filter_dict = {"user_id": normalized_user_id}
+    if project_id:
+        filter_dict["project_id"] = project_id
+    res = await store.search(src_vec, "semantic", 5, filter_dict)
     for r in res:
         dst_id = r["id"]
         if dst_id == src_id:
@@ -138,12 +141,12 @@ async def create_single_waypoint(src_id: str, src_vec: List[float], now: int, us
                    (src_id, dst_id, normalized_user_id, r["similarity"], now, now))
     db.commit()
 
-async def calc_multi_vec_fusion_score(mid: str, qe: Dict[str, List[float]], w: Dict[str, float], user_id: Optional[str] = None) -> float:
+async def calc_multi_vec_fusion_score(mid: str, qe: Dict[str, List[float]], w: Dict[str, float], user_id: Optional[str] = None, project_id: Optional[str] = None) -> float:
     # Multi-tenancy: getVectorsById now requires explicit user_id
     if not user_id:
         return 0.0
 
-    vecs = await store.getVectorsById(mid, user_id)
+    vecs = await store.getVectorsById(mid, user_id, project_id)
     s = 0.0
     tot = 0.0
 
@@ -257,7 +260,7 @@ async def hsg_store(mid: str, content: str, user_id: str = None, tags: str = "[]
             comp = compress_vec_for_storage(mean_vec, 128)
             db.execute("UPDATE memories SET compressed_vec=? WHERE id=?", (vec_to_buf(comp), mid))
 
-        await create_single_waypoint(mid, mean_vec, now, user_id)
+        await create_single_waypoint(mid, mean_vec, now, user_id, project_id)
         if user_id:
             await update_user_summary(user_id)
         return {
@@ -348,9 +351,12 @@ async def hsg_query(qt: str, k: int = 10, f: Dict[str, Any] = None) -> List[Dict
             "reflective_dimension_weight": 1.1 if qc["primary"] == "reflective" else 0.5,
         }
         sr = {}
+        search_filter = {"user_id": f.get("user_id")}
+        if f.get("project_id"):
+            search_filter["project_id"] = f.get("project_id")
         for s in ss:
             qv = qe[s]
-            res = await store.search(qv, s, k*3, {"user_id": f.get("user_id")})
+            res = await store.search(qv, s, k*3, search_filter)
             sr[s] = res
 
         all_sims = []
@@ -388,7 +394,7 @@ async def hsg_query(qt: str, k: int = 10, f: Dict[str, Any] = None) -> List[Dict
             if f and f.get("user_id") and m["user_id"] != f["user_id"]:
                 continue
 
-            mvf = await calc_multi_vec_fusion_score(mid, qe, w, m["user_id"])
+            mvf = await calc_multi_vec_fusion_score(mid, qe, w, m["user_id"], f.get("project_id"))
             csr = await calculateCrossSectorResonanceScore(m["primary_sector"], qc["primary"], mvf)
 
             best_sim = csr

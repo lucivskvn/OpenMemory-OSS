@@ -56,7 +56,8 @@ class ValkeyVectorStore(VectorStore):
             self._dec(item.get(b'sector') or item.get('sector')),
             vec,
             int(self._dec(item.get(b'dim') or item.get('dim'))),
-            self._dec(item.get(b'user_id') or item.get('user_id'))
+            self._dec(item.get(b'user_id') or item.get('user_id')),
+            self._dec(item.get(b'project_id') or item.get('project_id'))
         )
 
     async def _fetch_items_from_keys(self, client, keys):
@@ -78,7 +79,7 @@ class ValkeyVectorStore(VectorStore):
             if cursor == 0:
                 break
 
-    async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]:
+    async def getVectorsById(self, id: str, user_id: Optional[str] = None, project_id: Optional[str] = None) -> List[VectorRow]:
         if not user_id:
             raise ValueError("Explicit user_id is required for getVectorsById to ensure tenant isolation.")
 
@@ -89,19 +90,24 @@ class ValkeyVectorStore(VectorStore):
 
         def process(items):
             rows = [self._parse_item_to_row(i) for i in items]
+            if project_id:
+                rows = [r for r in rows if r and r.project_id == project_id]
             results.extend([r for r in rows if r])
 
         await self._scan_pattern(pattern, process)
         return results
 
-    async def getVector(self, id: str, sector: str, user_id: Optional[str] = None) -> Optional[VectorRow]:
+    async def getVector(self, id: str, sector: str, user_id: Optional[str] = None, project_id: Optional[str] = None) -> Optional[VectorRow]:
         client = await self._get_client()
         uid = user_id or "anonymous"
         key = self._key(uid, sector, id)
         item = await client.hgetall(key)
-        return self._parse_item_to_row(item)
+        row = self._parse_item_to_row(item)
+        if row and project_id and row.project_id != project_id:
+            return None
+        return row
 
-    async def deleteVectors(self, id: str, user_id: Optional[str] = None):
+    async def deleteVectors(self, id: str, user_id: Optional[str] = None, project_id: Optional[str] = None):
         if not user_id:
             raise ValueError("Explicit user_id is required for deleteVectors to ensure tenant isolation.")
 
@@ -113,7 +119,17 @@ class ValkeyVectorStore(VectorStore):
         while True:
             cursor, keys = await client.scan(cursor, match=pattern, count=100)
             if keys:
-                await client.delete(*keys)
+                if project_id:
+                    # Filter keys by project_id before deleting
+                    items = await self._fetch_items_from_keys(client, keys)
+                    filtered_keys = []
+                    for i, item in enumerate(items):
+                        if item and not self._should_filter(item, project_id):
+                            filtered_keys.append(keys[i])
+                    if filtered_keys:
+                        await client.delete(*filtered_keys)
+                else:
+                    await client.delete(*keys)
             if cursor == 0:
                 break
 

@@ -25,10 +25,11 @@ class PostgresVectorStore(VectorStore):
                         id TEXT NOT NULL,
                         sector TEXT NOT NULL,
                         user_id TEXT NOT NULL,
+                        project_id TEXT,
                         v vector,
                         dim INTEGER,
                         created_at TIMESTAMPTZ DEFAULT NOW(),
-                        PRIMARY KEY (id, sector)
+                        PRIMARY KEY (id, sector, user_id)
                     )
                 """)
                 
@@ -47,23 +48,28 @@ class PostgresVectorStore(VectorStore):
         uid = user_id or "anonymous"
 
         sql = f"""
-            INSERT INTO {self.table} (id, sector, user_id, v, dim)
-            VALUES ($1, $2, $3, $4::vector, $5)
-            ON CONFLICT (id, sector) DO UPDATE SET
-                user_id = EXCLUDED.user_id,
+            INSERT INTO {self.table} (id, sector, user_id, project_id, v, dim)
+            VALUES ($1, $2, $3, $4, $5::vector, $6)
+            ON CONFLICT (id, sector, user_id) DO UPDATE SET
+                project_id = EXCLUDED.project_id,
                 v = EXCLUDED.v,
                 dim = EXCLUDED.dim
         """
         async with pool.acquire() as conn:
-            await conn.execute(sql, id, sector, uid, vec_str, dim)
+            await conn.execute(sql, id, sector, uid, project_id, vec_str, dim)
 
-    async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]:
+    async def getVectorsById(self, id: str, user_id: Optional[str] = None, project_id: Optional[str] = None) -> List[VectorRow]:
         pool = await self._get_pool()
-        sql = f"SELECT id, sector, user_id, v::text as v_txt, dim FROM {self.table} WHERE id=$1"
+        sql = f"SELECT id, sector, user_id, project_id, v::text as v_txt, dim FROM {self.table} WHERE id=$1"
         params = [id]
+        param_idx = 2
         if user_id:
-            sql += " AND user_id=$2"
+            sql += f" AND user_id=${param_idx}"
             params.append(user_id)
+            param_idx += 1
+        if project_id:
+            sql += f" AND project_id=${param_idx}"
+            params.append(project_id)
 
         async with pool.acquire() as conn:
             rows = await conn.fetch(sql, *params)
@@ -71,31 +77,41 @@ class PostgresVectorStore(VectorStore):
         res = []
         for r in rows:
             vec = json.loads(r["v_txt"])
-            res.append(VectorRow(r["id"], r["sector"], vec, r["dim"], r["user_id"]))
+            res.append(VectorRow(r["id"], r["sector"], vec, r["dim"], r["user_id"], r["project_id"]))
         return res
 
-    async def getVector(self, id: str, sector: str, user_id: Optional[str] = None) -> Optional[VectorRow]:
+    async def getVector(self, id: str, sector: str, user_id: Optional[str] = None, project_id: Optional[str] = None) -> Optional[VectorRow]:
         pool = await self._get_pool()
-        sql = f"SELECT id, sector, user_id, v::text as v_txt, dim FROM {self.table} WHERE id=$1 AND sector=$2"
+        sql = f"SELECT id, sector, user_id, project_id, v::text as v_txt, dim FROM {self.table} WHERE id=$1 AND sector=$2"
         params = [id, sector]
+        param_idx = 3
         if user_id:
-            sql += " AND user_id=$3"
+            sql += f" AND user_id=${param_idx}"
             params.append(user_id)
+            param_idx += 1
+        if project_id:
+            sql += f" AND project_id=${param_idx}"
+            params.append(project_id)
 
         async with pool.acquire() as conn:
             r = await conn.fetchrow(sql, *params)
 
         if not r: return None
         vec = json.loads(r["v_txt"])
-        return VectorRow(r["id"], r["sector"], vec, r["dim"], r["user_id"])
+        return VectorRow(r["id"], r["sector"], vec, r["dim"], r["user_id"], r["project_id"])
 
-    async def deleteVectors(self, id: str, user_id: Optional[str] = None):
+    async def deleteVectors(self, id: str, user_id: Optional[str] = None, project_id: Optional[str] = None):
         pool = await self._get_pool()
         sql = f"DELETE FROM {self.table} WHERE id=$1"
         params = [id]
+        param_idx = 2
         if user_id:
-            sql += " AND user_id=$2"
+            sql += f" AND user_id=${param_idx}"
             params.append(user_id)
+            param_idx += 1
+        if project_id:
+            sql += f" AND project_id=${param_idx}"
+            params.append(project_id)
 
         async with pool.acquire() as conn:
             await conn.execute(sql, *params)
@@ -111,6 +127,11 @@ class PostgresVectorStore(VectorStore):
         if filter and filter.get("user_id"):
             filter_sql += f" AND user_id=${arg_idx}"
             args.append(filter["user_id"])
+            arg_idx += 1
+
+        if filter and filter.get("project_id"):
+            filter_sql += f" AND project_id=${arg_idx}"
+            args.append(filter["project_id"])
             arg_idx += 1
 
         sql = f"""

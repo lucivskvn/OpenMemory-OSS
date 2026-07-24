@@ -13,25 +13,26 @@ logger = logging.getLogger("vector_store")
 USER_ID_CONDITION = " AND user_id=?"
 
 class VectorRow:
-    def __init__(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None):
+    def __init__(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None, project_id: Optional[str] = None):
         self.id = id
         self.sector = sector
         self.vector = vector
         self.dim = dim
         self.user_id = user_id
+        self.project_id = project_id
 
 class VectorStore(ABC):
     @abstractmethod
     async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None, project_id: Optional[str] = None): pass
 
     @abstractmethod
-    async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]: pass
+    async def getVectorsById(self, id: str, user_id: Optional[str] = None, project_id: Optional[str] = None) -> List[VectorRow]: pass
 
     @abstractmethod
-    async def getVector(self, id: str, sector: str, user_id: Optional[str] = None) -> Optional[VectorRow]: pass
+    async def getVector(self, id: str, sector: str, user_id: Optional[str] = None, project_id: Optional[str] = None) -> Optional[VectorRow]: pass
 
     @abstractmethod
-    async def deleteVectors(self, id: str, user_id: Optional[str] = None): pass
+    async def deleteVectors(self, id: str, user_id: Optional[str] = None, project_id: Optional[str] = None): pass
 
     @abstractmethod
     async def search(self, vector: List[float], sector: str, k: int, filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]: pass
@@ -45,42 +46,51 @@ class SQLiteVectorStore(VectorStore):
 
     async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None, project_id: Optional[str] = None):
         blob = struct.pack(f"{len(vector)}f", *vector)
-        sql = f"INSERT OR REPLACE INTO {self.table}(id, sector, user_id, v, dim) VALUES (?, ?, ?, ?, ?)"
-        db.conn.execute(sql, (id, sector, user_id, blob, dim))
+        sql = f"INSERT OR REPLACE INTO {self.table}(id, sector, user_id, project_id, v, dim) VALUES (?, ?, ?, ?, ?, ?)"
+        db.conn.execute(sql, (id, sector, user_id, project_id, blob, dim))
         db.commit()
 
-    async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]:
+    async def getVectorsById(self, id: str, user_id: Optional[str] = None, project_id: Optional[str] = None) -> List[VectorRow]:
         sql = f"SELECT * FROM {self.table} WHERE id=?"
         params = [id]
         if user_id:
             sql += USER_ID_CONDITION
             params.append(user_id)
+        if project_id:
+            sql += " AND project_id=?"
+            params.append(project_id)
         rows = db.conn.execute(sql, tuple(params)).fetchall()
         res = []
         for r in rows:
             cnt = len(r["v"]) // 4
             vec = list(struct.unpack(f"{cnt}f", r["v"]))
-            res.append(VectorRow(r["id"], r["sector"], vec, r["dim"], r["user_id"]))
+            res.append(VectorRow(r["id"], r["sector"], vec, r["dim"], r["user_id"], r.get("project_id")))
         return res
 
-    async def getVector(self, id: str, sector: str, user_id: Optional[str] = None) -> Optional[VectorRow]:
+    async def getVector(self, id: str, sector: str, user_id: Optional[str] = None, project_id: Optional[str] = None) -> Optional[VectorRow]:
         sql = f"SELECT * FROM {self.table} WHERE id=? AND sector=?"
         params = [id, sector]
         if user_id:
             sql += USER_ID_CONDITION
             params.append(user_id)
+        if project_id:
+            sql += " AND project_id=?"
+            params.append(project_id)
         r = db.conn.execute(sql, tuple(params)).fetchone()
         if not r: return None
         cnt = len(r["v"]) // 4
         vec = list(struct.unpack(f"{cnt}f", r["v"]))
-        return VectorRow(r["id"], r["sector"], vec, r["dim"], r["user_id"])
+        return VectorRow(r["id"], r["sector"], vec, r["dim"], r["user_id"], r.get("project_id"))
 
-    async def deleteVectors(self, id: str, user_id: Optional[str] = None):
+    async def deleteVectors(self, id: str, user_id: Optional[str] = None, project_id: Optional[str] = None):
         sql = f"DELETE FROM {self.table} WHERE id=?"
         params = [id]
         if user_id:
             sql += USER_ID_CONDITION
             params.append(user_id)
+        if project_id:
+            sql += " AND project_id=?"
+            params.append(project_id)
         db.conn.execute(sql, tuple(params))
         db.commit()
 
@@ -90,6 +100,9 @@ class SQLiteVectorStore(VectorStore):
         if filter and filter.get("user_id"):
             filter_sql += USER_ID_CONDITION
             params.append(filter["user_id"])
+        if filter and filter.get("project_id"):
+            filter_sql += " AND project_id=?"
+            params.append(filter["project_id"])
 
         sql = f"SELECT id, v FROM {self.table} WHERE sector=? {filter_sql}"
         rows = db.conn.execute(sql, tuple(params)).fetchall()
