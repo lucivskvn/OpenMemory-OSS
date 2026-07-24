@@ -52,7 +52,7 @@ def compute_simhash(text: str) -> str:
         h = 0
         for char in t:
             h = (h << 5) - h + ord(char)
-            h = h & 0xffffffff
+            h = h & 0xffffffffffffffff
         hashes.append(h)
 
     vec = [0] * 64
@@ -170,7 +170,20 @@ async def add_hsg_memory(
     project_id: Optional[str] = None
 ) -> Dict[str, Any]:
     simhash = compute_simhash(content)
-    existing = db.fetchone("SELECT * FROM memories WHERE simhash=?", (simhash,))
+
+    normalized_user_id = user_id or "anonymous"
+
+    if project_id:
+        existing = db.fetchone(
+            "SELECT * FROM memories WHERE simhash=? AND user_id=? AND project_id=?",
+            (simhash, normalized_user_id, project_id)
+        )
+    else:
+        existing = db.fetchone(
+            "SELECT * FROM memories WHERE simhash=? AND user_id=?",
+            (simhash, normalized_user_id)
+        )
+
     if existing:
         now_ts = int(time.time() * 1000)
         boosted_sal = min(1.0, (existing["salience"] or 0) + 0.15)
@@ -185,11 +198,11 @@ async def add_hsg_memory(
 
     import uuid
     mid = str(uuid.uuid4())
-    res = await hsg_store(mid, content, user_id, tags or "[]", metadata)
+    res = await hsg_store(mid, content, user_id, tags or "[]", metadata, project_id)
     res["deduplicated"] = False
     return res
 
-async def hsg_store(mid: str, content: str, user_id: str = None, tags: str = "[]", metadata: Dict[str, Any] = None):
+async def hsg_store(mid: str, content: str, user_id: str = None, tags: str = "[]", metadata: Dict[str, Any] = None, project_id: str = None):
     now = int(time.time() * 1000)
     simhash = "0" # Stub
 
@@ -213,7 +226,7 @@ async def hsg_store(mid: str, content: str, user_id: str = None, tags: str = "[]
             print(f"[HSG] Rotated to segment {cur_seg}")
 
         from .embed import extract_essence
-        stored = extract_essence(content, cls["primary"], env.summary_max_length)
+        stored = extract_essence(content, env.summary_max_length)
         sec_cfg = SECTOR_CONFIGS[cls["primary"]]
         init_sal = max(0.0, min(1.0, 0.4 + 0.1 * len(cls["additional"])))
         q.ins_mem(
@@ -238,7 +251,7 @@ async def hsg_store(mid: str, content: str, user_id: str = None, tags: str = "[]
         )
         emb_res = await embed_multi_sector(mid, content, all_secs, chunks if use_chunks else None)
         for r in emb_res:
-             await store.storeVector(mid, r["sector"], r["vector"], r["dim"], user_id or "anonymous")
+             await store.storeVector(mid, r["sector"], r["vector"], r["dim"], user_id or "anonymous", project_id)
 
         from .embed import calc_mean_vec
         mean_vec = calc_mean_vec(emb_res, all_secs)
@@ -247,7 +260,7 @@ async def hsg_store(mid: str, content: str, user_id: str = None, tags: str = "[]
         db.execute("UPDATE memories SET mean_dim=?, mean_vec=? WHERE id=?", (len(mean_vec), mean_buf, mid))
 
         # Store the mean vector into the vector store as `_mean` sector to enable ANN search (Issue #141)
-        await store.storeVector(mid, "_mean", mean_vec, len(mean_vec), user_id or "anonymous")
+        await store.storeVector(mid, "_mean", mean_vec, len(mean_vec), user_id or "anonymous", project_id)
 
         if len(mean_vec) > 128:
             from .embed import compress_vec_for_storage

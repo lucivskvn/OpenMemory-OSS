@@ -127,11 +127,7 @@ export class ValkeyVectorStore implements VectorStore {
                 e,
             );
             let cursor = "0";
-            const allVecs: Array<{
-                id: string;
-                vector: number[];
-                project_id: string;
-            }> = [];
+            const results: Array<{ id: string; score: number }> = [];
             do {
                 const res = await this.client.scan(
                     cursor,
@@ -172,12 +168,8 @@ export class ValkeyVectorStore implements VectorStore {
                 }
             } while (cursor !== "0");
 
-            const sims = allVecs.map((v) => ({
-                id: v.id,
-                score: this.cosineSimilarity(queryVec, v.vector),
-            }));
-            sims.sort((a, b) => b.score - a.score);
-            return sims.slice(0, topK);
+            results.sort((a, b) => b.score - a.score);
+            return results.slice(0, topK);
         }
     }
 

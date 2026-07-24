@@ -130,11 +130,14 @@ def classify_content(content: str, metadata: Optional[Dict[str, Any]] = None) ->
     threshold = max(1.0, primary_score * 0.3)
     additional = [s for s, sc in sorted_scores[1:] if sc > 0 and sc >= threshold]
 
-    confidence = (
-        min(1.0, primary_score / (primary_score + sorted_scores[1][1] + 1.0))
-        if primary_score > 0
-        else 0.2
-    )
+    if len(sorted_scores) < 2:
+        confidence = 1.0 if primary_score > 0 else 0.2
+    else:
+        confidence = (
+            min(1.0, primary_score / (primary_score + sorted_scores[1][1] + 1.0))
+            if primary_score > 0
+            else 0.2
+        )
 
     return {
         "primary": primary if primary_score > 0 else "semantic",
@@ -162,33 +165,30 @@ def compress_vec_for_storage(vec: List[float], target_dim: int) -> List[float]:
         compressed /= norm
     return compressed.tolist()
 
-def extract_essence(raw: str, sec: str, max_len: int) -> str:
-    if not env.use_summary_only or len(raw) <= max_len:
-        return raw
-
+def _extract_sentences(raw: str) -> list:
+    """Split raw text into sentences, filtering out very short ones."""
     sents = [s.strip() for s in re.split(r"(?<=[.!?])\s+", raw) if len(s.strip()) > 10]
-    if not sents:
-        return raw[:max_len]
+    return sents
 
-    def score_sent(s: str, idx: int) -> float:
-        sc = 0.0
-        if idx == 0: sc += 10
-        if idx == 1: sc += 5
-        if re.match(r"^#+\s", s) or re.match(r"^[A-Z][A-Z\s]+:", s): sc += 8
-        if re.match(r"^[A-Z][a-z]+:", s): sc += 6
-        if re.search(r"\d{4}-\d{2}-\d{2}", s): sc += 7
-        if re.search(r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d+", s, re.I): sc += 5
-        if re.search(r"\$\d+|\d+\s*(miles|dollars|years|months|km)", s): sc += 4
-        if re.search(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+", s): sc += 3
-        if re.search(r"\b(bought|purchased|serviced|visited|went|got|received|paid|earned|learned|discovered|found|saw|met|completed|finished|fixed|implemented|created|updated|added|removed|resolved)\b", s, re.I): sc += 4
-        if re.search(r"\b(who|what|when|where|why|how)\b", s, re.I): sc += 2
-        if len(s) < 80: sc += 2
-        if "I" in s or "my" in s or "me" in s: sc += 1
-        return sc
+def _score_sentence(s: str, idx: int) -> float:
+    """Compute importance score for a sentence based on position and content patterns."""
+    sc = 0.0
+    if idx == 0: sc += 10
+    if idx == 1: sc += 5
+    if re.match(r"^#+\s", s) or re.match(r"^[A-Z][A-Z\s]+:", s): sc += 8
+    if re.match(r"^[A-Z][a-z]+:", s): sc += 6
+    if re.search(r"\d{4}-\d{2}-\d{2}", s): sc += 7
+    if re.search(r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d+", s, re.I): sc += 5
+    if re.search(r"\$\d+|\d+\s*(miles|dollars|years|months|km)", s): sc += 4
+    if re.search(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+", s): sc += 3
+    if re.search(r"\b(bought|purchased|serviced|visited|went|got|received|paid|earned|learned|discovered|found|saw|met|completed|finished|fixed|implemented|created|updated|added|removed|resolved)\b", s, re.I): sc += 4
+    if re.search(r"\b(who|what|when|where|why|how)\b", s, re.I): sc += 2
+    if len(s) < 80: sc += 2
+    if "I" in s or "my" in s or "me" in s: sc += 1
+    return sc
 
-    scored = [{"text": s, "score": score_sent(s, idx), "idx": idx} for idx, s in enumerate(sents)]
-    scored.sort(key=lambda x: x["score"], reverse=True)
-
+def _select_top_sentences(scored: list, max_len: int) -> list:
+    """Select highest scoring sentences that fit within max_len."""
     selected = []
     current_len = 0
 
@@ -204,4 +204,19 @@ def extract_essence(raw: str, sec: str, max_len: int) -> str:
             current_len += len(item["text"]) + 2
 
     selected.sort(key=lambda x: x["idx"])
+    return selected
+
+def extract_essence(raw: str, max_len: int) -> str:
+    """Extract most important sentences from raw text, respecting max_len limit."""
+    if not env.use_summary_only or len(raw) <= max_len:
+        return raw
+
+    sents = _extract_sentences(raw)
+    if not sents:
+        return raw[:max_len]
+
+    scored = [{"text": s, "score": _score_sentence(s, idx), "idx": idx} for idx, s in enumerate(sents)]
+    scored.sort(key=lambda x: x["score"], reverse=True)
+
+    selected = _select_top_sentences(scored, max_len)
     return " ".join([s["text"] for s in selected])

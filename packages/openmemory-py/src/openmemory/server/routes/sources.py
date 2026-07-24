@@ -186,7 +186,10 @@ async def notion_webhook(request: Request):
     try:
         payload = json.loads(raw_body) if raw_body else None
     except Exception:
-        payload = None
+        raise HTTPException(400, "Invalid JSON payload") from None
+
+    if not payload:
+        raise HTTPException(400, "Empty payload")
 
     try:
         content = json.dumps(payload, indent=2)
