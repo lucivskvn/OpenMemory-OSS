@@ -81,44 +81,54 @@ export function sys(app: any) {
                         data.user_id = tenant;
                     }
 
-                    const existing = await q.get_mem.get(data.id);
-                    if (existing && existing.user_id !== tenant) {
+                    // Atomically attempt upsert with tenant and version constraints enforced in SQL.
+                    // The ON CONFLICT UPDATE now includes a WHERE clause that only allows the update
+                    // if memories.user_id = excluded.user_id AND excluded.version > memories.version.
+                    // This prevents cross-tenant overwrites and enforces version deduplication atomically.
+                    await q.ins_mem.run(
+                        data.id,
+                        data.user_id ?? null,
+                        data.project_id ?? null,
+                        data.segment ?? null,
+                        data.content,
+                        data.simhash ?? null,
+                        data.primary_sector,
+                        data.tags ?? null,
+                        data.meta ?? null,
+                        data.created_at ?? null,
+                        data.updated_at ?? null,
+                        data.last_seen_at ?? null,
+                        data.salience ?? null,
+                        data.decay_lambda ?? null,
+                        data.version ?? 1,
+                        data.mean_dim ?? null,
+                        data.mean_vec ?? null,
+                        data.compressed_vec ?? null,
+                        data.feedback_score ?? null,
+                    );
+
+                    // Re-read the row to determine the actual outcome of the upsert
+                    const result = await q.get_mem.get(data.id);
+
+                    // If row exists but belongs to a different tenant, the conditional upsert did not apply
+                    if (result && result.user_id !== tenant) {
                         return res.status(403).json({
                             error: "tenant_mismatch",
                             message: "Target memory belongs to another tenant.",
                         });
                     }
 
-                    // Handle version tracker deduplication check
-                    if (!existing || (data.version ?? 1) > existing.version) {
-                        // We do an upsert, coalescing undefined fields to null to avoid libSQL TypeError
-                        await q.ins_mem.run(
-                            data.id,
-                            data.user_id ?? null,
-                            data.project_id ?? null,
-                            data.segment ?? null,
-                            data.content,
-                            data.simhash ?? null,
-                            data.primary_sector,
-                            data.tags ?? null,
-                            data.meta ?? null,
-                            data.created_at ?? null,
-                            data.updated_at ?? null,
-                            data.last_seen_at ?? null,
-                            data.salience ?? null,
-                            data.decay_lambda ?? null,
-                            data.version ?? 1,
-                            data.mean_dim ?? null,
-                            data.mean_vec ?? null,
-                            data.compressed_vec ?? null,
-                            data.feedback_score ?? null,
-                        );
-                        return res.json({ ok: true, message: "Synced" });
+                    // If the stored version doesn't match the incoming version, the conditional update
+                    // was blocked (existing row with same tenant but version check failed)
+                    if (result && result.version !== (data.version ?? 1)) {
+                        return res.json({
+                            ok: true,
+                            message: "Ignored due to version deduplication",
+                        });
                     }
-                    return res.json({
-                        ok: true,
-                        message: "Ignored due to version deduplication",
-                    });
+
+                    // Otherwise, upsert succeeded (new row or same-tenant update with higher version)
+                    return res.json({ ok: true, message: "Synced" });
                 }
                 res.status(400).json({ error: "Invalid sync event" });
             } catch (e: unknown) {
