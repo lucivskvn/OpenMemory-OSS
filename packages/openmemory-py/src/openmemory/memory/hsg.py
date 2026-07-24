@@ -123,15 +123,12 @@ async def calculateCrossSectorResonanceScore(m_sec: str, q_sec: str, fusion_scor
     rel = SECTOR_RELATIONSHIPS.get(q_sec, {}).get(m_sec, 0.5)
     return fusion_score * rel
 
-async def create_single_waypoint(src_id: str, src_vec: List[float], now: int, user_id: str = None, project_id: str = None):
+async def create_single_waypoint(src_id: str, src_vec: List[float], now: int, user_id: str = None):
     # Normalize tenant scope before searching and inserting
     normalized_user_id = user_id or "anonymous"
 
     # Find potential neighbors in semantic space
-    filter_dict = {"user_id": normalized_user_id}
-    if project_id:
-        filter_dict["project_id"] = project_id
-    res = await store.search(src_vec, "semantic", 5, filter_dict)
+    res = await store.search(src_vec, "semantic", 5, {"user_id": normalized_user_id})
     for r in res:
         dst_id = r["id"]
         if dst_id == src_id:
@@ -141,12 +138,12 @@ async def create_single_waypoint(src_id: str, src_vec: List[float], now: int, us
                    (src_id, dst_id, normalized_user_id, r["similarity"], now, now))
     db.commit()
 
-async def calc_multi_vec_fusion_score(mid: str, qe: Dict[str, List[float]], w: Dict[str, float], user_id: Optional[str] = None, project_id: Optional[str] = None) -> float:
+async def calc_multi_vec_fusion_score(mid: str, qe: Dict[str, List[float]], w: Dict[str, float], user_id: Optional[str] = None) -> float:
     # Multi-tenancy: getVectorsById now requires explicit user_id
     if not user_id:
         return 0.0
 
-    vecs = await store.getVectorsById(mid, user_id, project_id)
+    vecs = await store.getVectorsById(mid, user_id)
     s = 0.0
     tot = 0.0
 
@@ -175,25 +172,26 @@ async def add_hsg_memory(
     user_id: Optional[str] = None,
     project_id: Optional[str] = None
 ) -> Dict[str, Any]:
-    simhash = compute_simhash(content)
-    existing = db.fetchone("SELECT * FROM memories WHERE simhash=?", (simhash,))
-    if existing:
-        now_ts = int(time.time() * 1000)
-        boosted_sal = min(1.0, (existing["salience"] or 0) + 0.15)
-        db.execute(UPDATE_SALIENCE_QUERY, (boosted_sal, now_ts, existing["id"]))
+    text_signature = compute_simhash(content)
+    duplicate_record = db.fetchone("SELECT * FROM memories WHERE simhash=?", (text_signature,))
+
+    if duplicate_record:
+        timestamp_now = int(time.time() * 1000)
+        elevated_salience = min(1.0, (duplicate_record["salience"] or 0.0) + 0.15)
+        db.execute(UPDATE_SALIENCE_QUERY, (elevated_salience, timestamp_now, duplicate_record["id"]))
         db.commit()
         return {
-            "id": existing["id"],
-            "primary_sector": existing["primary_sector"],
-            "sectors": [existing["primary_sector"]],
+            "id": duplicate_record["id"],
+            "primary_sector": duplicate_record["primary_sector"],
+            "sectors": [duplicate_record["primary_sector"]],
             "deduplicated": True
         }
 
     import uuid
-    mid = str(uuid.uuid4())
-    res = await hsg_store(mid, content, user_id, tags or "[]", metadata)
-    res["deduplicated"] = False
-    return res
+    unique_memory_id = str(uuid.uuid4())
+    stored_result = await hsg_store(unique_memory_id, content, user_id, tags or "[]", metadata)
+    stored_result["deduplicated"] = False
+    return stored_result
 
 async def hsg_store(mid: str, content: str, user_id: str = None, tags: str = "[]", metadata: Dict[str, Any] = None, project_id: str = None):
     now = int(time.time() * 1000)
@@ -260,7 +258,7 @@ async def hsg_store(mid: str, content: str, user_id: str = None, tags: str = "[]
             comp = compress_vec_for_storage(mean_vec, 128)
             db.execute("UPDATE memories SET compressed_vec=? WHERE id=?", (vec_to_buf(comp), mid))
 
-        await create_single_waypoint(mid, mean_vec, now, user_id, project_id)
+        await create_single_waypoint(mid, mean_vec, now, user_id)
         if user_id:
             await update_user_summary(user_id)
         return {
@@ -351,12 +349,9 @@ async def hsg_query(qt: str, k: int = 10, f: Dict[str, Any] = None) -> List[Dict
             "reflective_dimension_weight": 1.1 if qc["primary"] == "reflective" else 0.5,
         }
         sr = {}
-        search_filter = {"user_id": f.get("user_id")}
-        if f.get("project_id"):
-            search_filter["project_id"] = f.get("project_id")
         for s in ss:
             qv = qe[s]
-            res = await store.search(qv, s, k*3, search_filter)
+            res = await store.search(qv, s, k*3, {"user_id": f.get("user_id")})
             sr[s] = res
 
         all_sims = []
@@ -394,7 +389,7 @@ async def hsg_query(qt: str, k: int = 10, f: Dict[str, Any] = None) -> List[Dict
             if f and f.get("user_id") and m["user_id"] != f["user_id"]:
                 continue
 
-            mvf = await calc_multi_vec_fusion_score(mid, qe, w, m["user_id"], f.get("project_id"))
+            mvf = await calc_multi_vec_fusion_score(mid, qe, w, m["user_id"])
             csr = await calculateCrossSectorResonanceScore(m["primary_sector"], qc["primary"], mvf)
 
             best_sim = csr

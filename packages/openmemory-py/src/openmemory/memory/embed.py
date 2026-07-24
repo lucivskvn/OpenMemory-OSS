@@ -106,7 +106,7 @@ def _get_preset_sector(metadata: Optional[Dict[str, Any]]) -> Optional[str]:
     sect = metadata.get("sector")
     if not sect and isinstance(metadata.get("lgm"), dict):
         sect = metadata["lgm"].get("sector")
-    if isinstance(sect, str) and sect in SECTOR_CONFIGS:
+    if sect in SECTOR_CONFIGS:
         return sect
     return None
 
@@ -168,50 +168,81 @@ def compress_vec_for_storage(vec: List[float], target_dim: int) -> List[float]:
     return compressed.tolist()
 
 def extract_essence(raw: str, sec: str, max_len: int) -> str:
+    # Fail-fast if we should bypass summarization
     if not env.use_summary_only or len(raw) <= max_len:
         return raw
 
-    sents = [s.strip() for s in re.split(r"(?<=[.!?])\s+", raw) if len(s.strip()) > 10]
-    if not sents:
+    # Tokenize input text into clean sentences
+    sentence_list = [sent.strip() for sent in re.split(r"(?<=[.!?])\s+", raw) if len(sent.strip()) > 10]
+    if not sentence_list:
         return raw[:max_len]
 
-    def score_sent(s: str, idx: int) -> float:
-        sc = 0.0
-        if idx == 0: sc += 10
-        if idx == 1: sc += 5
-        if re.match(r"^#+\s", s) or re.match(r"^[A-Z][A-Z\s]+:", s): sc += 8
-        if re.match(r"^[A-Z][a-z]+:", s): sc += 6
-        if re.search(r"\d{4}-\d{2}-\d{2}", s): sc += 7
-        if re.search(r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d+", s, re.I): sc += 5
-        if re.search(r"\$\d+|\d+\s*(miles|dollars|years|months|km)", s): sc += 4
-        if re.search(r"\b[A-Z][a-z]+\s[A-Z][a-z]+", s): sc += 3
-        tokens = set(canonical_tokens_from_text(s.lower()))
-        action_words = {"bought", "purchased", "serviced", "visited", "went", "got", "received", "paid",
-                        "earned", "learned", "discovered", "found", "saw", "met", "completed", "finished",
-                        "fixed", "implemented", "created", "updated", "added", "removed", "resolved"}
-        if tokens.intersection(action_words): sc += 4
-        question_words = {"who", "what", "when", "where", "why", "how"}
-        if tokens.intersection(question_words): sc += 2
-        if len(s) < 80: sc += 2
-        if "I" in s or "my" in s or "me" in s: sc += 1
-        return sc
+    def _get_sentence_score(sentence: str, position: int) -> float:
+        points = 0.0
+        if position == 0:
+            points += 10
+        elif position == 1:
+            points += 5
 
-    scored = [{"text": s, "score": score_sent(s, idx), "idx": idx} for idx, s in enumerate(sents)]
-    scored.sort(key=lambda x: x["score"], reverse=True)
+        # Heuristic rules for scoring sentences
+        if re.match(r"^#+\s", sentence) or re.match(r"^[A-Z][A-Z\s]+:", sentence):
+            points += 8
+        if re.match(r"^[A-Z][a-z]+:", sentence):
+            points += 6
+        if re.search(r"\d{4}-\d{2}-\d{2}", sentence):
+            points += 7
+        if re.search(r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d+", sentence, re.I):
+            points += 5
+        if re.search(r"\$\d+|\d+\s*(miles|dollars|years|months|km)", sentence):
+            points += 4
+        if re.search(r"\b[A-Z][a-z]+\s[A-Z][a-z]+", sentence):
+            points += 3
 
-    selected = []
-    current_len = 0
+        words_in_sentence = set(canonical_tokens_from_text(sentence.lower()))
+        actions_list = {
+            "bought", "purchased", "serviced", "visited", "went", "got", "received", "paid",
+            "earned", "learned", "discovered", "found", "saw", "met", "completed", "finished",
+            "fixed", "implemented", "created", "updated", "added", "removed", "resolved"
+        }
+        if words_in_sentence.intersection(actions_list):
+            points += 4
 
-    first_sent = next((s for s in scored if s["idx"] == 0), None)
-    if first_sent and len(first_sent["text"]) < max_len:
-        selected.append(first_sent)
-        current_len += len(first_sent["text"])
+        questions_list = {"who", "what", "when", "where", "why", "how"}
+        if words_in_sentence.intersection(questions_list):
+            points += 2
 
-    for item in scored:
-        if item["idx"] == 0: continue
-        if current_len + len(item["text"]) + 2 <= max_len:
-            selected.append(item)
-            current_len += len(item["text"]) + 2
+        if len(sentence) < 80:
+            points += 2
+        if any(pronoun in sentence for pronoun in ("I", "my", "me")):
+            points += 1
 
-    selected.sort(key=lambda x: x["idx"])
-    return " ".join([s["text"] for s in selected])
+        return points
+
+    # Build scored sentences list and sort by point value
+    scored_items = []
+    for idx, text in enumerate(sentence_list):
+        scored_items.append((text, _get_sentence_score(text, idx), idx))
+
+    scored_items.sort(key=lambda x: x[1], reverse=True)
+
+    budget_left = max_len
+    reconstructed_segments = []
+
+    # Try to pin the very first sentence if it fits
+    head_sent = next((item for item in scored_items if item[2] == 0), None)
+    if head_sent and len(head_sent[0]) < budget_left:
+        reconstructed_segments.append(head_sent)
+        budget_left -= len(head_sent[0])
+
+    for text, points, original_pos in scored_items:
+        if original_pos == 0:
+            continue
+        # Check if this sentence can be appended within length budget (accounting for space separator)
+        cost = len(text) + (2 if reconstructed_segments else 0)
+        if cost <= budget_left:
+            reconstructed_segments.append((text, points, original_pos))
+            budget_left -= cost
+
+    # Sort chosen sentences back to their original sequence
+    reconstructed_segments.sort(key=lambda x: x[2])
+    return " ".join([item[0] for item in reconstructed_segments])
