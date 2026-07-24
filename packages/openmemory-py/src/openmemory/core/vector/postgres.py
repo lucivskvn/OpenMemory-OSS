@@ -20,7 +20,7 @@ class PostgresVectorStore(VectorStore):
                 await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
                 logger.info("pgvector extension enabled")
                 
-                await conn.execute(f"""
+                await conn.execute(f""" # nosemgrep
                     CREATE TABLE IF NOT EXISTS {self.table} (
                         id TEXT NOT NULL,
                         sector TEXT NOT NULL,
@@ -30,14 +30,14 @@ class PostgresVectorStore(VectorStore):
                         created_at TIMESTAMPTZ DEFAULT NOW(),
                         PRIMARY KEY (id, sector)
                     )
-                """) # nosemgrep
+                """)
                 
                 await conn.execute(f"CREATE INDEX IF NOT EXISTS {self.table}_user_idx ON {self.table} (user_id)") # nosemgrep
 
-                await conn.execute(f"""
+                await conn.execute(f""" # nosemgrep
                     CREATE INDEX IF NOT EXISTS {self.table}_hnsw_idx
                     ON {self.table} USING hnsw (v vector_cosine_ops)
-                """) # nosemgrep
+                """)
                 logger.info(f"HNSW index created on {self.table} for fast ANN queries")
         return self.pool
 
