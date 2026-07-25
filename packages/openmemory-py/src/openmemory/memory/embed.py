@@ -99,22 +99,17 @@ SECTOR_RELATIONSHIPS = {
     },
 }
 
-def classify_content(content: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    from ..core.constants import SECTOR_CONFIGS
-    metadata = metadata or {}
+def _extract_sector_from_metadata(metadata: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not metadata:
+        return None
     sect = metadata.get("sector")
     if not sect:
         lgm = metadata.get("lgm") or {}
         if isinstance(lgm, dict):
             sect = lgm.get("sector")
+    return sect
 
-    if sect and sect in SECTOR_CONFIGS:
-        return {
-            "primary": sect,
-            "additional": [],
-            "confidence": 1.0,
-        }
-
+def _score_sectors(content: str) -> Dict[str, float]:
     scores = {}
     for sector, config in SECTOR_CONFIGS.items():
         score = 0
@@ -123,6 +118,20 @@ def classify_content(content: str, metadata: Optional[Dict[str, Any]] = None) ->
             if matches:
                 score += len(matches) * config["weight"]
         scores[sector] = score
+    return scores
+
+def classify_content(content: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    from ..core.constants import SECTOR_CONFIGS
+    sect = _extract_sector_from_metadata(metadata)
+
+    if sect and sect in SECTOR_CONFIGS:
+        return {
+            "primary": sect,
+            "additional": [],
+            "confidence": 1.0,
+        }
+
+    scores = _score_sectors(content)
 
     sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     primary = sorted_scores[0][0]
@@ -168,6 +177,47 @@ def compress_vec_for_storage(vec: List[float], target_dim: int) -> List[float]:
         compressed /= norm
     return compressed.tolist()
 
+def _score_sentence(s: str, idx: int) -> float:
+    import re
+    sc = 0.0
+    if idx == 0:
+        sc += 10
+    if idx == 1:
+        sc += 5
+    if re.match(r"^#+\s", s) or re.match(r"^[A-Z][A-Z\s]+:", s):
+        sc += 8
+    if re.match(r"^[A-Z][a-z]+:", s):
+        sc += 6
+    if re.search(r"\d{4}-\d{2}-\d{2}", s):
+        sc += 7
+    if re.search(r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d+", s, re.I):
+        sc += 5
+    if re.search(r"\$\d+|\d+\s*(miles|dollars|years|months|km)", s):
+        sc += 4
+    if re.search(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+", s):
+        sc += 3
+
+    words = set(re.findall(r"\b[a-z]+\b", s.lower()))
+    actions = {
+        "bought", "purchased", "serviced", "visited", "went", "got", "received", "paid",
+        "earned", "learned", "discovered", "found", "saw", "met", "completed", "finished",
+        "fixed", "implemented", "created", "updated", "added", "removed", "resolved"
+    }
+    if words.intersection(actions):
+        sc += 4
+
+    questions = {"who", "what", "when", "where", "why", "how"}
+    if words.intersection(questions):
+        sc += 2
+
+    if len(s) < 80:
+        sc += 2
+
+    if words.intersection({"i", "my", "me"}):
+        sc += 1
+
+    return sc
+
 def extract_essence(raw: str, sec: str, max_len: int) -> str:
     from ..core.config import env
     if not env.use_summary_only or len(raw) <= max_len:
@@ -179,35 +229,7 @@ def extract_essence(raw: str, sec: str, max_len: int) -> str:
     if not sents:
         return raw[:max_len]
 
-    def score_sent(s: str, idx: int) -> float:
-        sc = 0.0
-        if idx == 0:
-            sc += 10
-        if idx == 1:
-            sc += 5
-        if re.match(r"^#+\s", s) or re.match(r"^[A-Z][A-Z\s]+:", s):
-            sc += 8
-        if re.match(r"^[A-Z][a-z]+:", s):
-            sc += 6
-        if re.search(r"\d{4}-\d{2}-\d{2}", s):
-            sc += 7
-        if re.search(r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d+", s, re.I):
-            sc += 5
-        if re.search(r"\$\d+|\d+\s*(miles|dollars|years|months|km)", s):
-            sc += 4
-        if re.search(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+", s):
-            sc += 3
-        if re.search(r"\b(bought|purchased|serviced|visited|went|got|received|paid|earned|learned|discovered|found|saw|met|completed|finished|fixed|implemented|created|updated|added|removed|resolved)\b", s, re.I):
-            sc += 4
-        if re.search(r"\b(who|what|when|where|why|how)\b", s, re.I):
-            sc += 2
-        if len(s) < 80:
-            sc += 2
-        if "I" in s or "my" in s or "me" in s:
-            sc += 1
-        return sc
-
-    scored = [{"text": s, "score": score_sent(s, idx), "idx": idx} for idx, s in enumerate(sents)]
+    scored = [{"text": s, "score": _score_sentence(s, idx), "idx": idx} for idx, s in enumerate(sents)]
     scored.sort(key=lambda x: x["score"], reverse=True)
 
     selected = []

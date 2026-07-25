@@ -142,8 +142,7 @@ def transaction():
 def log_maint_op(maint_type: str, count: int = 1):
     try:
         ts = int(time.time() * 1000)
-        metrics = json.dumps({"type": maint_type, "count": count})
-        db.execute("INSERT INTO stats(ts, metrics) VALUES (?,?)", (ts, metrics))
+        db.execute("INSERT INTO stats(type, count, ts) VALUES (?,?,?)", (maint_type, count, ts))
         db.commit()
     except Exception:
         logger.exception("[DB] Maintenance log error")

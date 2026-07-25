@@ -123,9 +123,10 @@ async function fetch_dashboard_memories(
         is_pg,
         lim,
     );
+    const limitPlaceholder = is_pg ? "$" + params.length : "?";
     return await all_async(
         `SELECT id, content, primary_sector, salience, created_at, updated_at, last_seen_at
-         FROM ${mem_table}${where_clause} ORDER BY ${order_by} LIMIT ${is_pg ? `$${params.length}` : "?"}`,
+         FROM ${mem_table}${where_clause} ORDER BY ${order_by} LIMIT ${limitPlaceholder}`,
         params,
     );
 }

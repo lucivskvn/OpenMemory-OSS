@@ -64,15 +64,17 @@ import hmac
 import hashlib
 import os
 
+SHA256_PREFIX = "sha256="
+
 def verify_github_signature(raw_body: bytes, header_value: str | None, secret: str | None):
     if not secret:
         raise HTTPException(503, "webhook_not_configured")
     if not header_value:
         raise HTTPException(401, "invalid_signature")
-    if not header_value.startswith("sha256="):
+    if not header_value.startswith(SHA256_PREFIX):
         raise HTTPException(401, "invalid_signature")
 
-    provided = header_value[len("sha256="):]
+    provided = header_value[len(SHA256_PREFIX):]
     try:
         provided_bytes = bytes.fromhex(provided)
     except ValueError:
@@ -91,8 +93,8 @@ def verify_notion_signature(raw_body: bytes, header_value: str | None, secret: s
         raise HTTPException(401, "invalid_signature")
 
     provided = header_value
-    if provided.startswith("sha256="):
-        provided = provided[len("sha256="):]
+    if provided.startswith(SHA256_PREFIX):
+        provided = provided[len(SHA256_PREFIX):]
 
     try:
         provided_bytes = bytes.fromhex(provided)
