@@ -37,7 +37,7 @@ class VectorStore(ABC):
     async def search(self, vector: List[float], sector: str, k: int, filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]: pass
 
 class SQLiteVectorStore(VectorStore):
-    def __init__(self, table_name: str = "openmemory_vectors"):
+    def __init__(self, table_name: str = "vectors"):
         import re
         if not re.match(r'^[a-zA-Z0-9_]+$', str(table_name)):
             raise ValueError("Invalid input")

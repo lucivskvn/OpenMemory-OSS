@@ -60,9 +60,64 @@ async def ingest_source(source: str, req: ingest_req):
         logger.exception("Source ingestion failed")
         raise HTTPException(500, "Source ingestion failed") from None
 
-@router.post("/webhook/github", responses={500: {"description": "Internal Server Error"}})
+import hmac
+import hashlib
+import os
+
+def verify_github_signature(raw_body: bytes, header_value: str | None, secret: str | None):
+    if not secret:
+        raise HTTPException(503, "webhook_not_configured")
+    if not header_value:
+        raise HTTPException(401, "invalid_signature")
+    if not header_value.startswith("sha256="):
+        raise HTTPException(401, "invalid_signature")
+
+    provided = header_value[len("sha256="):]
+    try:
+        provided_bytes = bytes.fromhex(provided)
+    except ValueError:
+        raise HTTPException(401, "invalid_signature")
+
+    expected_hex = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    expected_bytes = bytes.fromhex(expected_hex)
+
+    if not hmac.compare_digest(provided_bytes, expected_bytes):
+        raise HTTPException(401, "invalid_signature")
+
+def verify_notion_signature(raw_body: bytes, header_value: str | None, secret: str | None):
+    if not secret:
+        raise HTTPException(503, "webhook_not_configured")
+    if not header_value:
+        raise HTTPException(401, "invalid_signature")
+
+    provided = header_value
+    if provided.startswith("sha256="):
+        provided = provided[len("sha256="):]
+
+    try:
+        provided_bytes = bytes.fromhex(provided)
+    except ValueError:
+        raise HTTPException(401, "invalid_signature")
+
+    expected_hex = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    expected_bytes = bytes.fromhex(expected_hex)
+
+    if not hmac.compare_digest(provided_bytes, expected_bytes):
+        raise HTTPException(401, "invalid_signature")
+
+@router.post("/webhook/github", responses={
+    400: {"description": "Bad Request"},
+    401: {"description": "Unauthorized"},
+    503: {"description": "Service Unavailable"},
+    500: {"description": "Internal Server Error"}
+})
 async def github_webhook(request: Request):
     from ..ops.ingest import ingest_document
+
+    secret = os.environ.get("OM_GITHUB_WEBHOOK_SECRET")
+    sig = request.headers.get("x-hub-signature-256")
+    raw_body = await request.body()
+    verify_github_signature(raw_body, sig, secret)
 
     event_type = request.headers.get("x-github-event", "unknown")
     payload = await request.json()
@@ -101,10 +156,20 @@ async def github_webhook(request: Request):
         logger.exception("GitHub webhook processing failed")
         raise HTTPException(500, "Webhook processing failed") from None
 
-@router.post("/webhook/notion", responses={500: {"description": "Internal Server Error"}})
+@router.post("/webhook/notion", responses={
+    400: {"description": "Bad Request"},
+    401: {"description": "Unauthorized"},
+    503: {"description": "Service Unavailable"},
+    500: {"description": "Internal Server Error"}
+})
 async def notion_webhook(request: Request):
     from ..ops.ingest import ingest_document
     import json
+
+    secret = os.environ.get("OM_NOTION_WEBHOOK_SECRET")
+    sig = request.headers.get("x-notion-signature")
+    raw_body = await request.body()
+    verify_notion_signature(raw_body, sig, secret)
 
     payload = await request.json()
 

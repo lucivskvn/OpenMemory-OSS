@@ -138,3 +138,11 @@ q = Queries()
 
 def transaction():
     return db.conn
+
+def log_maint_op(maint_type: str, count: int = 1):
+    try:
+        ts = int(time.time() * 1000)
+        db.execute("INSERT INTO stats(type, count, ts) VALUES (?,?,?)", (maint_type, count, ts))
+        db.commit()
+    except Exception as e:
+        logger.error(f"[DB] Maintenance log error: {e}")
