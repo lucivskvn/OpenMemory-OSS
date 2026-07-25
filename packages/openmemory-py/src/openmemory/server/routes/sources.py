@@ -30,7 +30,10 @@ async def list_sources():
         }
     }
 
-@router.post("/{source}/ingest", responses={500: {"description": "Internal Server Error"}})
+@router.post("/{source}/ingest", responses={
+    400: {"description": "Bad Request"},
+    500: {"description": "Internal Server Error"}
+})
 async def ingest_source(source: str, req: ingest_req):
     from ..connectors import (
         github_connector, notion_connector, google_drive_connector,
@@ -75,6 +78,10 @@ def verify_github_signature(raw_body: bytes, header_value: str | None, secret: s
         raise HTTPException(401, "invalid_signature")
 
     provided = header_value[len(SHA256_PREFIX):]
+    import re
+    if not re.match(r"^[0-9a-fA-F]{64}$", provided):
+        raise HTTPException(401, "invalid_signature")
+
     try:
         provided_bytes = bytes.fromhex(provided)
     except ValueError:
@@ -95,6 +102,10 @@ def verify_notion_signature(raw_body: bytes, header_value: str | None, secret: s
     provided = header_value
     if provided.startswith(SHA256_PREFIX):
         provided = provided[len(SHA256_PREFIX):]
+
+    import re
+    if not re.match(r"^[0-9a-fA-F]{64}$", provided):
+        raise HTTPException(401, "invalid_signature")
 
     try:
         provided_bytes = bytes.fromhex(provided)

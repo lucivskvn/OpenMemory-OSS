@@ -90,6 +90,17 @@ const get_db_sz = async (): Promise<number> => {
     }
 };
 
+class LimitValidationError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = "LimitValidationError";
+    }
+}
+
+const is_admin_tenant = (tenant: string) => {
+    return tenant === "admin" || tenant === "system" || tenant === "dev-no-auth";
+};
+
 function build_tenant_project_where(
     tenant: string,
     project_id: string | undefined,
@@ -116,12 +127,18 @@ async function fetch_dashboard_memories(
     lim: number,
     order_by: string,
 ) {
+    if (typeof lim !== "number" || !Number.isFinite(lim) || !Number.isInteger(lim) || lim <= 0) {
+        throw new LimitValidationError("Invalid limit value: must be a positive integer.");
+    }
+    const sensibleMax = 100;
+    const finalLim = Math.min(lim, sensibleMax);
+
     const mem_table = get_mem_table();
     const { where_clause, params } = build_tenant_project_where(
         tenant,
         project_id,
         is_pg,
-        lim,
+        finalLim,
     );
     const limitPlaceholder = is_pg ? "$" + params.length : "?";
     return await all_async(
@@ -212,18 +229,24 @@ export function dash(app: any) {
 
             const hour_ago = Date.now() - 60 * 60 * 1000;
             const sc = process.env.OM_PG_SCHEMA || "public";
-            const qps_data = await all_async(
-                is_pg
-                    ? `SELECT count, ts FROM "${sc}"."stats" WHERE type=$1 AND ts > $2 ORDER BY ts DESC`
-                    : "SELECT count, ts FROM stats WHERE type=? AND ts > ? ORDER BY ts DESC",
-                ["qps", hour_ago],
-            );
-            const err_data = await all_async(
-                is_pg
-                    ? `SELECT COUNT(*) as total FROM "${sc}"."stats" WHERE type=$1 AND ts > $2`
-                    : "SELECT COUNT(*) as total FROM stats WHERE type=? AND ts > ?",
-                ["error", hour_ago],
-            );
+            const is_admin = is_admin_tenant(tenant);
+
+            const qps_data = is_admin
+                ? await all_async(
+                      is_pg
+                          ? `SELECT count, ts FROM "${sc}"."stats" WHERE type=$1 AND ts > $2 ORDER BY ts DESC`
+                          : "SELECT count, ts FROM stats WHERE type=? AND ts > ? ORDER BY ts DESC",
+                      ["qps", hour_ago],
+                  )
+                : [];
+            const err_data = is_admin
+                ? await all_async(
+                      is_pg
+                          ? `SELECT COUNT(*) as total FROM "${sc}"."stats" WHERE type=$1 AND ts > $2`
+                          : "SELECT COUNT(*) as total FROM stats WHERE type=? AND ts > ?",
+                      ["error", hour_ago],
+                  )
+                : [];
 
             const peak_qps =
                 qps_data.length > 0
@@ -336,7 +359,7 @@ export function dash(app: any) {
         const tenant = require_tenant(req, res);
         if (!tenant) return;
         try {
-            const lim = parseInt(req.query.limit || "50");
+            const lim = req.query.limit !== undefined ? Number(req.query.limit) : 50;
             const project_id = req.query.project_id;
 
             const recmem = await fetch_dashboard_memories(
@@ -356,6 +379,9 @@ export function dash(app: any) {
                 })),
             });
         } catch (e: any) {
+            if (e instanceof LimitValidationError) {
+                return res.status(400).json({ error: "invalid_limit", message: e.message });
+            }
             res.status(500).json({ err: "internal", message: e.message });
         }
     });
@@ -428,7 +454,7 @@ export function dash(app: any) {
         const tenant = require_tenant(req, res);
         if (!tenant) return;
         try {
-            const lim = parseInt(req.query.limit || "10");
+            const lim = req.query.limit !== undefined ? Number(req.query.limit) : 10;
             const project_id = req.query.project_id;
 
             const topm = await fetch_dashboard_memories(
@@ -447,6 +473,9 @@ export function dash(app: any) {
                 })),
             });
         } catch (e: any) {
+            if (e instanceof LimitValidationError) {
+                return res.status(400).json({ error: "invalid_limit", message: e.message });
+            }
             res.status(500).json({ err: "internal", message: e.message });
         }
     });
@@ -454,6 +483,12 @@ export function dash(app: any) {
     app.get("/dashboard/maintenance", async (req: any, res: any) => {
         const tenant = require_tenant(req, res);
         if (!tenant) return;
+        if (!is_admin_tenant(tenant)) {
+            return res.status(403).json({
+                error: "forbidden",
+                message: "Only administrators can access maintenance operational data",
+            });
+        }
         try {
             const hrs = parseInt(req.query.hours || "24");
             const strt = Date.now() - hrs * 60 * 60 * 1000;

@@ -247,5 +247,8 @@ def extract_essence(raw: str, sec: str, max_len: int) -> str:
             selected.append(item)
             current_len += len(item["text"]) + 2
 
+    if not selected and scored:
+        return raw[:max_len]
+
     selected.sort(key=lambda x: x["idx"])
     return " ".join([s["text"] for s in selected])
