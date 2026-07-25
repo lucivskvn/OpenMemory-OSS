@@ -6,24 +6,47 @@ from openmemory.utils.fetch import (
     fetch_with_ssrf_protection,
 )
 
+def _setup_mock_200_response():
+    mock_resp = MagicMock()
+    mock_resp.is_redirect = False
+    mock_resp.status_code = 200
+    mock_resp.headers = httpx.Headers({"content-type": "text/html"})
+    mock_resp.text = "success"
+    mock_resp.aiter_bytes = MagicMock()
+
+    async def mock_aiter():
+        yield b"success"
+
+    mock_resp.aiter_bytes.return_value = mock_aiter()
+    return mock_resp
+
+
+def _setup_stream_context(mock_resp):
+    mock_stream_ctx = AsyncMock()
+    mock_stream_ctx.__aenter__.return_value = mock_resp
+    mock_stream_ctx.__aexit__.return_value = None
+    return mock_stream_ctx
+
+
 def test_is_ip_private_or_restricted_ipv4():
-    assert is_ip_private_or_restricted("127.0.0.1") is True
-    assert is_ip_private_or_restricted("10.0.0.5") is True
-    assert is_ip_private_or_restricted("172.16.31.254") is True
-    assert is_ip_private_or_restricted("192.168.1.100") is True
-    assert is_ip_private_or_restricted("169.254.1.1") is True
-    assert is_ip_private_or_restricted("100.64.0.50") is True
-    assert is_ip_private_or_restricted("0.0.0.0") is True
+    restricted_ips = [
+        "127.0.0.1", "10.0.0.5", "172.16.31.254",
+        "192.168.1.100", "169.254.1.1", "100.64.0.50", "0.0.0.0"
+    ]
+    for ip in restricted_ips:
+        assert is_ip_private_or_restricted(ip) is True
+
     assert is_ip_private_or_restricted("8.8.8.8") is False
 
 
 def test_is_ip_private_or_restricted_ipv6():
-    assert is_ip_private_or_restricted("::1") is True
-    assert is_ip_private_or_restricted("::") is True
-    assert is_ip_private_or_restricted("fe80::1") is True
-    assert is_ip_private_or_restricted("fc00::abc") is True
-    assert is_ip_private_or_restricted("ff02::1") is True
-    assert is_ip_private_or_restricted("::ffff:127.0.0.1") is True
+    restricted_ipv6s = [
+        "::1", "::", "fe80::1", "fc00::abc",
+        "ff02::1", "::ffff:127.0.0.1"
+    ]
+    for ip in restricted_ipv6s:
+        assert is_ip_private_or_restricted(ip) is True
+
     assert is_ip_private_or_restricted("::ffff:8.8.8.8") is False
 
 
@@ -42,26 +65,11 @@ async def test_fetch_with_ssrf_protection_cross_origin_redirect(mock_create_clie
     mock_resp1.aread = AsyncMock()
 
     # Second request response: 200 OK
-    mock_resp2 = MagicMock()
-    mock_resp2.is_redirect = False
-    mock_resp2.status_code = 200
-    mock_resp2.headers = httpx.Headers({"content-type": "text/html"})
-    mock_resp2.text = "success"
-    mock_resp2.aiter_bytes = MagicMock()
-
-    async def mock_aiter():
-        yield b"success"
-
-    mock_resp2.aiter_bytes.return_value = mock_aiter()
+    mock_resp2 = _setup_mock_200_response()
 
     # Configure context manager for stream()
-    mock_stream_ctx1 = AsyncMock()
-    mock_stream_ctx1.__aenter__.return_value = mock_resp1
-    mock_stream_ctx1.__aexit__.return_value = None
-
-    mock_stream_ctx2 = AsyncMock()
-    mock_stream_ctx2.__aenter__.return_value = mock_resp2
-    mock_stream_ctx2.__aexit__.return_value = None
+    mock_stream_ctx1 = _setup_stream_context(mock_resp1)
+    mock_stream_ctx2 = _setup_stream_context(mock_resp2)
 
     mock_client.stream.side_effect = [mock_stream_ctx1, mock_stream_ctx2]
 
@@ -115,25 +123,10 @@ async def test_fetch_with_ssrf_protection_chunked_redirect_body(mock_create_clie
     mock_resp1.aiter_bytes = mock_resp1_aiter
 
     # Second request: 200 OK
-    mock_resp2 = MagicMock()
-    mock_resp2.is_redirect = False
-    mock_resp2.status_code = 200
-    mock_resp2.headers = httpx.Headers({"content-type": "text/html"})
-    mock_resp2.text = "success"
-    mock_resp2.aiter_bytes = MagicMock()
+    mock_resp2 = _setup_mock_200_response()
 
-    async def mock_aiter():
-        yield b"success"
-
-    mock_resp2.aiter_bytes.return_value = mock_aiter()
-
-    mock_stream_ctx1 = AsyncMock()
-    mock_stream_ctx1.__aenter__.return_value = mock_resp1
-    mock_stream_ctx1.__aexit__.return_value = None
-
-    mock_stream_ctx2 = AsyncMock()
-    mock_stream_ctx2.__aenter__.return_value = mock_resp2
-    mock_stream_ctx2.__aexit__.return_value = None
+    mock_stream_ctx1 = _setup_stream_context(mock_resp1)
+    mock_stream_ctx2 = _setup_stream_context(mock_resp2)
 
     mock_client.stream.side_effect = [mock_stream_ctx1, mock_stream_ctx2]
 
