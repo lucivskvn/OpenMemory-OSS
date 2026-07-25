@@ -98,7 +98,9 @@ class LimitValidationError extends Error {
 }
 
 const is_admin_tenant = (tenant: string) => {
-    return tenant === "admin" || tenant === "system" || tenant === "dev-no-auth";
+    return (
+        tenant === "admin" || tenant === "system" || tenant === "dev-no-auth"
+    );
 };
 
 function build_tenant_project_where(
@@ -127,8 +129,15 @@ async function fetch_dashboard_memories(
     lim: number,
     order_by: string,
 ) {
-    if (typeof lim !== "number" || !Number.isFinite(lim) || !Number.isInteger(lim) || lim <= 0) {
-        throw new LimitValidationError("Invalid limit value: must be a positive integer.");
+    if (
+        typeof lim !== "number" ||
+        !Number.isFinite(lim) ||
+        !Number.isInteger(lim) ||
+        lim <= 0
+    ) {
+        throw new LimitValidationError(
+            "Invalid limit value: must be a positive integer.",
+        );
     }
     const sensibleMax = 100;
     const finalLim = Math.min(lim, sensibleMax);
@@ -175,7 +184,9 @@ export function dash(app: any) {
             const mem_table = get_mem_table();
             const project_id = req.query.project_id;
 
-            let where_clause = is_pg ? " WHERE user_id = $1" : " WHERE user_id = ?";
+            let where_clause = is_pg
+                ? " WHERE user_id = $1"
+                : " WHERE user_id = ?";
             let params: any[] = [tenant];
 
             if (project_id) {
@@ -359,7 +370,8 @@ export function dash(app: any) {
         const tenant = require_tenant(req, res);
         if (!tenant) return;
         try {
-            const lim = req.query.limit !== undefined ? Number(req.query.limit) : 50;
+            const lim =
+                req.query.limit !== undefined ? Number(req.query.limit) : 50;
             const project_id = req.query.project_id;
 
             const recmem = await fetch_dashboard_memories(
@@ -380,7 +392,9 @@ export function dash(app: any) {
             });
         } catch (e: any) {
             if (e instanceof LimitValidationError) {
-                return res.status(400).json({ error: "invalid_limit", message: e.message });
+                return res
+                    .status(400)
+                    .json({ error: "invalid_limit", message: e.message });
             }
             res.status(500).json({ err: "internal", message: e.message });
         }
@@ -454,7 +468,8 @@ export function dash(app: any) {
         const tenant = require_tenant(req, res);
         if (!tenant) return;
         try {
-            const lim = req.query.limit !== undefined ? Number(req.query.limit) : 10;
+            const lim =
+                req.query.limit !== undefined ? Number(req.query.limit) : 10;
             const project_id = req.query.project_id;
 
             const topm = await fetch_dashboard_memories(
@@ -474,7 +489,9 @@ export function dash(app: any) {
             });
         } catch (e: any) {
             if (e instanceof LimitValidationError) {
-                return res.status(400).json({ error: "invalid_limit", message: e.message });
+                return res
+                    .status(400)
+                    .json({ error: "invalid_limit", message: e.message });
             }
             res.status(500).json({ err: "internal", message: e.message });
         }
@@ -486,7 +503,8 @@ export function dash(app: any) {
         if (!is_admin_tenant(tenant)) {
             return res.status(403).json({
                 error: "forbidden",
-                message: "Only administrators can access maintenance operational data",
+                message:
+                    "Only administrators can access maintenance operational data",
             });
         }
         try {

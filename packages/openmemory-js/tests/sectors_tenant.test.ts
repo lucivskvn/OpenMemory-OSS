@@ -51,7 +51,7 @@ describe("Sectors route tenant scoping", () => {
             null,
             null,
             null,
-            0
+            0,
         );
 
         await q.ins_mem.run(
@@ -73,7 +73,7 @@ describe("Sectors route tenant scoping", () => {
             null,
             null,
             null,
-            0
+            0,
         );
 
         // 3. Request /sectors as Alice
@@ -83,7 +83,9 @@ describe("Sectors route tenant scoping", () => {
 
         let alice_res_json: any = null;
         const alice_res = {
-            status: function() { return this; },
+            status: function () {
+                return this;
+            },
             json: (data: any) => {
                 alice_res_json = data;
             },
@@ -106,7 +108,9 @@ describe("Sectors route tenant scoping", () => {
 
         let bob_res_json: any = null;
         const bob_res = {
-            status: function() { return this; },
+            status: function () {
+                return this;
+            },
             json: (data: any) => {
                 bob_res_json = data;
             },
@@ -157,7 +161,7 @@ describe("Cluster sync tenant scoping", () => {
         let status_code = 200;
         let res_json: any = null;
         const res_no_tenant = {
-            status: function(code: number) {
+            status: function (code: number) {
                 status_code = code;
                 return this;
             },
@@ -187,7 +191,7 @@ describe("Cluster sync tenant scoping", () => {
         let alice_status = 200;
         let alice_json: any = null;
         const res_alice = {
-            status: function(code: number) {
+            status: function (code: number) {
                 alice_status = code;
                 return this;
             },
@@ -223,7 +227,7 @@ describe("Cluster sync tenant scoping", () => {
         let mismatch_status = 200;
         let mismatch_json: any = null;
         const res_mismatch = {
-            status: function(code: number) {
+            status: function (code: number) {
                 mismatch_status = code;
                 return this;
             },
@@ -258,7 +262,7 @@ describe("Cluster sync tenant scoping", () => {
             null,
             null,
             null,
-            0
+            0,
         );
 
         // Alice tries to sync/overwrite sync-mem-3
@@ -278,7 +282,7 @@ describe("Cluster sync tenant scoping", () => {
         let hijack_status = 200;
         let hijack_json: any = null;
         const res_hijack = {
-            status: function(code: number) {
+            status: function (code: number) {
                 hijack_status = code;
                 return this;
             },
@@ -314,8 +318,10 @@ describe("Dashboard route tenant scoping", () => {
             get: (path: string, handler: any) => {
                 if (path === "/dashboard/projects") projects_handler = handler;
                 else if (path === "/dashboard/stats") stats_handler = handler;
-                else if (path === "/dashboard/activity") activity_handler = handler;
-                else if (path === "/dashboard/top-memories") top_memories_handler = handler;
+                else if (path === "/dashboard/activity")
+                    activity_handler = handler;
+                else if (path === "/dashboard/top-memories")
+                    top_memories_handler = handler;
             },
             post: () => {},
         };
@@ -349,7 +355,7 @@ describe("Dashboard route tenant scoping", () => {
             null,
             null,
             null,
-            0
+            0,
         );
 
         await q.ins_mem.run(
@@ -371,15 +377,19 @@ describe("Dashboard route tenant scoping", () => {
             null,
             null,
             null,
-            0
+            0,
         );
 
         // 1. Check projects for Alice
         const alice_req = { tenant: t_alice, query: {} };
         let alice_json: any = null;
         const res_mock = {
-            status: function() { return this; },
-            json: (data: any) => { alice_json = data; },
+            status: function () {
+                return this;
+            },
+            json: (data: any) => {
+                alice_json = data;
+            },
         };
 
         await projects_handler(alice_req, res_mock);
@@ -398,7 +408,9 @@ describe("Dashboard route tenant scoping", () => {
         await activity_handler(alice_req, res_mock);
         expect(alice_json).toBeTruthy();
         expect(alice_json.activities).toHaveLength(1);
-        expect(alice_json.activities[0].content).toContain("Alice private diary");
+        expect(alice_json.activities[0].content).toContain(
+            "Alice private diary",
+        );
 
         // 4. Check top-memories for Alice
         alice_json = null;

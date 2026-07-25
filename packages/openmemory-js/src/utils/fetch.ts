@@ -8,13 +8,13 @@ import https from "node:https";
  */
 export async function fetchWithTrace(
     url: string | URL | Request,
-    init?: RequestInit
+    init?: RequestInit,
 ): Promise<Response> {
     const headers = new Headers(init?.headers);
 
     // Inject current trace context into headers using the active context
     propagation.inject(context.active(), headers, {
-        set: (h, k, v) => h.set(k, v)
+        set: (h, k, v) => h.set(k, v),
     });
 
     // Apply a default timeout of 30 seconds if no signal is provided
@@ -30,7 +30,7 @@ export async function fetchWithTrace(
         const response = await fetch(url, {
             ...init,
             headers,
-            signal
+            signal,
         });
         return response;
     } finally {
@@ -213,7 +213,7 @@ function createFetchResponse(
     statusCode: number,
     statusMessage: string,
     responseHeaders: Headers,
-    buffer: Buffer
+    buffer: Buffer,
 ): FetchSsrfResponse {
     return {
         status: statusCode,
@@ -223,10 +223,11 @@ function createFetchResponse(
         text: async () => buffer.toString("utf8"),
         buffer: async () => buffer,
         json: async () => JSON.parse(buffer.toString("utf8")),
-        arrayBuffer: async () => buffer.buffer.slice(
-            buffer.byteOffset,
-            buffer.byteOffset + buffer.byteLength
-        ),
+        arrayBuffer: async () =>
+            buffer.buffer.slice(
+                buffer.byteOffset,
+                buffer.byteOffset + buffer.byteLength,
+            ),
     };
 }
 
@@ -333,7 +334,9 @@ export async function fetchWithSsrfProtection(
 
                 const maxRedirects = options.maxRedirects ?? 5;
                 if (redirectCount >= maxRedirects) {
-                    reject(new Error(`Too many redirects (max ${maxRedirects})`));
+                    reject(
+                        new Error(`Too many redirects (max ${maxRedirects})`),
+                    );
                     return;
                 }
 
@@ -348,7 +351,14 @@ export async function fetchWithSsrfProtection(
                     // Stripping credentials case-insensitively
                     for (const key of Object.keys(nextHeaders)) {
                         const lowerKey = key.toLowerCase();
-                        if (["authorization", "cookie", "x-api-key", "cookie2"].includes(lowerKey)) {
+                        if (
+                            [
+                                "authorization",
+                                "cookie",
+                                "x-api-key",
+                                "cookie2",
+                            ].includes(lowerKey)
+                        ) {
                             delete nextHeaders[key];
                         }
                     }
@@ -400,7 +410,14 @@ export async function fetchWithSsrfProtection(
                     }
                 }
 
-                resolve(createFetchResponse(statusCode, res.statusMessage || "", responseHeaders, buffer));
+                resolve(
+                    createFetchResponse(
+                        statusCode,
+                        res.statusMessage || "",
+                        responseHeaders,
+                        buffer,
+                    ),
+                );
             });
 
             res.on("error", (err) => {

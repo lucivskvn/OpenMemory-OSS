@@ -74,7 +74,8 @@ export function sys(app: any) {
                 if (parsed.success) {
                     const data = parsed.data.data;
 
-                    if (reject_tenant_mismatch(res, tenant, data.user_id)) return;
+                    if (reject_tenant_mismatch(res, tenant, data.user_id))
+                        return;
 
                     // Ensure user_id is forced to the verified tenant if not specified
                     if (!data.user_id) {
@@ -139,18 +140,20 @@ export function sys(app: any) {
     );
 
     const TrainSchema = z.object({
-        data: z.array(
-            z.object({
-                text: z.string().min(1).max(10000),
-                sector: z.enum([
-                    "episodic",
-                    "semantic",
-                    "procedural",
-                    "emotional",
-                    "reflective",
-                ]),
-            }),
-        ).max(1000),
+        data: z
+            .array(
+                z.object({
+                    text: z.string().min(1).max(10000),
+                    sector: z.enum([
+                        "episodic",
+                        "semantic",
+                        "procedural",
+                        "emotional",
+                        "reflective",
+                    ]),
+                }),
+            )
+            .max(1000),
     });
 
     app.post(
@@ -206,15 +209,21 @@ export function sys(app: any) {
     app.get(
         "/sectors",
         async (incoming_http_request: any, outgoing_http_response: any) => {
-            const tenant = require_tenant(incoming_http_request, outgoing_http_response);
+            const tenant = require_tenant(
+                incoming_http_request,
+                outgoing_http_response,
+            );
             if (!tenant) return;
             try {
-                const database_sector_statistics_rows = await all_async(`
+                const database_sector_statistics_rows = await all_async(
+                    `
                 select primary_sector as sector, count(*) as count, avg(salience) as avg_salience
                 from memories
                 where user_id = ?
                 group by primary_sector
-            `, [tenant]);
+            `,
+                    [tenant],
+                );
                 outgoing_http_response.json({
                     sectors: Object.keys(sector_configs),
                     configs: sector_configs,

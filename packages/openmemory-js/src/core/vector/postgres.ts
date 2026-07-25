@@ -65,9 +65,13 @@ export class PostgresVectorStore implements VectorStore {
         }
     }
 
-    async deleteVector(id: string, sector: string, user_id: string = "anonymous"): Promise<void> {
+    async deleteVector(
+        id: string,
+        sector: string,
+        user_id: string = "anonymous",
+    ): Promise<void> {
         const is_postgres = this.usePgVector || !!process.env.OM_POSTGRES_URL;
-        const param = (i: number) => is_postgres ? `$${i}` : "?";
+        const param = (i: number) => (is_postgres ? `$${i}` : "?");
         const sql = `delete from ${this.table} where id=${param(1)} and sector=${param(2)} and user_id=${param(3)}`;
         const params: any[] = [id, sector, user_id];
         await this.db.run_async(sql, params);
