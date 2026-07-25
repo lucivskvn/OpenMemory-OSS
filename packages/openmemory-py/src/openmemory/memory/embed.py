@@ -3,6 +3,7 @@ import time
 import math
 import json
 import hashlib
+import re
 from typing import List, Dict, Optional, Any, Tuple
 import numpy as np
 import httpx
@@ -178,7 +179,6 @@ def compress_vec_for_storage(vec: List[float], target_dim: int) -> List[float]:
     return compressed.tolist()
 
 def _score_sentence(s: str, idx: int) -> float:
-    import re
     sc = 0.0
     if idx == 0:
         sc += 10
@@ -194,7 +194,7 @@ def _score_sentence(s: str, idx: int) -> float:
         sc += 5
     if re.search(r"\$\d+|\d+\s*(miles|dollars|years|months|km)", s):
         sc += 4
-    if re.search(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+", s):
+    if re.search(r"\b[A-Z][a-z]+\s+[A-Z][a-z]+\b", s):
         sc += 3
 
     words = set(re.findall(r"\b[a-z]+\b", s.lower()))
@@ -223,7 +223,6 @@ def extract_essence(raw: str, sec: str, max_len: int) -> str:
     if not env.use_summary_only or len(raw) <= max_len:
         return raw
 
-    import re
     sents = [s.strip() for s in re.split(r"(?<=[.!?])\s+", raw) if s.strip()]
     sents = [s for s in sents if len(s) > 10]
     if not sents:
