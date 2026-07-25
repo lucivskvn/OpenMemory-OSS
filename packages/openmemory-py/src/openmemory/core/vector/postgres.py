@@ -1,7 +1,6 @@
 from typing import List, Optional, Dict, Any
 import json
 import logging
-import re
 from ..types import MemRow
 from ..vector_store import VectorStore, VectorRow
 
@@ -10,9 +9,6 @@ logger = logging.getLogger("vector_store.postgres")
 class PostgresVectorStore(VectorStore):
     def __init__(self, dsn: str, table_name: str = "openmemory_vectors"):
         self.dsn = dsn
-        # Validate table name to prevent SQL injection
-        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', table_name):
-            raise ValueError(f"Invalid table name: {table_name}. Must be a valid SQL identifier.")
         self.table = table_name
         self.pool = None
 
@@ -45,7 +41,7 @@ class PostgresVectorStore(VectorStore):
                 logger.info(f"HNSW index created on {self.table} for fast ANN queries")
         return self.pool
 
-    async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None, project_id: Optional[str] = None):
+    async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None):
         pool = await self._get_pool()
         vec_str = str(vector)
         uid = user_id or "anonymous"

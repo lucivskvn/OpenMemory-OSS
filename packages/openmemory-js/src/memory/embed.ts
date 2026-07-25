@@ -1,7 +1,7 @@
-import { env, tier } from "../core/config";
+﻿import { env, tier } from "../core/config";
 import { get_model } from "../core/models";
 import { sector_configs } from "./hsg";
-import * as dbModule from "../core/db";
+import { q } from "../core/db";
 import { canonical_tokens_from_text, add_synonym_tokens } from "../utils/text";
 import {
     BedrockRuntimeClient,
@@ -572,7 +572,7 @@ export async function embedMultiSector(
     chunks?: Array<{ text: string }>,
 ): Promise<EmbeddingResult[]> {
     const r: EmbeddingResult[] = [];
-    await dbModule.q.ins_log.run(id, "multi-sector", "pending", Date.now(), null);
+    await q.ins_log.run(id, "multi-sector", "pending", Date.now(), null);
     for (let a = 0; a < 3; a++) {
         try {
             const simp = env.embed_mode === "simple";
@@ -625,11 +625,11 @@ export async function embedMultiSector(
                     }
                 }
             }
-            await dbModule.q.upd_log.run("completed", null, id);
+            await q.upd_log.run("completed", null, id);
             return r;
         } catch (e) {
             if (a === 2) {
-                await dbModule.q.upd_log.run(
+                await q.upd_log.run(
                     "failed",
                     e instanceof Error ? e.message : String(e),
                     id,

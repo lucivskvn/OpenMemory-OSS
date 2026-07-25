@@ -6,11 +6,8 @@ from typing import List, Dict, Any, Optional
 from ..core.db import db, q
 from ..core.config import env
 from ..core.vector_store import VectorStore
-
-UPDATE_SALIENCE_QUERY = "UPDATE memories SET salience=?, last_seen_at=? WHERE id=?"
 from ..utils.chunking import chunk_text
 from ..utils.vectors import cos_sim as cosine_similarity, vec_to_buf, buf_to_vec
-
 from .embed import (
     classify_content,
     embed_multi_sector,
@@ -44,8 +41,19 @@ def canonical_token_set(text: str) -> set:
     from ..utils.text import canonical_tokens_from_text
     return set(canonical_tokens_from_text(text))
 
+def compute_token_overlap(q_tokens: set, m_tokens: set) -> float:
+    if not q_tokens or not m_tokens:
+        return 0.0
+    inter = q_tokens.intersection(m_tokens)
+    return len(inter) / math.sqrt(len(q_tokens) * len(m_tokens))
+
+def compute_keyword_overlap(q: str, m: str) -> float:
+    qt = canonical_token_set(q)
+    mt = canonical_token_set(m)
+    return compute_token_overlap(qt, mt)
+
 def compute_simhash(text: str) -> str:
-    from ..utils.text import stable_text_fallback_hash
+    from ..utils.text import canonical_token_set, stable_text_fallback_hash
     tokens = canonical_token_set(text)
     if not tokens:
         return stable_text_fallback_hash(text)
@@ -53,15 +61,18 @@ def compute_simhash(text: str) -> str:
     hashes = []
     for t in tokens:
         h = 0
-        for char in t:
-            h = (h << 5) - h + ord(char)
+        for c in t:
+            h = (h << 5) - h + ord(c)
             h = h & 0xffffffff
+        if h >= 0x80000000:
+            h -= 0x100000000
         hashes.append(h)
 
     vec = [0] * 64
     for h in hashes:
         for i in range(64):
-            if h & (1 << i):
+            bit = 1 << (i % 32)
+            if h & bit:
                 vec[i] += 1
             else:
                 vec[i] -= 1
@@ -74,19 +85,9 @@ def compute_simhash(text: str) -> str:
             (2 if vec[i + 2] > 0 else 0) +
             (1 if vec[i + 3] > 0 else 0)
         )
-        hash_str += hex(nibble)[2:]
+        hash_str += format(nibble, "x")
+
     return hash_str
-
-def compute_token_overlap(q_tokens: set, m_tokens: set) -> float:
-    if not q_tokens or not m_tokens:
-        return 0.0
-    inter = q_tokens.intersection(m_tokens)
-    return len(inter) / math.sqrt(len(q_tokens) * len(m_tokens))
-
-def compute_keyword_overlap(q: str, m: str) -> float:
-    qt = canonical_token_set(q)
-    mt = canonical_token_set(m)
-    return compute_token_overlap(qt, mt)
 
 def calc_recency_score_decay(last_seen_at: int) -> float:
     now = int(time.time() * 1000)
@@ -165,37 +166,9 @@ async def calc_multi_vec_fusion_score(mid: str, qe: Dict[str, List[float]], w: D
 
     return s / tot if tot > 0 else 0.0
 
-async def add_hsg_memory(
-    content: str,
-    tags: Optional[str] = None,
-    metadata: Optional[Dict[str, Any]] = None,
-    user_id: Optional[str] = None,
-    project_id: Optional[str] = None
-) -> Dict[str, Any]:
-    text_signature = compute_simhash(content)
-    duplicate_record = db.fetchone("SELECT * FROM memories WHERE simhash=?", (text_signature,))
-
-    if duplicate_record:
-        timestamp_now = int(time.time() * 1000)
-        elevated_salience = min(1.0, (duplicate_record["salience"] or 0.0) + 0.15)
-        db.execute(UPDATE_SALIENCE_QUERY, (elevated_salience, timestamp_now, duplicate_record["id"]))
-        db.commit()
-        return {
-            "id": duplicate_record["id"],
-            "primary_sector": duplicate_record["primary_sector"],
-            "sectors": [duplicate_record["primary_sector"]],
-            "deduplicated": True
-        }
-
-    import uuid
-    unique_memory_id = str(uuid.uuid4())
-    stored_result = await hsg_store(unique_memory_id, content, user_id, tags or "[]", metadata)
-    stored_result["deduplicated"] = False
-    return stored_result
-
-async def hsg_store(mid: str, content: str, user_id: str = None, tags: str = "[]", metadata: Dict[str, Any] = None, project_id: str = None):
+async def hsg_store(mid: str, content: str, user_id: str = None, tags: str = "[]", metadata: Dict[str, Any] = None):
     now = int(time.time() * 1000)
-    simhash = "0" # Stub
+    simhash = compute_simhash(content)
 
     if user_id:
         # Pre-seed user if not exists
@@ -242,7 +215,7 @@ async def hsg_store(mid: str, content: str, user_id: str = None, tags: str = "[]
         )
         emb_res = await embed_multi_sector(mid, content, all_secs, chunks if use_chunks else None)
         for r in emb_res:
-             await store.storeVector(mid, r["sector"], r["vector"], r["dim"], user_id or "anonymous", project_id)
+             await store.storeVector(mid, r["sector"], r["vector"], r["dim"], user_id or "anonymous")
 
         from .embed import calc_mean_vec
         mean_vec = calc_mean_vec(emb_res, all_secs)
@@ -251,7 +224,7 @@ async def hsg_store(mid: str, content: str, user_id: str = None, tags: str = "[]
         db.execute("UPDATE memories SET mean_dim=?, mean_vec=? WHERE id=?", (len(mean_vec), mean_buf, mid))
 
         # Store the mean vector into the vector store as `_mean` sector to enable ANN search (Issue #141)
-        await store.storeVector(mid, "_mean", mean_vec, len(mean_vec), user_id or "anonymous", project_id)
+        await store.storeVector(mid, "_mean", mean_vec, len(mean_vec), user_id or "anonymous")
 
         if len(mean_vec) > 128:
             from .embed import compress_vec_for_storage
@@ -271,6 +244,16 @@ async def hsg_store(mid: str, content: str, user_id: str = None, tags: str = "[]
         }
     except Exception as e:
         raise e
+
+async def add_hsg_memory(
+    content: str,
+    tags: Optional[str] = "[]",
+    metadata: Optional[Dict[str, Any]] = None,
+    user_id: Optional[str] = None
+) -> Dict[str, Any]:
+    import uuid
+    mid = str(uuid.uuid4())
+    return await hsg_store(mid, content, user_id, tags or "[]", metadata)
 
 cache = {}
 TTL = 60000
@@ -447,7 +430,7 @@ async def hsg_query(qt: str, k: int = 10, f: Dict[str, Any] = None) -> List[Dict
         for r in top:
              rsal = await applyRetrievalTraceReinforcementToMemory(r["id"], r["salience"])
              now = int(time.time()*1000)
-             db.execute(UPDATE_SALIENCE_QUERY, (rsal, now, r["id"]))
+             db.execute("UPDATE memories SET salience=?, last_seen_at=? WHERE id=?", (rsal, now, r["id"]))
              if len(r["path"]) > 1:
                  wps_rows = db.fetchall("SELECT dst_id, weight FROM waypoints WHERE src_id=?", (r["id"],))
                  wps = [{"target_id": row["dst_id"], "weight": row["weight"]} for row in wps_rows]
@@ -460,7 +443,7 @@ async def hsg_query(qt: str, k: int = 10, f: Dict[str, Any] = None) -> List[Dict
                          decay_fact = math.exp(-0.02 * time_diff)
                          ctx_boost = HYBRID_PARAMS["gamma"] * (rsal - (linked_mem["salience"] or 0)) * decay_fact
                          new_sal = max(0.0, min(1.0, (linked_mem["salience"] or 0) + ctx_boost))
-                         db.execute(UPDATE_SALIENCE_QUERY, (new_sal, now, u["node_id"]))
+                         db.execute("UPDATE memories SET salience=?, last_seen_at=? WHERE id=?", (new_sal, now, u["node_id"]))
 
              from .decay import on_query_hit
              await on_query_hit(r["id"], r["primary_sector"], lambda t: embed_for_sector(t, r["primary_sector"]))

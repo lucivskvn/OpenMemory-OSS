@@ -116,13 +116,15 @@ def calc_decay(
 ) -> float:
     from ..core.constants import SECTOR_CONFIGS
     cfg = SECTOR_CONFIGS.get(sec)
-    if not cfg: return init_sal
+    if not cfg:
+        return init_sal
     lambda_val = cfg["decay_lambda"]
     if seg_idx is not None and max_seg is not None and max_seg > 0:
         seg_ratio = math.sqrt(seg_idx / max_seg)
-        lambda_val = lambda_val * (1.0 - seg_ratio)
+        lambda_val = lambda_val * (1 - seg_ratio)
     decayed = init_sal * math.exp(-lambda_val * days_since)
-    reinf = 0.08 * (1.0 - math.exp(-lambda_val * days_since))
+    alpha_reinforce = 0.08
+    reinf = alpha_reinforce * (1 - math.exp(-lambda_val * days_since))
     return max(0.0, min(1.0, decayed + reinf))
 
 

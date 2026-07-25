@@ -139,5 +139,10 @@ q = Queries()
 def transaction():
     return db.conn
 
-def log_maint_op(op: str, count: int):
-    logger.info(f"[MAINT] {op} processed {count} items")
+def log_maint_op(maint_type: str, count: int = 1):
+    try:
+        ts = int(time.time() * 1000)
+        db.execute("INSERT INTO stats(type, count, ts) VALUES (?,?,?)", (maint_type, count, ts))
+        db.commit()
+    except Exception:
+        logger.exception("[DB] Maintenance log error")
