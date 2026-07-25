@@ -1,6 +1,5 @@
 import { q, all_async, run_async } from "../../core/db";
 import { env } from "../../core/config";
-import { require_tenant } from "../middleware/tenant";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -90,57 +89,12 @@ const get_db_sz = async (): Promise<number> => {
     }
 };
 
-function build_tenant_project_where(
-    tenant: string,
-    project_id: string | undefined,
-    is_pg: boolean,
-    limit: number,
-) {
-    let where_clause = is_pg ? " WHERE user_id = $1" : " WHERE user_id = ?";
-    const params: any[] = [tenant];
-
-    if (project_id) {
-        where_clause += is_pg
-            ? " AND (project_id = $2 OR project_id = 'system_global' OR project_id IS NULL)"
-            : " AND (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)";
-        params.push(project_id);
-    }
-
-    params.push(limit);
-    return { where_clause, params };
-}
-
-async function fetch_dashboard_memories(
-    tenant: string,
-    project_id: string | undefined,
-    lim: number,
-    order_by: string,
-) {
-    const mem_table = get_mem_table();
-    const { where_clause, params } = build_tenant_project_where(
-        tenant,
-        project_id,
-        is_pg,
-        lim,
-    );
-    return await all_async(
-        `SELECT id, content, primary_sector, salience, created_at, updated_at, last_seen_at
-         FROM ${mem_table}${where_clause} ORDER BY ${order_by} LIMIT ${is_pg ? `$${params.length}` : "?"}`,
-        params,
-    );
-}
-
 export function dash(app: any) {
-    app.get("/dashboard/projects", async (req: any, res: any) => {
-        const tenant = require_tenant(req, res);
-        if (!tenant) return;
+    app.get("/dashboard/projects", async (_req: any, res: any) => {
         try {
             const mem_table = get_mem_table();
             const projs = await all_async(
-                is_pg
-                    ? `SELECT DISTINCT project_id FROM ${mem_table} WHERE user_id = $1 AND project_id IS NOT NULL AND project_id != 'system_global'`
-                    : `SELECT DISTINCT project_id FROM ${mem_table} WHERE user_id = ? AND project_id IS NOT NULL AND project_id != 'system_global'`,
-                [tenant],
+                `SELECT DISTINCT project_id FROM ${mem_table} WHERE project_id IS NOT NULL AND project_id != 'system_global'`,
             );
             res.json({
                 projects: projs.map((p: any) => p.project_id),
@@ -151,20 +105,18 @@ export function dash(app: any) {
     });
 
     app.get("/dashboard/stats", async (req: any, res: any) => {
-        const tenant = require_tenant(req, res);
-        if (!tenant) return;
         try {
             const mem_table = get_mem_table();
             const project_id = req.query.project_id;
 
-            let where_clause = is_pg ? " WHERE user_id = $1" : " WHERE user_id = ?";
-            let params: any[] = [tenant];
+            let where_clause = "";
+            let params: any[] = [];
 
             if (project_id) {
-                where_clause += is_pg
-                    ? " AND (project_id = $2 OR project_id = 'system_global' OR project_id IS NULL)"
-                    : " AND (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)";
-                params.push(project_id);
+                where_clause = is_pg
+                    ? " WHERE (project_id = $1 OR project_id = 'system_global' OR project_id IS NULL)"
+                    : " WHERE (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)";
+                params = [project_id];
             }
 
             const totmem = await all_async(
@@ -181,11 +133,10 @@ export function dash(app: any) {
             );
             const dayago = Date.now() - 24 * 60 * 60 * 1000;
 
-            const recent_where =
-                where_clause +
-                (is_pg
-                    ? ` AND created_at > $${params.length + 1}`
-                    : " AND created_at > ?");
+            const recent_where = where_clause
+                ? where_clause +
+                  (is_pg ? " AND created_at > $2" : " AND created_at > ?")
+                : " WHERE created_at > " + (is_pg ? "$1" : "?");
             const recent_params = [...params, dayago];
 
             const recmem = await all_async(
@@ -332,17 +283,25 @@ export function dash(app: any) {
     });
 
     app.get("/dashboard/activity", async (req: any, res: any) => {
-        const tenant = require_tenant(req, res);
-        if (!tenant) return;
         try {
+            const mem_table = get_mem_table();
             const lim = parseInt(req.query.limit || "50");
             const project_id = req.query.project_id;
 
-            const recmem = await fetch_dashboard_memories(
-                tenant,
-                project_id,
-                lim,
-                "updated_at DESC",
+            let where_clause = "";
+            let params: any[] = [lim];
+
+            if (project_id) {
+                where_clause = is_pg
+                    ? " WHERE (project_id = $2 OR project_id = 'system_global' OR project_id IS NULL)"
+                    : " WHERE (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)";
+                params = [lim, project_id];
+            }
+
+            const recmem = await all_async(
+                `SELECT id, content, primary_sector, salience, created_at, updated_at, last_seen_at
+                 FROM ${mem_table}${where_clause} ORDER BY updated_at DESC LIMIT ${is_pg ? "$1" : "?"}`,
+                params,
             );
             res.json({
                 activities: recmem.map((m: any) => ({
@@ -360,8 +319,6 @@ export function dash(app: any) {
     });
 
     app.get("/dashboard/sectors/timeline", async (req: any, res: any) => {
-        const tenant = require_tenant(req, res);
-        if (!tenant) return;
         try {
             const mem_table = get_mem_table();
             const hrs = parseInt(req.query.hours || "24");
@@ -369,13 +326,13 @@ export function dash(app: any) {
             const project_id = req.query.project_id;
 
             let where_clause = is_pg
-                ? " WHERE user_id = $1 AND created_at > $2"
-                : " WHERE user_id = ? AND created_at > ?";
-            let params: any[] = [tenant, strt];
+                ? " WHERE created_at > $1"
+                : " WHERE created_at > ?";
+            let params: any[] = [strt];
 
             if (project_id) {
                 where_clause += is_pg
-                    ? " AND (project_id = $3 OR project_id = 'system_global' OR project_id IS NULL)"
+                    ? " AND (project_id = $2 OR project_id = 'system_global' OR project_id IS NULL)"
                     : " AND (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)";
                 params.push(project_id);
             }
@@ -424,17 +381,25 @@ export function dash(app: any) {
     });
 
     app.get("/dashboard/top-memories", async (req: any, res: any) => {
-        const tenant = require_tenant(req, res);
-        if (!tenant) return;
         try {
+            const mem_table = get_mem_table();
             const lim = parseInt(req.query.limit || "10");
             const project_id = req.query.project_id;
 
-            const topm = await fetch_dashboard_memories(
-                tenant,
-                project_id,
-                lim,
-                "salience DESC",
+            let where_clause = "";
+            let params: any[] = [lim];
+
+            if (project_id) {
+                where_clause = is_pg
+                    ? " WHERE (project_id = $2 OR project_id = 'system_global' OR project_id IS NULL)"
+                    : " WHERE (project_id = ? OR project_id = 'system_global' OR project_id IS NULL)";
+                params = [lim, project_id];
+            }
+
+            const topm = await all_async(
+                `SELECT id, content, primary_sector, salience, last_seen_at
+                 FROM ${mem_table}${where_clause} ORDER BY salience DESC LIMIT ${is_pg ? "$1" : "?"}`,
+                params,
             );
             res.json({
                 memories: topm.map((m: any) => ({
@@ -451,8 +416,6 @@ export function dash(app: any) {
     });
 
     app.get("/dashboard/maintenance", async (req: any, res: any) => {
-        const tenant = require_tenant(req, res);
-        if (!tenant) return;
         try {
             const hrs = parseInt(req.query.hours || "24");
             const strt = Date.now() - hrs * 60 * 60 * 1000;

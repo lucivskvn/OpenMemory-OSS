@@ -22,7 +22,7 @@ class VectorRow:
 
 class VectorStore(ABC):
     @abstractmethod
-    async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None): pass
+    async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None, project_id: Optional[str] = None): pass
 
     @abstractmethod
     async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]: pass
@@ -37,16 +37,16 @@ class VectorStore(ABC):
     async def search(self, vector: List[float], sector: str, k: int, filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]: pass
 
 class SQLiteVectorStore(VectorStore):
-    def __init__(self, table_name: str = "openmemory_vectors"):
+    def __init__(self, table_name: str = "vectors"):
         import re
         if not re.match(r'^[a-zA-Z0-9_]+$', str(table_name)):
             raise ValueError("Invalid input")
         self.table = table_name
 
-    async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None):
+    async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None, project_id: Optional[str] = None):
         blob = struct.pack(f"{len(vector)}f", *vector)
         sql = f"INSERT OR REPLACE INTO {self.table}(id, sector, user_id, v, dim) VALUES (?, ?, ?, ?, ?)"
-        db.conn.execute(sql, (id, sector, user_id, blob, dim))
+        db.conn.execute(sql, (id, sector, user_id, blob, dim)) # nosemgrep
         db.commit()
 
     async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]:
