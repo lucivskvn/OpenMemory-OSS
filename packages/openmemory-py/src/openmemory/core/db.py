@@ -144,5 +144,5 @@ def log_maint_op(maint_type: str, count: int = 1):
         ts = int(time.time() * 1000)
         db.execute("INSERT INTO stats(type, count, ts) VALUES (?,?,?)", (maint_type, count, ts))
         db.commit()
-    except Exception as e:
-        logger.error(f"[DB] Maintenance log error: {e}")
+    except Exception:
+        logger.exception("[DB] Maintenance log error")

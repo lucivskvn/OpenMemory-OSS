@@ -22,7 +22,7 @@ class VectorRow:
 
 class VectorStore(ABC):
     @abstractmethod
-    async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None, project_id: Optional[str] = None): pass
+    async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None): pass
 
     @abstractmethod
     async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]: pass
@@ -43,10 +43,10 @@ class SQLiteVectorStore(VectorStore):
             raise ValueError("Invalid input")
         self.table = table_name
 
-    async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None, project_id: Optional[str] = None):
+    async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None):
         blob = struct.pack(f"{len(vector)}f", *vector)
         sql = f"INSERT OR REPLACE INTO {self.table}(id, sector, user_id, v, dim) VALUES (?, ?, ?, ?, ?)"
-        db.conn.execute(sql, (id, sector, user_id, blob, dim)) # nosemgrep
+        db.conn.execute(sql, (id, sector, user_id, blob, dim))
         db.commit()
 
     async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]:

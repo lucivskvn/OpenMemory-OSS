@@ -1,4 +1,11 @@
-import * as dbModule from "../core/db";
+import {
+    q,
+    all_async,
+    run_async,
+    memories_table,
+    vector_store,
+    log_maint_op,
+} from "../core/db";
 import { env } from "../core/config";
 import { now } from "../utils";
 import { clamp_f } from "../utils/math";
@@ -86,7 +93,7 @@ export const apply_decay = async () => {
     last_decay = now_ts;
     const t0 = performance.now();
 
-    const segments = await dbModule.q.get_segments.all(undefined, undefined, true);
+    const segments = await q.get_segments.all(undefined, undefined, true);
     let tot_proc = 0,
         tot_chg = 0,
         tot_comp = 0,
@@ -97,7 +104,7 @@ export const apply_decay = async () => {
         const seg_start_proc = tot_proc;
         try {
             const segment = seg.segment;
-            const rows = await dbModule.all_async(
+            const rows = await all_async(
                 "select id,user_id,project_id,content,summary,salience,decay_lambda,last_seen_at,updated_at,primary_sector,coactivations,feedback_score from memories where segment=?",
                 [segment],
             );
@@ -148,7 +155,7 @@ export const apply_decay = async () => {
 
                         if (f < 0.7) {
                             const sector = m.primary_sector || "semantic";
-                            const vec_row = await dbModule.vector_store.getVector(
+                            const vec_row = await vector_store.getVector(
                                 m.id,
                                 sector,
                                 m.user_id || undefined,
@@ -177,7 +184,7 @@ export const apply_decay = async () => {
                                     );
 
                                     if (new_vec.length < before_len) {
-                                        await dbModule.vector_store.storeVector(
+                                        await vector_store.storeVector(
                                             m.id,
                                             sector,
                                             new_vec,
@@ -190,7 +197,7 @@ export const apply_decay = async () => {
                                     }
 
                                     if (new_summary !== (m.summary || "")) {
-                                        await dbModule.run_async(
+                                        await run_async(
                                             "update memories set summary=? where id=?",
                                             [new_summary, m.id],
                                         );
@@ -203,7 +210,7 @@ export const apply_decay = async () => {
                         if (f < Math.max(0.3, cfg.cold_threshold)) {
                             const sector = m.primary_sector || "semantic";
                             const fp = fingerprint_mem(m, cfg.max_vec_dim);
-                            await dbModule.vector_store.storeVector(
+                            await vector_store.storeVector(
                                 m.id,
                                 sector,
                                 fp.vector,
@@ -211,7 +218,7 @@ export const apply_decay = async () => {
                                 m.user_id || undefined,
                                 m.project_id || undefined,
                             );
-                            await dbModule.run_async(
+                            await run_async(
                                 "update memories set summary=? where id=?",
                                 [fp.summary, m.id],
                             );
@@ -221,8 +228,8 @@ export const apply_decay = async () => {
                         }
 
                         if (changed) {
-                            await dbModule.run_async(
-                                `update memories set salience=?,feedback_score=?,updated_at=? where id=?`,
+                            await run_async(
+                                `update ${memories_table} set salience=?,feedback_score=?,updated_at=? where id=?`,
                                 [new_sal, new_feedback, now(), m.id],
                             );
                             tot_chg++;
@@ -240,7 +247,7 @@ export const apply_decay = async () => {
                 await sleep_local(env.decay_sleep_ms);
             }
         } finally {
-            await dbModule.log_maint_op("decay", tot_proc - seg_start_proc);
+            await log_maint_op("decay", tot_proc - seg_start_proc);
         }
     }
 
@@ -258,13 +265,13 @@ export const on_query_hit = async (
 ) => {
     if (!cfg.regeneration_enabled && !cfg.reinforce_on_query) return;
 
-    const m = await dbModule.q.get_mem.get(mem_id);
+    const m = await q.get_mem.get(mem_id);
     if (!m) return;
 
     let updated = false;
 
     if (cfg.regeneration_enabled && reembed) {
-        const vec_row = await dbModule.vector_store.getVector(
+        const vec_row = await vector_store.getVector(
             mem_id,
             sector,
             m.user_id || undefined,
@@ -278,7 +285,7 @@ export const on_query_hit = async (
                 try {
                     const base = m.summary || m.content || "";
                     const new_vec = await reembed(base);
-                    await dbModule.vector_store.storeVector(
+                    await vector_store.storeVector(
                         mem_id,
                         sector,
                         new_vec,
@@ -294,8 +301,8 @@ export const on_query_hit = async (
 
     if (cfg.reinforce_on_query) {
         const new_sal = clamp_f((m.salience || 0.5) + 0.5, 0, 1);
-        await dbModule.run_async(
-            `update memories set salience=?,last_seen_at=? where id=?`,
+        await run_async(
+            `update ${memories_table} set salience=?,last_seen_at=? where id=?`,
             [new_sal, now(), mem_id],
         );
         updated = true;

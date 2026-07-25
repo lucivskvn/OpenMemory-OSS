@@ -1,5 +1,9 @@
 import { VectorStore } from "../vector_store";
-import { cos_sim, buf_to_vec, vec_to_buf } from "../../utils/index";
+import {
+    bufferToVector,
+    vectorToBuffer,
+    cosineSimilarity,
+} from "../../memory/embed";
 import { assertSafeIdentifier, DEFAULT_VECTOR_TABLE } from "../identifiers";
 
 export interface DbOps {
@@ -48,7 +52,7 @@ export class PostgresVectorStore implements VectorStore {
                 dim,
             ]);
         } else {
-            const v = vec_to_buf(vector);
+            const v = vectorToBuffer(vector);
             const sql = `insert into ${this.table}(id,sector,user_id,project_id,v,dim) values($1,$2,$3,$4,$5,$6) on conflict(id,sector) do update set user_id=excluded.user_id,project_id=excluded.project_id,v=excluded.v,dim=excluded.dim`;
             await this.db.run_async(sql, [
                 id,
@@ -124,10 +128,9 @@ export class PostgresVectorStore implements VectorStore {
                 direct_args,
             );
             const sims: Array<{ id: string; score: number }> = [];
-            const queryF32 = new Float32Array(queryVec);
             for (const row of rows) {
-                const vec = buf_to_vec(row.v);
-                const sim = cos_sim(queryF32, vec);
+                const vec = bufferToVector(row.v);
+                const sim = cosineSimilarity(queryVec, vec);
                 sims.push({ id: row.id, score: sim });
             }
             sims.sort((a, b) => b.score - a.score);
@@ -148,7 +151,7 @@ export class PostgresVectorStore implements VectorStore {
 
         const vector = this.usePgVector
             ? JSON.parse(row.v_val)
-            : Array.from(buf_to_vec(row.v_val));
+            : bufferToVector(row.v_val);
 
         return { vector, dim: row.dim };
     }
@@ -165,7 +168,7 @@ export class PostgresVectorStore implements VectorStore {
             sector: row.sector,
             vector: this.usePgVector
                 ? JSON.parse(row.v_val)
-                : Array.from(buf_to_vec(row.v_val)),
+                : bufferToVector(row.v_val),
             dim: row.dim,
         }));
     }
@@ -182,7 +185,7 @@ export class PostgresVectorStore implements VectorStore {
             id: row.id,
             vector: this.usePgVector
                 ? JSON.parse(row.v_val)
-                : Array.from(buf_to_vec(row.v_val)),
+                : bufferToVector(row.v_val),
             dim: row.dim,
         }));
     }

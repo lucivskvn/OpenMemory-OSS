@@ -1,6 +1,6 @@
 import { env } from "../core/config";
 import { add_hsg_memory, hsg_query } from "../memory/hsg";
-import * as dbModule from "../core/db";
+import { q, vector_store } from "../core/db";
 import { now, j } from "../utils";
 import type {
     lgm_store_req,
@@ -133,7 +133,7 @@ const hydrate_mem_row = async (
     path?: string[],
 ): Promise<hydrated_mem> => {
     const tags = safe_parse<string[]>(row.tags, []);
-    const vecs = await dbModule.vector_store.getVectorsById(
+    const vecs = await vector_store.getVectorsById(
         row.id,
         row.user_id || undefined,
     );
@@ -253,7 +253,7 @@ export async function retrieve_node_mems(p: lgm_retrieve_req) {
             user_id: p.user_id,
         });
         for (const match of matches) {
-            const row = (await dbModule.q.get_mem.get(match.id)) as mem_row | undefined;
+            const row = (await q.get_mem.get(match.id)) as mem_row | undefined;
             if (!row) continue;
             if (p.user_id && row.user_id !== p.user_id) continue;
             const meta = safe_parse<Record<string, unknown>>(row.meta, {});
@@ -270,13 +270,13 @@ export async function retrieve_node_mems(p: lgm_retrieve_req) {
         }
     } else {
         const raw_rows = p.user_id
-            ? ((await dbModule.q.all_mem_by_user_sector.all(
+            ? ((await q.all_mem_by_user_sector.all(
                   p.user_id,
                   sec,
                   lim * 4,
                   0,
               )) as mem_row[])
-            : ((await dbModule.q.all_mem_by_sector.all(sec, lim * 4, 0)) as mem_row[]);
+            : ((await q.all_mem_by_sector.all(sec, lim * 4, 0)) as mem_row[]);
         for (const row of raw_rows) {
             if (p.user_id && row.user_id !== p.user_id) continue;
             const meta = safe_parse<Record<string, unknown>>(row.meta, {});

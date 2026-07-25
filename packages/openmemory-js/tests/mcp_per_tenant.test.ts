@@ -10,25 +10,25 @@ import { beforeEach, describe, expect, it } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { create_mcp_srv } from "../src/ai/mcp";
+import { run_async, q } from "../src/core/db";
 
 const T_ALICE = "tenant-alice-mcp";
 const T_BOB = "tenant-bob-mcp";
 
 async function cleanup() {
-    const db = await import("../src/core/db");
-    await db.run_async(`DELETE FROM memories`);
+    await run_async(`DELETE FROM memories`);
     try {
-        await db.run_async(`DELETE FROM vectors`);
+        await run_async(`DELETE FROM vectors`);
     } catch {
         /* schema variant */
     }
     try {
-        await db.run_async(`DELETE FROM openmemory_vectors`);
+        await run_async(`DELETE FROM openmemory_vectors`);
     } catch {
         /* schema variant */
     }
     try {
-        await db.run_async(`DELETE FROM waypoints`);
+        await run_async(`DELETE FROM waypoints`);
     } catch {
         /* schema variant */
     }
@@ -93,8 +93,7 @@ describe("MCP per-tenant scoping", () => {
 
         // The DB row must carry the tenant as user_id — without this fix
         // it would have been "anonymous" and invisible to REST /memory/all.
-        const db = await import("../src/core/db");
-        const row = await db.q.get_mem.get(id!);
+        const row = await q.get_mem.get(id!);
         expect(row).toBeTruthy();
         expect(row.user_id).toBe(T_ALICE);
         expect(row.project_id).toBe("system_global");
@@ -187,8 +186,7 @@ describe("MCP per-tenant scoping", () => {
         const { id } = parse_store(stored);
         expect(id).toBeTruthy();
 
-        const db = await import("../src/core/db");
-        const row = await db.q.get_mem.get(id!);
+        const row = await q.get_mem.get(id!);
         expect(row.user_id).toBe("anonymous");
 
         const items = parse_items(

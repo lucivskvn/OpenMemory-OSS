@@ -3,7 +3,6 @@ import time
 import math
 import json
 import hashlib
-import re
 from typing import List, Dict, Optional, Any, Tuple
 import numpy as np
 import httpx
@@ -57,7 +56,6 @@ async def embed_multi_sector(id: str, txt: str, secs: List[str], chunks: Optiona
     except Exception as e:
         q.upd_log(id=id, status="failed", err=str(e))
         raise e
-
 def calc_mean_vec(emb_res: List[Dict[str, Any]], all_sectors: List[str]) -> List[float]:
     if not emb_res:
         return []
@@ -101,23 +99,20 @@ SECTOR_RELATIONSHIPS = {
     },
 }
 
-def _get_preset_sector(metadata: Optional[Dict[str, Any]]) -> Optional[str]:
-    if not metadata:
-        return None
-    sect = metadata.get("sector")
-    if not sect and isinstance(metadata.get("lgm"), dict):
-        sect = metadata["lgm"].get("sector")
-    if sect in SECTOR_CONFIGS:
-        return sect
-    return None
-
 def classify_content(content: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    sect = _get_preset_sector(metadata)
-    if sect:
+    from ..core.constants import SECTOR_CONFIGS
+    metadata = metadata or {}
+    sect = metadata.get("sector")
+    if not sect:
+        lgm = metadata.get("lgm") or {}
+        if isinstance(lgm, dict):
+            sect = lgm.get("sector")
+
+    if sect and sect in SECTOR_CONFIGS:
         return {
             "primary": sect,
             "additional": [],
-            "confidence": 1.0
+            "confidence": 1.0,
         }
 
     scores = {}
@@ -132,20 +127,22 @@ def classify_content(content: str, metadata: Optional[Dict[str, Any]] = None) ->
     sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     primary = sorted_scores[0][0]
     primary_score = sorted_scores[0][1]
-
     threshold = max(1.0, primary_score * 0.3)
-    additional = [s for s, sc in sorted_scores[1:] if sc > 0 and sc >= threshold]
 
-    confidence = (
-        min(1.0, primary_score / (primary_score + sorted_scores[1][1] + 1.0))
-        if primary_score > 0
-        else 0.2
-    )
+    additional = [
+        sector for sector, score in sorted_scores[1:]
+        if score > 0 and score >= threshold
+    ]
+
+    confidence = 0.2
+    if primary_score > 0:
+        second_score = sorted_scores[1][1] if len(sorted_scores) > 1 else 0
+        confidence = min(1.0, primary_score / (primary_score + second_score + 1))
 
     return {
         "primary": primary if primary_score > 0 else "semantic",
         "additional": additional,
-        "confidence": confidence
+        "confidence": confidence,
     }
 
 async def embed_query_for_all_sectors(query: str, sectors: List[str]) -> Dict[str, List[float]]:
@@ -155,108 +152,78 @@ async def embed_query_for_all_sectors(query: str, sectors: List[str]) -> Dict[st
     return res
 
 def compress_vec_for_storage(vec: List[float], target_dim: int) -> List[float]:
-    if len(vec) <= target_dim: return vec
+    if len(vec) <= target_dim:
+        return vec
     compressed = np.zeros(target_dim, dtype=np.float32)
     bucket_sz = len(vec) / target_dim
     for i in range(target_dim):
         start = math.floor(i * bucket_sz)
         end = math.floor((i + 1) * bucket_sz)
         sub = vec[start:end]
-        compressed[i] = sum(sub) / len(sub) if sub else 0.0
+        if sub:
+            compressed[i] = sum(sub) / len(sub)
+
     norm = np.linalg.norm(compressed)
     if norm > 0:
         compressed /= norm
     return compressed.tolist()
 
 def extract_essence(raw: str, sec: str, max_len: int) -> str:
-    # Fail-fast if we should bypass summarization
+    from ..core.config import env
     if not env.use_summary_only or len(raw) <= max_len:
         return raw
 
-    # Tokenize input text into clean sentences
-    sentence_list = [sent.strip() for sent in re.split(r"(?<=[.!?])\s+", raw) if len(sent.strip()) > 10]
-    if not sentence_list:
+    import re
+    sents = [s.strip() for s in re.split(r"(?<=[.!?])\s+", raw) if s.strip()]
+    sents = [s for s in sents if len(s) > 10]
+    if not sents:
         return raw[:max_len]
 
-    def _get_sentence_score(sentence: str, position: int) -> float:
-        points = 0.0
-        if position == 0:
-            points += 10
-        elif position == 1:
-            points += 5
+    def score_sent(s: str, idx: int) -> float:
+        sc = 0.0
+        if idx == 0:
+            sc += 10
+        if idx == 1:
+            sc += 5
+        if re.match(r"^#+\s", s) or re.match(r"^[A-Z][A-Z\s]+:", s):
+            sc += 8
+        if re.match(r"^[A-Z][a-z]+:", s):
+            sc += 6
+        if re.search(r"\d{4}-\d{2}-\d{2}", s):
+            sc += 7
+        if re.search(r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d+", s, re.I):
+            sc += 5
+        if re.search(r"\$\d+|\d+\s*(miles|dollars|years|months|km)", s):
+            sc += 4
+        if re.search(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+", s):
+            sc += 3
+        if re.search(r"\b(bought|purchased|serviced|visited|went|got|received|paid|earned|learned|discovered|found|saw|met|completed|finished|fixed|implemented|created|updated|added|removed|resolved)\b", s, re.I):
+            sc += 4
+        if re.search(r"\b(who|what|when|where|why|how)\b", s, re.I):
+            sc += 2
+        if len(s) < 80:
+            sc += 2
+        if "I" in s or "my" in s or "me" in s:
+            sc += 1
+        return sc
 
-        # Heuristic rules for scoring sentences
-        if re.match(r"^#+\s", sentence) or re.match(r"^[A-Z][A-Z\s]+:", sentence):
-            points += 8
-        if re.match(r"^[A-Z][a-z]+:", sentence):
-            points += 6
-        if re.search(r"\d{4}-\d{2}-\d{2}", sentence):
-            points += 7
-        if re.search(r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d+", sentence, re.I):
-            points += 5
-        if re.search(r"\$\d+|\d+\s*(miles|dollars|years|months|km)", sentence):
-            points += 4
-        if re.search(r"\b[A-Z][a-z]+\s[A-Z][a-z]+", sentence):
-            points += 3
+    scored = [{"text": s, "score": score_sent(s, idx), "idx": idx} for idx, s in enumerate(sents)]
+    scored.sort(key=lambda x: x["score"], reverse=True)
 
-        words_in_sentence = set(canonical_tokens_from_text(sentence.lower()))
-        # Canonicalize action keywords to match stemmed tokens
-        actions_list = {
-            canonicalize_token("bought"), canonicalize_token("purchased"), canonicalize_token("serviced"),
-            canonicalize_token("visited"), canonicalize_token("went"), canonicalize_token("got"),
-            canonicalize_token("received"), canonicalize_token("paid"), canonicalize_token("earned"),
-            canonicalize_token("learned"), canonicalize_token("discovered"), canonicalize_token("found"),
-            canonicalize_token("saw"), canonicalize_token("met"), canonicalize_token("completed"),
-            canonicalize_token("finished"), canonicalize_token("fixed"), canonicalize_token("implemented"),
-            canonicalize_token("created"), canonicalize_token("updated"), canonicalize_token("added"),
-            canonicalize_token("removed"), canonicalize_token("resolved")
-        }
-        if words_in_sentence.intersection(actions_list):
-            points += 4
+    selected = []
+    current_len = 0
 
-        # Canonicalize question keywords to match stemmed tokens
-        questions_list = {
-            canonicalize_token("who"), canonicalize_token("what"), canonicalize_token("when"),
-            canonicalize_token("where"), canonicalize_token("why"), canonicalize_token("how")
-        }
-        if words_in_sentence.intersection(questions_list):
-            points += 2
+    first_sent = next((s for s in scored if s["idx"] == 0), None)
+    if first_sent and len(first_sent["text"]) < max_len:
+        selected.append(first_sent)
+        current_len += len(first_sent["text"])
 
-        if len(sentence) < 80:
-            points += 2
-        if any(pronoun in sentence for pronoun in ("I", "my", "me")):
-            points += 1
-
-        return points
-
-    # Build scored sentences list and sort by point value
-    scored_items = []
-    for idx, text in enumerate(sentence_list):
-        scored_items.append((text, _get_sentence_score(text, idx), idx))
-
-    scored_items.sort(key=lambda x: x[1], reverse=True)
-
-    budget_left = max_len
-    reconstructed_segments = []
-
-    # Try to pin the very first sentence if it fits
-    head_sent = next((item for item in scored_items if item[2] == 0), None)
-    if head_sent and len(head_sent[0]) < budget_left:
-        reconstructed_segments.append(head_sent)
-        budget_left -= len(head_sent[0])
-
-    for text, points, original_pos in scored_items:
-        if original_pos == 0:
+    for item in scored:
+        if item["idx"] == 0:
             continue
-        # Check if this sentence can be appended within length budget (accounting for space separator)
-        cost = len(text) + (2 if reconstructed_segments else 0)
-        if cost <= budget_left:
-            reconstructed_segments.append((text, points, original_pos))
-            budget_left -= cost
+        if current_len + len(item["text"]) + 2 <= max_len:
+            selected.append(item)
+            current_len += len(item["text"]) + 2
 
-    # Sort chosen sentences back to their original sequence
-    reconstructed_segments.sort(key=lambda x: x[2])
-    # Fallback to raw truncation if no sentences were selected
-    if not reconstructed_segments:
-        return raw[:max_len]
-    return " ".join([item[0] for item in reconstructed_segments])
+    selected.sort(key=lambda x: x["idx"])
+    return " ".join([s["text"] for s in selected])

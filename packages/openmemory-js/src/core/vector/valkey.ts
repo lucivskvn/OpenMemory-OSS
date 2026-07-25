@@ -1,7 +1,7 @@
 import Redis from "ioredis";
 import { env } from "../config";
 import { VectorStore } from "../vector_store";
-import { buf_to_vec, vec_to_buf } from "../../utils/index";
+import { bufferToVector, vectorToBuffer } from "../../memory/embed";
 
 export class ValkeyVectorStore implements VectorStore {
     private client: Redis;
@@ -28,7 +28,7 @@ export class ValkeyVectorStore implements VectorStore {
         project_id?: string,
     ): Promise<void> {
         const key = this.getKey(user_id, id, sector);
-        const buf = vec_to_buf(vector);
+        const buf = vectorToBuffer(vector);
 
         await this.client.hset(key, {
             v: buf,
@@ -73,7 +73,7 @@ export class ValkeyVectorStore implements VectorStore {
         project_id?: string,
     ): Promise<Array<{ id: string; score: number }>> {
         const indexName = `idx:${sector}`;
-        const blob = vec_to_buf(queryVec);
+        const blob = vectorToBuffer(queryVec);
 
         try {
             const fetchK = project_id ? topK * 5 : topK;
@@ -162,9 +162,10 @@ export class ValkeyVectorStore implements VectorStore {
                                 vec_project_id === "";
 
                             if (projectMatch) {
-                                results.push({
+                                allVecs.push({
                                     id,
-                                    score: this.cosineSimilarity(queryVec, Array.from(buf_to_vec(buf))),
+                                    vector: bufferToVector(buf),
+                                    project_id: vec_project_id,
                                 });
                             }
                         }
@@ -203,7 +204,7 @@ export class ValkeyVectorStore implements VectorStore {
         const res = await this.client.hmget(key, "v", "dim");
         if (!res[0]) return null;
         return {
-            vector: Array.from(buf_to_vec(res[0] as unknown as Buffer)),
+            vector: bufferToVector(res[0] as unknown as Buffer),
             dim: parseInt(res[1] as string),
         };
     }
@@ -240,7 +241,7 @@ export class ValkeyVectorStore implements VectorStore {
                         const sector = parts[3];
                         results.push({
                             sector,
-                            vector: Array.from(buf_to_vec(v)),
+                            vector: bufferToVector(v),
                             dim: parseInt(dim),
                         });
                     }
@@ -278,7 +279,7 @@ export class ValkeyVectorStore implements VectorStore {
                         const id = key.split(":").pop()!;
                         results.push({
                             id,
-                            vector: Array.from(buf_to_vec(v)),
+                            vector: bufferToVector(v),
                             dim: parseInt(dim),
                         });
                     }
