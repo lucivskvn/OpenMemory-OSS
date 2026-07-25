@@ -1,6 +1,6 @@
 import socket
 import ipaddress
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 import httpx
 import httpcore
 import anyio
@@ -87,29 +87,102 @@ def create_ssrf_protected_client(*args: Any, **kwargs: Any) -> httpx.AsyncClient
     return httpx.AsyncClient(*args, transport=transport, **kwargs)
 
 
+def get_effective_port(parsed_url) -> int:
+    if parsed_url.port is not None:
+        return parsed_url.port
+    if parsed_url.scheme.lower() == "https":
+        return 443
+    return 80
+
+
+def is_cross_origin_redirect(current_url: str, next_url: str) -> bool:
+    from urllib.parse import urlparse
+    parsed_current = urlparse(current_url)
+    parsed_next = urlparse(next_url)
+
+    scheme_current = parsed_current.scheme.lower()
+    scheme_next = parsed_next.scheme.lower()
+
+    host_current = (parsed_current.hostname or "").lower()
+    host_next = (parsed_next.hostname or "").lower()
+
+    port_current = get_effective_port(parsed_current)
+    port_next = get_effective_port(parsed_next)
+
+    return (
+        scheme_current != scheme_next or
+        host_current != host_next or
+        port_current != port_next
+    )
+
+
+def strip_cross_origin_credentials(headers_dict: dict, kwargs: dict) -> dict:
+    sensitive_keys = {"authorization", "cookie", "cookie2", "x-api-key"}
+    new_headers = {
+        k: v for k, v in headers_dict.items()
+        if k.lower() not in sensitive_keys
+    }
+    kwargs.pop("auth", None)
+    kwargs.pop("cookies", None)
+    return new_headers
+
+
+def check_response_size_limit(response: httpx.Response, limit: int = 50 * 1024 * 1024) -> None:
+    content_length_str = response.headers.get("content-length")
+    if content_length_str:
+        try:
+            content_length = int(content_length_str)
+        except ValueError:
+            content_length = None
+        if content_length is not None and content_length > limit:
+            raise ValueError("Response size exceeded 50MB limit")
+
+
+async def accumulate_response_bytes(response: httpx.Response, limit: int = 50 * 1024 * 1024) -> bytes:
+    chunks = []
+    total_bytes = 0
+    async for chunk in response.aiter_bytes():
+        total_bytes += len(chunk)
+        if total_bytes > limit:
+            raise ValueError("Response size exceeded 50MB limit")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 async def fetch_with_ssrf_protection(url: str, **kwargs: Any) -> httpx.Response:
     timeout = kwargs.pop("timeout", 30.0)
     follow_redirects = kwargs.pop("follow_redirects", True)
 
+    current_url = url
+    headers = kwargs.pop("headers", {})
+    headers_dict = dict(httpx.Headers(headers).items())
+
+    max_redirects = 5
+    redirect_count = 0
+
     client = create_ssrf_protected_client()
     async with client:
-        async with client.stream("GET", url, follow_redirects=follow_redirects, timeout=timeout, **kwargs) as response:
-            content_length_str = response.headers.get("content-length")
-            if content_length_str:
-                try:
-                    content_length = int(content_length_str)
-                except ValueError:
-                    content_length = None
-                if content_length is not None and content_length > 50 * 1024 * 1024:
-                    raise ValueError("Response size exceeded 50MB limit")
+        while True:
+            async with client.stream("GET", current_url, follow_redirects=False, headers=headers_dict, timeout=timeout, **kwargs) as response:
+                check_response_size_limit(response)
 
-            chunks = []
-            total_bytes = 0
-            async for chunk in response.aiter_bytes():
-                total_bytes += len(chunk)
-                if total_bytes > 50 * 1024 * 1024:
-                    raise ValueError("Response size exceeded 50MB limit")
-                chunks.append(chunk)
+                if response.is_redirect and follow_redirects:
+                    if redirect_count >= max_redirects:
+                        raise ValueError(f"Too many redirects (max {max_redirects})")
 
-            response._content = b"".join(chunks)
-            return response
+                    location = response.headers.get("location")
+                    if not location:
+                        raise ValueError(f"Redirect status {response.status_code} with no location header")
+
+                    from urllib.parse import urljoin
+                    next_url = urljoin(current_url, location)
+
+                    if is_cross_origin_redirect(current_url, next_url):
+                        headers_dict = strip_cross_origin_credentials(headers_dict, kwargs)
+
+                    current_url = next_url
+                    redirect_count += 1
+                    continue
+
+                response._content = await accumulate_response_bytes(response)
+                return response
