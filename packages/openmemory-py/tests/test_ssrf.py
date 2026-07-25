@@ -95,6 +95,18 @@ async def test_fetch_with_ssrf_protection_cross_origin_redirect(mock_create_clie
     calls = mock_client.stream.call_args_list
     assert len(calls) == 2
 
+    # First call headers and kwargs
+    first_call_headers = calls[0][1]["headers"]
+    first_call_kwargs = calls[0][1]
+
+    assert "custom-header" in {k.lower() for k in first_call_headers.keys()}
+    assert "authorization" in {k.lower() for k in first_call_headers.keys()}
+    assert "cookie" in {k.lower() for k in first_call_headers.keys()}
+    assert "cookie2" in {k.lower() for k in first_call_headers.keys()}
+    assert "x-api-key" in {k.lower() for k in first_call_headers.keys()}
+    assert first_call_kwargs.get("auth") == ("username", "password")
+    assert first_call_kwargs.get("cookies") == {"foo": "bar"}
+
     # Second call headers and kwargs
     second_call_headers = calls[1][1]["headers"]
     second_call_kwargs = calls[1][1]
@@ -114,13 +126,15 @@ async def test_fetch_with_ssrf_protection_chunked_redirect_body(mock_create_clie
     mock_client = MagicMock()
     mock_create_client.return_value = mock_client
 
-    # First request: 302 redirect with a mock aiter_bytes (chunked body)
+    # First request: 302 redirect with a mock aiter_bytes (chunked body) and mock aread method
     mock_resp1 = MagicMock()
     mock_resp1.is_redirect = True
     mock_resp1.status_code = 302
     mock_resp1.headers = httpx.Headers({"location": "https://attacker.com/leak"})
     mock_resp1_aiter = MagicMock()
     mock_resp1.aiter_bytes = mock_resp1_aiter
+    mock_resp1_aread = AsyncMock()
+    mock_resp1.aread = mock_resp1_aread
 
     # Second request: 200 OK
     mock_resp2 = _setup_mock_200_response()
@@ -135,5 +149,6 @@ async def test_fetch_with_ssrf_protection_chunked_redirect_body(mock_create_clie
     assert resp.status_code == 200
     assert resp.text == "success"
 
-    # Verify that the redirect response's body was NEVER read/buffered (aiter_bytes was not called)
+    # Verify that the redirect response's body was NEVER read/buffered (neither aread nor aiter_bytes was called)
     mock_resp1_aiter.assert_not_called()
+    mock_resp1_aread.assert_not_called()
