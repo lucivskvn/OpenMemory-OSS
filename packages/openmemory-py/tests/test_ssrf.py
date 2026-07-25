@@ -68,6 +68,7 @@ async def test_fetch_with_ssrf_protection_cross_origin_redirect(mock_create_clie
     headers = {
         "Authorization": "Bearer token123",
         "Cookie": "session=abc",
+        "Cookie2": "session2=def",
         "X-API-Key": "secret-key",
         "Custom-Header": "value"
     }
@@ -93,6 +94,53 @@ async def test_fetch_with_ssrf_protection_cross_origin_redirect(mock_create_clie
     assert "custom-header" in {k.lower() for k in second_call_headers.keys()}
     assert "authorization" not in {k.lower() for k in second_call_headers.keys()}
     assert "cookie" not in {k.lower() for k in second_call_headers.keys()}
+    assert "cookie2" not in {k.lower() for k in second_call_headers.keys()}
     assert "x-api-key" not in {k.lower() for k in second_call_headers.keys()}
     assert "auth" not in second_call_kwargs
     assert "cookies" not in second_call_kwargs
+
+
+@pytest.mark.asyncio
+@patch("openmemory.utils.fetch.create_ssrf_protected_client")
+async def test_fetch_with_ssrf_protection_chunked_redirect_body(mock_create_client):
+    mock_client = MagicMock()
+    mock_create_client.return_value = mock_client
+
+    # First request: 302 redirect with a mock aiter_bytes (chunked body)
+    mock_resp1 = MagicMock()
+    mock_resp1.is_redirect = True
+    mock_resp1.status_code = 302
+    mock_resp1.headers = httpx.Headers({"location": "https://attacker.com/leak"})
+    mock_resp1_aiter = MagicMock()
+    mock_resp1.aiter_bytes = mock_resp1_aiter
+
+    # Second request: 200 OK
+    mock_resp2 = MagicMock()
+    mock_resp2.is_redirect = False
+    mock_resp2.status_code = 200
+    mock_resp2.headers = httpx.Headers({"content-type": "text/html"})
+    mock_resp2.text = "success"
+    mock_resp2.aiter_bytes = MagicMock()
+
+    async def mock_aiter():
+        yield b"success"
+
+    mock_resp2.aiter_bytes.return_value = mock_aiter()
+
+    mock_stream_ctx1 = AsyncMock()
+    mock_stream_ctx1.__aenter__.return_value = mock_resp1
+    mock_stream_ctx1.__aexit__.return_value = None
+
+    mock_stream_ctx2 = AsyncMock()
+    mock_stream_ctx2.__aenter__.return_value = mock_resp2
+    mock_stream_ctx2.__aexit__.return_value = None
+
+    mock_client.stream.side_effect = [mock_stream_ctx1, mock_stream_ctx2]
+
+    resp = await fetch_with_ssrf_protection("https://example.com/start")
+
+    assert resp.status_code == 200
+    assert resp.text == "success"
+
+    # Verify that the redirect response's body was NEVER read/buffered (aiter_bytes was not called)
+    mock_resp1_aiter.assert_not_called()

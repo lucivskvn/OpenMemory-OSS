@@ -125,9 +125,26 @@ async def fetch_with_ssrf_protection(url: str, **kwargs: Any) -> httpx.Response:
                     parsed_current = urlparse(current_url)
                     parsed_next = urlparse(next_url)
 
+                    scheme_current = parsed_current.scheme.lower()
+                    scheme_next = parsed_next.scheme.lower()
+
+                    host_current = (parsed_current.hostname or "").lower()
+                    host_next = (parsed_next.hostname or "").lower()
+
+                    def get_effective_port(parsed_url):
+                        if parsed_url.port is not None:
+                            return parsed_url.port
+                        if parsed_url.scheme.lower() == "https":
+                            return 443
+                        return 80
+
+                    port_current = get_effective_port(parsed_current)
+                    port_next = get_effective_port(parsed_next)
+
                     is_cross_origin = (
-                        parsed_current.scheme.lower() != parsed_next.scheme.lower() or
-                        parsed_current.netloc.lower() != parsed_next.netloc.lower()
+                        scheme_current != scheme_next or
+                        host_current != host_next or
+                        port_current != port_next
                     )
 
                     if is_cross_origin:
@@ -141,7 +158,6 @@ async def fetch_with_ssrf_protection(url: str, **kwargs: Any) -> httpx.Response:
 
                     current_url = next_url
                     redirect_count += 1
-                    await response.aread()
                     continue
 
                 chunks = []
