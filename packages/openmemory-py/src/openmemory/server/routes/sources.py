@@ -15,6 +15,8 @@ from pydantic import BaseModel
 logger = logging.getLogger("server.sources")
 router = APIRouter(prefix="/sources", tags=["sources"])
 
+SHA256_PREFIX = "sha256="
+
 class ingest_req(BaseModel):
     creds: Dict[str, Any] = {}
     filters: Dict[str, Any] = {}
@@ -30,7 +32,13 @@ async def list_sources():
         }
     }
 
-@router.post("/{source}/ingest", responses={500: {"description": "Internal Server Error"}})
+@router.post(
+    "/{source}/ingest",
+    responses={
+        400: {"description": "Bad Request / Unknown Source"},
+        500: {"description": "Internal Server Error"}
+    }
+)
 async def ingest_source(source: str, req: ingest_req):
     from ..connectors import (
         github_connector, notion_connector, google_drive_connector,
@@ -68,51 +76,40 @@ def verify_github_signature(raw_body: bytes, header_value: str | None, secret: s
     if not secret:
         raise HTTPException(503, "webhook_not_configured")
     if not header_value:
-        raise HTTPException(401, "invalid_signature")
-    if not header_value.startswith("sha256="):
-        raise HTTPException(401, "invalid_signature")
+        raise HTTPException(401, "invalid_signature: header_missing")
+    if not header_value.startswith(SHA256_PREFIX):
+        raise HTTPException(401, "invalid_signature: bad_format")
 
-    provided = header_value[len("sha256="):]
-    try:
-        provided_bytes = bytes.fromhex(provided)
-    except ValueError:
-        raise HTTPException(401, "invalid_signature")
+    provided = header_value[len(SHA256_PREFIX):]
+    expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
 
-    expected_hex = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
-    expected_bytes = bytes.fromhex(expected_hex)
-
-    if not hmac.compare_digest(provided_bytes, expected_bytes):
-        raise HTTPException(401, "invalid_signature")
+    if not hmac.compare_digest(provided, expected):
+        raise HTTPException(401, "invalid_signature: mismatch")
 
 def verify_notion_signature(raw_body: bytes, header_value: str | None, secret: str | None):
     if not secret:
         raise HTTPException(503, "webhook_not_configured")
     if not header_value:
-        raise HTTPException(401, "invalid_signature")
+        raise HTTPException(401, "invalid_signature: header_missing")
 
-    provided = header_value
-    if provided.startswith("sha256="):
-        provided = provided[len("sha256="):]
+    provided = header_value[len(SHA256_PREFIX):] if header_value.startswith(SHA256_PREFIX) else header_value
+    expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
 
-    try:
-        provided_bytes = bytes.fromhex(provided)
-    except ValueError:
-        raise HTTPException(401, "invalid_signature")
+    if not hmac.compare_digest(provided, expected):
+        raise HTTPException(401, "invalid_signature: mismatch")
 
-    expected_hex = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
-    expected_bytes = bytes.fromhex(expected_hex)
-
-    if not hmac.compare_digest(provided_bytes, expected_bytes):
-        raise HTTPException(401, "invalid_signature")
-
-@router.post("/webhook/github", responses={
-    400: {"description": "Bad Request"},
-    401: {"description": "Unauthorized"},
-    503: {"description": "Service Unavailable"},
-    500: {"description": "Internal Server Error"}
-})
+@router.post(
+    "/webhook/github",
+    responses={
+        400: {"description": "Bad Request / Missing Payload"},
+        401: {"description": "Unauthorized / Invalid Signature"},
+        500: {"description": "Internal Server Error"},
+        503: {"description": "Service Unavailable / Webhook Not Configured"}
+    }
+)
 async def github_webhook(request: Request):
-    from ..ops.ingest import ingest_document
+    from ...ops.ingest import ingest_document
+    import json
 
     secret = os.environ.get("OM_GITHUB_WEBHOOK_SECRET")
     sig = request.headers.get("x-hub-signature-256")
@@ -120,7 +117,10 @@ async def github_webhook(request: Request):
     verify_github_signature(raw_body, sig, secret)
 
     event_type = request.headers.get("x-github-event", "unknown")
-    payload = await request.json()
+    try:
+        payload = json.loads(raw_body) if raw_body else None
+    except Exception:
+        payload = None
 
     if not payload:
         raise HTTPException(400, "no payload")
@@ -145,7 +145,6 @@ async def github_webhook(request: Request):
             meta["repo"] = payload.get("repository", {}).get("full_name")
             meta["pr_number"] = pr.get("number")
         else:
-            import json
             content = json.dumps(payload, indent=2)
 
         if content:
@@ -156,14 +155,16 @@ async def github_webhook(request: Request):
         logger.exception("GitHub webhook processing failed")
         raise HTTPException(500, "Webhook processing failed") from None
 
-@router.post("/webhook/notion", responses={
-    400: {"description": "Bad Request"},
-    401: {"description": "Unauthorized"},
-    503: {"description": "Service Unavailable"},
-    500: {"description": "Internal Server Error"}
-})
+@router.post(
+    "/webhook/notion",
+    responses={
+        401: {"description": "Unauthorized / Invalid Signature"},
+        500: {"description": "Internal Server Error"},
+        503: {"description": "Service Unavailable / Webhook Not Configured"}
+    }
+)
 async def notion_webhook(request: Request):
-    from ..ops.ingest import ingest_document
+    from ...ops.ingest import ingest_document
     import json
 
     secret = os.environ.get("OM_NOTION_WEBHOOK_SECRET")
@@ -171,7 +172,10 @@ async def notion_webhook(request: Request):
     raw_body = await request.body()
     verify_notion_signature(raw_body, sig, secret)
 
-    payload = await request.json()
+    try:
+        payload = json.loads(raw_body) if raw_body else None
+    except Exception:
+        payload = None
 
     try:
         content = json.dumps(payload, indent=2)

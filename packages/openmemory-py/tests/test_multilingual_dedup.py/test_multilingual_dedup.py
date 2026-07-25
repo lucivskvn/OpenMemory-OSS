@@ -23,6 +23,11 @@ def _stub_module(name: str, **attrs: object) -> None:
     for key, value in attrs.items():
         setattr(mod, key, value)
     sys.modules[name] = mod
+    if "." in name:
+        parent_name, child_name = name.rsplit(".", 1)
+        parent_mod = sys.modules.get(parent_name)
+        if parent_mod:
+            setattr(parent_mod, child_name, mod)
 
 
 def _load_module(name: str, path: Path):
@@ -35,88 +40,70 @@ def _load_module(name: str, path: Path):
 
 
 def _load_text_and_hsg():
-    _ensure_pkg("openmemory")
-    _ensure_pkg("openmemory.utils")
-    _ensure_pkg("openmemory.memory")
-    _ensure_pkg("openmemory.core")
-    _ensure_pkg("openmemory.ops")
+    orig_modules = dict(sys.modules)
+    try:
+        _ensure_pkg("openmemory")
+        _ensure_pkg("openmemory.utils")
+        _ensure_pkg("openmemory.memory")
+        _ensure_pkg("openmemory.core")
+        _ensure_pkg("openmemory.ops")
 
-    text = _load_module("openmemory.utils.text", ROOT / "utils" / "text.py")
+        text = _load_module("openmemory.utils.text", ROOT / "utils" / "text.py")
 
-    _stub_module("openmemory.core.db", q=None, db=None, transaction=lambda: None)
-    _stub_module("openmemory.core.config", env=types.SimpleNamespace())
-    _stub_module("openmemory.core.constants", SECTOR_CONFIGS={})
-    _stub_module("openmemory.core.vector_store", vector_store=None, VectorStore=object)
-    _stub_module("openmemory.utils.chunking", chunk_text=lambda *args, **kwargs: [])
-    _stub_module(
-        "openmemory.utils.keyword",
-        keyword_filter_memories=lambda *args, **kwargs: [],
-        compute_keyword_overlap=lambda *args, **kwargs: 0.0,
-    )
-    _stub_module(
-        "openmemory.utils.vectors",
-        buf_to_vec=lambda *args, **kwargs: [],
-        vec_to_buf=lambda *args, **kwargs: b"",
-        cos_sim=lambda *args, **kwargs: 0.0,
-    )
-    _stub_module(
-        "openmemory.memory.embed",
-        embed_multi_sector=lambda *args, **kwargs: {},
-        embed_for_sector=lambda *args, **kwargs: [],
-        calc_mean_vec=lambda *args, **kwargs: [],
-        classify_content=lambda *args, **kwargs: {"primary": "semantic", "additional": []},
-        embed_query_for_all_sectors=lambda *args, **kwargs: {},
-        SECTOR_RELATIONSHIPS={},
-        SECTOR_CONFIGS={},
-        extract_essence=lambda *args, **kwargs: args[0],
-        compress_vec_for_storage=lambda *args, **kwargs: args[0],
-    )
-    _stub_module(
-        "openmemory.memory.decay",
-        inc_q=lambda *args, **kwargs: None,
-        dec_q=lambda *args, **kwargs: None,
-        on_query_hit=lambda *args, **kwargs: None,
-        calc_recency_score=lambda *args, **kwargs: 0.0,
-        pick_tier=lambda *args, **kwargs: "cold",
-        calc_decay=lambda *args, **kwargs: 0.0,
-    )
-    _stub_module(
-        "openmemory.ops.dynamics",
-        calculateCrossSectorResonanceScore=lambda *args, **kwargs: 0.0,
-        applyRetrievalTraceReinforcementToMemory=lambda *args, **kwargs: None,
-        propagateAssociativeReinforcementToLinkedNodes=lambda *args, **kwargs: None,
-    )
-    _stub_module("openmemory.memory.user_summary", update_user_summary=lambda *args, **kwargs: None)
-    _stub_module("openmemory.memory.reflect", update_user_summary=lambda *args, **kwargs: None)
+        _stub_module("openmemory.core.db", q=None, db=None, transaction=lambda: None)
+        _stub_module("openmemory.core.config", env=types.SimpleNamespace())
+        _stub_module("openmemory.core.constants", SECTOR_CONFIGS={})
+        _stub_module("openmemory.core.vector_store", vector_store=None, VectorStore=object)
+        _stub_module("openmemory.utils.chunking", chunk_text=lambda *args, **kwargs: [])
+        _stub_module(
+            "openmemory.utils.keyword",
+            keyword_filter_memories=lambda *args, **kwargs: [],
+            compute_keyword_overlap=lambda *args, **kwargs: 0.0,
+        )
+        _stub_module(
+            "openmemory.utils.vectors",
+            buf_to_vec=lambda *args, **kwargs: [],
+            vec_to_buf=lambda *args, **kwargs: b"",
+            cos_sim=lambda *args, **kwargs: 0.0,
+        )
+        _stub_module(
+            "openmemory.memory.embed",
+            embed_multi_sector=lambda *args, **kwargs: {},
+            embed_for_sector=lambda *args, **kwargs: [],
+            calc_mean_vec=lambda *args, **kwargs: [],
+            classify_content=lambda *args, **kwargs: {"primary": "semantic", "additional": []},
+            embed_query_for_all_sectors=lambda *args, **kwargs: {},
+            SECTOR_RELATIONSHIPS={},
+            SECTOR_CONFIGS={},
+            extract_essence=lambda *args, **kwargs: args[0],
+            compress_vec_for_storage=lambda *args, **kwargs: args[0],
+        )
+        _stub_module(
+            "openmemory.memory.decay",
+            inc_q=lambda *args, **kwargs: None,
+            dec_q=lambda *args, **kwargs: None,
+            on_query_hit=lambda *args, **kwargs: None,
+            calc_recency_score=lambda *args, **kwargs: 0.0,
+            pick_tier=lambda *args, **kwargs: "cold",
+            calc_decay=lambda *args, **kwargs: 0.0,
+        )
+        _stub_module(
+            "openmemory.ops.dynamics",
+            calculateCrossSectorResonanceScore=lambda *args, **kwargs: 0.0,
+            applyRetrievalTraceReinforcementToMemory=lambda *args, **kwargs: None,
+            propagateAssociativeReinforcementToLinkedNodes=lambda *args, **kwargs: None,
+        )
+        _stub_module("openmemory.memory.user_summary", update_user_summary=lambda *args, **kwargs: None)
+        _stub_module("openmemory.memory.reflect", update_user_summary=lambda *args, **kwargs: None)
 
-    hsg = _load_module("openmemory.memory.hsg", ROOT / "memory" / "hsg.py")
-
-    stubs = [
-        "openmemory",
-        "openmemory.utils",
-        "openmemory.memory",
-        "openmemory.core",
-        "openmemory.ops",
-        "openmemory.core.db",
-        "openmemory.core.config",
-        "openmemory.core.constants",
-        "openmemory.core.vector_store",
-        "openmemory.utils.chunking",
-        "openmemory.utils.keyword",
-        "openmemory.utils.vectors",
-        "openmemory.memory.embed",
-        "openmemory.memory.decay",
-        "openmemory.ops.dynamics",
-        "openmemory.memory.user_summary",
-        "openmemory.memory.reflect",
-        "openmemory.memory.hsg",
-        "openmemory.utils.text",
-    ]
-    for s in stubs:
-        if s in sys.modules:
-            sys.modules.pop(s)
-
-    return text, hsg
+        hsg = _load_module("openmemory.memory.hsg", ROOT / "memory" / "hsg.py")
+        return text, hsg
+    finally:
+        # Restore sys.modules so stubs don't pollute other tests
+        for k in list(sys.modules.keys()):
+            if k not in orig_modules:
+                del sys.modules[k]
+        sys.modules.update(orig_modules)
 
 
 TEXT, HSG = _load_text_and_hsg()
