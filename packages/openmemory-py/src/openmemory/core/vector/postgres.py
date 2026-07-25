@@ -1,6 +1,7 @@
 from typing import List, Optional, Dict, Any
 import json
 import logging
+import re
 from ..types import MemRow
 from ..vector_store import VectorStore, VectorRow
 
@@ -9,6 +10,9 @@ logger = logging.getLogger("vector_store.postgres")
 class PostgresVectorStore(VectorStore):
     def __init__(self, dsn: str, table_name: str = "openmemory_vectors"):
         self.dsn = dsn
+        # Validate table name to prevent SQL injection
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', table_name):
+            raise ValueError(f"Invalid table name: {table_name}. Must be a valid SQL identifier.")
         self.table = table_name
         self.pool = None
 
@@ -20,7 +24,7 @@ class PostgresVectorStore(VectorStore):
                 await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
                 logger.info("pgvector extension enabled")
                 
-                await conn.execute(f""" # nosemgrep
+                await conn.execute(f"""
                     CREATE TABLE IF NOT EXISTS {self.table} (
                         id TEXT NOT NULL,
                         sector TEXT NOT NULL,
@@ -32,9 +36,9 @@ class PostgresVectorStore(VectorStore):
                     )
                 """)
                 
-                await conn.execute(f"CREATE INDEX IF NOT EXISTS {self.table}_user_idx ON {self.table} (user_id)") # nosemgrep
+                await conn.execute(f"CREATE INDEX IF NOT EXISTS {self.table}_user_idx ON {self.table} (user_id)")
 
-                await conn.execute(f""" # nosemgrep
+                await conn.execute(f"""
                     CREATE INDEX IF NOT EXISTS {self.table}_hnsw_idx
                     ON {self.table} USING hnsw (v vector_cosine_ops)
                 """)
@@ -55,7 +59,7 @@ class PostgresVectorStore(VectorStore):
                 dim = EXCLUDED.dim
         """
         async with pool.acquire() as conn:
-            await conn.execute(sql, id, sector, uid, project_id, vec_str, dim) # nosemgrep
+            await conn.execute(sql, id, sector, uid, vec_str, dim)
 
     async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]:
         pool = await self._get_pool()

@@ -199,15 +199,25 @@ def extract_essence(raw: str, sec: str, max_len: int) -> str:
             points += 3
 
         words_in_sentence = set(canonical_tokens_from_text(sentence.lower()))
+        # Canonicalize action keywords to match stemmed tokens
         actions_list = {
-            "bought", "purchased", "serviced", "visited", "went", "got", "received", "paid",
-            "earned", "learned", "discovered", "found", "saw", "met", "completed", "finished",
-            "fixed", "implemented", "created", "updated", "added", "removed", "resolved"
+            canonicalize_token("bought"), canonicalize_token("purchased"), canonicalize_token("serviced"),
+            canonicalize_token("visited"), canonicalize_token("went"), canonicalize_token("got"),
+            canonicalize_token("received"), canonicalize_token("paid"), canonicalize_token("earned"),
+            canonicalize_token("learned"), canonicalize_token("discovered"), canonicalize_token("found"),
+            canonicalize_token("saw"), canonicalize_token("met"), canonicalize_token("completed"),
+            canonicalize_token("finished"), canonicalize_token("fixed"), canonicalize_token("implemented"),
+            canonicalize_token("created"), canonicalize_token("updated"), canonicalize_token("added"),
+            canonicalize_token("removed"), canonicalize_token("resolved")
         }
         if words_in_sentence.intersection(actions_list):
             points += 4
 
-        questions_list = {"who", "what", "when", "where", "why", "how"}
+        # Canonicalize question keywords to match stemmed tokens
+        questions_list = {
+            canonicalize_token("who"), canonicalize_token("what"), canonicalize_token("when"),
+            canonicalize_token("where"), canonicalize_token("why"), canonicalize_token("how")
+        }
         if words_in_sentence.intersection(questions_list):
             points += 2
 
@@ -245,4 +255,7 @@ def extract_essence(raw: str, sec: str, max_len: int) -> str:
 
     # Sort chosen sentences back to their original sequence
     reconstructed_segments.sort(key=lambda x: x[2])
+    # Fallback to raw truncation if no sentences were selected
+    if not reconstructed_segments:
+        return raw[:max_len]
     return " ".join([item[0] for item in reconstructed_segments])
