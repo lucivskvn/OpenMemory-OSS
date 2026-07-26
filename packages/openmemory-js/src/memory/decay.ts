@@ -43,13 +43,7 @@ const cfg: DecayCfg = {
     time_unit_ms: 86_400_000,
 };
 
-let last_decay = 0;
-export const reset_last_decay = () => {
-    last_decay = 0;
-};
-const cooldown = 60000;
 let active_q = 0;
-
 export const inc_q = () => active_q++;
 export const dec_q = () => (active_q = Math.max(0, active_q - 1));
 
@@ -82,8 +76,8 @@ export const reset_last_decay = () => {
     last_decay = 0;
 };
 
-export const apply_decay = async () => {
-    if (active_q > 0) {
+export const apply_dual_phase_decay = async (active_q = 0) => {
+    if (active_q > 5) {
         console.log(`[decay] skipped - ${active_q} active queries`);
         return;
     }
