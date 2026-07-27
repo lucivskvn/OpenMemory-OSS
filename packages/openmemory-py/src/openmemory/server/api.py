@@ -82,7 +82,7 @@ def create_app() -> FastAPI:
         dev_allow_no_auth = os.getenv("OM_DEV_ALLOW_NO_AUTH", "false").lower() == "true" and os.getenv("NODE_ENV", "") != "production"
 
         if not api_key_configured:
-            if not require_auth or dev_allow_no_auth:
+            if dev_allow_no_auth:
                 request.state.tenant = "dev-no-auth"
                 return await call_next(request)
             else:
