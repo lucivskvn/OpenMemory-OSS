@@ -34,7 +34,15 @@ async def list_sources():
     400: {"description": "Bad Request"},
     500: {"description": "Internal Server Error"}
 })
-async def ingest_source(source: str, req: ingest_req):
+async def ingest_source(source: str, req: ingest_req, request: Request):
+    tenant = getattr(request.state, "tenant", "anonymous")
+    user_id = req.user_id
+    if user_id:
+        if user_id != tenant:
+            raise HTTPException(status_code=403, detail="tenant_mismatch")
+    else:
+        user_id = tenant
+
     from ..connectors import (
         github_connector, notion_connector, google_drive_connector,
         google_sheets_connector, google_slides_connector,
@@ -55,7 +63,7 @@ async def ingest_source(source: str, req: ingest_req):
         raise HTTPException(400, f"unknown source: {source}. available: {list(source_map.keys())}")
 
     try:
-        src = source_map[source](user_id=req.user_id)
+        src = source_map[source](user_id=user_id)
         await src.connect(**req.creds)
         ids = await src.ingest_all(**req.filters)
         return {"ok": True, "ingested": len(ids), "memory_ids": ids}

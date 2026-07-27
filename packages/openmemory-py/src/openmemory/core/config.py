@@ -43,6 +43,7 @@ class EnvConfig:
         else:
             default_db_path = str(Path(__file__).parent.parent.parent.parent / "datta" / "openmemory.sqlite")
             self.db_path = s_str(os.getenv("OM_DB_PATH"), default_db_path)
+        self.api_key = get("auth", "api_key", "OM_API_KEY", "")
         self.max_context_items = int(get("context", "max_items", "OM_MAX_CONTEXT_ITEMS", 16))
         self.max_context_tokens = int(get("context", "max_tokens", "OM_MAX_CONTEXT_TOKENS", 2048))
         self.decay_half_life = float(get("decay", "half_life_days", "OM_DECAY_HALF_LIFE", 14))

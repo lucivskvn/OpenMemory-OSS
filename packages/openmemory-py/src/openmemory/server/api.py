@@ -67,6 +67,79 @@ def create_app() -> FastAPI:
         )
 
     @app.middleware("http")
+    async def authenticate_api_request(request: Request, call_next):
+        import os
+        import hmac
+        import hashlib
+
+        path = request.url.path
+        # Public endpoints
+        if path in ["/health", "/sources/webhook/github", "/sources/webhook/notion"]:
+            return await call_next(request)
+
+        api_key_configured = env.api_key
+        require_auth = os.getenv("OM_REQUIRE_AUTH", "false").lower() == "true" or os.getenv("NODE_ENV", "") == "production"
+        dev_allow_no_auth = os.getenv("OM_DEV_ALLOW_NO_AUTH", "false").lower() == "true" and os.getenv("NODE_ENV", "") != "production"
+
+        if not api_key_configured:
+            if not require_auth or dev_allow_no_auth:
+                request.state.tenant = "dev-no-auth"
+                return await call_next(request)
+            else:
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "type": "https://openmemory.oss/errors/503",
+                        "title": "Service Unavailable",
+                        "status": 503,
+                        "detail": "Server has no OM_API_KEY configured. Protected endpoints are unavailable.",
+                        "instance": path
+                    }
+                )
+
+        provided = None
+        if "x-api-key" in request.headers:
+            provided = request.headers["x-api-key"]
+        elif "authorization" in request.headers:
+            auth_header = request.headers["authorization"]
+            if auth_header.startswith("Bearer "):
+                provided = auth_header[7:]
+            elif auth_header.startswith("ApiKey "):
+                provided = auth_header[7:]
+
+        if not provided:
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "type": "https://openmemory.oss/errors/401",
+                    "title": "Unauthorized",
+                    "status": 401,
+                    "detail": "API key required",
+                    "instance": path
+                }
+            )
+
+        provided_hash = hashlib.sha256(provided.encode("utf-8")).digest()
+        expected_hash = hashlib.sha256(api_key_configured.encode("utf-8")).digest()
+
+        if not hmac.compare_digest(provided_hash, expected_hash):
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "type": "https://openmemory.oss/errors/403",
+                    "title": "Forbidden",
+                    "status": 403,
+                    "detail": "invalid_api_key",
+                    "instance": path
+                }
+            )
+
+        tenant = hashlib.sha256(provided.encode("utf-8")).hexdigest()[:16]
+        request.state.tenant = tenant
+
+        return await call_next(request)
+
+    @app.middleware("http")
     async def log_requests(request: Request, call_next):
         start = time.time()
         # Sanitize path and method to prevent log forging
