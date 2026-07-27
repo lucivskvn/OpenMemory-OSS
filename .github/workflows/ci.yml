@@ -129,7 +129,7 @@ jobs:
       - name: Run Omnibus Test (Deep Verify)
         run: |
           cd packages/openmemory-py
-          python -m pytest tests/test_omnibus.py -v
+          python -m pytest tests/ -v
           
   test-node:
     name: Test Bun SDK Stack

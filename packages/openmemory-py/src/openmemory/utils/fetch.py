@@ -30,36 +30,6 @@ def is_ip_private_or_restricted(ip_str: str) -> bool:
         return True
 
 
-
-class SsrfStreamWrapper(httpcore.AsyncNetworkStream):
-    def __init__(self, stream: httpcore.AsyncNetworkStream, server_hostname: str):
-        self._stream = stream
-        self._server_hostname = server_hostname
-
-    async def read(self, max_bytes: int, timeout: Optional[float] = None) -> bytes:
-        return await self._stream.read(max_bytes, timeout=timeout)
-
-    async def write(self, buffer: bytes, timeout: Optional[float] = None) -> None:
-        return await self._stream.write(buffer, timeout=timeout)
-
-    async def aclose(self) -> None:
-        return await self._stream.aclose()
-
-    async def start_tls(
-        self,
-        ssl_context: Any,
-        server_hostname: Optional[str] = None,
-        timeout: Optional[float] = None,
-    ) -> httpcore.AsyncNetworkStream:
-        return await self._stream.start_tls(
-            ssl_context,
-            server_hostname=self._server_hostname,
-            timeout=timeout,
-        )
-
-    def get_extra_info(self, info: str) -> Any:
-        return self._stream.get_extra_info(info)
-
 class SsrfProtectedNetworkBackend(httpcore.AsyncNetworkBackend):
     def __init__(self, backend: Optional[httpcore.AsyncNetworkBackend] = None):
         self._backend = backend or httpcore.AnyIOBackend()

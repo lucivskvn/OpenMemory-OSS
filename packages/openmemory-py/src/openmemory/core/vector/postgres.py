@@ -8,9 +8,6 @@ logger = logging.getLogger("vector_store.postgres")
 
 class PostgresVectorStore(VectorStore):
     def __init__(self, dsn: str, table_name: str = "openmemory_vectors"):
-        import re
-        if not re.match(r'^[a-zA-Z0-9_]+$', str(table_name)):
-            raise ValueError("Invalid table name")
         self.dsn = dsn
         self.table = table_name
         self.pool = None
@@ -116,14 +113,12 @@ class PostgresVectorStore(VectorStore):
             args.append(filter["user_id"])
             arg_idx += 1
 
-        args.append(k)
-
         sql = f"""
             SELECT id, 1 - (v <=> $1::vector) as similarity
             FROM {self.table}
             WHERE 1=1 {filter_sql}
             ORDER BY v <=> $1::vector
-            LIMIT ${arg_idx}
+            LIMIT {k}
         """
 
         async with pool.acquire() as conn:
