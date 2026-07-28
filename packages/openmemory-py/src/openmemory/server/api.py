@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, status, HTTPException
+from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
@@ -82,7 +82,7 @@ def create_app() -> FastAPI:
         dev_allow_no_auth = os.getenv("OM_DEV_ALLOW_NO_AUTH", "false").lower() == "true" and os.getenv("NODE_ENV", "") != "production"
 
         if not api_key_configured:
-            if dev_allow_no_auth:
+            if not require_auth or dev_allow_no_auth:
                 request.state.tenant = "dev-no-auth"
                 return await call_next(request)
             else:
@@ -102,9 +102,7 @@ def create_app() -> FastAPI:
             provided = request.headers["x-api-key"]
         elif "authorization" in request.headers:
             auth_header = request.headers["authorization"]
-            if auth_header.startswith("Bearer "):
-                provided = auth_header[7:]
-            elif auth_header.startswith("ApiKey "):
+            if auth_header.startswith("Bearer ") or auth_header.startswith("ApiKey "):
                 provided = auth_header[7:]
 
         if not provided:

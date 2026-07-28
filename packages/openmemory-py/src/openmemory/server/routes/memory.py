@@ -53,7 +53,7 @@ async def search_memory(req: SearchMemoryRequest, request: Request):
         user_id = tenant
 
     try:
-        filters = {k: v for k, v in (req.filters or {}).items() if k != "user_id"}
+        filters = req.filters or {}
         results = await mem.search(req.query, user_id=user_id, limit=req.limit, **filters)
         return {"results": results}
     except Exception:
