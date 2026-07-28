@@ -21,7 +21,10 @@ class SearchMemoryRequest(BaseModel):
     limit: Optional[int] = 10
     filters: Optional[Dict[str, Any]] = {}
 
-@router.post("/add", responses={500: {"description": "Internal Server Error"}})
+@router.post("/add", responses={
+    403: {"description": "Forbidden"},
+    500: {"description": "Internal Server Error"}
+})
 async def add_memory(req: AddMemoryRequest, request: Request):
     tenant = getattr(request.state, "tenant", "anonymous")
     user_id = req.user_id
@@ -42,7 +45,10 @@ async def add_memory(req: AddMemoryRequest, request: Request):
         logger.exception("Error adding memory")
         raise HTTPException(status_code=500, detail="Failed to add memory") from None
 
-@router.post("/search", responses={500: {"description": "Internal Server Error"}})
+@router.post("/search", responses={
+    403: {"description": "Forbidden"},
+    500: {"description": "Internal Server Error"}
+})
 async def search_memory(req: SearchMemoryRequest, request: Request):
     tenant = getattr(request.state, "tenant", "anonymous")
     user_id = req.user_id
@@ -60,7 +66,10 @@ async def search_memory(req: SearchMemoryRequest, request: Request):
         logger.exception("Error searching memory")
         raise HTTPException(status_code=500, detail="Failed to search memory") from None
 
-@router.get("/history", responses={500: {"description": "Internal Server Error"}})
+@router.get("/history", responses={
+    403: {"description": "Forbidden"},
+    500: {"description": "Internal Server Error"}
+})
 async def get_history(user_id: str, request: Request, limit: int = 20, offset: int = 0):
     tenant = getattr(request.state, "tenant", "anonymous")
     if user_id != tenant:

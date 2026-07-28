@@ -32,6 +32,7 @@ async def list_sources():
 
 @router.post("/{source}/ingest", responses={
     400: {"description": "Bad Request"},
+    403: {"description": "Forbidden"},
     500: {"description": "Internal Server Error"}
 })
 async def ingest_source(source: str, req: ingest_req, request: Request):
