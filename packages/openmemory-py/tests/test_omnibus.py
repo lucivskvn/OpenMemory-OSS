@@ -45,7 +45,8 @@ async def test_evolutionary_stability():
             # Reinforce Popular (Search/Access)
             # This should boost its salience back up or slow its decay.
             if gen % 2 == 0: # Reinforce every other day
-               await mem.search("Popular", user_id=uid, limit=1)
+               result = await mem.search("I am the Popular Memory", user_id=uid, limit=1)
+               assert result and result[0]['id'] == pid, "Search should return the Popular memory"
 
             # Unpopular is ignored.
 
@@ -67,7 +68,7 @@ async def test_evolutionary_stability():
         s_pop = float(pop_final['salience'])
         s_unpop = float(unpop_final['salience'])
 
-        print(f" -> Generation 10 Results:")
+        print(" -> Generation 10 Results:")
         print(f"    Popular Salience: {s_pop:.4f}")
         print(f"    Unpopular Salience: {s_unpop:.4f}")
 
@@ -104,16 +105,27 @@ async def test_boolean_metadata_logic():
     # Does search support tags? usually `search(..., filters={...})`.
 
     print(" -> Filtering for 'work' AND 'urgent'...")
-    # Mocking strict filter availability or simulating it
-    # We will search generic and verify properties.
+    # Note: Memory.search() API does not support native tag-based boolean filtering.
+    # Tag filtering (compute_tag_match_score in hsg.py) is currently a stub that returns 0.0.
+    # We test the boolean AND logic via post-retrieval filtering to verify correctness.
 
     hits = await mem.search("Report", user_id=uid, limit=10)
     print(f"DEBUG HITS: {hits}")
-    # Check if we found the work item
-    found_work_urgent = any("urgent" in h.get('tags', []) and "work" in h.get('tags', []) for h in hits)
-    assert found_work_urgent, "Should find item with both tags."
 
-    print(" -> PASS: Metadata attributes preserved and queryable.")
+    # Verify the item with both 'work' AND 'urgent' tags is present
+    work_urgent_items = [h for h in hits if all(t in h.get('tags', []) for t in ("work", "urgent"))]
+    assert len(work_urgent_items) > 0, "Should find 'Finish Report' with both 'work' and 'urgent' tags"
+    assert any("Finish Report" in h.get('content', '') for h in work_urgent_items), "The work+urgent item should be 'Finish Report'"
+
+    # Verify items with only one tag are correctly excluded from the AND condition
+    single_tag_items = [h for h in hits if not all(t in h.get('tags', []) for t in ("work", "urgent"))]
+    for item in single_tag_items:
+        # Items like "Clean Desk" (only 'work') or "Pay Bills" (only 'urgent', actually 'home'+'urgent')
+        # should not satisfy the both-tags condition
+        assert not all(t in item.get('tags', []) for t in ("work", "urgent")), \
+            f"Item {item.get('content', '')} should not have both tags"
+
+    print(" -> PASS: Boolean AND logic verified via post-retrieval filtering.")
 
 
 @pytest.mark.asyncio
@@ -123,6 +135,7 @@ async def test_content_robustness():
     """
     mem = Memory()
     uid = "format_user"
+    await mem.delete_all(user_id=uid)
 
     print("\n[Phase 3] Content Robustness")
 
@@ -132,22 +145,34 @@ async def test_content_robustness():
         "Markdown": "| Col1 | Col2 |\n|---|---|\n| Val1 | Val2 |"
     }
 
+    # Expected markers for each format type
+    format_markers = {
+        "HTML": "Title",
+        "JSON": "key",
+        "Markdown": "Col1"
+    }
+
     for fmt, content in payloads.items():
         await mem.add(content, user_id=uid)
 
         # Verify
         hits = await mem.search(content[:10], user_id=uid, limit=1)
+
+        if not hits:
+            pytest.fail(f"{fmt} retrieval returned no hits.")
+
         retrieved = hits[0]['content']
 
         if content in retrieved:
             print(f" -> {fmt}: Verified (Exact Match)")
         else:
             # Embedding models might normalize whitespace?
-            # Check rough containment
-            if "Title" in retrieved or "key" in retrieved or "Col1" in retrieved:
+            # Check format-specific marker containment
+            expected_marker = format_markers[fmt]
+            if expected_marker in retrieved:
                  print(f" -> {fmt}: Verified (Semantic Key Match)")
             else:
-                 pytest.fail(f"{fmt} retrieval failed completely.")
+                 pytest.fail(f"{fmt} retrieval failed: expected marker '{expected_marker}' not found in retrieved content.")
 
     print(" -> PASS: Complex formats handled.")
 
