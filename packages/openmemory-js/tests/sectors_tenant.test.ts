@@ -420,3 +420,89 @@ describe("Dashboard route tenant scoping", () => {
         expect(alice_json.memories[0].content).toContain("Alice private diary");
     });
 });
+
+describe("Classifier training route scoping", () => {
+    it("enforces authentication and authorization on /api/system/classifier/train", async () => {
+        let train_handler: any = null;
+        const app_mock = {
+            post: (path: string, handler: any) => {
+                if (path === "/api/system/classifier/train") {
+                    train_handler = handler;
+                }
+            },
+            get: () => {},
+        };
+
+        sys(app_mock);
+        expect(train_handler).toBeTruthy();
+
+        // 1. Missing tenant
+        const req_no_tenant = {
+            body: {
+                data: [{ text: "Deploy to production", sector: "procedural" }],
+            },
+        };
+        let status_code = 200;
+        let res_json: any = null;
+        const res_no_tenant = {
+            status: function (code: number) {
+                status_code = code;
+                return this;
+            },
+            json: (data: any) => {
+                res_json = data;
+            },
+        };
+
+        await train_handler(req_no_tenant, res_no_tenant);
+        expect(status_code).toBe(401);
+        expect(res_json.error).toBe("authentication_required");
+
+        // 2. Non-admin tenant (e.g. regular tenant)
+        const req_regular_tenant = {
+            tenant: "tenant-alice",
+            body: {
+                data: [{ text: "Deploy to production", sector: "procedural" }],
+            },
+        };
+        let regular_status = 200;
+        let regular_json: any = null;
+        const res_regular = {
+            status: function (code: number) {
+                regular_status = code;
+                return this;
+            },
+            json: (data: any) => {
+                regular_json = data;
+            },
+        };
+
+        await train_handler(req_regular_tenant, res_regular);
+        expect(regular_status).toBe(403);
+        expect(regular_json.error).toBe("forbidden");
+
+        // 3. Authorized admin tenant
+        const req_admin_tenant = {
+            tenant: "admin",
+            body: {
+                data: [{ text: "Deploy to production", sector: "procedural" }],
+            },
+        };
+        let admin_status = 200;
+        let admin_json: any = null;
+        const res_admin = {
+            status: function (code: number) {
+                admin_status = code;
+                return this;
+            },
+            json: (data: any) => {
+                admin_json = data;
+            },
+        };
+
+        await train_handler(req_admin_tenant, res_admin);
+        expect(admin_status).toBe(200);
+        expect(admin_json.ok).toBe(true);
+        expect(admin_json.message).toBe("Training started");
+    });
+});
