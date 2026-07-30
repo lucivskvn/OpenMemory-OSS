@@ -162,6 +162,20 @@ export function sys(app: any) {
             req: import("../server").AppRequest,
             res: import("../server").AppResponse,
         ) => {
+            const tenant = require_tenant(req, res);
+            if (!tenant) return;
+
+            if (
+                tenant !== "admin" &&
+                tenant !== "system" &&
+                tenant !== "dev-no-auth"
+            ) {
+                return res.status(403).json({
+                    error: "forbidden",
+                    message: "Only administrators can train the classifier",
+                });
+            }
+
             try {
                 const parsed = TrainSchema.safeParse(req.body);
                 if (!parsed.success) {
