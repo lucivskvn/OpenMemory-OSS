@@ -809,9 +809,14 @@ export const create_mcp_srv = (tenant?: string) => {
                 "Runtime configuration snapshot for the OpenMemory MCP server",
         },
         async () => {
-            const stats = await all_async(
-                `select primary_sector as sector, count(*) as count, avg(salience) as avg_salience from ${memories_table} group by primary_sector`,
-            );
+            const stats = tenant
+                ? await all_async(
+                      `select primary_sector as sector, count(*) as count, avg(salience) as avg_salience from ${memories_table} where user_id = ? group by primary_sector`,
+                      [tenant],
+                  )
+                : await all_async(
+                      `select primary_sector as sector, count(*) as count, avg(salience) as avg_salience from ${memories_table} group by primary_sector`,
+                  );
             const pay = {
                 mode: env.mode,
                 sectors: sector_configs,

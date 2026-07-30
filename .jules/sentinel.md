@@ -45,3 +45,8 @@ Always enforce a standard "defense-in-depth" rule where *all* user-interactive e
 **Vulnerability:** The API key authentication middleware allowed endpoints to bypass verification if their path started with one of the public endpoints (using `path.startsWith(e)`). This allowed sensitive paths like `/health-secrets` or `/dashboard/health-admin` to completely bypass API key checks.
 **Learning:** Checking subpaths using broad prefix match `path.startsWith(e)` without trailing slash separation exposes the application to prefix-based bypasses.
 **Prevention:** Always strictly validate public/bypass paths using exact matches (`path === e`) or subdirectory-delimited checks (`path.startsWith(e + "/")`).
+
+## 2026-07-24 - [Cross-Tenant Statistics Leakage in MCP Server Configuration Resource]
+**Vulnerability:** The `openmemory://config` MCP resource query retrieved and aggregated memory statistics across all tenants in the database, ignoring the authenticated tenant identity. Any authenticated tenant calling the MCP config resource could view database-wide aggregation stats, violating tenant isolation boundaries.
+**Learning:** Secondary resources (such as configuration snapshots, system info, or diagnostic resources) inside protocol adapters like the Model Context Protocol (MCP) are often omitted during manual audit checks for tenant filtering, introducing subtle cross-tenant data leaks.
+**Prevention:** Always ensure that *all* queries fetching or aggregating database rows inside any API layer, including MCP tool/resource definitions, filter dynamically by the authenticated `tenant` context whenever it is available.

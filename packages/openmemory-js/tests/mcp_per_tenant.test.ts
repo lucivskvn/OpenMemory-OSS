@@ -198,4 +198,41 @@ describe("MCP per-tenant scoping", () => {
         expect(items.length).toBe(1);
         expect(items[0].id).toBe(id);
     });
+
+    it("openmemory-config resource isolates stats per tenant", async () => {
+        const alice = await connect_client(T_ALICE);
+        const bob = await connect_client(T_BOB);
+
+        // Store one memory for Alice in "semantic" primary_sector (default)
+        await alice.client.callTool({
+            name: "openmemory_store",
+            arguments: { content: "Alice's semantic data." },
+        });
+
+        // Store two memories for Bob
+        await bob.client.callTool({
+            name: "openmemory_store",
+            arguments: { content: "Bob's first memory." },
+        });
+        await bob.client.callTool({
+            name: "openmemory_store",
+            arguments: { content: "Bob's second memory." },
+        });
+
+        // Read configuration resource for Alice
+        const alice_res = await alice.client.readResource({ uri: "openmemory://config" });
+        const alice_cfg = JSON.parse(alice_res.contents[0].text as string);
+        expect(alice_cfg.stats).toBeDefined();
+        // Alice should only see her 1 memory in the stats
+        const alice_count = alice_cfg.stats.reduce((acc: number, item: any) => acc + item.count, 0);
+        expect(alice_count).toBe(1);
+
+        // Read configuration resource for Bob
+        const bob_res = await bob.client.readResource({ uri: "openmemory://config" });
+        const bob_cfg = JSON.parse(bob_res.contents[0].text as string);
+        expect(bob_cfg.stats).toBeDefined();
+        // Bob should only see his 2 memories in the stats
+        const bob_count = bob_cfg.stats.reduce((acc: number, item: any) => acc + item.count, 0);
+        expect(bob_count).toBe(2);
+    });
 });
