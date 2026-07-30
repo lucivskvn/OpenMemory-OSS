@@ -57,6 +57,7 @@ const auth_config = {
         "/api/system/health",
         "/api/system/stats",
         "/dashboard/health",
+        "/sources/webhook",
     ],
 };
 
@@ -82,7 +83,7 @@ if (!auth_config.api_key) {
 
 function is_public_endpoint(path: string): boolean {
     return auth_config.public_endpoints.some(
-        (e) => path === e || path.startsWith(e),
+        (e) => path === e || path.startsWith(e + "/"),
     );
 }
 

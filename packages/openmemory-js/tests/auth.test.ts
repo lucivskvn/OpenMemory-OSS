@@ -56,6 +56,64 @@ describe("Authentication Middleware", () => {
         expect(next_called).toBe(true);
     });
 
+    it("allows access to webhook endpoints without any API key", () => {
+        const req1: any = {
+            path: "/sources/webhook/github",
+            headers: {},
+        };
+        const req2: any = {
+            path: "/sources/webhook/notion",
+            headers: {},
+        };
+        let next_called1 = false;
+        let next_called2 = false;
+        const res: any = {
+            status: () => res,
+            json: () => res,
+        };
+
+        authenticate_api_request(req1, res, () => {
+            next_called1 = true;
+        });
+        authenticate_api_request(req2, res, () => {
+            next_called2 = true;
+        });
+
+        expect(next_called1).toBe(true);
+        expect(next_called2).toBe(true);
+    });
+
+    it("does NOT exempt partial prefix paths from API key checks (prevents authentication bypass)", () => {
+        const paths = [
+            "/health-secrets",
+            "/api/system/health-secrets",
+            "/dashboard/health-secrets",
+        ];
+
+        for (const p of paths) {
+            const req: any = {
+                path: p,
+                headers: {},
+            };
+            let next_called = false;
+            let status_val = 0;
+            const res: any = {
+                status: (s: number) => {
+                    status_val = s;
+                    return res;
+                },
+                json: () => res,
+            };
+
+            authenticate_api_request(req, res, () => {
+                next_called = true;
+            });
+
+            expect(next_called).toBe(false);
+            expect(status_val).toBe(401); // Requires API key
+        }
+    });
+
     it("allows request with a valid Authorization ApiKey token", () => {
         const req: any = {
             path: "/api/memory",
