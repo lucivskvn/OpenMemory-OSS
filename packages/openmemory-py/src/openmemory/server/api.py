@@ -15,7 +15,8 @@ from .routes import health, memory, sources
 logger = logging.getLogger("server")
 
 def _is_public_endpoint(path: str) -> bool:
-    return path in ["/health", "/sources/webhook/github", "/sources/webhook/notion"]
+    public_endpoints = ["/health", "/sources/webhook/github", "/sources/webhook/notion"]
+    return any(path == e or path.startswith(e + "/") for e in public_endpoints)
 
 def _should_require_auth() -> tuple[bool, bool]:
     import os

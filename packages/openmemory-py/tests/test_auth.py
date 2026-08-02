@@ -21,6 +21,14 @@ def test_public_endpoint_always_accessible(auth_client):
     response = auth_client.get("/health")
     assert response.status_code == 200
 
+def test_public_endpoint_with_trailing_slash_always_accessible(auth_client):
+    response = auth_client.get("/health/")
+    assert response.status_code == 200
+
+def test_partial_prefix_public_endpoint_is_protected(auth_client):
+    response = auth_client.get("/health-secrets")
+    assert response.status_code == 401
+
 def test_protected_endpoint_rejects_missing_key(auth_client):
     response = auth_client.get("/memory/history?user_id=test_user")
     assert response.status_code == 401
