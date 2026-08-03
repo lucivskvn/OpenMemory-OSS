@@ -208,3 +208,31 @@ def test_notion_webhook_rejects_invalid_user_id(webhook_client):
     )
     assert response.status_code == 400
     assert "invalid_user_id" in response.text
+
+def test_notion_webhook_secure_error_response(webhook_client):
+    os.environ["OM_NOTION_WEBHOOK_SECRET"] = SECRET
+
+    # Trigger an error by passing invalid JSON that will cause json.dumps to fail
+    # Use a non-serializable object in the payload processing
+    from unittest.mock import patch
+
+    payload = {"test": "data"}
+    payload_bytes = json.dumps(payload).encode("utf-8")
+    sig = make_notion_sig(SECRET, payload_bytes)
+
+    # Mock ingest_document to raise an exception to trigger error handling
+    with patch("openmemory.ops.ingest.ingest_document") as mock_ingest:
+        mock_ingest.side_effect = ValueError("Database connection lost")
+
+        response = webhook_client.post(
+            "/sources/webhook/notion",
+            content=payload_bytes,
+            headers={
+                "x-notion-signature": sig,
+                "content-type": "application/json",
+            }
+        )
+        assert response.status_code == 500
+        assert "Webhook processing failed" in response.json()["detail"]
+        # Ensure the raw error message is NOT leaked
+        assert "Database connection lost" not in response.json()["detail"]
