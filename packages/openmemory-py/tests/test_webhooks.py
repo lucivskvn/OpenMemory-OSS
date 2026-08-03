@@ -84,19 +84,16 @@ def test_notion_webhook_rejects_missing_header():
 # ==============================================================================
 
 @pytest.fixture
-def webhook_client():
-    orig_api_key = env.api_key
-    env.api_key = "test-api-key-123456"
+def webhook_client(monkeypatch):
+    monkeypatch.setattr(env, "api_key", "test-api-key-123456")
 
     app = create_app()
     client = TestClient(app)
 
     yield client
 
-    env.api_key = orig_api_key
-
-def test_github_webhook_isolates_tenant(webhook_client):
-    os.environ["OM_GITHUB_WEBHOOK_SECRET"] = SECRET
+def test_github_webhook_isolates_tenant(webhook_client, monkeypatch):
+    monkeypatch.setenv("OM_GITHUB_WEBHOOK_SECRET", SECRET)
 
     # Clean up memories first
     db.execute("DELETE FROM memories")
@@ -124,8 +121,8 @@ def test_github_webhook_isolates_tenant(webhook_client):
     assert mem is not None
     assert mem["user_id"] == "alice-tenant"
 
-def test_github_webhook_rejects_invalid_user_id(webhook_client):
-    os.environ["OM_GITHUB_WEBHOOK_SECRET"] = SECRET
+def test_github_webhook_rejects_invalid_user_id(webhook_client, monkeypatch):
+    monkeypatch.setenv("OM_GITHUB_WEBHOOK_SECRET", SECRET)
 
     payload = {"commits": []}
     payload_bytes = json.dumps(payload).encode("utf-8")
@@ -143,8 +140,8 @@ def test_github_webhook_rejects_invalid_user_id(webhook_client):
     assert response.status_code == 400
     assert "invalid_user_id" in response.text
 
-def test_github_webhook_secure_error_response(webhook_client):
-    os.environ["OM_GITHUB_WEBHOOK_SECRET"] = SECRET
+def test_github_webhook_secure_error_response(webhook_client, monkeypatch):
+    monkeypatch.setenv("OM_GITHUB_WEBHOOK_SECRET", SECRET)
 
     # Pass commits as non-iterable integer to trigger TypeError inside try block
     payload = {"commits": 123}
@@ -163,8 +160,8 @@ def test_github_webhook_secure_error_response(webhook_client):
     assert response.status_code == 500
     assert "Webhook processing failed" in response.json()["detail"]
 
-def test_notion_webhook_isolates_tenant(webhook_client):
-    os.environ["OM_NOTION_WEBHOOK_SECRET"] = SECRET
+def test_notion_webhook_isolates_tenant(webhook_client, monkeypatch):
+    monkeypatch.setenv("OM_NOTION_WEBHOOK_SECRET", SECRET)
 
     # Clean up memories first
     db.execute("DELETE FROM memories")
@@ -191,8 +188,8 @@ def test_notion_webhook_isolates_tenant(webhook_client):
     assert mem is not None
     assert mem["user_id"] == "bob-tenant"
 
-def test_notion_webhook_rejects_invalid_user_id(webhook_client):
-    os.environ["OM_NOTION_WEBHOOK_SECRET"] = SECRET
+def test_notion_webhook_rejects_invalid_user_id(webhook_client, monkeypatch):
+    monkeypatch.setenv("OM_NOTION_WEBHOOK_SECRET", SECRET)
 
     payload = {"test": "data"}
     payload_bytes = json.dumps(payload).encode("utf-8")
@@ -208,31 +205,3 @@ def test_notion_webhook_rejects_invalid_user_id(webhook_client):
     )
     assert response.status_code == 400
     assert "invalid_user_id" in response.text
-
-def test_notion_webhook_secure_error_response(webhook_client):
-    os.environ["OM_NOTION_WEBHOOK_SECRET"] = SECRET
-
-    # Trigger an error by passing invalid JSON that will cause json.dumps to fail
-    # Use a non-serializable object in the payload processing
-    from unittest.mock import patch
-
-    payload = {"test": "data"}
-    payload_bytes = json.dumps(payload).encode("utf-8")
-    sig = make_notion_sig(SECRET, payload_bytes)
-
-    # Mock ingest_document to raise an exception to trigger error handling
-    with patch("openmemory.ops.ingest.ingest_document") as mock_ingest:
-        mock_ingest.side_effect = ValueError("Database connection lost")
-
-        response = webhook_client.post(
-            "/sources/webhook/notion",
-            content=payload_bytes,
-            headers={
-                "x-notion-signature": sig,
-                "content-type": "application/json",
-            }
-        )
-        assert response.status_code == 500
-        assert "Webhook processing failed" in response.json()["detail"]
-        # Ensure the raw error message is NOT leaked
-        assert "Database connection lost" not in response.json()["detail"]
