@@ -88,7 +88,7 @@ export function src(app: any) {
             res.json({ ok: true, ingested: ids.length, memory_ids: ids });
         } catch (e: any) {
             console.error("[sources] ingest failed:", e);
-            res.status(500).json({ error: e.message });
+            res.status(500).json({ error: "Source ingestion failed" });
         }
     });
 
@@ -107,6 +107,11 @@ export function src(app: any) {
                 .status(401)
                 .json({ error: "invalid_signature", reason: verify.reason });
         }
+
+        if (req.query.user_id !== undefined && (typeof req.query.user_id !== "string" || req.query.user_id.length > 256)) {
+            return res.status(400).json({ error: "invalid_user_id" });
+        }
+        const user_id = typeof req.query.user_id === "string" ? req.query.user_id : undefined;
 
         const event_type = req.headers["x-github-event"];
         const payload = req.body;
@@ -147,6 +152,8 @@ export function src(app: any) {
                     "text" as any,
                     content,
                     meta,
+                    undefined,
+                    user_id,
                 );
                 res.json({
                     ok: true,
@@ -158,7 +165,7 @@ export function src(app: any) {
             }
         } catch (e: any) {
             console.error("[sources/github] ingest failed:", e);
-            res.status(500).json({ error: e.message });
+            res.status(500).json({ error: "Webhook processing failed" });
         }
     });
 
@@ -182,17 +189,22 @@ export function src(app: any) {
                 .json({ error: "invalid_signature", reason: verify.reason });
         }
 
+        if (req.query.user_id !== undefined && (typeof req.query.user_id !== "string" || req.query.user_id.length > 256)) {
+            return res.status(400).json({ error: "invalid_user_id" });
+        }
+        const user_id = typeof req.query.user_id === "string" ? req.query.user_id : undefined;
+
         const payload = req.body;
         try {
             const { ingestDocument } = await import("../../ops/ingest");
             const content = JSON.stringify(payload, null, 2);
             const result = await ingestDocument("text" as any, content, {
                 source: "notion_webhook",
-            });
+            }, undefined, user_id);
             res.json({ ok: true, memory_id: result.root_memory_id });
         } catch (e: any) {
             console.error("[sources/notion] ingest failed:", e);
-            res.status(500).json({ error: e.message });
+            res.status(500).json({ error: "Webhook processing failed" });
         }
     });
 }
