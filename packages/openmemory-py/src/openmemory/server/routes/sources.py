@@ -134,12 +134,16 @@ def verify_notion_signature(raw_body: bytes, header_value: str | None, secret: s
     500: {"description": "Internal Server Error"}
 })
 async def github_webhook(request: Request):
-    from ..ops.ingest import ingest_document
+    from openmemory.ops.ingest import ingest_document
 
     secret = os.environ.get("OM_GITHUB_WEBHOOK_SECRET")
     sig = request.headers.get("x-hub-signature-256")
     raw_body = await request.body()
     verify_github_signature(raw_body, sig, secret)
+
+    user_id = request.query_params.get("user_id")
+    if user_id is not None and (not isinstance(user_id, str) or len(user_id) > 256):
+        raise HTTPException(400, "invalid_user_id")
 
     event_type = request.headers.get("x-github-event", "unknown")
     payload = await request.json()
@@ -171,7 +175,7 @@ async def github_webhook(request: Request):
             content = json.dumps(payload, indent=2)
 
         if content:
-            result = await ingest_document("text", content, meta=meta)
+            result = await ingest_document("text", content, meta=meta, user_id=user_id)
             return {"ok": True, "memory_id": result.get("root_memory_id"), "event": event_type}
         return {"ok": True, "skipped": True, "reason": "no content"}
     except Exception:
@@ -185,7 +189,7 @@ async def github_webhook(request: Request):
     500: {"description": "Internal Server Error"}
 })
 async def notion_webhook(request: Request):
-    from ..ops.ingest import ingest_document
+    from openmemory.ops.ingest import ingest_document
     import json
 
     secret = os.environ.get("OM_NOTION_WEBHOOK_SECRET")
@@ -193,11 +197,15 @@ async def notion_webhook(request: Request):
     raw_body = await request.body()
     verify_notion_signature(raw_body, sig, secret)
 
+    user_id = request.query_params.get("user_id")
+    if user_id is not None and (not isinstance(user_id, str) or len(user_id) > 256):
+        raise HTTPException(400, "invalid_user_id")
+
     payload = await request.json()
 
     try:
         content = json.dumps(payload, indent=2)
-        result = await ingest_document("text", content, meta={"source": "notion_webhook"})
+        result = await ingest_document("text", content, meta={"source": "notion_webhook"}, user_id=user_id)
         return {"ok": True, "memory_id": result.get("root_memory_id")}
     except Exception:
         logger.exception("Notion webhook processing failed")
