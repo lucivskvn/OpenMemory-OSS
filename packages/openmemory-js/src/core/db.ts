@@ -544,8 +544,21 @@ export const q: q_type = {
             ),
     },
     del_waypoints: {
-        run: (...p) =>
-            exec("delete from waypoints where src_id=? or dst_id=?", p),
+        run: (...p) => {
+            const src_id = p[0];
+            const dst_id = p[1];
+            const user_id = p[2];
+            if (user_id) {
+                return exec(
+                    "delete from waypoints where (src_id=? or dst_id=?) and user_id=?",
+                    [src_id, dst_id, user_id],
+                );
+            }
+            return exec("delete from waypoints where src_id=? or dst_id=?", [
+                src_id,
+                dst_id,
+            ]);
+        },
     },
     prune_waypoints: {
         run: (t) => exec("delete from waypoints where weight<?", [t]),

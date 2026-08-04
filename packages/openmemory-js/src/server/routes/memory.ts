@@ -357,9 +357,9 @@ export function mem(app: any) {
             if (m.user_id && m.user_id !== tenant) {
                 return res.status(403).json({ err: "forbidden" });
             }
-            await q.del_mem.run(id);
+            await q.del_mem.run(id, tenant);
             await vector_store.deleteVectors(id, tenant);
-            await q.del_waypoints.run(id, id);
+            await q.del_waypoints.run(id, id, tenant);
             res.json({ ok: true });
         } catch (e: any) {
             console.error("[mem] /memory/:id delete failed:", e);

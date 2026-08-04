@@ -33,9 +33,10 @@ class Memory:
     async def get(self, memory_id: str):
         return q.get_mem(memory_id)
 
-    async def delete(self, memory_id: str):
-        q.del_mem(memory_id)
-        clear_cache()
+    async def delete(self, memory_id: str, user_id: str = None):
+        uid = user_id or self.default_user
+        q.del_mem(memory_id, uid)
+        clear_cache(uid)
 
     async def delete_all(self, user_id: str = None):
         uid = user_id or self.default_user
