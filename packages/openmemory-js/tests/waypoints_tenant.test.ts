@@ -29,14 +29,14 @@ describe("Waypoints per-tenant scoping", () => {
 
         // Verify both waypoints exist
         const all_wps_before = await all_async(`SELECT * FROM waypoints`);
-        expect(all_wps_before.length).toBe(2);
+        expect(all_wps_before).toHaveLength(2);
 
         // Delete waypoints for Alice only
         await q.del_waypoints.run(mem_id, mem_id, T_ALICE);
 
         // Verify Bob's waypoint still exists
         const wps = await all_async(`SELECT * FROM waypoints`);
-        expect(wps.length).toBe(1);
+        expect(wps).toHaveLength(1);
         expect(wps[0].user_id).toBe(T_BOB);
         expect(wps[0].dst_id).toBe("dst-bob");
     });

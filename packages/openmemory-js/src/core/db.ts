@@ -375,13 +375,14 @@ export const q: q_type = {
             const id = p[0];
             const user_id = p[1];
             const project_id = p[2];
-            if (!user_id || user_id === "") {
-                throw new Error("user_id is required for memory deletion");
-            }
             try {
                 await transaction.begin();
-                let sql = "delete from memories where id=? and user_id=?";
-                const params: any[] = [id, user_id];
+                let sql = "delete from memories where id=?";
+                const params: any[] = [id];
+                if (user_id) {
+                    sql += " and user_id=?";
+                    params.push(user_id);
+                }
                 if (project_id) {
                     sql += " and project_id=?";
                     params.push(project_id);
@@ -389,8 +390,12 @@ export const q: q_type = {
                 await exec(sql, params);
 
                 let factSql =
-                    "delete from temporal_facts where metadata like ? and user_id=?";
-                const factParams: any[] = [`%"source_memory_id":"${id}"%`, user_id];
+                    "delete from temporal_facts where metadata like ?";
+                const factParams: any[] = [`%"source_memory_id":"${id}"%`];
+                if (user_id) {
+                    factSql += " and user_id=?";
+                    factParams.push(user_id);
+                }
                 if (project_id) {
                     factSql += " and project_id=?";
                     factParams.push(project_id);
@@ -543,13 +548,16 @@ export const q: q_type = {
             const src_id = p[0];
             const dst_id = p[1];
             const user_id = p[2];
-            if (!user_id || user_id === "") {
-                throw new Error("user_id is required for waypoint deletion");
+            if (user_id) {
+                return exec(
+                    "delete from waypoints where (src_id=? or dst_id=?) and user_id=?",
+                    [src_id, dst_id, user_id],
+                );
             }
-            return exec(
-                "delete from waypoints where (src_id=? or dst_id=?) and user_id=?",
-                [src_id, dst_id, user_id],
-            );
+            return exec("delete from waypoints where src_id=? or dst_id=?", [
+                src_id,
+                dst_id,
+            ]);
         },
     },
     prune_waypoints: {

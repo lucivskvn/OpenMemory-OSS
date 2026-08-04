@@ -123,11 +123,14 @@ class Queries:
         return db.fetchall("SELECT * FROM waypoints WHERE src_id=?", (src_id,))
 
     def del_mem(self, mid: str, user_id: Optional[str] = None):
-        if not user_id or user_id == "":
-            raise ValueError("user_id is required for memory deletion")
-        db.execute("DELETE FROM memories WHERE id=? AND user_id=?", (mid, user_id))
-        db.execute("DELETE FROM vectors WHERE id=? AND user_id=?", (mid, user_id))
-        db.execute("DELETE FROM waypoints WHERE (src_id=? OR dst_id=?) AND user_id=?", (mid, mid, user_id))
+        if user_id:
+            db.execute("DELETE FROM memories WHERE id=? AND user_id=?", (mid, user_id))
+            db.execute("DELETE FROM vectors WHERE id=? AND user_id=?", (mid, user_id))
+            db.execute("DELETE FROM waypoints WHERE (src_id=? OR dst_id=?) AND user_id=?", (mid, mid, user_id))
+        else:
+            db.execute("DELETE FROM memories WHERE id=?", (mid,))
+            db.execute("DELETE FROM vectors WHERE id=?", (mid,))
+            db.execute("DELETE FROM waypoints WHERE src_id=? OR dst_id=?", (mid, mid))
         db.commit()
 
     def del_mem_by_user(self, uid: str):

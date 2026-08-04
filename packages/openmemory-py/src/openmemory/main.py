@@ -35,8 +35,6 @@ class Memory:
 
     async def delete(self, memory_id: str, user_id: str = None):
         uid = user_id or self.default_user
-        if not uid or uid == "":
-            raise ValueError("user_id is required for deletion (provide user_id parameter or set default_user)")
         q.del_mem(memory_id, uid)
         clear_cache(uid)
 
