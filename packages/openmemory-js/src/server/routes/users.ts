@@ -131,9 +131,9 @@ export const usr = (app: any) => {
             const mems = await q.all_mem_by_user.all(tenant, 10000, 0);
             let deleted = 0;
             for (const m of mems) {
-                await q.del_mem.run(m.id);
+                await q.del_mem.run(m.id, tenant);
                 await vector_store.deleteVectors(m.id, tenant);
-                await q.del_waypoints.run(m.id, m.id);
+                await q.del_waypoints.run(m.id, m.id, tenant);
                 deleted++;
             }
             res.json({ ok: true, deleted });

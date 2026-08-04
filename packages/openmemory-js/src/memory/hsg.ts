@@ -1261,8 +1261,9 @@ export async function delete_memory(id: string): Promise<boolean> {
     if (!mem) return false;
     await transaction.begin();
     try {
-        await q.del_mem.run(id);
-        await q.del_waypoints.run(id, id);
+        const user_id = mem.user_id || "anonymous";
+        await q.del_mem.run(id, user_id);
+        await q.del_waypoints.run(id, id, user_id);
         await vector_store.deleteVectors(id, mem.user_id || undefined);
         await transaction.commit();
         return true;

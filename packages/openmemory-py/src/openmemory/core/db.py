@@ -122,15 +122,20 @@ class Queries:
     def get_waypoints_by_src(self, src_id: str):
         return db.fetchall("SELECT * FROM waypoints WHERE src_id=?", (src_id,))
 
-    def del_mem(self, mid: str):
-        db.execute("DELETE FROM memories WHERE id=?", (mid,))
-        db.execute("DELETE FROM vectors WHERE id=?", (mid,))
-        db.execute("DELETE FROM waypoints WHERE src_id=? OR dst_id=?", (mid, mid))
+    def del_mem(self, mid: str, user_id: Optional[str] = None):
+        if user_id:
+            db.execute("DELETE FROM memories WHERE id=? AND user_id=?", (mid, user_id))
+            db.execute("DELETE FROM vectors WHERE id=? AND user_id=?", (mid, user_id))
+            db.execute("DELETE FROM waypoints WHERE (src_id=? OR dst_id=?) AND user_id=?", (mid, mid, user_id))
+        else:
+            db.execute("DELETE FROM memories WHERE id=?", (mid,))
+            db.execute("DELETE FROM vectors WHERE id=?", (mid,))
+            db.execute("DELETE FROM waypoints WHERE src_id=? OR dst_id=?", (mid, mid))
         db.commit()
 
     def del_mem_by_user(self, uid: str):
-        db.execute("DELETE FROM vectors WHERE id IN (SELECT id FROM memories WHERE user_id=?)", (uid,))
-        db.execute("DELETE FROM waypoints WHERE src_id IN (SELECT id FROM memories WHERE user_id=?) OR dst_id IN (SELECT id FROM memories WHERE user_id=?)", (uid, uid))
+        db.execute("DELETE FROM vectors WHERE id IN (SELECT id FROM memories WHERE user_id=?) AND user_id=?", (uid, uid))
+        db.execute("DELETE FROM waypoints WHERE (src_id IN (SELECT id FROM memories WHERE user_id=?) OR dst_id IN (SELECT id FROM memories WHERE user_id=?)) AND user_id=?", (uid, uid, uid))
         db.execute("DELETE FROM memories WHERE user_id=?", (uid,))
         db.commit()
 
