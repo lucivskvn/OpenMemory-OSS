@@ -1,7 +1,16 @@
 import { compressionEngine, CompressionMetrics } from "../../ops/compress";
+import { require_tenant } from "../middleware/tenant";
+
+const is_admin_tenant = (tenant: string) => {
+    return (
+        tenant === "admin" || tenant === "system" || tenant === "dev-no-auth"
+    );
+};
 
 export function compression(app: any) {
     app.post("/api/compression/compress", async (req: any, res: any) => {
+        const tenant = require_tenant(req, res);
+        if (!tenant) return;
         try {
             const { text, algorithm } = req.body;
             if (!text) return res.status(400).json({ error: "text required" });
@@ -21,6 +30,8 @@ export function compression(app: any) {
     });
 
     app.post("/api/compression/batch", async (req: any, res: any) => {
+        const tenant = require_tenant(req, res);
+        if (!tenant) return;
         try {
             const { texts, algorithm = "semantic" } = req.body;
             if (!Array.isArray(texts))
@@ -43,6 +54,8 @@ export function compression(app: any) {
     });
 
     app.post("/api/compression/analyze", async (req: any, res: any) => {
+        const tenant = require_tenant(req, res);
+        if (!tenant) return;
         try {
             const { text } = req.body;
             if (!text) return res.status(400).json({ error: "text required" });
@@ -71,6 +84,14 @@ export function compression(app: any) {
     });
 
     app.get("/api/compression/stats", async (req: any, res: any) => {
+        const tenant = require_tenant(req, res);
+        if (!tenant) return;
+        if (!is_admin_tenant(tenant)) {
+            return res.status(403).json({
+                error: "forbidden",
+                message: "Only administrators can access compression stats",
+            });
+        }
         try {
             const s = compressionEngine.getStats();
             res.json({
@@ -95,6 +116,14 @@ export function compression(app: any) {
     });
 
     app.post("/api/compression/reset", async (req: any, res: any) => {
+        const tenant = require_tenant(req, res);
+        if (!tenant) return;
+        if (!is_admin_tenant(tenant)) {
+            return res.status(403).json({
+                error: "forbidden",
+                message: "Only administrators can reset compression metrics",
+            });
+        }
         try {
             compressionEngine.reset();
             compressionEngine.clear();
