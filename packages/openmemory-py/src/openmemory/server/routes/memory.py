@@ -46,6 +46,7 @@ async def add_memory(req: AddMemoryRequest, request: Request):
         raise HTTPException(status_code=500, detail="Failed to add memory") from None
 
 @router.post("/search", responses={
+    400: {"description": "Bad Request"},
     403: {"description": "Forbidden"},
     500: {"description": "Internal Server Error"}
 })
@@ -58,6 +59,11 @@ async def search_memory(req: SearchMemoryRequest, request: Request):
     else:
         user_id = tenant
 
+    # Input validation on search limit parameter to prevent DoS/resource exhaustion
+    if req.limit is not None:
+        if req.limit < 0 or req.limit > 10000:
+            raise HTTPException(status_code=400, detail="invalid_limit")
+
     try:
         filters = req.filters or {}
         results = await mem.search(req.query, user_id=user_id, limit=req.limit, **filters)
@@ -67,6 +73,7 @@ async def search_memory(req: SearchMemoryRequest, request: Request):
         raise HTTPException(status_code=500, detail="Failed to search memory") from None
 
 @router.get("/history", responses={
+    400: {"description": "Bad Request"},
     403: {"description": "Forbidden"},
     500: {"description": "Internal Server Error"}
 })
@@ -74,6 +81,10 @@ async def get_history(user_id: str, request: Request, limit: int = 20, offset: i
     tenant = getattr(request.state, "tenant", "anonymous")
     if user_id != tenant:
         raise HTTPException(status_code=403, detail="tenant_mismatch")
+
+    # Input validation on pagination parameters to prevent unbounded SQLite queries / DoS
+    if limit < 0 or offset < 0 or limit > 10000:
+        raise HTTPException(status_code=400, detail="invalid_pagination")
 
     try:
         results = mem.history(user_id, limit, offset)
