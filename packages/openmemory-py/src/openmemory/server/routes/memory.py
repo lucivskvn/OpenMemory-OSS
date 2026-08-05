@@ -27,12 +27,9 @@ class SearchMemoryRequest(BaseModel):
 })
 async def add_memory(req: AddMemoryRequest, request: Request):
     tenant = getattr(request.state, "tenant", "anonymous")
-    user_id = req.user_id
-    if user_id:
-        if user_id != tenant:
-            raise HTTPException(status_code=403, detail="tenant_mismatch")
-    else:
-        user_id = tenant
+    user_id = req.user_id if req.user_id is not None else tenant
+    if user_id != tenant:
+        raise HTTPException(status_code=403, detail="tenant_mismatch")
 
     try:
         meta = req.metadata or {}
@@ -52,17 +49,13 @@ async def add_memory(req: AddMemoryRequest, request: Request):
 })
 async def search_memory(req: SearchMemoryRequest, request: Request):
     tenant = getattr(request.state, "tenant", "anonymous")
-    user_id = req.user_id
-    if user_id:
-        if user_id != tenant:
-            raise HTTPException(status_code=403, detail="tenant_mismatch")
-    else:
-        user_id = tenant
+    user_id = req.user_id if req.user_id is not None else tenant
+    if user_id != tenant:
+        raise HTTPException(status_code=403, detail="tenant_mismatch")
 
     # Input validation on search limit parameter to prevent DoS/resource exhaustion
-    if req.limit is not None:
-        if req.limit < 0 or req.limit > 10000:
-            raise HTTPException(status_code=400, detail="invalid_limit")
+    if req.limit is not None and (req.limit < 0 or req.limit > 10000):
+        raise HTTPException(status_code=400, detail="invalid_limit")
 
     try:
         filters = req.filters or {}
