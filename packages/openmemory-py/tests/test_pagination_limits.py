@@ -130,8 +130,8 @@ def test_add_memory_reject_oversized_user_id(pagination_limits_client):
         json=payload,
         headers={"x-api-key": "test-api-key-123456"}
     )
-    # Since user_id disagrees with tenant (and is oversized), it can be 403 or 400
-    assert response.status_code in (400, 403)
+    assert response.status_code == 400, f"Failed: {response.text}"
+    assert "invalid_user_id_length" in response.json()["detail"]
 
 def test_add_memory_reject_too_many_tags(pagination_limits_client):
     tenant_id = hashlib.sha256("test-api-key-123456".encode("utf-8")).hexdigest()[:16]
@@ -202,7 +202,8 @@ def test_search_reject_oversized_user_id(pagination_limits_client):
         json=payload,
         headers={"x-api-key": "test-api-key-123456"}
     )
-    assert response.status_code in (400, 403)
+    assert response.status_code == 400, f"Failed: {response.text}"
+    assert "invalid_user_id_length" in response.json()["detail"]
 
 def test_history_reject_oversized_user_id(pagination_limits_client):
     oversized_id = "u" * 257
@@ -210,7 +211,48 @@ def test_history_reject_oversized_user_id(pagination_limits_client):
         f"/memory/history?user_id={oversized_id}",
         headers={"x-api-key": "test-api-key-123456"}
     )
-    assert response.status_code in (400, 403)
+    assert response.status_code == 400, f"Failed: {response.text}"
+    assert "invalid_user_id_length" in response.json()["detail"]
+
+def test_add_memory_unicode_boundary(pagination_limits_client):
+    tenant_id = hashlib.sha256("test-api-key-123456".encode("utf-8")).hexdigest()[:16]
+    # "𠜎" is a non-BMP emoji. It is 1 character (code point) in python and in our new validate.ts
+    payload_valid = {
+        "content": "𠜎" * 200000,
+        "user_id": tenant_id
+    }
+    response_valid = pagination_limits_client.post(
+        "/memory/add",
+        json=payload_valid,
+        headers={"x-api-key": "test-api-key-123456"}
+    )
+    assert response_valid.status_code == 200, f"Failed: {response_valid.text}"
+
+    payload_invalid = {
+        "content": "𠜎" * 200001,
+        "user_id": tenant_id
+    }
+    response_invalid = pagination_limits_client.post(
+        "/memory/add",
+        json=payload_invalid,
+        headers={"x-api-key": "test-api-key-123456"}
+    )
+    assert response_invalid.status_code == 400, f"Failed: {response_invalid.text}"
+    assert "invalid_content_length" in response_invalid.json()["detail"]
+
+def test_add_memory_reject_oversized_body(pagination_limits_client, monkeypatch):
+    monkeypatch.setenv("OM_MAX_BODY_SIZE", "100")
+    tenant_id = hashlib.sha256("test-api-key-123456".encode("utf-8")).hexdigest()[:16]
+    payload = {
+        "content": "A" * 200, # This payload is clearly larger than 100 bytes
+        "user_id": tenant_id
+    }
+    response = pagination_limits_client.post(
+        "/memory/add",
+        json=payload,
+        headers={"x-api-key": "test-api-key-123456"}
+    )
+    assert response.status_code == 413, f"Failed: {response.text}"
 
 def test_search_reject_oversized_limit(pagination_limits_client):
     tenant_id = hashlib.sha256("test-api-key-123456".encode("utf-8")).hexdigest()[:16]

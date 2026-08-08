@@ -95,6 +95,28 @@ def create_app() -> FastAPI:
         )
 
     @app.middleware("http")
+    async def limit_request_body_size(request: Request, call_next):
+        import os
+        if request.method == "POST" and request.url.path == "/memory/add":
+            content_length = request.headers.get("content-length")
+            max_size = int(os.getenv("OM_MAX_BODY_SIZE", "1048576"))
+            if content_length:
+                try:
+                    if int(content_length) > max_size:
+                        return JSONResponse(
+                            status_code=413,
+                            content={
+                                "type": "https://openmemory.oss/errors/413",
+                                "title": "Payload Too Large",
+                                "status": 413,
+                                "detail": f"Request body exceeds limit of {max_size} bytes."
+                            }
+                        )
+                except ValueError:
+                    pass
+        return await call_next(request)
+
+    @app.middleware("http")
     async def authenticate_api_request(request: Request, call_next):
         import hashlib
 
