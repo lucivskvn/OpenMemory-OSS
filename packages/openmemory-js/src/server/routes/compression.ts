@@ -1,5 +1,26 @@
 import { compressionEngine, CompressionMetrics } from "../../ops/compress";
 import { require_tenant } from "../middleware/tenant";
+import { parse_or_400, schema } from "../middleware/validate";
+
+const compress_schema: schema = {
+    text: { type: "string", required: true, min_length: 1, max_length: 200_000 },
+    algorithm: { type: "string", one_of: ["semantic", "syntactic", "aggressive"] },
+};
+
+const batch_schema: schema = {
+    texts: {
+        type: "array",
+        required: true,
+        min_items: 1,
+        max_items: 100,
+        items: { type: "string", min_length: 1, max_length: 200_000 },
+    },
+    algorithm: { type: "string", one_of: ["semantic", "syntactic", "aggressive"] },
+};
+
+const analyze_schema: schema = {
+    text: { type: "string", required: true, min_length: 1, max_length: 200_000 },
+};
 
 const is_admin_tenant = (tenant: string) => {
     return (
@@ -11,17 +32,17 @@ export function compression(app: any) {
     app.post("/api/compression/compress", async (req: any, res: any) => {
         const tenant = require_tenant(req, res);
         if (!tenant) return;
+        const b = parse_or_400<{
+            text: string;
+            algorithm?: "semantic" | "syntactic" | "aggressive";
+        }>(res, req.body, compress_schema);
+        if (!b) return;
         try {
-            const { text, algorithm } = req.body;
-            if (!text) return res.status(400).json({ error: "text required" });
             let r;
-            if (
-                algorithm &&
-                ["semantic", "syntactic", "aggressive"].includes(algorithm)
-            ) {
-                r = compressionEngine.compress(text, algorithm);
+            if (b.algorithm) {
+                r = compressionEngine.compress(b.text, b.algorithm);
             } else {
-                r = compressionEngine.auto(text);
+                r = compressionEngine.auto(b.text);
             }
             res.json({ ok: true, comp: r.comp, m: r.metrics, hash: r.hash });
         } catch (e: any) {
@@ -32,13 +53,14 @@ export function compression(app: any) {
     app.post("/api/compression/batch", async (req: any, res: any) => {
         const tenant = require_tenant(req, res);
         if (!tenant) return;
+        const b = parse_or_400<{
+            texts: string[];
+            algorithm?: "semantic" | "syntactic" | "aggressive";
+        }>(res, req.body, batch_schema);
+        if (!b) return;
         try {
-            const { texts, algorithm = "semantic" } = req.body;
-            if (!Array.isArray(texts))
-                return res.status(400).json({ error: "texts must be array" });
-            if (!["semantic", "syntactic", "aggressive"].includes(algorithm))
-                return res.status(400).json({ error: "invalid algo" });
-            const r = compressionEngine.batch(texts, algorithm);
+            const algo = b.algorithm || "semantic";
+            const r = compressionEngine.batch(b.texts, algo);
             res.json({
                 ok: true,
                 results: r.map((x: any) => ({
@@ -56,10 +78,10 @@ export function compression(app: any) {
     app.post("/api/compression/analyze", async (req: any, res: any) => {
         const tenant = require_tenant(req, res);
         if (!tenant) return;
+        const b = parse_or_400<{ text: string }>(res, req.body, analyze_schema);
+        if (!b) return;
         try {
-            const { text } = req.body;
-            if (!text) return res.status(400).json({ error: "text required" });
-            const a = compressionEngine.analyze(text);
+            const a = compressionEngine.analyze(b.text);
             let best = "semantic";
             let max = 0;
             for (const [algo, m] of Object.entries(a)) {
