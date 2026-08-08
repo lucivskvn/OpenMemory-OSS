@@ -120,33 +120,37 @@ describe("Compression routes tenant scoping and admin check", () => {
         }
     });
 
-    it("allows admin/system tenants to call admin endpoints", async () => {
-        const req_mock = {
-            tenant: "admin",
-        };
+    it("allows admin/system/dev-no-auth tenants to call admin endpoints", async () => {
+        const admin_tenants = ["admin", "system", "dev-no-auth"];
 
-        let status_code = 200;
-        let res_json: any = null;
-        const res_mock = {
-            status: function (code: number) {
-                status_code = code;
-                return this;
-            },
-            json: (data: any) => {
-                res_json = data;
-            },
-        };
+        for (const tenant of admin_tenants) {
+            const req_mock = {
+                tenant,
+            };
 
-        // stats
-        await stats_handler(req_mock, res_mock);
-        expect(status_code).toBe(200);
-        expect(res_json?.ok).toBe(true);
-        expect(res_json?.stats).toBeDefined();
+            let status_code = 200;
+            let res_json: any = null;
+            const res_mock = {
+                status: function (code: number) {
+                    status_code = code;
+                    return this;
+                },
+                json: (data: any) => {
+                    res_json = data;
+                },
+            };
 
-        // reset
-        await reset_handler(req_mock, res_mock);
-        expect(status_code).toBe(200);
-        expect(res_json?.ok).toBe(true);
-        expect(res_json?.msg).toBe("reset done");
+            // stats
+            await stats_handler(req_mock, res_mock);
+            expect(status_code).toBe(200);
+            expect(res_json?.ok).toBe(true);
+            expect(res_json?.stats).toBeDefined();
+
+            // reset
+            await reset_handler(req_mock, res_mock);
+            expect(status_code).toBe(200);
+            expect(res_json?.ok).toBe(true);
+            expect(res_json?.msg).toBe("reset done");
+        }
     });
 });
