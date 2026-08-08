@@ -153,4 +153,100 @@ describe("Compression routes tenant scoping and admin check", () => {
             expect(res_json?.msg).toBe("reset done");
         }
     });
+
+    it("enforces validation limits on inputs to prevent DoS", async () => {
+        const create_res_mock = () => {
+            let status_code = 200;
+            let res_json: any = null;
+            return {
+                status: function (code: number) {
+                    status_code = code;
+                    return this;
+                },
+                set: function (key: string, val: string) {
+                    return this;
+                },
+                json: function (data: any) {
+                    res_json = data;
+                    return this;
+                },
+                get_status: () => status_code,
+                get_json: () => res_json,
+            };
+        };
+
+        // 1. Text is too long (> 200,000 characters)
+        const huge_text = "A".repeat(200_001);
+        const req_huge = {
+            tenant: "tenant-alice",
+            body: { text: huge_text },
+        };
+        const res_huge = create_res_mock();
+        await compress_handler(req_huge, res_huge);
+        expect(res_huge.get_status()).toBe(400);
+        expect(res_huge.get_json()?.title).toBe("Invalid Input");
+
+        // 2. Text is empty
+        const req_empty = {
+            tenant: "tenant-alice",
+            body: { text: "" },
+        };
+        const res_empty = create_res_mock();
+        await compress_handler(req_empty, res_empty);
+        expect(res_empty.get_status()).toBe(400);
+
+        // 3. Batch texts is too large (> 100 items)
+        const req_huge_batch = {
+            tenant: "tenant-alice",
+            body: { texts: Array(101).fill("hello") },
+        };
+        const res_huge_batch = create_res_mock();
+        await batch_handler(req_huge_batch, res_huge_batch);
+        expect(res_huge_batch.get_status()).toBe(400);
+
+        // 4. Batch texts has elements too long
+        const req_huge_element_batch = {
+            tenant: "tenant-alice",
+            body: { texts: [huge_text] },
+        };
+        const res_huge_element_batch = create_res_mock();
+        await batch_handler(req_huge_element_batch, res_huge_element_batch);
+        expect(res_huge_element_batch.get_status()).toBe(400);
+
+        // 5. Invalid algorithm for compress
+        const req_invalid_algo = {
+            tenant: "tenant-alice",
+            body: { text: "hello", algorithm: "super-extreme" },
+        };
+        const res_invalid_algo = create_res_mock();
+        await compress_handler(req_invalid_algo, res_invalid_algo);
+        expect(res_invalid_algo.get_status()).toBe(400);
+
+        // 6. Invalid algorithm for batch
+        const req_invalid_batch_algo = {
+            tenant: "tenant-alice",
+            body: { texts: ["hello"], algorithm: "super-extreme" },
+        };
+        const res_invalid_batch_algo = create_res_mock();
+        await batch_handler(req_invalid_batch_algo, res_invalid_batch_algo);
+        expect(res_invalid_batch_algo.get_status()).toBe(400);
+
+        // 7. Empty text for analyze
+        const req_analyze_empty = {
+            tenant: "tenant-alice",
+            body: { text: "" },
+        };
+        const res_analyze_empty = create_res_mock();
+        await analyze_handler(req_analyze_empty, res_analyze_empty);
+        expect(res_analyze_empty.get_status()).toBe(400);
+
+        // 8. Oversized text for analyze
+        const req_analyze_huge = {
+            tenant: "tenant-alice",
+            body: { text: huge_text },
+        };
+        const res_analyze_huge = create_res_mock();
+        await analyze_handler(req_analyze_huge, res_analyze_huge);
+        expect(res_analyze_huge.get_status()).toBe(400);
+    });
 });
