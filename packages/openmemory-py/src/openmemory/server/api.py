@@ -40,6 +40,130 @@ def _validate_api_key(provided: str, expected: str) -> bool:
     expected_hash = hashlib.sha256(expected.encode("utf-8")).digest()
     return hmac.compare_digest(provided_hash, expected_hash)
 
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "type": f"https://openmemory.oss/errors/{exc.status_code}",
+            "title": exc.detail if isinstance(exc.detail, str) else "An error occurred",
+            "status": exc.status_code,
+            "detail": str(exc.detail),
+            "instance": request.url.path
+        },
+    )
+
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={
+            "type": "https://openmemory.oss/errors/validation-error",
+            "title": "Validation Error",
+            "status": 422,
+            "detail": exc.errors(),
+            "instance": request.url.path
+        },
+    )
+
+async def generic_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled error")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "type": "https://openmemory.oss/errors/internal-server-error",
+            "title": "Internal Server Error",
+            "status": 500,
+            "detail": "An unexpected error occurred on the server.",
+            "instance": request.url.path
+        },
+    )
+
+async def limit_request_body_size(request: Request, call_next):
+    import os
+    if request.method == "POST" and request.url.path == "/memory/add":
+        content_length = request.headers.get("content-length")
+        max_size = int(os.getenv("OM_MAX_BODY_SIZE", "1048576"))
+        if content_length:
+            try:
+                if int(content_length) > max_size:
+                    return JSONResponse(
+                        status_code=413,
+                        content={
+                            "type": "https://openmemory.oss/errors/413",
+                            "title": "Payload Too Large",
+                            "status": 413,
+                            "detail": f"Request body exceeds limit of {max_size} bytes."
+                        }
+                    )
+            except ValueError:
+                pass
+    return await call_next(request)
+
+async def authenticate_api_request(request: Request, call_next):
+    import hashlib
+
+    path = request.url.path
+    if _is_public_endpoint(path):
+        return await call_next(request)
+
+    api_key_configured = env.api_key
+    require_auth, dev_allow_no_auth = _should_require_auth()
+
+    if not api_key_configured:
+        if not require_auth or dev_allow_no_auth:
+            request.state.tenant = "dev-no-auth"
+            return await call_next(request)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "type": "https://openmemory.oss/errors/503",
+                "title": "Service Unavailable",
+                "status": 503,
+                "detail": "Server has no OM_API_KEY configured. Protected endpoints are unavailable.",
+                "instance": path
+            }
+        )
+
+    provided = _extract_api_key(request.headers)
+    if not provided:
+        return JSONResponse(
+            status_code=401,
+            content={
+                "type": "https://openmemory.oss/errors/401",
+                "title": "Unauthorized",
+                "status": 401,
+                "detail": "API key required",
+                "instance": path
+            }
+        )
+
+    if not _validate_api_key(provided, api_key_configured):
+        return JSONResponse(
+            status_code=403,
+            content={
+                "type": "https://openmemory.oss/errors/403",
+                "title": "Forbidden",
+                "status": 403,
+                "detail": "invalid_api_key",
+                "instance": path
+            }
+        )
+
+    request.state.tenant = hashlib.sha256(provided.encode("utf-8")).hexdigest()[:16]
+    return await call_next(request)
+
+async def log_requests(request: Request, call_next):
+    start = time.time()
+    path = re.sub(r"[\r\n]", "", request.url.path)
+    method = re.sub(r"[\r\n]", "", request.method)
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        return response
+    finally:
+        process_time = (time.time() - start) * 1000
+        logger.info(f"{method} {path} - {status_code} ({process_time:.2f}ms)")
+
 def create_app() -> FastAPI:
     app = FastAPI(title="OpenMemory API", version="1.2.2")
 
@@ -52,116 +176,13 @@ def create_app() -> FastAPI:
 
     inject_trace_middleware(app)
 
-    @app.exception_handler(StarletteHTTPException)
-    async def http_exception_handler(request: Request, exc: StarletteHTTPException):
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={
-                "type": f"https://openmemory.oss/errors/{exc.status_code}",
-                "title": exc.detail if isinstance(exc.detail, str) else "An error occurred",
-                "status": exc.status_code,
-                "detail": str(exc.detail),
-                "instance": request.url.path
-            },
-        )
+    app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+    app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    app.add_exception_handler(Exception, generic_exception_handler)
 
-    @app.exception_handler(RequestValidationError)
-    async def validation_exception_handler(request: Request, exc: RequestValidationError):
-        # Using exc.errors() without arguments to ensure compatibility across Pydantic versions
-        # as reported by static analysis.
-        return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            content={
-                "type": "https://openmemory.oss/errors/validation-error",
-                "title": "Validation Error",
-                "status": 422,
-                "detail": exc.errors(),
-                "instance": request.url.path
-            },
-        )
-
-    @app.exception_handler(Exception)
-    async def generic_exception_handler(request: Request, exc: Exception):
-        logger.exception("Unhandled error")
-        return JSONResponse(
-            status_code=500,
-            content={
-                "type": "https://openmemory.oss/errors/internal-server-error",
-                "title": "Internal Server Error",
-                "status": 500,
-                "detail": "An unexpected error occurred on the server.",
-                "instance": request.url.path
-            },
-        )
-
-    @app.middleware("http")
-    async def authenticate_api_request(request: Request, call_next):
-        import hashlib
-
-        path = request.url.path
-        if _is_public_endpoint(path):
-            return await call_next(request)
-
-        api_key_configured = env.api_key
-        require_auth, dev_allow_no_auth = _should_require_auth()
-
-        if not api_key_configured:
-            if not require_auth or dev_allow_no_auth:
-                request.state.tenant = "dev-no-auth"
-                return await call_next(request)
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "type": "https://openmemory.oss/errors/503",
-                    "title": "Service Unavailable",
-                    "status": 503,
-                    "detail": "Server has no OM_API_KEY configured. Protected endpoints are unavailable.",
-                    "instance": path
-                }
-            )
-
-        provided = _extract_api_key(request.headers)
-        if not provided:
-            return JSONResponse(
-                status_code=401,
-                content={
-                    "type": "https://openmemory.oss/errors/401",
-                    "title": "Unauthorized",
-                    "status": 401,
-                    "detail": "API key required",
-                    "instance": path
-                }
-            )
-
-        if not _validate_api_key(provided, api_key_configured):
-            return JSONResponse(
-                status_code=403,
-                content={
-                    "type": "https://openmemory.oss/errors/403",
-                    "title": "Forbidden",
-                    "status": 403,
-                    "detail": "invalid_api_key",
-                    "instance": path
-                }
-            )
-
-        request.state.tenant = hashlib.sha256(provided.encode("utf-8")).hexdigest()[:16]
-        return await call_next(request)
-
-    @app.middleware("http")
-    async def log_requests(request: Request, call_next):
-        start = time.time()
-        # Sanitize path and method to prevent log forging
-        path = re.sub(r"[\r\n]", "", request.url.path)
-        method = re.sub(r"[\r\n]", "", request.method)
-        status_code = 500
-        try:
-            response = await call_next(request)
-            status_code = response.status_code
-            return response
-        finally:
-            process_time = (time.time() - start) * 1000
-            logger.info(f"{method} {path} - {status_code} ({process_time:.2f}ms)")
+    app.middleware("http")(limit_request_body_size)
+    app.middleware("http")(authenticate_api_request)
+    app.middleware("http")(log_requests)
 
     app.include_router(health.router)
     app.include_router(memory.router, prefix="/memory", tags=["memory"])

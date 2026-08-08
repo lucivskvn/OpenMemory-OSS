@@ -73,9 +73,10 @@ function check_field(
                 return value;
             }
             const s = value as string;
-            if (spec.min_length !== undefined && s.length < spec.min_length)
+            const codePointsLength = Array.from(s).length;
+            if (spec.min_length !== undefined && codePointsLength < spec.min_length)
                 errors.push(`${path}: length < ${spec.min_length}`);
-            if (spec.max_length !== undefined && s.length > spec.max_length)
+            if (spec.max_length !== undefined && codePointsLength > spec.max_length)
                 errors.push(`${path}: length > ${spec.max_length}`);
             if (spec.one_of && !spec.one_of.includes(s))
                 errors.push(`${path}: must be one of ${spec.one_of.join(",")}`);

@@ -21,11 +21,35 @@ class SearchMemoryRequest(BaseModel):
     limit: Optional[int] = 10
     filters: Optional[Dict[str, Any]] = {}
 
+def _validate_add_request(req: AddMemoryRequest) -> None:
+    if len(req.content) < 1 or len(req.content) > 200000:
+        raise HTTPException(status_code=400, detail="invalid_content_length")
+    if req.user_id is not None and len(req.user_id) > 256:
+        raise HTTPException(status_code=400, detail="invalid_user_id_length")
+    if not req.tags:
+        return
+    if len(req.tags) > 64:
+        raise HTTPException(status_code=400, detail="too_many_tags")
+    for tag in req.tags:
+        if len(tag) > 256:
+            raise HTTPException(status_code=400, detail="tag_too_long")
+
+def _validate_search_request(req: SearchMemoryRequest) -> None:
+    if req.user_id is not None and len(req.user_id) > 256:
+        raise HTTPException(status_code=400, detail="invalid_user_id_length")
+    if len(req.query) < 1 or len(req.query) > 8192:
+        raise HTTPException(status_code=400, detail="invalid_query_length")
+    if req.limit is not None and (req.limit < 0 or req.limit > 10000):
+        raise HTTPException(status_code=400, detail="invalid_limit")
+
 @router.post("/add", responses={
+    400: {"description": "Bad Request"},
     403: {"description": "Forbidden"},
     500: {"description": "Internal Server Error"}
 })
 async def add_memory(req: AddMemoryRequest, request: Request):
+    _validate_add_request(req)
+
     tenant = getattr(request.state, "tenant", "anonymous")
     user_id = req.user_id if req.user_id is not None else tenant
     if user_id != tenant:
@@ -48,14 +72,12 @@ async def add_memory(req: AddMemoryRequest, request: Request):
     500: {"description": "Internal Server Error"}
 })
 async def search_memory(req: SearchMemoryRequest, request: Request):
+    _validate_search_request(req)
+
     tenant = getattr(request.state, "tenant", "anonymous")
     user_id = req.user_id if req.user_id is not None else tenant
     if user_id != tenant:
         raise HTTPException(status_code=403, detail="tenant_mismatch")
-
-    # Input validation on search limit parameter to prevent DoS/resource exhaustion
-    if req.limit is not None and (req.limit < 0 or req.limit > 10000):
-        raise HTTPException(status_code=400, detail="invalid_limit")
 
     try:
         filters = req.filters or {}
@@ -71,13 +93,16 @@ async def search_memory(req: SearchMemoryRequest, request: Request):
     500: {"description": "Internal Server Error"}
 })
 async def get_history(user_id: str, request: Request, limit: int = 20, offset: int = 0):
-    tenant = getattr(request.state, "tenant", "anonymous")
-    if user_id != tenant:
-        raise HTTPException(status_code=403, detail="tenant_mismatch")
+    if len(user_id) > 256:
+        raise HTTPException(status_code=400, detail="invalid_user_id_length")
 
     # Input validation on pagination parameters to prevent unbounded SQLite queries / DoS
     if limit < 0 or offset < 0 or limit > 10000:
         raise HTTPException(status_code=400, detail="invalid_pagination")
+
+    tenant = getattr(request.state, "tenant", "anonymous")
+    if user_id != tenant:
+        raise HTTPException(status_code=403, detail="tenant_mismatch")
 
     try:
         results = mem.history(user_id, limit, offset)
