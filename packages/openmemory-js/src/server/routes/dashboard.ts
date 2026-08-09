@@ -404,8 +404,24 @@ export function dash(app: any) {
         const tenant = require_tenant(req, res);
         if (!tenant) return;
         try {
+            const hrs_raw = req.query.hours;
+            let hrs = 24;
+            if (hrs_raw !== undefined && hrs_raw !== "") {
+                const parsed = parseInt(String(hrs_raw), 10);
+                if (
+                    !Number.isFinite(parsed) ||
+                    !Number.isInteger(parsed) ||
+                    parsed <= 0 ||
+                    parsed > 8760
+                ) {
+                    return res.status(400).json({
+                        error: "invalid_hours",
+                        message: "Hours must be a positive integer between 1 and 8760.",
+                    });
+                }
+                hrs = parsed;
+            }
             const mem_table = get_mem_table();
-            const hrs = parseInt(req.query.hours || "24");
             const strt = Date.now() - hrs * 60 * 60 * 1000;
             const project_id = req.query.project_id;
 
@@ -508,7 +524,23 @@ export function dash(app: any) {
             });
         }
         try {
-            const hrs = parseInt(req.query.hours || "24");
+            const hrs_raw = req.query.hours;
+            let hrs = 24;
+            if (hrs_raw !== undefined && hrs_raw !== "") {
+                const parsed = parseInt(String(hrs_raw), 10);
+                if (
+                    !Number.isFinite(parsed) ||
+                    !Number.isInteger(parsed) ||
+                    parsed <= 0 ||
+                    parsed > 8760
+                ) {
+                    return res.status(400).json({
+                        error: "invalid_hours",
+                        message: "Hours must be a positive integer between 1 and 8760.",
+                    });
+                }
+                hrs = parsed;
+            }
             const strt = Date.now() - hrs * 60 * 60 * 1000;
             const sc = process.env.OM_PG_SCHEMA || "public";
 
@@ -523,8 +555,8 @@ export function dash(app: any) {
 
             const totals = await all_async(
                 is_pg
-                    ? `SELECT type, SUM(count) as total FROM "${sc}"."stats" WHERE type=$1 AND ts > $2 GROUP BY type`
-                    : `SELECT type, SUM(count) as total FROM stats WHERE type=? AND ts > ? GROUP BY type`,
+                    ? `SELECT type, SUM(count) as total FROM "${sc}"."stats" WHERE ts > $1 GROUP BY type`
+                    : `SELECT type, SUM(count) as total FROM stats WHERE ts > ? GROUP BY type`,
                 [strt],
             );
 

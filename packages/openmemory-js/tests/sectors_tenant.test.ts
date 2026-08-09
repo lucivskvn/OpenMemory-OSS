@@ -506,3 +506,105 @@ describe("Classifier training route scoping", () => {
         expect(admin_json.message).toBe("Training started");
     });
 });
+
+describe("Dashboard route hours parameter validation", () => {
+    let timeline_handler: any = null;
+    let maintenance_handler: any = null;
+
+    beforeEach(async () => {
+        await cleanup();
+
+        const app_mock = {
+            get: (path: string, handler: any) => {
+                if (path === "/dashboard/sectors/timeline") {
+                    timeline_handler = handler;
+                } else if (path === "/dashboard/maintenance") {
+                    maintenance_handler = handler;
+                }
+            },
+            post: () => {},
+        };
+
+        dash(app_mock);
+    });
+
+    it("accepts valid positive integers within range", async () => {
+        const req = { tenant: "admin", query: { hours: "48" } };
+        let status = 200;
+        let json_res: any = null;
+        const res = {
+            status: function (code: number) {
+                status = code;
+                return this;
+            },
+            json: (data: any) => {
+                json_res = data;
+            },
+        };
+
+        await timeline_handler(req, res);
+        if (status !== 200) {
+            console.log("TIMELINE RANGE FAILURE:", json_res);
+        }
+        expect(status).toBe(200);
+
+        status = 200;
+        await maintenance_handler(req, res);
+        if (status !== 200) {
+            console.log("MAINTENANCE RANGE FAILURE:", json_res);
+        }
+        expect(status).toBe(200);
+    });
+
+    it("rejects non-integer, negative, or excessive values for timeline", async () => {
+        const invalid_queries = ["-5", "0", "99999", "abc"];
+
+        for (const bad_hours of invalid_queries) {
+            const req = { tenant: "admin", query: { hours: bad_hours } };
+            let status = 200;
+            let json_res: any = null;
+            const res = {
+                status: function (code: number) {
+                    status = code;
+                    return this;
+                },
+                json: (data: any) => {
+                    json_res = data;
+                },
+            };
+
+            await timeline_handler(req, res);
+            if (status !== 400) {
+                console.log("TIMELINE INVALID HOURE REJECT FAILURE for", bad_hours, ":", json_res, "status:", status);
+            }
+            expect(status).toBe(400);
+            expect(json_res.error).toBe("invalid_hours");
+        }
+    });
+
+    it("rejects non-integer, negative, or excessive values for maintenance", async () => {
+        const invalid_queries = ["-5", "0", "99999", "abc"];
+
+        for (const bad_hours of invalid_queries) {
+            const req = { tenant: "admin", query: { hours: bad_hours } };
+            let status = 200;
+            let json_res: any = null;
+            const res = {
+                status: function (code: number) {
+                    status = code;
+                    return this;
+                },
+                json: (data: any) => {
+                    json_res = data;
+                },
+            };
+
+            await maintenance_handler(req, res);
+            if (status !== 400) {
+                console.log("MAINTENANCE INVALID HOURE REJECT FAILURE for", bad_hours, ":", json_res, "status:", status);
+            }
+            expect(status).toBe(400);
+            expect(json_res.error).toBe("invalid_hours");
+        }
+    });
+});
