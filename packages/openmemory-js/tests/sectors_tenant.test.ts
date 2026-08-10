@@ -557,7 +557,7 @@ describe("Dashboard route hours parameter validation", () => {
     });
 
     it("rejects non-integer, negative, or excessive values for timeline", async () => {
-        const invalid_queries = ["-5", "0", "99999", "abc"];
+        const invalid_queries = ["-5", "0", "99999", "abc", "1.5", "24hours", "1e2", [24] as any, { hours: 24 } as any];
 
         for (const bad_hours of invalid_queries) {
             const req = { tenant: "admin", query: { hours: bad_hours } };
@@ -583,7 +583,7 @@ describe("Dashboard route hours parameter validation", () => {
     });
 
     it("rejects non-integer, negative, or excessive values for maintenance", async () => {
-        const invalid_queries = ["-5", "0", "99999", "abc"];
+        const invalid_queries = ["-5", "0", "99999", "abc", "1.5", "24hours", "1e2", [24] as any, { hours: 24 } as any];
 
         for (const bad_hours of invalid_queries) {
             const req = { tenant: "admin", query: { hours: bad_hours } };

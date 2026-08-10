@@ -98,10 +98,20 @@ class LimitValidationError extends Error {
 }
 
 function parse_hours_query(hours_raw: unknown): number {
-    if (hours_raw === undefined || hours_raw === "") {
+    if (hours_raw === undefined || hours_raw === null || hours_raw === "") {
         return 24;
     }
-    const parsed = Number.parseInt(String(hours_raw), 10);
+    if (typeof hours_raw !== "string") {
+        throw new LimitValidationError(
+            "Hours must be a string consisting only of decimal digits.",
+        );
+    }
+    if (!/^\d+$/.test(hours_raw)) {
+        throw new LimitValidationError(
+            "Hours must consist only of decimal digits.",
+        );
+    }
+    const parsed = Number.parseInt(hours_raw, 10);
     if (
         !Number.isFinite(parsed) ||
         !Number.isInteger(parsed) ||
