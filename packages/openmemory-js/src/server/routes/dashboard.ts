@@ -97,6 +97,24 @@ class LimitValidationError extends Error {
     }
 }
 
+function parse_hours_query(hours_raw: unknown): number {
+    if (hours_raw === undefined || hours_raw === "") {
+        return 24;
+    }
+    const parsed = Number.parseInt(String(hours_raw), 10);
+    if (
+        !Number.isFinite(parsed) ||
+        !Number.isInteger(parsed) ||
+        parsed <= 0 ||
+        parsed > 8760
+    ) {
+        throw new LimitValidationError(
+            "Hours must be a positive integer between 1 and 8760.",
+        );
+    }
+    return parsed;
+}
+
 const is_admin_tenant = (tenant: string) => {
     return (
         tenant === "admin" || tenant === "system" || tenant === "dev-no-auth"
@@ -404,23 +422,7 @@ export function dash(app: any) {
         const tenant = require_tenant(req, res);
         if (!tenant) return;
         try {
-            const hrs_raw = req.query.hours;
-            let hrs = 24;
-            if (hrs_raw !== undefined && hrs_raw !== "") {
-                const parsed = parseInt(String(hrs_raw), 10);
-                if (
-                    !Number.isFinite(parsed) ||
-                    !Number.isInteger(parsed) ||
-                    parsed <= 0 ||
-                    parsed > 8760
-                ) {
-                    return res.status(400).json({
-                        error: "invalid_hours",
-                        message: "Hours must be a positive integer between 1 and 8760.",
-                    });
-                }
-                hrs = parsed;
-            }
+            const hrs = parse_hours_query(req.query.hours);
             const mem_table = get_mem_table();
             const strt = Date.now() - hrs * 60 * 60 * 1000;
             const project_id = req.query.project_id;
@@ -476,6 +478,12 @@ export function dash(app: any) {
                 grouping: timeKey,
             });
         } catch (e: any) {
+            if (e instanceof LimitValidationError) {
+                return res.status(400).json({
+                    error: "invalid_hours",
+                    message: e.message,
+                });
+            }
             res.status(500).json({ err: "internal", message: e.message });
         }
     });
@@ -524,23 +532,7 @@ export function dash(app: any) {
             });
         }
         try {
-            const hrs_raw = req.query.hours;
-            let hrs = 24;
-            if (hrs_raw !== undefined && hrs_raw !== "") {
-                const parsed = parseInt(String(hrs_raw), 10);
-                if (
-                    !Number.isFinite(parsed) ||
-                    !Number.isInteger(parsed) ||
-                    parsed <= 0 ||
-                    parsed > 8760
-                ) {
-                    return res.status(400).json({
-                        error: "invalid_hours",
-                        message: "Hours must be a positive integer between 1 and 8760.",
-                    });
-                }
-                hrs = parsed;
-            }
+            const hrs = parse_hours_query(req.query.hours);
             const strt = Date.now() - hrs * 60 * 60 * 1000;
             const sc = process.env.OM_PG_SCHEMA || "public";
 
@@ -598,6 +590,12 @@ export function dash(app: any) {
                 },
             });
         } catch (e: any) {
+            if (e instanceof LimitValidationError) {
+                return res.status(400).json({
+                    error: "invalid_hours",
+                    message: e.message,
+                });
+            }
             res.status(500).json({ err: "internal", message: e.message });
         }
     });
