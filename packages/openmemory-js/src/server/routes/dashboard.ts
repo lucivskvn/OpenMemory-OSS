@@ -97,6 +97,34 @@ class LimitValidationError extends Error {
     }
 }
 
+function parse_hours_query(hours_raw: unknown): number {
+    if (hours_raw === undefined || hours_raw === null || hours_raw === "") {
+        return 24;
+    }
+    if (typeof hours_raw !== "string") {
+        throw new LimitValidationError(
+            "Hours must be a string consisting only of decimal digits.",
+        );
+    }
+    if (!/^\d+$/.test(hours_raw)) {
+        throw new LimitValidationError(
+            "Hours must consist only of decimal digits.",
+        );
+    }
+    const parsed = Number.parseInt(hours_raw, 10);
+    if (
+        !Number.isFinite(parsed) ||
+        !Number.isInteger(parsed) ||
+        parsed <= 0 ||
+        parsed > 8760
+    ) {
+        throw new LimitValidationError(
+            "Hours must be a positive integer between 1 and 8760.",
+        );
+    }
+    return parsed;
+}
+
 const is_admin_tenant = (tenant: string) => {
     return (
         tenant === "admin" || tenant === "system" || tenant === "dev-no-auth"
@@ -404,8 +432,8 @@ export function dash(app: any) {
         const tenant = require_tenant(req, res);
         if (!tenant) return;
         try {
+            const hrs = parse_hours_query(req.query.hours);
             const mem_table = get_mem_table();
-            const hrs = parseInt(req.query.hours || "24");
             const strt = Date.now() - hrs * 60 * 60 * 1000;
             const project_id = req.query.project_id;
 
@@ -460,6 +488,12 @@ export function dash(app: any) {
                 grouping: timeKey,
             });
         } catch (e: any) {
+            if (e instanceof LimitValidationError) {
+                return res.status(400).json({
+                    error: "invalid_hours",
+                    message: e.message,
+                });
+            }
             res.status(500).json({ err: "internal", message: e.message });
         }
     });
@@ -508,7 +542,7 @@ export function dash(app: any) {
             });
         }
         try {
-            const hrs = parseInt(req.query.hours || "24");
+            const hrs = parse_hours_query(req.query.hours);
             const strt = Date.now() - hrs * 60 * 60 * 1000;
             const sc = process.env.OM_PG_SCHEMA || "public";
 
@@ -523,8 +557,8 @@ export function dash(app: any) {
 
             const totals = await all_async(
                 is_pg
-                    ? `SELECT type, SUM(count) as total FROM "${sc}"."stats" WHERE type=$1 AND ts > $2 GROUP BY type`
-                    : `SELECT type, SUM(count) as total FROM stats WHERE type=? AND ts > ? GROUP BY type`,
+                    ? `SELECT type, SUM(count) as total FROM "${sc}"."stats" WHERE ts > $1 GROUP BY type`
+                    : `SELECT type, SUM(count) as total FROM stats WHERE ts > ? GROUP BY type`,
                 [strt],
             );
 
@@ -566,6 +600,12 @@ export function dash(app: any) {
                 },
             });
         } catch (e: any) {
+            if (e instanceof LimitValidationError) {
+                return res.status(400).json({
+                    error: "invalid_hours",
+                    message: e.message,
+                });
+            }
             res.status(500).json({ err: "internal", message: e.message });
         }
     });
