@@ -261,4 +261,81 @@ describe("temporal_graph per-tenant isolation", () => {
         expect(volB).toHaveLength(2);
         expect(volB.map((v: any) => v.subject).sort()).toEqual([SA, SB].sort());
     });
+
+    it("enforces multi-tenant isolation on get_temporal_stats", async () => {
+        const { get_temporal_stats } = await import("../src/server/routes/temporal");
+
+        // Helper to mock request/response
+        const create_res_mock = () => {
+            let status_code = 200;
+            let res_json: any = null;
+            return {
+                status: function (code: number) {
+                    status_code = code;
+                    return this;
+                },
+                json: function (data: any) {
+                    res_json = data;
+                    return this;
+                },
+                get_status: () => status_code,
+                get_json: () => res_json,
+            };
+        };
+
+        // Query stats as T_ALICE (should get tenant-scoped stats)
+        const req_alice = {
+            tenant: T_ALICE,
+            query: {},
+        };
+        const res_alice = create_res_mock();
+        await get_temporal_stats(req_alice, res_alice);
+
+        expect(res_alice.get_status()).toBe(200);
+        const alice_json = res_alice.get_json();
+        expect(alice_json.scope).toBe("tenant");
+        const alice_total = alice_json.total_facts;
+
+        // Query stats as T_BOB (should get tenant-scoped stats)
+        const req_bob = {
+            tenant: T_BOB,
+            query: {},
+        };
+        const res_bob = create_res_mock();
+        await get_temporal_stats(req_bob, res_bob);
+
+        expect(res_bob.get_status()).toBe(200);
+        const bob_json = res_bob.get_json();
+        expect(bob_json.scope).toBe("tenant");
+        const bob_total = bob_json.total_facts;
+
+        // Query stats as admin with global=true (should get global stats)
+        const req_admin_global = {
+            tenant: "admin",
+            query: { global: "true" },
+        };
+        const res_admin_global = create_res_mock();
+        await get_temporal_stats(req_admin_global, res_admin_global);
+
+        expect(res_admin_global.get_status()).toBe(200);
+        const admin_global_json = res_admin_global.get_json();
+        expect(admin_global_json.scope).toBe("global");
+        const global_total = admin_global_json.total_facts;
+
+        // Verify that global total is the sum/combination of all tenants (at least > alice_total and > bob_total)
+        expect(global_total).toBeGreaterThan(alice_total);
+        expect(global_total).toBeGreaterThan(bob_total);
+
+        // Query stats as admin without global=true (should default to tenant-scoped stats)
+        const req_admin_local = {
+            tenant: "admin",
+            query: {},
+        };
+        const res_admin_local = create_res_mock();
+        await get_temporal_stats(req_admin_local, res_admin_local);
+
+        expect(res_admin_local.get_status()).toBe(200);
+        expect(res_admin_local.get_json().scope).toBe("tenant");
+        expect(res_admin_local.get_json().total_facts).toBe(0); // admin tenant itself has no facts
+    });
 });

@@ -466,10 +466,18 @@ export const get_temporal_stats = async (req: any, res: any) => {
     const tenant = require_tenant(req, res);
     if (!tenant) return;
     try {
-        // The underlying counters are not tenant-scoped; expose them only
-        // as global counters and document the limitation.
-        const active_facts = await get_active_facts_count();
-        const total_facts = await get_total_facts_count();
+        // Check if caller is an admin
+        const is_admin =
+            tenant === "admin" ||
+            tenant === "system" ||
+            tenant === "dev-no-auth";
+
+        // Only admins can see global stats (if they explicitly request it via global=true)
+        const show_global = is_admin && req.query.global === "true";
+        const scope_user = show_global ? undefined : tenant;
+
+        const active_facts = await get_active_facts_count(scope_user);
+        const total_facts = await get_total_facts_count(scope_user);
         const historical_facts = total_facts - active_facts;
 
         res.json({
@@ -480,7 +488,7 @@ export const get_temporal_stats = async (req: any, res: any) => {
                 total_facts > 0
                     ? ((historical_facts / total_facts) * 100).toFixed(2) + "%"
                     : "0%",
-            scope: "global",
+            scope: show_global ? "global" : "tenant",
         });
     } catch (error) {
         console.error("[TEMPORAL API] Error getting stats:", error);
