@@ -235,11 +235,11 @@ describe("temporal_graph per-tenant isolation", () => {
         const compBAsA = await timeline_lib.compare_time_points(SB, t1, t2, TA);
         expect(compBAsA.changed.length).toBe(0);
 
-        const volA = await timeline_lib.get_volatile_facts(undefined, 10, TA);
+        const volA = await timeline_lib.get_volatile_facts(undefined, TA, 10);
         expect(volA.length).toBe(1);
         expect(volA[0].subject).toBe(SA);
 
-        const volB = await timeline_lib.get_volatile_facts(undefined, 10, TB);
+        const volB = await timeline_lib.get_volatile_facts(undefined, TB, 10);
         expect(volB.length).toBe(1);
         expect(volB[0].subject).toBe(SB);
     });

@@ -3,20 +3,15 @@ import { TemporalFact, TimelineEntry } from "./types";
 
 export const get_subject_timeline = async (
     subject: string,
-    predicate?: string,
-    user_id?: string,
+    predicate: string | undefined,
+    user_id: string,
 ): Promise<TimelineEntry[]> => {
-    const conditions = ["subject = ?"];
-    const params: any[] = [subject];
+    const conditions = ["subject = ?", "user_id = ?"];
+    const params: any[] = [subject, user_id];
 
     if (predicate) {
         conditions.push("predicate = ?");
         params.push(predicate);
-    }
-
-    if (user_id) {
-        conditions.push("user_id = ?");
-        params.push(user_id);
     }
 
     const sql = `
@@ -58,12 +53,12 @@ export const get_subject_timeline = async (
 
 export const get_predicate_timeline = async (
     predicate: string,
-    from?: Date,
-    to?: Date,
-    user_id?: string,
+    from: Date | undefined,
+    to: Date | undefined,
+    user_id: string,
 ): Promise<TimelineEntry[]> => {
-    const conditions = ["predicate = ?"];
-    const params: any[] = [predicate];
+    const conditions = ["predicate = ?", "user_id = ?"];
+    const params: any[] = [predicate, user_id];
 
     if (from) {
         conditions.push("valid_from >= ?");
@@ -73,11 +68,6 @@ export const get_predicate_timeline = async (
     if (to) {
         conditions.push("valid_from <= ?");
         params.push(to.getTime());
-    }
-
-    if (user_id) {
-        conditions.push("user_id = ?");
-        params.push(user_id);
     }
 
     const sql = `
@@ -120,20 +110,20 @@ export const get_predicate_timeline = async (
 export const get_changes_in_window = async (
     from: Date,
     to: Date,
-    subject?: string,
+    subject: string | undefined,
+    user_id: string,
 ): Promise<TimelineEntry[]> => {
     const from_ts = from.getTime();
     const to_ts = to.getTime();
-    const conditions: string[] = [];
-    const params: any[] = [];
+    const conditions: string[] = ["user_id = ?"];
+    const params: any[] = [user_id];
 
     if (subject) {
         conditions.push("subject = ?");
         params.push(subject);
     }
 
-    const where =
-        conditions.length > 0 ? `AND ${conditions.join(" AND ")}` : "";
+    const where = `AND ${conditions.join(" AND ")}`;
 
     const sql = `
         SELECT subject, predicate, object, confidence, valid_from, valid_to
@@ -185,7 +175,7 @@ export const compare_time_points = async (
     subject: string,
     time1: Date,
     time2: Date,
-    user_id?: string,
+    user_id: string,
 ): Promise<{
     added: TemporalFact[];
     removed: TemporalFact[];
@@ -200,9 +190,9 @@ export const compare_time_points = async (
         SELECT id, user_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
         FROM temporal_facts
         WHERE subject = ?
-        AND valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?)${user_id ? " AND user_id = ?" : ""}
+        AND valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?) AND user_id = ?
     `,
-        [subject, t1_ts, t1_ts, ...(user_id ? [user_id] : [])],
+        [subject, t1_ts, t1_ts, user_id],
     );
 
     const facts_t2 = await all_async(
@@ -210,9 +200,9 @@ export const compare_time_points = async (
         SELECT id, user_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
         FROM temporal_facts
         WHERE subject = ?
-        AND valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?)${user_id ? " AND user_id = ?" : ""}
+        AND valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?) AND user_id = ?
     `,
-        [subject, t2_ts, t2_ts, ...(user_id ? [user_id] : [])],
+        [subject, t2_ts, t2_ts, user_id],
     );
 
     const map_t1 = new Map<string, any>();
@@ -257,6 +247,7 @@ export const compare_time_points = async (
 export const get_change_frequency = async (
     subject: string,
     predicate: string,
+    user_id: string,
     window_days: number = 30,
 ): Promise<{
     predicate: string;
@@ -271,11 +262,11 @@ export const get_change_frequency = async (
         `
         SELECT valid_from, valid_to
         FROM temporal_facts
-        WHERE subject = ? AND predicate = ?
+        WHERE subject = ? AND predicate = ? AND user_id = ?
         AND valid_from >= ?
         ORDER BY valid_from ASC
     `,
-        [subject, predicate, window_start],
+        [subject, predicate, user_id, window_start],
     );
 
     const total_changes = rows.length;
@@ -302,9 +293,9 @@ export const get_change_frequency = async (
 };
 
 export const get_volatile_facts = async (
-    subject?: string,
+    subject: string | undefined,
+    user_id: string,
     limit: number = 10,
-    user_id?: string,
 ): Promise<
     Array<{
         subject: string;
@@ -313,19 +304,15 @@ export const get_volatile_facts = async (
         avg_confidence: number;
     }>
 > => {
-    const conditions: string[] = [];
-    const params: any[] = [];
+    const conditions: string[] = ["user_id = ?"];
+    const params: any[] = [user_id];
 
     if (subject) {
         conditions.push("subject = ?");
         params.push(subject);
     }
-    if (user_id) {
-        conditions.push("user_id = ?");
-        params.push(user_id);
-    }
 
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const where = `WHERE ${conditions.join(" AND ")}`;
 
     const sql = `
         SELECT subject, predicate, COUNT(*) as change_count, AVG(confidence) as avg_confidence
