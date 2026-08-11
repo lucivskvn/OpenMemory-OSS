@@ -258,12 +258,7 @@ export const get_entity_timeline = async (req: any, res: any) => {
                 .status(400)
                 .json({ error: "Subject parameter is required" });
 
-        // get_subject_timeline does not accept user_id; filter post-hoc.
-        const timeline_raw = await get_subject_timeline(subject, predicate);
-        const timeline = timeline_raw.filter((entry: any) => {
-            const u = entry.fact?.user_id ?? entry.user_id;
-            return u === undefined || u === null || u === tenant;
-        });
+        const timeline = await get_subject_timeline(subject, predicate, tenant);
 
         res.json({ subject, predicate, timeline, count: timeline.length });
     } catch (error) {
@@ -291,15 +286,12 @@ export const get_predicate_history = async (req: any, res: any) => {
             return res.status(400).json({ error: "invalid from date" });
         if (!to_p.ok) return res.status(400).json({ error: "invalid to date" });
 
-        const timeline_raw = await get_predicate_timeline(
+        const timeline = await get_predicate_timeline(
             predicate,
             from_p.date,
             to_p.date,
+            tenant,
         );
-        const timeline = timeline_raw.filter((entry: any) => {
-            const u = entry.fact?.user_id ?? entry.user_id;
-            return u === undefined || u === null || u === tenant;
-        });
 
         res.json({
             predicate,
@@ -549,6 +541,7 @@ export const compare_facts = async (req: any, res: any) => {
             subject,
             t1_p.date,
             t2_p.date,
+            tenant,
         );
 
         res.json({
@@ -587,11 +580,7 @@ export const get_most_volatile = async (req: any, res: any) => {
             limit = n;
         }
 
-        const volatile_raw = await get_volatile_facts(subject, limit);
-        const volatile = volatile_raw.filter((f: any) => {
-            const u = f.user_id ?? f.fact?.user_id;
-            return u === undefined || u === null || u === tenant;
-        });
+        const volatile = await get_volatile_facts(subject, limit, tenant);
 
         res.json({
             subject,
