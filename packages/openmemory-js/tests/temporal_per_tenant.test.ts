@@ -15,6 +15,12 @@ import {
     find_conflicting_facts,
     get_related_facts,
 } from "../src/temporal_graph/query";
+import {
+    get_subject_timeline,
+    get_predicate_timeline,
+    compare_time_points,
+    get_volatile_facts,
+} from "../src/temporal_graph/timeline";
 
 const T_ALICE = "tenant-alice";
 const T_BOB = "tenant-bob";
@@ -180,5 +186,59 @@ describe("temporal_graph per-tenant isolation", () => {
         expect(after_second[0].user_id).toBe(LEGACY_ORPHAN_TENANT);
         const aliceSees = await get_facts_by_subject("S", { user_id: T_ALICE });
         expect(aliceSees.find((f: any) => f.id === "legacy-1")).toBeUndefined();
+    });
+
+    it("enforces multi-tenant isolation on timeline and volatility queries", async () => {
+        const TA = "tenant-a-timeline";
+        const TB = "tenant-b-timeline";
+        const SA = "SubjA_unique";
+        const SB = "SubjB_unique";
+        const P_ROLE = "Role_unique";
+
+        const test_setup = [
+            { user: TA, subj: SA, pred: P_ROLE, obj: "Engineer", date: "2026-01-01" },
+            { user: TA, subj: SA, pred: P_ROLE, obj: "Lead Engineer", date: "2026-02-01" },
+            { user: TB, subj: SB, pred: P_ROLE, obj: "Designer", date: "2026-01-01" },
+            { user: TB, subj: SB, pred: P_ROLE, obj: "Lead Designer", date: "2026-02-01" },
+        ];
+
+        for (const item of test_setup) {
+            await insert_fact({
+                subject: item.subj,
+                predicate: item.pred,
+                object: item.obj,
+                user_id: item.user,
+                valid_from: new Date(item.date),
+                confidence: 1.0,
+            });
+        }
+
+        const timelineA = await get_subject_timeline(SA, undefined, TA);
+        const timelineBAsA = await get_subject_timeline(SB, undefined, TA);
+        const timelineB = await get_subject_timeline(SB, undefined, TB);
+        expect(timelineA.length).toBe(3);
+        expect(timelineBAsA.length).toBe(0);
+        expect(timelineB.length).toBe(3);
+
+        const predTimelineA = await get_predicate_timeline(P_ROLE, undefined, undefined, TA);
+        const predTimelineB = await get_predicate_timeline(P_ROLE, undefined, undefined, TB);
+        expect(predTimelineA.length).toBe(3);
+        expect(predTimelineB.length).toBe(3);
+
+        const t1 = new Date("2026-01-15");
+        const t2 = new Date("2026-02-15");
+        const compA = await compare_time_points(SA, t1, t2, TA);
+        const compB = await compare_time_points(SB, t1, t2, TB);
+        const compBAsA = await compare_time_points(SB, t1, t2, TA);
+        expect(compA.changed.length).toBe(1);
+        expect(compB.changed.length).toBe(1);
+        expect(compBAsA.changed.length).toBe(0);
+
+        const volA = await get_volatile_facts(undefined, 10, TA);
+        const volB = await get_volatile_facts(undefined, 10, TB);
+        expect(volA.length).toBe(1);
+        expect(volA[0].subject).toBe(SA);
+        expect(volB.length).toBe(1);
+        expect(volB[0].subject).toBe(SB);
     });
 });
