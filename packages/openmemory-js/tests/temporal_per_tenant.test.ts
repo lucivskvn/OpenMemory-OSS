@@ -210,37 +210,37 @@ describe("temporal_graph per-tenant isolation", () => {
 
         // Plain, non-duplicated procedural queries to avoid Sonar's block matchers
         const timelineA = await timeline_lib.get_subject_timeline(SA, undefined, TA);
-        expect(timelineA.length).toBe(3);
+        expect(timelineA).toHaveLength(3);
 
         const timelineBAsA = await timeline_lib.get_subject_timeline(SB, undefined, TA);
-        expect(timelineBAsA.length).toBe(0);
+        expect(timelineBAsA).toHaveLength(0);
 
         const timelineB = await timeline_lib.get_subject_timeline(SB, undefined, TB);
-        expect(timelineB.length).toBe(3);
+        expect(timelineB).toHaveLength(3);
 
         const predTimelineA = await timeline_lib.get_predicate_timeline(P_ROLE, undefined, undefined, TA);
-        expect(predTimelineA.length).toBe(3);
+        expect(predTimelineA).toHaveLength(3);
 
         const predTimelineB = await timeline_lib.get_predicate_timeline(P_ROLE, undefined, undefined, TB);
-        expect(predTimelineB.length).toBe(3);
+        expect(predTimelineB).toHaveLength(3);
 
         const t1 = new Date("2026-01-15");
         const t2 = new Date("2026-02-15");
         const compA = await timeline_lib.compare_time_points(SA, t1, t2, TA);
-        expect(compA.changed.length).toBe(1);
+        expect(compA.changed).toHaveLength(1);
 
         const compB = await timeline_lib.compare_time_points(SB, t1, t2, TB);
-        expect(compB.changed.length).toBe(1);
+        expect(compB.changed).toHaveLength(1);
 
         const compBAsA = await timeline_lib.compare_time_points(SB, t1, t2, TA);
-        expect(compBAsA.changed.length).toBe(0);
+        expect(compBAsA.changed).toHaveLength(0);
 
         const volA = await timeline_lib.get_volatile_facts(undefined, TA, 10);
-        expect(volA.length).toBe(1);
+        expect(volA).toHaveLength(1);
         expect(volA[0].subject).toBe(SA);
 
         const volB = await timeline_lib.get_volatile_facts(undefined, TB, 10);
-        expect(volB.length).toBe(1);
+        expect(volB).toHaveLength(1);
         expect(volB[0].subject).toBe(SB);
     });
 });
