@@ -1,26 +1,7 @@
 import { all_async } from "../core/db";
 import { TemporalFact, TimelineEntry } from "./types";
 
-export const get_subject_timeline = async (
-    subject: string,
-    predicate: string | undefined,
-    user_id: string,
-): Promise<TimelineEntry[]> => {
-    const conditions = ["subject = ?", "user_id = ?"];
-    const params: any[] = [subject, user_id];
-
-    if (predicate) {
-        conditions.push("predicate = ?");
-        params.push(predicate);
-    }
-
-    const sql = `
-        SELECT subject, predicate, object, confidence, valid_from, valid_to
-        FROM temporal_facts
-        WHERE ${conditions.join(" AND ")}
-        ORDER BY valid_from ASC
-    `;
-
+async function build_timeline_from_query(sql: string, params: any[]): Promise<TimelineEntry[]> {
     const rows = await all_async(sql, params);
     const timeline: TimelineEntry[] = [];
 
@@ -49,6 +30,29 @@ export const get_subject_timeline = async (
     return timeline.sort(
         (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
     );
+}
+
+export const get_subject_timeline = async (
+    subject: string,
+    predicate: string | undefined,
+    user_id: string,
+): Promise<TimelineEntry[]> => {
+    const conditions = ["subject = ?", "user_id = ?"];
+    const params: any[] = [subject, user_id];
+
+    if (predicate) {
+        conditions.push("predicate = ?");
+        params.push(predicate);
+    }
+
+    const sql = `
+        SELECT subject, predicate, object, confidence, valid_from, valid_to
+        FROM temporal_facts
+        WHERE ${conditions.join(" AND ")}
+        ORDER BY valid_from ASC
+    `;
+
+    return build_timeline_from_query(sql, params);
 };
 
 export const get_predicate_timeline = async (
@@ -77,34 +81,7 @@ export const get_predicate_timeline = async (
         ORDER BY valid_from ASC
     `;
 
-    const rows = await all_async(sql, params);
-    const timeline: TimelineEntry[] = [];
-
-    for (const row of rows) {
-        timeline.push({
-            timestamp: new Date(row.valid_from),
-            subject: row.subject,
-            predicate: row.predicate,
-            object: row.object,
-            confidence: row.confidence,
-            change_type: "created",
-        });
-
-        if (row.valid_to) {
-            timeline.push({
-                timestamp: new Date(row.valid_to),
-                subject: row.subject,
-                predicate: row.predicate,
-                object: row.object,
-                confidence: row.confidence,
-                change_type: "invalidated",
-            });
-        }
-    }
-
-    return timeline.sort(
-        (a, b) => a.timestamp.getTime() - b.timestamp.getTime(),
-    );
+    return build_timeline_from_query(sql, params);
 };
 
 export const get_changes_in_window = async (
