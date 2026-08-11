@@ -213,32 +213,42 @@ describe("temporal_graph per-tenant isolation", () => {
             });
         }
 
-        const timelineA = await get_subject_timeline(SA, undefined, TA);
-        const timelineBAsA = await get_subject_timeline(SB, undefined, TA);
-        const timelineB = await get_subject_timeline(SB, undefined, TB);
-        expect(timelineA.length).toBe(3);
-        expect(timelineBAsA.length).toBe(0);
-        expect(timelineB.length).toBe(3);
+        const timelineQueries = [
+            { s: SA, u: TA, expected: 3 },
+            { s: SB, u: TA, expected: 0 },
+            { s: SB, u: TB, expected: 3 }
+        ];
+        for (const q of timelineQueries) {
+            const res = await get_subject_timeline(q.s, undefined, q.u);
+            expect(res.length).toBe(q.expected);
+        }
 
-        const predTimelineA = await get_predicate_timeline(P_ROLE, undefined, undefined, TA);
-        const predTimelineB = await get_predicate_timeline(P_ROLE, undefined, undefined, TB);
-        expect(predTimelineA.length).toBe(3);
-        expect(predTimelineB.length).toBe(3);
+        const predQueries = [ { u: TA }, { u: TB } ];
+        for (const q of predQueries) {
+            const res = await get_predicate_timeline(P_ROLE, undefined, undefined, q.u);
+            expect(res.length).toBe(3);
+        }
 
         const t1 = new Date("2026-01-15");
         const t2 = new Date("2026-02-15");
-        const compA = await compare_time_points(SA, t1, t2, TA);
-        const compB = await compare_time_points(SB, t1, t2, TB);
-        const compBAsA = await compare_time_points(SB, t1, t2, TA);
-        expect(compA.changed.length).toBe(1);
-        expect(compB.changed.length).toBe(1);
-        expect(compBAsA.changed.length).toBe(0);
+        const compQueries = [
+            { s: SA, u: TA, expected: 1 },
+            { s: SB, u: TB, expected: 1 },
+            { s: SB, u: TA, expected: 0 }
+        ];
+        for (const q of compQueries) {
+            const res = await compare_time_points(q.s, t1, t2, q.u);
+            expect(res.changed.length).toBe(q.expected);
+        }
 
-        const volA = await get_volatile_facts(undefined, 10, TA);
-        const volB = await get_volatile_facts(undefined, 10, TB);
-        expect(volA.length).toBe(1);
-        expect(volA[0].subject).toBe(SA);
-        expect(volB.length).toBe(1);
-        expect(volB[0].subject).toBe(SB);
+        const volQueries = [
+            { u: TA, expectedSubj: SA },
+            { u: TB, expectedSubj: SB }
+        ];
+        for (const q of volQueries) {
+            const res = await get_volatile_facts(undefined, 10, q.u);
+            expect(res.length).toBe(1);
+            expect(res[0].subject).toBe(q.expectedSubj);
+        }
     });
 });
