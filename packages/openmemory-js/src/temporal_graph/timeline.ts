@@ -4,6 +4,7 @@ import { TemporalFact, TimelineEntry } from "./types";
 export const get_subject_timeline = async (
     subject: string,
     predicate?: string,
+    user_id?: string,
 ): Promise<TimelineEntry[]> => {
     const conditions = ["subject = ?"];
     const params: any[] = [subject];
@@ -11,6 +12,11 @@ export const get_subject_timeline = async (
     if (predicate) {
         conditions.push("predicate = ?");
         params.push(predicate);
+    }
+
+    if (user_id) {
+        conditions.push("user_id = ?");
+        params.push(user_id);
     }
 
     const sql = `
@@ -54,6 +60,7 @@ export const get_predicate_timeline = async (
     predicate: string,
     from?: Date,
     to?: Date,
+    user_id?: string,
 ): Promise<TimelineEntry[]> => {
     const conditions = ["predicate = ?"];
     const params: any[] = [predicate];
@@ -66,6 +73,11 @@ export const get_predicate_timeline = async (
     if (to) {
         conditions.push("valid_from <= ?");
         params.push(to.getTime());
+    }
+
+    if (user_id) {
+        conditions.push("user_id = ?");
+        params.push(user_id);
     }
 
     const sql = `
@@ -173,6 +185,7 @@ export const compare_time_points = async (
     subject: string,
     time1: Date,
     time2: Date,
+    user_id?: string,
 ): Promise<{
     added: TemporalFact[];
     removed: TemporalFact[];
@@ -184,22 +197,22 @@ export const compare_time_points = async (
 
     const facts_t1 = await all_async(
         `
-        SELECT id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
+        SELECT id, user_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
         FROM temporal_facts
         WHERE subject = ?
-        AND valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?)
+        AND valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?)${user_id ? " AND user_id = ?" : ""}
     `,
-        [subject, t1_ts, t1_ts],
+        [subject, t1_ts, t1_ts, ...(user_id ? [user_id] : [])],
     );
 
     const facts_t2 = await all_async(
         `
-        SELECT id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
+        SELECT id, user_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata
         FROM temporal_facts
         WHERE subject = ?
-        AND valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?)
+        AND valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?)${user_id ? " AND user_id = ?" : ""}
     `,
-        [subject, t2_ts, t2_ts],
+        [subject, t2_ts, t2_ts, ...(user_id ? [user_id] : [])],
     );
 
     const map_t1 = new Map<string, any>();
@@ -291,6 +304,7 @@ export const get_change_frequency = async (
 export const get_volatile_facts = async (
     subject?: string,
     limit: number = 10,
+    user_id?: string,
 ): Promise<
     Array<{
         subject: string;
@@ -299,8 +313,19 @@ export const get_volatile_facts = async (
         avg_confidence: number;
     }>
 > => {
-    const where = subject ? "WHERE subject = ?" : "";
-    const params = subject ? [subject] : [];
+    const conditions: string[] = [];
+    const params: any[] = [];
+
+    if (subject) {
+        conditions.push("subject = ?");
+        params.push(subject);
+    }
+    if (user_id) {
+        conditions.push("user_id = ?");
+        params.push(user_id);
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
     const sql = `
         SELECT subject, predicate, COUNT(*) as change_count, AVG(confidence) as avg_confidence
@@ -318,6 +343,7 @@ export const get_volatile_facts = async (
 function row_to_fact(row: any): TemporalFact {
     return {
         id: row.id,
+        user_id: row.user_id,
         subject: row.subject,
         predicate: row.predicate,
         object: row.object,
