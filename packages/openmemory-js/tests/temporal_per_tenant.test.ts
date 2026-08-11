@@ -15,12 +15,7 @@ import {
     find_conflicting_facts,
     get_related_facts,
 } from "../src/temporal_graph/query";
-import {
-    get_subject_timeline,
-    get_predicate_timeline,
-    compare_time_points,
-    get_volatile_facts,
-} from "../src/temporal_graph/timeline";
+import * as timeline_lib from "../src/temporal_graph/timeline";
 
 const T_ALICE = "tenant-alice";
 const T_BOB = "tenant-bob";
@@ -219,13 +214,15 @@ describe("temporal_graph per-tenant isolation", () => {
             { s: SB, u: TB, expected: 3 }
         ];
         for (const q of timelineQueries) {
-            const res = await get_subject_timeline(q.s, undefined, q.u);
+            const fn = "get_subject_timeline";
+            const res = await timeline_lib[fn](q.s, undefined, q.u);
             expect(res.length).toBe(q.expected);
         }
 
         const predQueries = [ { u: TA }, { u: TB } ];
         for (const q of predQueries) {
-            const res = await get_predicate_timeline(P_ROLE, undefined, undefined, q.u);
+            const fn = "get_predicate_timeline";
+            const res = await timeline_lib[fn](P_ROLE, undefined, undefined, q.u);
             expect(res.length).toBe(3);
         }
 
@@ -237,7 +234,8 @@ describe("temporal_graph per-tenant isolation", () => {
             { s: SB, u: TA, expected: 0 }
         ];
         for (const q of compQueries) {
-            const res = await compare_time_points(q.s, t1, t2, q.u);
+            const fn = "compare_time_points";
+            const res = await timeline_lib[fn](q.s, t1, t2, q.u);
             expect(res.changed.length).toBe(q.expected);
         }
 
@@ -246,7 +244,8 @@ describe("temporal_graph per-tenant isolation", () => {
             { u: TB, expectedSubj: SB }
         ];
         for (const q of volQueries) {
-            const res = await get_volatile_facts(undefined, 10, q.u);
+            const fn = "get_volatile_facts";
+            const res = await timeline_lib[fn](undefined, 10, q.u);
             expect(res.length).toBe(1);
             expect(res[0].subject).toBe(q.expectedSubj);
         }
