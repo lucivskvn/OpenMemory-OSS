@@ -588,7 +588,7 @@ export const get_most_volatile = async (req: any, res: any) => {
             limit = n;
         }
 
-        const volatile = await get_volatile_facts(subject, limit, tenant);
+        const volatile = await get_volatile_facts(subject, tenant, limit);
 
         res.json({
             subject,
