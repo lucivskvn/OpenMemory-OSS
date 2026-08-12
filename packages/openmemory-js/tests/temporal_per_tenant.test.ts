@@ -296,6 +296,19 @@ describe("temporal_graph per-tenant isolation", () => {
         expect(alice_json.scope).toBe("tenant");
         const alice_total = alice_json.total_facts;
 
+        // Standard tenant (T_ALICE) attempts to query global=true (should be downgraded/ignored)
+        const req_alice_bypass = {
+            tenant: T_ALICE,
+            query: { global: "true" },
+        };
+        const res_alice_bypass = create_res_mock();
+        await get_temporal_stats(req_alice_bypass, res_alice_bypass);
+
+        expect(res_alice_bypass.get_status()).toBe(200);
+        const alice_bypass_json = res_alice_bypass.get_json();
+        expect(alice_bypass_json.scope).toBe("tenant"); // Must be downgraded to "tenant" scope
+        expect(alice_bypass_json.total_facts).toBe(alice_total); // Must match normal tenant-scoped total
+
         // Query stats as T_BOB (should get tenant-scoped stats)
         const req_bob = {
             tenant: T_BOB,
