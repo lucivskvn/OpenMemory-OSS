@@ -296,17 +296,29 @@ export const apply_confidence_decay = async (
     return changes;
 };
 
-export const get_active_facts_count = async (): Promise<number> => {
-    const result = (await get_async(
-        "SELECT COUNT(*) as count FROM temporal_facts WHERE valid_to IS NULL",
-    )) as any;
+export const get_active_facts_count = async (
+    user_id?: string,
+): Promise<number> => {
+    let sql = "SELECT COUNT(*) as count FROM temporal_facts WHERE valid_to IS NULL";
+    const params: any[] = [];
+    if (user_id) {
+        sql += " AND user_id = ?";
+        params.push(user_id);
+    }
+    const result = (await get_async(sql, params)) as any;
     return result?.count || 0;
 };
 
-export const get_total_facts_count = async (): Promise<number> => {
-    const result = (await get_async(
-        "SELECT COUNT(*) as count FROM temporal_facts",
-    )) as any;
+export const get_total_facts_count = async (
+    user_id?: string,
+): Promise<number> => {
+    let sql = "SELECT COUNT(*) as count FROM temporal_facts";
+    const params: any[] = [];
+    if (user_id) {
+        sql += " WHERE user_id = ?";
+        params.push(user_id);
+    }
+    const result = (await get_async(sql, params)) as any;
     return result?.count || 0;
 };
 
