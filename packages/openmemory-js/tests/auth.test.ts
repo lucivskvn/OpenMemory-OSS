@@ -287,4 +287,27 @@ describe("Authentication Middleware", () => {
 
         expect(next_called_new).toBe(true);
     });
+
+    it("rejects access to /dashboard/health without valid authentication", () => {
+        const req: any = {
+            path: "/dashboard/health",
+            headers: {},
+        };
+        let next_called = false;
+        let status_val = 0;
+        const res: any = {
+            status: (s: number) => {
+                status_val = s;
+                return res;
+            },
+            json: () => res,
+        };
+
+        authenticate_api_request(req, res, () => {
+            next_called = true;
+        });
+
+        expect(next_called).toBe(false);
+        expect(status_val).toBe(401); // Requires API key
+    });
 });

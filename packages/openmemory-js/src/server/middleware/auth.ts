@@ -56,7 +56,6 @@ const auth_config = {
         "/health",
         "/api/system/health",
         "/api/system/stats",
-        "/dashboard/health",
         "/sources/webhook",
     ],
 };
