@@ -46,7 +46,8 @@ export function compression(app: any) {
             }
             res.json({ ok: true, comp: r.comp, m: r.metrics, hash: r.hash });
         } catch (e: any) {
-            res.status(500).json({ error: e.message });
+            console.error("[compression] compress error:", e);
+            res.status(500).json({ error: "Compression processing failed" });
         }
     });
 
@@ -71,7 +72,8 @@ export function compression(app: any) {
                 total: r.reduce((s: any, x: any) => s + x.metrics.saved, 0),
             });
         } catch (e: any) {
-            res.status(500).json({ error: e.message });
+            console.error("[compression] batch error:", e);
+            res.status(500).json({ error: "Compression processing failed" });
         }
     });
 
@@ -101,7 +103,8 @@ export function compression(app: any) {
                 },
             });
         } catch (e: any) {
-            res.status(500).json({ error: e.message });
+            console.error("[compression] analyze error:", e);
+            res.status(500).json({ error: "Compression processing failed" });
         }
     });
 
@@ -133,7 +136,8 @@ export function compression(app: any) {
                 },
             });
         } catch (e: any) {
-            res.status(500).json({ error: e.message });
+            console.error("[compression] stats error:", e);
+            res.status(500).json({ error: "Compression processing failed" });
         }
     });
 
@@ -151,7 +155,8 @@ export function compression(app: any) {
             compressionEngine.clear();
             res.json({ ok: true, msg: "reset done" });
         } catch (e: any) {
-            res.status(500).json({ error: e.message });
+            console.error("[compression] reset error:", e);
+            res.status(500).json({ error: "Compression processing failed" });
         }
     });
 }
