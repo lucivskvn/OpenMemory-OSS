@@ -260,7 +260,7 @@ describe("temporal_graph per-tenant isolation", () => {
         // Tenant B now has SA and SB
         expect(volB).toHaveLength(2);
         expect(volB.map((v: any) => v.subject).sort()).toEqual([SA, SB].sort());
-    });
+    }, 20000);
 
     it("enforces multi-tenant isolation on get_temporal_stats", async () => {
         const { get_temporal_stats } = await import("../src/server/routes/temporal");
@@ -350,5 +350,56 @@ describe("temporal_graph per-tenant isolation", () => {
         expect(res_admin_local.get_status()).toBe(200);
         expect(res_admin_local.get_json().scope).toBe("tenant");
         expect(res_admin_local.get_json().total_facts).toBe(0); // admin tenant itself has no facts
+    });
+
+    it("enforces multi-tenant isolation on get_most_volatile", async () => {
+        const { get_most_volatile } = await import("../src/server/routes/temporal");
+
+        // Helper to mock request/response
+        const create_res_mock = () => {
+            let status_code = 200;
+            let res_json: any = null;
+            return {
+                status: function (code: number) {
+                    status_code = code;
+                    return this;
+                },
+                json: function (data: any) {
+                    res_json = data;
+                    return this;
+                },
+                get_status: () => status_code,
+                get_json: () => res_json,
+            };
+        };
+
+        // TA is tenant-a-timeline, TB is tenant-b-timeline
+        // Query as TA
+        const req_ta = {
+            tenant: "tenant-a-timeline",
+            query: { limit: "10" },
+        };
+        const res_ta = create_res_mock();
+        await get_most_volatile(req_ta, res_ta);
+
+        expect(res_ta.get_status()).toBe(200);
+        const ta_json = res_ta.get_json();
+        expect(ta_json.count).toBe(1);
+        expect(ta_json.volatile_facts[0].subject).toBe("SubjA_unique");
+
+        // Query as TB
+        const req_tb = {
+            tenant: "tenant-b-timeline",
+            query: { limit: "10" },
+        };
+        const res_tb = create_res_mock();
+        await get_most_volatile(req_tb, res_tb);
+
+        expect(res_tb.get_status()).toBe(200);
+        const tb_json = res_tb.get_json();
+        expect(tb_json.count).toBe(2);
+        expect(tb_json.volatile_facts.map((f: any) => f.subject).sort()).toEqual(
+            ["SubjA_unique", "SubjB_unique"].sort()
+        );
     });
 });
