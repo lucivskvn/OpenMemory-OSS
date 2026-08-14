@@ -367,7 +367,16 @@ export function dash(app: any) {
         }
     });
 
-    app.get("/dashboard/health", async (_req: any, res: any) => {
+    app.get("/dashboard/health", async (req: any, res: any) => {
+        const tenant = require_tenant(req, res);
+        if (!tenant) return;
+        if (!is_admin_tenant(tenant)) {
+            return res.status(403).json({
+                error: "forbidden",
+                message:
+                    "Only administrators can access health operational data",
+            });
+        }
         try {
             const memusg = process.memoryUsage();
             const upt = process.uptime();
