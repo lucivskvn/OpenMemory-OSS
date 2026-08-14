@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { authenticate_api_request } from "../src/server/middleware/auth";
 import { env } from "../src/core/config";
+import { dash } from "../src/server/routes/dashboard";
 
 describe("Authentication Middleware", () => {
     let original_api_key: string | undefined;
@@ -309,5 +310,80 @@ describe("Authentication Middleware", () => {
 
         expect(next_called).toBe(false);
         expect(status_val).toBe(401); // Requires API key
+    });
+
+    it("enforces require_tenant and is_admin_tenant on /dashboard/health route", async () => {
+        let health_handler: any = null;
+        const app_mock = {
+            get: (path: string, handler: any) => {
+                if (path === "/dashboard/health") {
+                    health_handler = handler;
+                }
+            },
+            post: () => {},
+        };
+
+        dash(app_mock);
+        expect(health_handler).toBeTruthy();
+
+        // 1. Missing tenant (should return 401)
+        const req_no_tenant = {};
+        let status_code = 200;
+        let res_json: any = null;
+        const res_no_tenant = {
+            status: function (code: number) {
+                status_code = code;
+                return this;
+            },
+            json: (data: any) => {
+                res_json = data;
+            },
+        };
+
+        await health_handler(req_no_tenant, res_no_tenant);
+        expect(status_code).toBe(401);
+        expect(res_json.error).toBe("authentication_required");
+
+        // 2. Authenticated non-administrator tenant (should return 403)
+        const req_non_admin = {
+            tenant: "tenant-alice",
+        };
+        let status_code_non_admin = 200;
+        let res_json_non_admin: any = null;
+        const res_non_admin = {
+            status: function (code: number) {
+                status_code_non_admin = code;
+                return this;
+            },
+            json: (data: any) => {
+                res_json_non_admin = data;
+            },
+        };
+
+        await health_handler(req_non_admin, res_non_admin);
+        expect(status_code_non_admin).toBe(403);
+        expect(res_json_non_admin.error).toBe("forbidden");
+
+        // 3. Authenticated administrator tenant (should return 200)
+        const req_admin = {
+            tenant: "admin",
+        };
+        let status_code_admin = 200;
+        let res_json_admin: any = null;
+        const res_admin = {
+            status: function (code: number) {
+                status_code_admin = code;
+                return this;
+            },
+            json: (data: any) => {
+                res_json_admin = data;
+            },
+        };
+
+        await health_handler(req_admin, res_admin);
+        expect(status_code_admin).toBe(200);
+        expect(res_json_admin).toBeTruthy();
+        expect(res_json_admin.memory).toBeDefined();
+        expect(res_json_admin.process).toBeDefined();
     });
 });
