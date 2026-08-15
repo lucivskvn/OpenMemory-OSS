@@ -310,7 +310,7 @@ describe("Compression routes tenant scoping and admin check", () => {
                 expect(JSON.stringify(res_json)).not.toContain(secret_error_msg);
             }
 
-            expect(logged_errors.length).toBe(test_cases.length);
+            expect(logged_errors).toHaveLength(test_cases.length);
             for (let i = 0; i < test_cases.length; i++) {
                 expect(logged_errors[i][0]).toContain(`[compression] ${test_cases[i].name} error:`);
             }
