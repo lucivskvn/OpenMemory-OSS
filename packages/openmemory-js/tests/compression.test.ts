@@ -257,6 +257,12 @@ describe("Compression routes tenant scoping and admin check", () => {
         const orig_analyze = compressionEngine.analyze;
         const orig_stats = compressionEngine.getStats;
         const orig_reset = compressionEngine.reset;
+        const orig_console_error = console.error;
+
+        const logged_errors: any[][] = [];
+        console.error = (...args: any[]) => {
+            logged_errors.push(args);
+        };
 
         const secret_error_msg = "SENSITIVE_DB_CREDENTIALS_AND_INTERNAL_STACK_TRACE";
 
@@ -278,11 +284,11 @@ describe("Compression routes tenant scoping and admin check", () => {
             };
 
             const test_cases = [
-                { handler: compress_handler, req: { tenant: "tenant-alice", body: { text: "hello" } } },
-                { handler: batch_handler, req: { tenant: "tenant-alice", body: { texts: ["hello"] } } },
-                { handler: analyze_handler, req: { tenant: "tenant-alice", body: { text: "hello" } } },
-                { handler: stats_handler, req: { tenant: "admin" } },
-                { handler: reset_handler, req: { tenant: "admin" } },
+                { name: "compress", handler: compress_handler, req: { tenant: "tenant-alice", body: { text: "hello" } } },
+                { name: "batch", handler: batch_handler, req: { tenant: "tenant-alice", body: { texts: ["hello"] } } },
+                { name: "analyze", handler: analyze_handler, req: { tenant: "tenant-alice", body: { text: "hello" } } },
+                { name: "stats", handler: stats_handler, req: { tenant: "admin" } },
+                { name: "reset", handler: reset_handler, req: { tenant: "admin" } },
             ];
 
             for (const tc of test_cases) {
@@ -303,12 +309,18 @@ describe("Compression routes tenant scoping and admin check", () => {
                 expect(res_json?.error).toBe("Compression processing failed");
                 expect(JSON.stringify(res_json)).not.toContain(secret_error_msg);
             }
+
+            expect(logged_errors.length).toBe(test_cases.length);
+            for (let i = 0; i < test_cases.length; i++) {
+                expect(logged_errors[i][0]).toContain(`[compression] ${test_cases[i].name} error:`);
+            }
         } finally {
             compressionEngine.auto = orig_auto;
             compressionEngine.batch = orig_batch;
             compressionEngine.analyze = orig_analyze;
             compressionEngine.getStats = orig_stats;
             compressionEngine.reset = orig_reset;
+            console.error = orig_console_error;
         }
     });
 });
