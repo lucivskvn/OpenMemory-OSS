@@ -1,5 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { compression } from "../src/server/routes/compression";
+import { compressionEngine } from "../src/ops/compress";
 
 describe("Compression routes tenant scoping and admin check", () => {
     // 1. Setup route handlers mock
@@ -248,5 +249,78 @@ describe("Compression routes tenant scoping and admin check", () => {
         const res_analyze_huge = create_res_mock();
         await analyze_handler(req_analyze_huge, res_analyze_huge);
         expect(res_analyze_huge.get_status()).toBe(400);
+    });
+
+    it("sanitizes 500 error responses and prevents raw exception leakage", async () => {
+        const orig_auto = compressionEngine.auto;
+        const orig_batch = compressionEngine.batch;
+        const orig_analyze = compressionEngine.analyze;
+        const orig_stats = compressionEngine.getStats;
+        const orig_reset = compressionEngine.reset;
+        const orig_console_error = console.error;
+
+        const logged_errors: any[][] = [];
+        console.error = (...args: any[]) => {
+            logged_errors.push(args);
+        };
+
+        const secret_error_msg = "SENSITIVE_DB_CREDENTIALS_AND_INTERNAL_STACK_TRACE";
+
+        try {
+            compressionEngine.auto = () => {
+                throw new Error(secret_error_msg);
+            };
+            compressionEngine.batch = () => {
+                throw new Error(secret_error_msg);
+            };
+            compressionEngine.analyze = () => {
+                throw new Error(secret_error_msg);
+            };
+            compressionEngine.getStats = () => {
+                throw new Error(secret_error_msg);
+            };
+            compressionEngine.reset = () => {
+                throw new Error(secret_error_msg);
+            };
+
+            const test_cases = [
+                { name: "compress", handler: compress_handler, req: { tenant: "tenant-alice", body: { text: "hello" } } },
+                { name: "batch", handler: batch_handler, req: { tenant: "tenant-alice", body: { texts: ["hello"] } } },
+                { name: "analyze", handler: analyze_handler, req: { tenant: "tenant-alice", body: { text: "hello" } } },
+                { name: "stats", handler: stats_handler, req: { tenant: "admin" } },
+                { name: "reset", handler: reset_handler, req: { tenant: "admin" } },
+            ];
+
+            for (const tc of test_cases) {
+                let status_code = 200;
+                let res_json: any = null;
+                const res_mock = {
+                    status: function (code: number) {
+                        status_code = code;
+                        return this;
+                    },
+                    json: (data: any) => {
+                        res_json = data;
+                    },
+                };
+
+                await tc.handler(tc.req, res_mock);
+                expect(status_code).toBe(500);
+                expect(res_json?.error).toBe("Compression processing failed");
+                expect(JSON.stringify(res_json)).not.toContain(secret_error_msg);
+            }
+
+            expect(logged_errors).toHaveLength(test_cases.length);
+            for (let i = 0; i < test_cases.length; i++) {
+                expect(logged_errors[i][0]).toContain(`[compression] ${test_cases[i].name} error:`);
+            }
+        } finally {
+            compressionEngine.auto = orig_auto;
+            compressionEngine.batch = orig_batch;
+            compressionEngine.analyze = orig_analyze;
+            compressionEngine.getStats = orig_stats;
+            compressionEngine.reset = orig_reset;
+            console.error = orig_console_error;
+        }
     });
 });
