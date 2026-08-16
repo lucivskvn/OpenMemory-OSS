@@ -100,7 +100,8 @@ export function mem(app: any) {
                 console.error("[mem] user summary update failed:", e),
             );
         } catch (e: any) {
-            res.status(500).json({ err: e.message });
+            console.error("[mem] /memory/add failed:", e);
+            res.status(500).json({ err: "internal" });
         }
     });
 
@@ -126,7 +127,8 @@ export function mem(app: any) {
             );
             res.json(r);
         } catch (e: any) {
-            res.status(500).json({ err: "ingest_fail", msg: e.message });
+            console.error("[mem] /memory/ingest failed:", e);
+            res.status(500).json({ err: "ingest_fail" });
         }
     });
 
@@ -145,7 +147,8 @@ export function mem(app: any) {
             const r = await ingestURL(b.url, b.metadata, b.config, tenant);
             res.json(r);
         } catch (e: any) {
-            res.status(500).json({ err: "url_fail", msg: e.message });
+            console.error("[mem] /memory/ingest/url failed:", e);
+            res.status(500).json({ err: "url_fail" });
         }
     });
 

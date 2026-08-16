@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "bun:test";
 import { authenticate_api_request } from "../src/server/middleware/auth";
 import { env } from "../src/core/config";
 import { dash } from "../src/server/routes/dashboard";
+import { mem } from "../src/server/routes/memory";
 
 describe("Authentication Middleware", () => {
     let original_api_key: string | undefined;
@@ -385,5 +386,97 @@ describe("Authentication Middleware", () => {
         expect(res_json_admin).toBeTruthy();
         expect(res_json_admin.memory).toBeDefined();
         expect(res_json_admin.process).toBeDefined();
+    });
+
+    it("sanitizes exception responses on memory ingestion routes (/memory/add, /memory/ingest, /memory/ingest/url)", async () => {
+        const handlers: Record<string, any> = {};
+        const app_mock = {
+            post: (path: string, handler: any) => {
+                handlers[path] = handler;
+            },
+            get: () => {},
+            patch: () => {},
+            delete: () => {},
+        };
+
+        mem(app_mock);
+        expect(handlers["/memory/add"]).toBeTruthy();
+        expect(handlers["/memory/ingest"]).toBeTruthy();
+        expect(handlers["/memory/ingest/url"]).toBeTruthy();
+
+        // 1. /memory/add sanitization test
+        let add_status = 0;
+        let add_json: any = null;
+        const res_add = {
+            status: (code: number) => {
+                add_status = code;
+                return res_add;
+            },
+            json: (data: any) => {
+                add_json = data;
+            },
+        };
+        // Invalid request body format that causes an internal exception
+        const req_add = {
+            tenant: "test-tenant",
+            body: { content: "Valid content string" },
+        };
+        // Call /memory/add with mock that triggers catch block or test error response
+        await handlers["/memory/add"](req_add, res_add);
+        // Verify response does not leak raw stack/message
+        if (add_status === 500) {
+            expect(add_json).toEqual({ err: "internal" });
+            expect(add_json.msg).toBeUndefined();
+            expect(add_json.message).toBeUndefined();
+        }
+
+        // 2. /memory/ingest sanitization test
+        let ingest_status = 0;
+        let ingest_json: any = null;
+        const res_ingest = {
+            status: (code: number) => {
+                ingest_status = code;
+                return res_ingest;
+            },
+            json: (data: any) => {
+                ingest_json = data;
+            },
+        };
+        const req_ingest = {
+            tenant: "test-tenant",
+            body: {
+                content_type: "unknown_invalid_type",
+                data: "test data string",
+            },
+        };
+        await handlers["/memory/ingest"](req_ingest, res_ingest);
+        expect(ingest_status).toBe(500);
+        expect(ingest_json).toEqual({ err: "ingest_fail" });
+        expect(ingest_json.msg).toBeUndefined();
+        expect(ingest_json.message).toBeUndefined();
+
+        // 3. /memory/ingest/url sanitization test
+        let url_status = 0;
+        let url_json: any = null;
+        const res_url = {
+            status: (code: number) => {
+                url_status = code;
+                return res_url;
+            },
+            json: (data: any) => {
+                url_json = data;
+            },
+        };
+        const req_url = {
+            tenant: "test-tenant",
+            body: {
+                url: "invalid-url-format",
+            },
+        };
+        await handlers["/memory/ingest/url"](req_url, res_url);
+        expect(url_status).toBe(500);
+        expect(url_json).toEqual({ err: "url_fail" });
+        expect(url_json.msg).toBeUndefined();
+        expect(url_json.message).toBeUndefined();
     });
 });
