@@ -426,8 +426,11 @@ describe("Authentication Middleware", () => {
             body: { content: "Valid content string" },
         };
 
-        await handlers["/memory/add"](req_add, res_add);
-        spy.mockRestore();
+        try {
+            await handlers["/memory/add"](req_add, res_add);
+        } finally {
+            spy.mockRestore();
+        }
 
         expect(add_status).toBe(500);
         expect(add_json).toEqual({ err: "internal" });
@@ -482,133 +485,5 @@ describe("Authentication Middleware", () => {
         expect(url_json).toEqual({ err: "url_fail" });
         expect(url_json.msg).toBeUndefined();
         expect(url_json.message).toBeUndefined();
-    });
-});
-
-describe("Memory Routes Error Sanitization", () => {
-    let routes: Record<string, Function> = {};
-
-    beforeAll(() => {
-        const app_mock = {
-            post: (path: string, handler: Function) => {
-                routes[path] = handler;
-            },
-            get: () => {},
-            patch: () => {},
-            delete: () => {},
-        };
-        mem(app_mock);
-    });
-
-    it("sanitizes error message in /memory/add on internal failure", async () => {
-        const handler = routes["/memory/add"];
-        expect(handler).toBeTruthy();
-
-        const spy = spyOn(hsgModule, "add_hsg_memory").mockImplementation(async () => {
-            throw new Error("Secret database password leak: postgresql://admin:secret123@db:5432/main");
-        });
-
-        const req = {
-            tenant: "test-tenant-123",
-            body: {
-                content: "Valid memory content for test",
-            },
-        };
-
-        let status_code = 0;
-        let res_json: any = null;
-        const res = {
-            status: (code: number) => {
-                status_code = code;
-                return res;
-            },
-            json: (data: any) => {
-                res_json = data;
-                return res;
-            },
-        };
-
-        await handler(req, res);
-
-        expect(status_code).toBe(500);
-        expect(res_json).toEqual({ err: "internal" });
-        expect(JSON.stringify(res_json)).not.toContain("Secret database password leak");
-
-        spy.mockRestore();
-    });
-
-    it("sanitizes error message in /memory/ingest on internal failure", async () => {
-        const handler = routes["/memory/ingest"];
-        expect(handler).toBeTruthy();
-
-        const spy = spyOn(ingestModule, "ingestDocument").mockImplementation(async () => {
-            throw new Error("Sensitive internal stack trace /var/secrets/key.pem access denied");
-        });
-
-        const req = {
-            tenant: "test-tenant-123",
-            body: {
-                content_type: "text/plain",
-                data: "test data",
-            },
-        };
-
-        let status_code = 0;
-        let res_json: any = null;
-        const res = {
-            status: (code: number) => {
-                status_code = code;
-                return res;
-            },
-            json: (data: any) => {
-                res_json = data;
-                return res;
-            },
-        };
-
-        await handler(req, res);
-
-        expect(status_code).toBe(500);
-        expect(res_json).toEqual({ err: "ingest_fail" });
-        expect(JSON.stringify(res_json)).not.toContain("Sensitive internal stack trace");
-
-        spy.mockRestore();
-    });
-
-    it("sanitizes error message in /memory/ingest/url on internal failure", async () => {
-        const handler = routes["/memory/ingest/url"];
-        expect(handler).toBeTruthy();
-
-        const spy = spyOn(ingestModule, "ingestURL").mockImplementation(async () => {
-            throw new Error("Internal network error at 10.0.0.15:8080 timeout");
-        });
-
-        const req = {
-            tenant: "test-tenant-123",
-            body: {
-                url: "https://example.com/doc",
-            },
-        };
-
-        let status_code = 0;
-        let res_json: any = null;
-        const res = {
-            status: (code: number) => {
-                status_code = code;
-                return res;
-            },
-            json: (data: any) => {
-                res_json = data;
-                return res;
-            },
-        };
-
-        await handler(req, res);
-
-        expect(status_code).toBe(500);
-        expect(res_json).toEqual({ err: "url_fail" });
-        expect(JSON.stringify(res_json)).not.toContain("10.0.0.15:8080");
-
-        spy.mockRestore();
     });
 });
