@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeAll, afterAll } from "bun:test";
+import { describe, it, expect, beforeAll, afterAll, spyOn } from "bun:test";
 import { authenticate_api_request } from "../src/server/middleware/auth";
 import { env } from "../src/core/config";
 import { dash } from "../src/server/routes/dashboard";
 import { mem } from "../src/server/routes/memory";
+import * as hsgModule from "../src/memory/hsg";
 
 describe("Authentication Middleware", () => {
     let original_api_key: string | undefined;
@@ -405,6 +406,10 @@ describe("Authentication Middleware", () => {
         expect(handlers["/memory/ingest/url"]).toBeTruthy();
 
         // 1. /memory/add sanitization test
+        const spy = spyOn(hsgModule, "add_hsg_memory").mockImplementationOnce(() =>
+            Promise.reject(new Error("Sensitive database failure trace")),
+        );
+
         let add_status = 0;
         let add_json: any = null;
         const res_add = {
@@ -416,19 +421,18 @@ describe("Authentication Middleware", () => {
                 add_json = data;
             },
         };
-        // Invalid request body format that causes an internal exception
         const req_add = {
             tenant: "test-tenant",
             body: { content: "Valid content string" },
         };
-        // Call /memory/add with mock that triggers catch block or test error response
+
         await handlers["/memory/add"](req_add, res_add);
-        // Verify response does not leak raw stack/message
-        if (add_status === 500) {
-            expect(add_json).toEqual({ err: "internal" });
-            expect(add_json.msg).toBeUndefined();
-            expect(add_json.message).toBeUndefined();
-        }
+        spy.mockRestore();
+
+        expect(add_status).toBe(500);
+        expect(add_json).toEqual({ err: "internal" });
+        expect(add_json.msg).toBeUndefined();
+        expect(add_json.message).toBeUndefined();
 
         // 2. /memory/ingest sanitization test
         let ingest_status = 0;
