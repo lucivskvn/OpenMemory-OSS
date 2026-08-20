@@ -201,7 +201,8 @@ export function dash(app: any) {
                 projects: projs.map((p: any) => p.project_id),
             });
         } catch (e: any) {
-            res.status(500).json({ err: "internal", message: e.message });
+            console.error("[dash] projects err:", e);
+            res.status(500).json({ err: "internal" });
         }
     });
 
@@ -363,7 +364,7 @@ export function dash(app: any) {
             });
         } catch (e: any) {
             console.error("[dash] stats err:", e);
-            res.status(500).json({ err: "internal", message: e.message });
+            res.status(500).json({ err: "internal" });
         }
     });
 
@@ -399,7 +400,8 @@ export function dash(app: any) {
                 },
             });
         } catch (e: any) {
-            res.status(500).json({ err: "internal", message: e.message });
+            console.error("[dash] health err:", e);
+            res.status(500).json({ err: "internal" });
         }
     });
 
@@ -433,7 +435,8 @@ export function dash(app: any) {
                     .status(400)
                     .json({ error: "invalid_limit", message: e.message });
             }
-            res.status(500).json({ err: "internal", message: e.message });
+            console.error("[dash] activity err:", e);
+            res.status(500).json({ err: "internal" });
         }
     });
 
@@ -503,7 +506,8 @@ export function dash(app: any) {
                     message: e.message,
                 });
             }
-            res.status(500).json({ err: "internal", message: e.message });
+            console.error("[dash] sectors timeline err:", e);
+            res.status(500).json({ err: "internal" });
         }
     });
 
@@ -536,7 +540,8 @@ export function dash(app: any) {
                     .status(400)
                     .json({ error: "invalid_limit", message: e.message });
             }
-            res.status(500).json({ err: "internal", message: e.message });
+            console.error("[dash] top-memories err:", e);
+            res.status(500).json({ err: "internal" });
         }
     });
 
@@ -615,7 +620,8 @@ export function dash(app: any) {
                     message: e.message,
                 });
             }
-            res.status(500).json({ err: "internal", message: e.message });
+            console.error("[dash] maintenance err:", e);
+            res.status(500).json({ err: "internal" });
         }
     });
 }

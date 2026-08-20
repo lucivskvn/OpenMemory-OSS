@@ -3,7 +3,10 @@ import { authenticate_api_request } from "../src/server/middleware/auth";
 import { env } from "../src/core/config";
 import { dash } from "../src/server/routes/dashboard";
 import { mem } from "../src/server/routes/memory";
+import { lg } from "../src/server/routes/langgraph";
 import * as hsgModule from "../src/memory/hsg";
+import * as graphAiModule from "../src/ai/graph";
+import * as dbModule from "../src/core/db";
 
 describe("Authentication Middleware", () => {
     let original_api_key: string | undefined;
@@ -485,5 +488,124 @@ describe("Authentication Middleware", () => {
         expect(url_json).toEqual({ err: "url_fail" });
         expect(url_json.msg).toBeUndefined();
         expect(url_json.message).toBeUndefined();
+    });
+
+    it("sanitizes exception responses on dashboard, memory query, and langgraph routes", async () => {
+        // 1. Test /dashboard/projects error sanitization
+        let dash_projects_handler: any = null;
+        dash({
+            get: (path: string, handler: any) => {
+                if (path === "/dashboard/projects") dash_projects_handler = handler;
+            },
+            post: () => {},
+        });
+        expect(dash_projects_handler).toBeTruthy();
+
+        const dbSpy = spyOn(dbModule, "all_async").mockImplementationOnce(() =>
+            Promise.reject(new Error("Sensitive DB failure trace")),
+        );
+
+        let projects_status = 0;
+        let projects_json: any = null;
+        const res_projects = {
+            status: (code: number) => {
+                projects_status = code;
+                return res_projects;
+            },
+            json: (data: any) => {
+                projects_json = data;
+            },
+        };
+        const req_projects = { tenant: "test-tenant" };
+
+        try {
+            await dash_projects_handler(req_projects, res_projects);
+        } finally {
+            dbSpy.mockRestore();
+        }
+
+        expect(projects_status).toBe(500);
+        expect(projects_json).toEqual({ err: "internal" });
+        expect(projects_json.message).toBeUndefined();
+
+        // 2. Test /memory/query error sanitization
+        const mem_handlers: Record<string, any> = {};
+        mem({
+            post: (path: string, handler: any) => {
+                mem_handlers[path] = handler;
+            },
+            get: () => {},
+            patch: () => {},
+            delete: () => {},
+        });
+        expect(mem_handlers["/memory/query"]).toBeTruthy();
+
+        const querySpy = spyOn(hsgModule, "hsg_query").mockImplementationOnce(() =>
+            Promise.reject(new Error("Sensitive query failure trace")),
+        );
+
+        let query_status = 0;
+        let query_json: any = null;
+        const res_query = {
+            status: (code: number) => {
+                query_status = code;
+                return res_query;
+            },
+            json: (data: any) => {
+                query_json = data;
+            },
+        };
+        const req_query = {
+            tenant: "test-tenant",
+            body: { query: "test query" },
+        };
+
+        try {
+            await mem_handlers["/memory/query"](req_query, res_query);
+        } finally {
+            querySpy.mockRestore();
+        }
+
+        expect(query_status).toBe(500);
+        expect(query_json).toEqual({ error: "query_failed", message: "internal" });
+
+        // 3. Test /lgm/store error sanitization
+        const lgm_handlers: Record<string, any> = {};
+        lg({
+            post: (path: string, handler: any) => {
+                lgm_handlers[path] = handler;
+            },
+            get: () => {},
+        });
+        expect(lgm_handlers["/lgm/store"]).toBeTruthy();
+
+        const storeSpy = spyOn(graphAiModule, "store_node_mem").mockImplementationOnce(() =>
+            Promise.reject(new Error("Sensitive langgraph failure trace")),
+        );
+
+        let lgm_status = 0;
+        let lgm_json: any = null;
+        const res_lgm = {
+            status: (code: number) => {
+                lgm_status = code;
+                return res_lgm;
+            },
+            json: (data: any) => {
+                lgm_json = data;
+            },
+        };
+        const req_lgm = {
+            tenant: "test-tenant",
+            body: { content: "test memory" },
+        };
+
+        try {
+            await lgm_handlers["/lgm/store"](req_lgm, res_lgm);
+        } finally {
+            storeSpy.mockRestore();
+        }
+
+        expect(lgm_status).toBe(400);
+        expect(lgm_json).toEqual({ err: "lgm_store_failed", message: "internal" });
     });
 });

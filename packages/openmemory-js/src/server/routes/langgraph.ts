@@ -64,7 +64,7 @@ export function lg(app: any) {
             console.error("[LGM] store error:", e);
             res.status(400).json({
                 err: "lgm_store_failed",
-                message: (e as Error).message,
+                message: "internal",
             });
         }
     });
@@ -84,7 +84,7 @@ export function lg(app: any) {
             console.error("[LGM] retrieve error:", e);
             res.status(400).json({
                 err: "lgm_retrieve_failed",
-                message: (e as Error).message,
+                message: "internal",
             });
         }
     });
@@ -104,7 +104,7 @@ export function lg(app: any) {
             console.error("[LGM] context error:", e);
             res.status(400).json({
                 err: "lgm_context_failed",
-                message: (e as Error).message,
+                message: "internal",
             });
         }
     });
@@ -124,7 +124,7 @@ export function lg(app: any) {
             console.error("[LGM] reflection error:", e);
             res.status(400).json({
                 err: "lgm_reflection_failed",
-                message: (e as Error).message,
+                message: "internal",
             });
         }
     });

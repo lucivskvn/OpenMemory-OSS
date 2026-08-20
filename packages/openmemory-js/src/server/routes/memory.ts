@@ -203,7 +203,7 @@ export function mem(app: any) {
             console.error("[mem] /memory/query failed:", e);
             res.status(500).json({
                 error: "query_failed",
-                message: e?.message || "internal",
+                message: "internal",
             });
         }
     });
