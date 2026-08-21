@@ -45,7 +45,7 @@ const LgmReflectionReqSchema = z
     .passthrough();
 
 function handle_lgm_error(res: any, action: string, e: unknown) {
-    console.error(`[LGM] ${action} error:`, e);
+    console.error("[LGM] operation error:", action, e);
     if (e instanceof z.ZodError) {
         return res.status(400).json({
             err: "invalid_payload",
