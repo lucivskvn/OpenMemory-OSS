@@ -44,6 +44,20 @@ const LgmReflectionReqSchema = z
     })
     .passthrough();
 
+function handle_lgm_error(res: any, action: string, e: unknown) {
+    console.error(`[LGM] ${action} error:`, e);
+    if (e instanceof z.ZodError) {
+        return res.status(400).json({
+            err: "invalid_payload",
+            message: "Validation failed",
+        });
+    }
+    return res.status(500).json({
+        err: `lgm_${action}_failed`,
+        message: "internal",
+    });
+}
+
 export function lg(app: any) {
     app.get("/lgm/config", (_req: any, res: any) => {
         res.json(get_lg_cfg());
@@ -61,11 +75,7 @@ export function lg(app: any) {
             } as lgm_store_req);
             res.json(r);
         } catch (e) {
-            console.error("[LGM] store error:", e);
-            res.status(400).json({
-                err: "lgm_store_failed",
-                message: (e as Error).message,
-            });
+            handle_lgm_error(res, "store", e);
         }
     });
 
@@ -81,11 +91,7 @@ export function lg(app: any) {
             } as lgm_retrieve_req);
             res.json(r);
         } catch (e) {
-            console.error("[LGM] retrieve error:", e);
-            res.status(400).json({
-                err: "lgm_retrieve_failed",
-                message: (e as Error).message,
-            });
+            handle_lgm_error(res, "retrieve", e);
         }
     });
 
@@ -101,11 +107,7 @@ export function lg(app: any) {
             } as lgm_context_req);
             res.json(r);
         } catch (e) {
-            console.error("[LGM] context error:", e);
-            res.status(400).json({
-                err: "lgm_context_failed",
-                message: (e as Error).message,
-            });
+            handle_lgm_error(res, "context", e);
         }
     });
 
@@ -121,11 +123,7 @@ export function lg(app: any) {
             } as lgm_reflection_req);
             res.json(r);
         } catch (e) {
-            console.error("[LGM] reflection error:", e);
-            res.status(400).json({
-                err: "lgm_reflection_failed",
-                message: (e as Error).message,
-            });
+            handle_lgm_error(res, "reflection", e);
         }
     });
 }

@@ -3,7 +3,7 @@ process.env.OM_EMBEDDING_FALLBACK = "synthetic";
 process.env.OM_METADATA_BACKEND = process.env.OM_METADATA_BACKEND || "sqlite";
 process.env.OM_VECTOR_BACKEND = process.env.OM_VECTOR_BACKEND || "sqlite";
 
-import { beforeEach, describe, expect, it } from "bun:test";
+import { beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { run_async, q } from "../src/core/db";
 import {
     store_node_mem,
@@ -11,6 +11,8 @@ import {
     get_graph_ctx,
     create_refl,
 } from "../src/ai/graph";
+import * as graphModule from "../src/ai/graph";
+import { lg } from "../src/server/routes/langgraph";
 
 const T_ALICE = "tenant-alice-lg";
 const T_BOB = "tenant-bob-lg";
@@ -177,4 +179,75 @@ describe("LangGraph per-tenant scoping", () => {
         expect(row.content).toContain("Alice");
         expect(row.content).not.toContain("Bob");
     }, 25000);
+
+    it("sanitizes exception responses and returns 500 on internal errors, and 400 on Zod validation errors", async () => {
+        const handlers: Record<string, any> = {};
+        const app_mock = {
+            post: (path: string, handler: any) => {
+                handlers[path] = handler;
+            },
+            get: () => {},
+        };
+
+        lg(app_mock);
+        expect(handlers["/lgm/store"]).toBeTruthy();
+        expect(handlers["/lgm/retrieve"]).toBeTruthy();
+
+        // 1. Internal error on /lgm/store should return 500 and sanitized message "internal"
+        const spyStore = spyOn(graphModule, "store_node_mem").mockImplementationOnce(() =>
+            Promise.reject(new Error("Database column error or sensitive path trace")),
+        );
+
+        let store_status = 0;
+        let store_json: any = null;
+        const res_store = {
+            status: (code: number) => {
+                store_status = code;
+                return res_store;
+            },
+            json: (data: any) => {
+                store_json = data;
+            },
+        };
+        const req_store = {
+            tenant: T_ALICE,
+            body: { content: "Valid test content" },
+        };
+
+        try {
+            await handlers["/lgm/store"](req_store, res_store);
+        } finally {
+            spyStore.mockRestore();
+        }
+
+        expect(store_status).toBe(500);
+        expect(store_json).toEqual({
+            err: "lgm_store_failed",
+            message: "internal",
+        });
+
+        // 2. Zod validation error (invalid parameter type) should return 400 Bad Request
+        let val_status = 0;
+        let val_json: any = null;
+        const res_val = {
+            status: (code: number) => {
+                val_status = code;
+                return res_val;
+            },
+            json: (data: any) => {
+                val_json = data;
+            },
+        };
+        const req_val = {
+            tenant: T_ALICE,
+            body: { limit: "invalid_number_type" },
+        };
+
+        await handlers["/lgm/retrieve"](req_val, res_val);
+        expect(val_status).toBe(400);
+        expect(val_json).toEqual({
+            err: "invalid_payload",
+            message: "Validation failed",
+        });
+    });
 });
