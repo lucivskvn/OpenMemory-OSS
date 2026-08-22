@@ -102,7 +102,7 @@ function handle_dash_error(res: any, ep: string, err: any) {
         const errType = ep.includes("timeline") || ep.includes("maintenance") ? "invalid_hours" : "invalid_limit";
         return res.status(400).json({ error: errType, message: err.message });
     }
-    console.error(`[dash] ${ep} err:`, err);
+    console.error("[dash]", ep, "err:", err);
     res.status(500).json({ err: "internal" });
 }
 
