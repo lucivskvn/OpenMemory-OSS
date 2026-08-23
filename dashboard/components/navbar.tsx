@@ -31,9 +31,14 @@ export default function Navbar() {
     }, [])
 
     useEffect(() => {
-        checkBackendStatus()
+        const initialCheck = window.setTimeout(() => {
+            void checkBackendStatus()
+        }, 0)
         const interval = setInterval(checkBackendStatus, 5000)
-        return () => clearInterval(interval)
+        return () => {
+            window.clearTimeout(initialCheck)
+            clearInterval(interval)
+        }
     }, [checkBackendStatus])
 
     return (
