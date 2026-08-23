@@ -338,9 +338,11 @@ describe("Compression routes tenant scoping and admin check", () => {
         const spy = spyOn(dbModule, "all_async").mockImplementation(() => {
             throw new Error("SECRET_DB_LEAK: postgres://admin:pass@127.0.0.1:5432/db");
         });
+        const console_spy = spyOn(console, "error").mockImplementation(() => {});
+        let server: ReturnType<typeof d_app.listen> | undefined;
 
         try {
-            const server = d_app.listen(0);
+            server = d_app.listen(0);
             const port = (server.address() as any).port;
             const routes = [
                 "/dashboard/projects",
@@ -357,9 +359,18 @@ describe("Compression routes tenant scoping and admin check", () => {
                 const data = await res.json();
                 expect(data).toEqual({ err: "internal" });
             }
-            server.close();
+            expect(JSON.stringify(console_spy.mock.calls)).not.toContain("SECRET_DB_LEAK");
         } finally {
-            spy.mockRestore();
+            try {
+                if (server) {
+                    await new Promise<void>((resolve, reject) => {
+                        server.close((error) => (error ? reject(error) : resolve()));
+                    });
+                }
+            } finally {
+                spy.mockRestore();
+                console_spy.mockRestore();
+            }
         }
     });
 });

@@ -97,12 +97,23 @@ class LimitValidationError extends Error {
     }
 }
 
-function handle_dash_error(res: any, ep: string, err: any) {
+function handle_dash_error(res: any, ep: string, err: unknown) {
     if (err instanceof LimitValidationError) {
         const errType = ep.includes("timeline") || ep.includes("maintenance") ? "invalid_hours" : "invalid_limit";
         return res.status(400).json({ error: errType, message: err.message });
     }
-    console.error("[dash]", ep, "err:", err);
+    const errorClass =
+        err instanceof Error && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(err.constructor.name)
+            ? err.constructor.name
+            : "UnknownError";
+    const errorCode =
+        typeof err === "object" &&
+        err !== null &&
+        typeof (err as { code?: unknown }).code === "string" &&
+        /^[A-Za-z0-9_]{1,64}$/.test((err as { code: string }).code)
+            ? (err as { code: string }).code
+            : "unknown";
+    console.error("[dash] request failed", { route: ep, errorClass, errorCode });
     res.status(500).json({ err: "internal" });
 }
 
