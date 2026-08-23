@@ -404,6 +404,7 @@ describe("Authentication Middleware", () => {
         expect(handlers["/memory/add"]).toBeTruthy();
         expect(handlers["/memory/ingest"]).toBeTruthy();
         expect(handlers["/memory/ingest/url"]).toBeTruthy();
+        expect(handlers["/memory/query"]).toBeTruthy();
 
         // 1. /memory/add sanitization test
         const spy = spyOn(hsgModule, "add_hsg_memory").mockImplementationOnce(() =>
@@ -485,5 +486,40 @@ describe("Authentication Middleware", () => {
         expect(url_json).toEqual({ err: "url_fail" });
         expect(url_json.msg).toBeUndefined();
         expect(url_json.message).toBeUndefined();
+
+        // 4. /memory/query sanitization test
+        const query_spy = spyOn(hsgModule, "hsg_query").mockImplementationOnce(() =>
+            Promise.reject(new Error("Database connection string: postgres://admin:secret@localhost:5432/db")),
+        );
+
+        let query_status = 0;
+        let query_json: any = null;
+        const res_query = {
+            status: (code: number) => {
+                query_status = code;
+                return res_query;
+            },
+            json: (data: any) => {
+                query_json = data;
+            },
+        };
+        const req_query = {
+            tenant: "test-tenant",
+            body: {
+                query: "test search query",
+            },
+        };
+
+        try {
+            await handlers["/memory/query"](req_query, res_query);
+        } finally {
+            query_spy.mockRestore();
+        }
+
+        expect(query_status).toBe(500);
+        expect(query_json).toEqual({
+            error: "query_failed",
+            message: "internal",
+        });
     });
 });
