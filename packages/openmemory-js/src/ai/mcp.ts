@@ -27,6 +27,8 @@ const sec_enum = z.enum([
     "reflective",
 ] as const);
 
+const MAX_MCP_BODY_BYTES = 1024 * 1024;
+
 const trunc = (val: string, max = 200) =>
     val.length <= max ? val : `${val.slice(0, max).trimEnd()}...`;
 
@@ -852,25 +854,49 @@ export const create_mcp_srv = (tenant?: string) => {
     return srv;
 };
 
-const extract_pay = async (req: IncomingMessage & { body?: any }) => {
+const parse_mcp_payload = (body: string) => {
+    if (Buffer.byteLength(body, "utf8") > MAX_MCP_BODY_BYTES) {
+        throw new RangeError("MCP request body exceeds the 1 MiB limit");
+    }
+    return JSON.parse(body);
+};
+
+const extract_pay = async (req: IncomingMessage & { body?: unknown }) => {
     if (req.body !== undefined) {
         if (typeof req.body === "string") {
             if (!req.body.trim()) return undefined;
-            return JSON.parse(req.body);
+            return parse_mcp_payload(req.body);
         }
         if (typeof req.body === "object" && req.body !== null) return req.body;
         return undefined;
     }
     const raw = await new Promise<string>((resolve, reject) => {
-        let buf = "";
+        const chunks: Buffer[] = [];
+        let size = 0;
+        let rejected = false;
         req.on("data", (chunk) => {
-            buf += chunk;
+            if (rejected) return;
+            const bytes = Buffer.isBuffer(chunk)
+                ? chunk
+                : Buffer.from(String(chunk));
+            size += bytes.length;
+            if (size > MAX_MCP_BODY_BYTES) {
+                rejected = true;
+                req.resume();
+                reject(
+                    new RangeError("MCP request body exceeds the 1 MiB limit"),
+                );
+                return;
+            }
+            chunks.push(bytes);
         });
-        req.on("end", () => resolve(buf));
+        req.on("end", () => {
+            if (!rejected) resolve(Buffer.concat(chunks).toString("utf8"));
+        });
         req.on("error", reject);
     });
     if (!raw.trim()) return undefined;
-    return JSON.parse(raw);
+    return parse_mcp_payload(raw);
 };
 
 export const mcp = (app: any) => {
@@ -881,7 +907,11 @@ export const mcp = (app: any) => {
                 send_err(res, -32600, "Request body must be a JSON object");
                 return;
             }
-            console.error("[MCP] Incoming request:", JSON.stringify(pay));
+            const method =
+                "method" in pay && typeof pay.method === "string"
+                    ? pay.method
+                    : "unknown";
+            console.error("[MCP] Incoming request method:", method);
             set_hdrs(res);
 
             const tenant_from_req =
@@ -897,6 +927,16 @@ export const mcp = (app: any) => {
             await trans.handleRequest(req, res, pay);
         } catch (error) {
             console.error("[MCP] Error handling request:", error);
+            if (error instanceof RangeError) {
+                send_err(
+                    res,
+                    -32600,
+                    "Request body exceeds the 1 MiB limit",
+                    null,
+                    413,
+                );
+                return;
+            }
             if (error instanceof SyntaxError) {
                 send_err(res, -32600, "Invalid JSON payload");
                 return;
