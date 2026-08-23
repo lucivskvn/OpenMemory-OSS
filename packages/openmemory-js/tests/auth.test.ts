@@ -488,8 +488,8 @@ describe("Authentication Middleware", () => {
         expect(url_json.message).toBeUndefined();
 
         // 4. /memory/query sanitization test
-        const querySpy = spyOn(hsgModule, "hsg_query").mockImplementationOnce(() =>
-            Promise.reject(new Error("Sensitive database query stack trace")),
+        const query_spy = spyOn(hsgModule, "hsg_query").mockImplementationOnce(() =>
+            Promise.reject(new Error("Database connection string: postgres://admin:secret@localhost:5432/db")),
         );
 
         let query_status = 0;
@@ -505,16 +505,22 @@ describe("Authentication Middleware", () => {
         };
         const req_query = {
             tenant: "test-tenant",
-            body: { query: "valid query string" },
+            body: {
+                query: "test search query",
+            },
         };
 
         try {
             await handlers["/memory/query"](req_query, res_query);
+            expect(query_spy).toHaveBeenCalledTimes(1);
         } finally {
-            querySpy.mockRestore();
+            query_spy.mockRestore();
         }
 
         expect(query_status).toBe(500);
-        expect(query_json).toEqual({ error: "query_failed", message: "internal" });
+        expect(query_json).toEqual({
+            error: "query_failed",
+            message: "internal",
+        });
     });
 });
