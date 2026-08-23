@@ -926,7 +926,7 @@ export const mcp = (app: any) => {
             await srv.connect(trans);
             await trans.handleRequest(req, res, pay);
         } catch (error) {
-            console.error("[MCP] Error handling request:", error);
+            console.error("[MCP] Request handling failed");
             if (error instanceof RangeError) {
                 send_err(
                     res,
