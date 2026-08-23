@@ -11,6 +11,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   desloppify:
     name: Desloppify Code Quality Scan
@@ -103,7 +106,6 @@ jobs:
     name: Semgrep Application Audit (OSS Free Tier)
     runs-on: ubuntu-latest
     permissions:
-      contents: read
       security-events: write
     container:
       image: semgrep/semgrep:1.168.0@sha256:59fbed6127ea7c5dde3ba6a85142733bb20ea9aaa36120c953904f1539aaf66e
@@ -137,7 +139,7 @@ jobs:
         run: |
           cd packages/openmemory-py
           pip install --no-cache-dir -e .[dev]
-          pip install --no-cache-dir pytest pytest-asyncio python-dotenv pyyaml ruff bandit
+          pip install --no-cache-dir pytest pytest-asyncio python-dotenv pyyaml ruff==0.16.2 bandit==1.9.4
 
       - name: Run Python Runtime-Safety Lint Gate
         run: |
@@ -149,17 +151,37 @@ jobs:
           cd packages/openmemory-py
           bandit -q -r src -lll
 
-      - name: Publish Python Lint Baseline
-        continue-on-error: true
+      - name: Enforce Python Lint Baseline
         run: |
           cd packages/openmemory-py
-          ruff check src tests
+          set +e
+          ruff check --output-format=json src tests > ruff-report.json
+          ruff_status=$?
+          set -e
+          if [ "$ruff_status" -gt 1 ]; then exit "$ruff_status"; fi
+          finding_count="$(python -c 'import json; print(len(json.load(open("ruff-report.json", encoding="utf-8"))))')"
+          test "$finding_count" -le 1016
 
-      - name: Publish Python Security Baseline
-        continue-on-error: true
+      - name: Enforce Python Security Baseline
         run: |
           cd packages/openmemory-py
-          bandit -q -r src
+          set +e
+          bandit -q -r src -f json -o bandit-report.json
+          bandit_status=$?
+          set -e
+          if [ "$bandit_status" -gt 1 ]; then exit "$bandit_status"; fi
+          finding_count="$(python -c 'import json; print(len(json.load(open("bandit-report.json", encoding="utf-8"))["results"]))')"
+          test "$finding_count" -le 29
+
+      - name: Upload Python QA Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-qa-reports
+          path: |
+            packages/openmemory-py/ruff-report.json
+            packages/openmemory-py/bandit-report.json
+          if-no-files-found: warn
           
       - name: Run Omnibus Test (Deep Verify)
         run: |
@@ -201,10 +223,9 @@ jobs:
           bun test --max-concurrency=4
 
   dashboard-qa:
-    name: Dashboard Lint Baseline
+    name: Dashboard Lint Ratchet
     needs: [desloppify, snyk, semgrep]
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -221,7 +242,21 @@ jobs:
           cd dashboard
           bun install --frozen-lockfile --no-progress --network-concurrency=8 --concurrent-scripts=2
 
-      - name: Run Dashboard Lint
+      - name: Enforce Dashboard Lint Baseline
         run: |
           cd dashboard
-          bun run lint
+          set +e
+          bunx eslint . --format json --output-file eslint-report.json
+          eslint_status=$?
+          set -e
+          if [ "$eslint_status" -gt 1 ]; then exit "$eslint_status"; fi
+          finding_count="$(node -e 'const report = require("./eslint-report.json"); console.log(report.reduce((total, file) => total + file.errorCount + file.warningCount, 0));')"
+          test "$finding_count" -le 100
+
+      - name: Upload Dashboard Lint Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-eslint-report
+          path: dashboard/eslint-report.json
+          if-no-files-found: warn
