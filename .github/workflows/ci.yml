@@ -96,11 +96,10 @@ jobs:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
           if [ -z "$SNYK_TOKEN" ]; then
-            echo "SNYK_TOKEN is not set. Skipping Snyk scan."
-            # We skip gracefully to avoid pipeline failures
-          else
-            snyk test --all-projects
+            echo "::error::SNYK_TOKEN is required; refusing to report an unscanned dependency tree as passing."
+            exit 1
           fi
+          snyk test --all-projects
 
   semgrep:
     name: Semgrep Application Audit (OSS Free Tier)
@@ -215,7 +214,7 @@ jobs:
       - name: Run TypeScript Typecheck
         run: |
           cd packages/openmemory-js
-          bun run typecheck
+          timeout 10m env NODE_OPTIONS=--max-old-space-size=4096 bun run typecheck
           
       - name: Run Full Core Test Suite
         run: |
