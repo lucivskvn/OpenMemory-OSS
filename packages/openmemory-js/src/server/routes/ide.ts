@@ -315,13 +315,23 @@ export function ide(app: any) {
         if (!tenant) return;
         try {
             const session_id = req.params.session_id;
-            if (!session_id)
-                return res.status(400).json({ err: "session_id_required" });
+            if (
+                !session_id ||
+                typeof session_id !== "string" ||
+                session_id.length === 0 ||
+                session_id.length > 256
+            ) {
+                return res.status(400).json({ err: "invalid_session_id" });
+            }
 
-            // Scope pattern detection to the authenticated tenant.
-            const all_memories = await q.all_mem_by_user.all(tenant, 10000, 0);
-            const procedural = all_memories.filter((m: any) => {
-                if (m.primary_sector !== "procedural") return false;
+            // Scope pattern detection to the authenticated tenant and procedural sector at DB query level.
+            const procedural_memories = await q.all_mem_by_user_sector.all(
+                tenant,
+                "procedural",
+                10000,
+                0,
+            );
+            const procedural = procedural_memories.filter((m: any) => {
                 try {
                     const meta = p(m.meta);
                     return meta && meta.ide_session_id === session_id;
