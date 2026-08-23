@@ -68,10 +68,13 @@ describe("IDE routes per-tenant isolation & input validation", () => {
         };
 
         return new Promise<{ status: number; data: any }>((resolve) => {
+            let handlerStarted = false;
             authenticate_api_request(req, res, async () => {
+                handlerStarted = true;
                 await handler(req, res);
                 resolve({ status: resStatus, data: resData });
             });
+            if (!handlerStarted) resolve({ status: resStatus, data: resData });
         });
     };
 
