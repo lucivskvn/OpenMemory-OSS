@@ -199,8 +199,7 @@ export function mem(app: any) {
         } catch (e: any) {
             // SECURITY: previously this swallowed errors and returned an
             // empty result set, hiding backend outages from clients and
-            // making silent regressions invisible. Now report 500 without
-            // leaking internal exception details to callers.
+            // making silent regressions invisible. Now report 500 without leaking raw e.message.
             console.error("[mem] /memory/query failed:", e);
             res.status(500).json({
                 error: "query_failed",

@@ -512,6 +512,7 @@ describe("Authentication Middleware", () => {
 
         try {
             await handlers["/memory/query"](req_query, res_query);
+            expect(query_spy).toHaveBeenCalledTimes(1);
         } finally {
             query_spy.mockRestore();
         }
