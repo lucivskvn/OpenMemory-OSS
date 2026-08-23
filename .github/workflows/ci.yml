@@ -28,10 +28,19 @@ jobs:
         with:
           bun-version: '1.2.14'
 
+      - name: Install Dashboard Lint Dependencies
+        run: |
+          cd dashboard
+          bun install --frozen-lockfile --no-progress --network-concurrency=8 --concurrent-scripts=2
+
+      - name: Install PowerShell Analysis Sensor
+        shell: pwsh
+        run: Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force
+
       - name: Run Desloppify Scan
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bunx desloppify scan . --profile ci || true
+        run: PATH="$GITHUB_WORKSPACE/dashboard/node_modules/.bin:$PATH" bunx desloppify scan --path . --profile full --by-language --no-badge
 
       - name: Upload Desloppify Report
         uses: actions/upload-artifact@v4
