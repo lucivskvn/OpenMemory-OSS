@@ -1,6 +1,9 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, spyOn } from "bun:test";
+import express from "express";
 import { compression } from "../src/server/routes/compression";
+import { dash } from "../src/server/routes/dashboard";
 import { compressionEngine } from "../src/ops/compress";
+import * as dbModule from "../src/core/db";
 
 describe("Compression routes tenant scoping and admin check", () => {
     // 1. Setup route handlers mock
@@ -321,6 +324,53 @@ describe("Compression routes tenant scoping and admin check", () => {
             compressionEngine.getStats = orig_stats;
             compressionEngine.reset = orig_reset;
             console.error = orig_console_error;
+        }
+    });
+
+    it("sanitizes 500 responses on dashboard routes without leaking e.message", async () => {
+        const d_app = express();
+        d_app.use((req: any, _r: any, next: any) => {
+            req.tenant = "admin";
+            next();
+        });
+        dash(d_app);
+
+        const spy = spyOn(dbModule, "all_async").mockImplementation(() => {
+            throw new Error("SECRET_DB_LEAK: postgres://admin:pass@127.0.0.1:5432/db");
+        });
+        const console_spy = spyOn(console, "error").mockImplementation(() => {});
+        let server: ReturnType<typeof d_app.listen> | undefined;
+
+        try {
+            server = d_app.listen(0);
+            const port = (server.address() as any).port;
+            const routes = [
+                "/dashboard/projects",
+                "/dashboard/stats",
+                "/dashboard/activity",
+                "/dashboard/sectors/timeline",
+                "/dashboard/top-memories",
+                "/dashboard/maintenance",
+            ];
+
+            for (const path of routes) {
+                const res = await fetch(`http://localhost:${port}${path}`);
+                expect(res.status).toBe(500);
+                const data = await res.json();
+                expect(data).toEqual({ err: "internal" });
+            }
+            expect(JSON.stringify(console_spy.mock.calls)).not.toContain("SECRET_DB_LEAK");
+        } finally {
+            try {
+                if (server) {
+                    await new Promise<void>((resolve, reject) => {
+                        server.close((error) => (error ? reject(error) : resolve()));
+                    });
+                }
+            } finally {
+                spy.mockRestore();
+                console_spy.mockRestore();
+            }
         }
     });
 });

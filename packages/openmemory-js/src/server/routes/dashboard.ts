@@ -97,6 +97,26 @@ class LimitValidationError extends Error {
     }
 }
 
+function handle_dash_error(res: any, ep: string, err: unknown) {
+    if (err instanceof LimitValidationError) {
+        const errType = ep.includes("timeline") || ep.includes("maintenance") ? "invalid_hours" : "invalid_limit";
+        return res.status(400).json({ error: errType, message: err.message });
+    }
+    const errorClass =
+        err instanceof Error && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(err.constructor.name)
+            ? err.constructor.name
+            : "UnknownError";
+    const errorCode =
+        typeof err === "object" &&
+        err !== null &&
+        typeof (err as { code?: unknown }).code === "string" &&
+        /^[A-Za-z0-9_]{1,64}$/.test((err as { code: string }).code)
+            ? (err as { code: string }).code
+            : "unknown";
+    console.error("[dash] request failed", { route: ep, errorClass, errorCode });
+    res.status(500).json({ err: "internal" });
+}
+
 function parse_hours_query(hours_raw: unknown): number {
     if (hours_raw === undefined || hours_raw === null || hours_raw === "") {
         return 24;
@@ -201,7 +221,7 @@ export function dash(app: any) {
                 projects: projs.map((p: any) => p.project_id),
             });
         } catch (e: any) {
-            res.status(500).json({ err: "internal", message: e.message });
+            handle_dash_error(res, "projects", e);
         }
     });
 
@@ -362,8 +382,7 @@ export function dash(app: any) {
                 },
             });
         } catch (e: any) {
-            console.error("[dash] stats err:", e);
-            res.status(500).json({ err: "internal", message: e.message });
+            handle_dash_error(res, "stats", e);
         }
     });
 
@@ -399,7 +418,7 @@ export function dash(app: any) {
                 },
             });
         } catch (e: any) {
-            res.status(500).json({ err: "internal", message: e.message });
+            handle_dash_error(res, "health", e);
         }
     });
 
@@ -428,12 +447,7 @@ export function dash(app: any) {
                 })),
             });
         } catch (e: any) {
-            if (e instanceof LimitValidationError) {
-                return res
-                    .status(400)
-                    .json({ error: "invalid_limit", message: e.message });
-            }
-            res.status(500).json({ err: "internal", message: e.message });
+            handle_dash_error(res, "activity", e);
         }
     });
 
@@ -497,13 +511,7 @@ export function dash(app: any) {
                 grouping: timeKey,
             });
         } catch (e: any) {
-            if (e instanceof LimitValidationError) {
-                return res.status(400).json({
-                    error: "invalid_hours",
-                    message: e.message,
-                });
-            }
-            res.status(500).json({ err: "internal", message: e.message });
+            handle_dash_error(res, "sectors/timeline", e);
         }
     });
 
@@ -531,12 +539,7 @@ export function dash(app: any) {
                 })),
             });
         } catch (e: any) {
-            if (e instanceof LimitValidationError) {
-                return res
-                    .status(400)
-                    .json({ error: "invalid_limit", message: e.message });
-            }
-            res.status(500).json({ err: "internal", message: e.message });
+            handle_dash_error(res, "top-memories", e);
         }
     });
 
@@ -609,13 +612,7 @@ export function dash(app: any) {
                 },
             });
         } catch (e: any) {
-            if (e instanceof LimitValidationError) {
-                return res.status(400).json({
-                    error: "invalid_hours",
-                    message: e.message,
-                });
-            }
-            res.status(500).json({ err: "internal", message: e.message });
+            handle_dash_error(res, "maintenance", e);
         }
     });
 }
