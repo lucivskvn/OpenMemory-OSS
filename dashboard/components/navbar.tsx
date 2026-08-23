@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useProject } from "@/lib/project-context"
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "/api/openmemory"
@@ -9,13 +9,7 @@ export default function Navbar() {
     const [backendStatus, setBackendStatus] = useState<'online' | 'offline' | 'checking'>('checking')
     const { currentProject, setCurrentProject, projects } = useProject()
 
-    useEffect(() => {
-        checkBackendStatus()
-        const interval = setInterval(checkBackendStatus, 5000)
-        return () => clearInterval(interval)
-    }, [])
-
-    const checkBackendStatus = async () => {
+    const checkBackendStatus = useCallback(async () => {
         try {
             const controller = new AbortController()
             const timeoutId = setTimeout(() => controller.abort(), 2000)
@@ -31,10 +25,16 @@ export default function Navbar() {
             } else {
                 setBackendStatus('offline')
             }
-        } catch (error) {
+        } catch {
             setBackendStatus('offline')
         }
-    }
+    }, [])
+
+    useEffect(() => {
+        checkBackendStatus()
+        const interval = setInterval(checkBackendStatus, 5000)
+        return () => clearInterval(interval)
+    }, [checkBackendStatus])
 
     return (
         <nav className="fixed top-0 w-full p-2 pl-20 z-40">
