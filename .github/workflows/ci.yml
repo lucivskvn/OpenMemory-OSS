@@ -72,15 +72,17 @@ jobs:
           bun-version: '1.2.14'
 
       - name: Pre-resolve Dependencies
+        env:
+          PIP_NO_CACHE_DIR: "1"
         run: |
           cd packages/openmemory-py
-          pip install -e .[dev]
+          pip install --no-cache-dir -e .[dev]
           cd ../..
           cd dashboard
-          bun install
+          bun install --frozen-lockfile --no-progress --network-concurrency=8 --concurrent-scripts=2
           cd ..
           cd packages/openmemory-js
-          bun install
+          bun install --frozen-lockfile --no-progress --network-concurrency=8 --concurrent-scripts=2
           cd ../..
 
       - name: Initialize Snyk Engine
@@ -120,6 +122,8 @@ jobs:
     name: Test Python SDK
     needs: [desloppify, snyk, semgrep]
     runs-on: ubuntu-latest
+    env:
+      PIP_NO_CACHE_DIR: "1"
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -132,8 +136,30 @@ jobs:
       - name: Install Dependencies
         run: |
           cd packages/openmemory-py
-          pip install -e .[dev]
-          pip install pytest pytest-asyncio python-dotenv pyyaml
+          pip install --no-cache-dir -e .[dev]
+          pip install --no-cache-dir pytest pytest-asyncio python-dotenv pyyaml ruff bandit
+
+      - name: Run Python Runtime-Safety Lint Gate
+        run: |
+          cd packages/openmemory-py
+          ruff check --select=E9,F63,F7,F82 src tests
+
+      - name: Run High-Severity Python Security Gate
+        run: |
+          cd packages/openmemory-py
+          bandit -q -r src -lll
+
+      - name: Publish Python Lint Baseline
+        continue-on-error: true
+        run: |
+          cd packages/openmemory-py
+          ruff check src tests
+
+      - name: Publish Python Security Baseline
+        continue-on-error: true
+        run: |
+          cd packages/openmemory-py
+          bandit -q -r src
           
       - name: Run Omnibus Test (Deep Verify)
         run: |
@@ -162,9 +188,40 @@ jobs:
       - name: Install Project Workspace Dependencies
         run: |
           cd packages/openmemory-js
-          bun install
+          bun install --frozen-lockfile --no-progress --network-concurrency=8 --concurrent-scripts=2
+
+      - name: Run TypeScript Typecheck
+        run: |
+          cd packages/openmemory-js
+          bun run typecheck
           
       - name: Run Full Core Test Suite
         run: |
           cd packages/openmemory-js
-          bun test
+          bun test --max-concurrency=4
+
+  dashboard-qa:
+    name: Dashboard Lint Baseline
+    needs: [desloppify, snyk, semgrep]
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Set up Bun Runtime
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.1
+        with:
+          bun-version: '1.2.14'
+
+      - name: Install Dashboard Dependencies
+        run: |
+          cd dashboard
+          bun install --frozen-lockfile --no-progress --network-concurrency=8 --concurrent-scripts=2
+
+      - name: Run Dashboard Lint
+        run: |
+          cd dashboard
+          bun run lint
