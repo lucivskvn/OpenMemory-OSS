@@ -618,4 +618,76 @@ describe("Authentication Middleware", () => {
         await handlers["/dynamics/activation/spreading"](req4, res4);
         expect(status4).toBe(400);
     });
+
+    it("rejects tenant mismatch on /memory/reinforce", async () => {
+        const handlers: Record<string, any> = {};
+        const app_mock = {
+            post: (path: string, handler: any) => {
+                handlers[path] = handler;
+            },
+            get: () => {},
+            patch: () => {},
+            delete: () => {},
+        };
+
+        mem(app_mock);
+        expect(handlers["/memory/reinforce"]).toBeTruthy();
+
+        // 1. Mismatched user_id in payload
+        let status = 0;
+        let json_val: any = null;
+        const res = {
+            status: (code: number) => {
+                status = code;
+                return res;
+            },
+            json: (data: any) => {
+                json_val = data;
+            },
+        };
+        const req = {
+            tenant: "tenant-alice",
+            body: {
+                id: "mem-123",
+                user_id: "tenant-bob",
+            },
+        };
+
+        await handlers["/memory/reinforce"](req, res);
+        expect(status).toBe(403);
+        expect(json_val?.error).toBe("tenant_mismatch");
+
+        // 2. Mismatched owner on target memory record in DB
+        const dbModule = await import("../src/core/db");
+        const get_mem_spy = spyOn(dbModule.q.get_mem, "get").mockImplementationOnce(() =>
+            Promise.resolve({ id: "mem-123", salience: 0.5, user_id: "tenant-bob" }),
+        );
+
+        let status_owner = 0;
+        let json_owner: any = null;
+        const res_owner = {
+            status: (code: number) => {
+                status_owner = code;
+                return res_owner;
+            },
+            json: (data: any) => {
+                json_owner = data;
+            },
+        };
+        const req_owner = {
+            tenant: "tenant-alice",
+            body: {
+                id: "mem-123",
+            },
+        };
+
+        try {
+            await handlers["/memory/reinforce"](req_owner, res_owner);
+        } finally {
+            get_mem_spy.mockRestore();
+        }
+
+        expect(status_owner).toBe(403);
+        expect(json_owner?.error).toBe("tenant_mismatch");
+    });
 });
