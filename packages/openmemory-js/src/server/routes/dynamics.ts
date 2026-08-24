@@ -1,5 +1,6 @@
 import { q } from "../../core/db";
 import { require_tenant, reject_tenant_mismatch } from "../middleware/tenant";
+import { parse_or_400, schema } from "../middleware/validate";
 import {
     calculateDynamicSalienceWithTimeDecay,
     calculateCrossSectorResonanceScore,
@@ -19,6 +20,34 @@ import {
     TAU_ENERGY_THRESHOLD_FOR_RETRIEVAL,
     SECTORAL_INTERDEPENDENCE_MATRIX_FOR_COGNITIVE_RESONANCE,
 } from "../../ops/dynamics";
+
+const salience_schema: schema = {
+    initial_salience: { type: "number", min: 0, max: 1 },
+    decay_lambda: { type: "number", min: 0 },
+    recall_count: { type: "integer", min: 0 },
+    emotional_frequency: { type: "number", min: 0 },
+    time_elapsed_days: { type: "number", min: 0 },
+    user_id: { type: "string", max_length: 256 },
+};
+
+const resonance_schema: schema = {
+    memory_sector: { type: "string", max_length: 64 },
+    query_sector: { type: "string", max_length: 64 },
+    base_similarity: { type: "number", min: 0, max: 1 },
+    user_id: { type: "string", max_length: 256 },
+};
+
+const spreading_schema: schema = {
+    initial_memory_ids: {
+        type: "array",
+        required: true,
+        min_items: 1,
+        max_items: 100,
+        items: { type: "string", min_length: 1, max_length: 256 },
+    },
+    max_iterations: { type: "integer", min: 1, max: 20 },
+    user_id: { type: "string", max_length: 256 },
+};
 
 export function dynroutes(app: any) {
     app.get(
@@ -63,19 +92,43 @@ export function dynroutes(app: any) {
     app.post(
         "/dynamics/salience/calculate",
         async (incoming_http_request: any, outgoing_http_response: any) => {
+            const tenant = require_tenant(
+                incoming_http_request,
+                outgoing_http_response,
+            );
+            if (!tenant) return;
+            const b = parse_or_400<{
+                initial_salience?: number;
+                decay_lambda?: number;
+                recall_count?: number;
+                emotional_frequency?: number;
+                time_elapsed_days?: number;
+                user_id?: string;
+            }>(
+                outgoing_http_response,
+                incoming_http_request.body,
+                salience_schema,
+            );
+            if (!b) return;
+            if (
+                reject_tenant_mismatch(
+                    outgoing_http_response,
+                    tenant,
+                    b.user_id,
+                )
+            )
+                return;
             try {
-                const incoming_request_body_payload =
-                    incoming_http_request.body;
                 const initial_salience_value_from_request =
-                    incoming_request_body_payload.initial_salience || 0.5;
+                    b.initial_salience ?? 0.5;
                 const lambda_decay_constant_from_request =
-                    incoming_request_body_payload.decay_lambda || 0.01;
+                    b.decay_lambda ?? 0.01;
                 const recall_reinforcement_count_from_request =
-                    incoming_request_body_payload.recall_count || 0;
+                    b.recall_count ?? 0;
                 const emotional_frequency_metric_from_request =
-                    incoming_request_body_payload.emotional_frequency || 0;
+                    b.emotional_frequency ?? 0;
                 const time_elapsed_in_days_from_request =
-                    incoming_request_body_payload.time_elapsed_days || 0;
+                    b.time_elapsed_days ?? 0;
 
                 const calculated_dynamic_salience_result =
                     await calculateDynamicSalienceWithTimeDecay(
@@ -112,15 +165,37 @@ export function dynroutes(app: any) {
     app.post(
         "/dynamics/resonance/calculate",
         async (incoming_http_request: any, outgoing_http_response: any) => {
+            const tenant = require_tenant(
+                incoming_http_request,
+                outgoing_http_response,
+            );
+            if (!tenant) return;
+            const b = parse_or_400<{
+                memory_sector?: string;
+                query_sector?: string;
+                base_similarity?: number;
+                user_id?: string;
+            }>(
+                outgoing_http_response,
+                incoming_http_request.body,
+                resonance_schema,
+            );
+            if (!b) return;
+            if (
+                reject_tenant_mismatch(
+                    outgoing_http_response,
+                    tenant,
+                    b.user_id,
+                )
+            )
+                return;
             try {
-                const incoming_request_body_payload =
-                    incoming_http_request.body;
                 const memory_sector_type_from_request =
-                    incoming_request_body_payload.memory_sector || "semantic";
+                    b.memory_sector || "semantic";
                 const query_sector_type_from_request =
-                    incoming_request_body_payload.query_sector || "semantic";
+                    b.query_sector || "semantic";
                 const base_cosine_similarity_from_request =
-                    incoming_request_body_payload.base_similarity || 0.8;
+                    b.base_similarity ?? 0.8;
 
                 const calculated_cross_sector_resonance_score =
                     await calculateCrossSectorResonanceScore(
@@ -355,31 +430,29 @@ export function dynroutes(app: any) {
                 outgoing_http_response,
             );
             if (!tenant) return;
-            try {
-                const incoming_request_body_payload =
-                    incoming_http_request.body;
-                const initial_memory_ids_array_from_request =
-                    incoming_request_body_payload.initial_memory_ids || [];
-                const maximum_spreading_iterations_from_request =
-                    incoming_request_body_payload.max_iterations || 3;
-
-                if (
-                    reject_tenant_mismatch(
-                        outgoing_http_response,
-                        tenant,
-                        incoming_request_body_payload.user_id,
-                    )
+            const b = parse_or_400<{
+                initial_memory_ids: string[];
+                max_iterations?: number;
+                user_id?: string;
+            }>(
+                outgoing_http_response,
+                incoming_http_request.body,
+                spreading_schema,
+            );
+            if (!b) return;
+            if (
+                reject_tenant_mismatch(
+                    outgoing_http_response,
+                    tenant,
+                    b.user_id,
                 )
-                    return;
-
-                if (
-                    !Array.isArray(initial_memory_ids_array_from_request) ||
-                    initial_memory_ids_array_from_request.length === 0
-                ) {
-                    return outgoing_http_response
-                        .status(400)
-                        .json({ err: "initial_memory_ids_required" });
-                }
+            )
+                return;
+            try {
+                const initial_memory_ids_array_from_request =
+                    b.initial_memory_ids;
+                const maximum_spreading_iterations_from_request =
+                    b.max_iterations ?? 3;
 
                 for (const mid of initial_memory_ids_array_from_request) {
                     const m = await q.get_mem.get(mid);

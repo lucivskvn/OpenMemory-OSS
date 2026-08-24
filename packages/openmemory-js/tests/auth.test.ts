@@ -3,6 +3,7 @@ import { authenticate_api_request } from "../src/server/middleware/auth";
 import { env } from "../src/core/config";
 import { dash } from "../src/server/routes/dashboard";
 import { mem } from "../src/server/routes/memory";
+import { dynroutes } from "../src/server/routes/dynamics";
 import * as hsgModule from "../src/memory/hsg";
 
 describe("Authentication Middleware", () => {
@@ -522,5 +523,99 @@ describe("Authentication Middleware", () => {
             error: "query_failed",
             message: "internal",
         });
+    });
+
+    it("enforces authentication and schema validation on dynamics calculation endpoints", async () => {
+        const handlers: Record<string, any> = {};
+        const app_mock = {
+            post: (path: string, handler: any) => {
+                handlers[path] = handler;
+            },
+            get: () => {},
+        };
+
+        dynroutes(app_mock);
+        expect(handlers["/dynamics/salience/calculate"]).toBeTruthy();
+        expect(handlers["/dynamics/resonance/calculate"]).toBeTruthy();
+        expect(handlers["/dynamics/activation/spreading"]).toBeTruthy();
+
+        // 1. Unauthenticated request to /dynamics/salience/calculate
+        let status1 = 0;
+        let json1: any = null;
+        const res1 = {
+            status: (s: number) => {
+                status1 = s;
+                return res1;
+            },
+            json: (j: any) => {
+                json1 = j;
+                return res1;
+            },
+            set: () => res1,
+        };
+        await handlers["/dynamics/salience/calculate"]({}, res1);
+        expect(status1).toBe(401);
+
+        // 2. Unauthenticated request to /dynamics/resonance/calculate
+        let status2 = 0;
+        let json2: any = null;
+        const res2 = {
+            status: (s: number) => {
+                status2 = s;
+                return res2;
+            },
+            json: (j: any) => {
+                json2 = j;
+                return res2;
+            },
+            set: () => res2,
+        };
+        await handlers["/dynamics/resonance/calculate"]({}, res2);
+        expect(status2).toBe(401);
+
+        // 3. Authenticated request with invalid input (out-of-bounds initial_salience)
+        let status3 = 0;
+        let json3: any = null;
+        const res3 = {
+            status: (s: number) => {
+                status3 = s;
+                return res3;
+            },
+            json: (j: any) => {
+                json3 = j;
+                return res3;
+            },
+            set: () => res3,
+        };
+        const req3 = {
+            tenant: "test-tenant",
+            body: { initial_salience: 5.0 }, // max is 1
+        };
+        await handlers["/dynamics/salience/calculate"](req3, res3);
+        expect(status3).toBe(400);
+
+        // 4. Authenticated request to /dynamics/activation/spreading with max_iterations out-of-bounds (> 20)
+        let status4 = 0;
+        let json4: any = null;
+        const res4 = {
+            status: (s: number) => {
+                status4 = s;
+                return res4;
+            },
+            json: (j: any) => {
+                json4 = j;
+                return res4;
+            },
+            set: () => res4,
+        };
+        const req4 = {
+            tenant: "test-tenant",
+            body: {
+                initial_memory_ids: ["mem-1"],
+                max_iterations: 100, // max is 20
+            },
+        };
+        await handlers["/dynamics/activation/spreading"](req4, res4);
+        expect(status4).toBe(400);
     });
 });
