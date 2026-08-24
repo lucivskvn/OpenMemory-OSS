@@ -67,11 +67,12 @@
     "vaul": "^0.9.9",
     "zod": "3.25.76"
   },
-    "devDependencies": {
+  "devDependencies": {
     "@tailwindcss/postcss": "^4.1.9",
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "desloppify": "1.0.2",
     "eslint": "^9.0.0",
     "eslint-config-next": "^16.2.9",
     "postcss": "^8.5",

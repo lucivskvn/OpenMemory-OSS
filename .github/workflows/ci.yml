@@ -44,7 +44,7 @@ jobs:
       - name: Run Desloppify Scan
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: PATH="$GITHUB_WORKSPACE/dashboard/node_modules/.bin:$PATH" bunx desloppify scan --path . --profile full --by-language --no-badge
+        run: dashboard/node_modules/.bin/desloppify scan --path . --profile full --by-language --no-badge
 
       - name: Upload Desloppify Report
         if: always()
@@ -123,33 +123,33 @@ jobs:
       - name: Run Python Runtime-Safety Lint Gate
         run: |
           cd packages/openmemory-py
-          PYTHONPATH=src uv run --no-sync ruff check --select=E9,F63,F7,F82 src tests
+          PYTHONPATH=src .venv/bin/ruff check --select=E9,F63,F7,F82 src tests
 
       - name: Run High-Severity Python Security Gate
         run: |
           cd packages/openmemory-py
-          PYTHONPATH=src uv run --no-sync bandit -q -r src -lll
+          PYTHONPATH=src .venv/bin/bandit -q -r src -lll
 
       - name: Enforce Python Lint Baseline
         run: |
           cd packages/openmemory-py
           set +e
-          PYTHONPATH=src uv run --no-sync ruff check --output-format=json src tests > ruff-report.json
+          PYTHONPATH=src .venv/bin/ruff check --output-format=json src tests > ruff-report.json
           ruff_status=$?
           set -e
           if [ "$ruff_status" -gt 1 ]; then exit "$ruff_status"; fi
-          finding_count="$(uv run --no-sync python -c 'import json; print(len(json.load(open("ruff-report.json", encoding="utf-8"))))')"
+          finding_count="$(.venv/bin/python -c 'import json; print(len(json.load(open("ruff-report.json", encoding="utf-8"))))')"
           test "$finding_count" -le 1016
 
       - name: Enforce Python Security Baseline
         run: |
           cd packages/openmemory-py
           set +e
-          PYTHONPATH=src uv run --no-sync bandit -q -r src -f json -o bandit-report.json
+          PYTHONPATH=src .venv/bin/bandit -q -r src -f json -o bandit-report.json
           bandit_status=$?
           set -e
           if [ "$bandit_status" -gt 1 ]; then exit "$bandit_status"; fi
-          finding_count="$(uv run --no-sync python -c 'import json; print(len(json.load(open("bandit-report.json", encoding="utf-8"))["results"]))')"
+          finding_count="$(.venv/bin/python -c 'import json; print(len(json.load(open("bandit-report.json", encoding="utf-8"))["results"]))')"
           test "$finding_count" -le 29
 
       - name: Upload Python QA Reports
@@ -165,7 +165,7 @@ jobs:
       - name: Run Omnibus Test (Deep Verify)
         run: |
           cd packages/openmemory-py
-          PYTHONPATH=src uv run --no-sync pytest tests/ -v
+          PYTHONPATH=src .venv/bin/pytest tests/ -v
           
   test-node:
     name: Test Bun SDK Stack
@@ -224,7 +224,7 @@ jobs:
         run: |
           cd dashboard
           set +e
-          bunx eslint . --format json --output-file eslint-report.json
+          node_modules/.bin/eslint . --format json --output-file eslint-report.json
           eslint_status=$?
           set -e
           if [ "$eslint_status" -gt 1 ]; then exit "$eslint_status"; fi
