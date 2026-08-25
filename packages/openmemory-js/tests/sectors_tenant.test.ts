@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "bun:test";
 import { sys } from "../src/server/routes/system";
 import { dash } from "../src/server/routes/dashboard";
 import { run_async, q, all_async } from "../src/core/db";
+import { delete_memory } from "../src/memory/hsg";
 
 async function cleanup() {
     await run_async(`DELETE FROM memories`);
@@ -606,5 +607,54 @@ describe("Dashboard route hours parameter validation", () => {
             expect(status).toBe(400);
             expect(json_res.error).toBe("invalid_hours");
         }
+    });
+});
+
+describe("delete_memory tenant isolation", () => {
+    beforeEach(async () => {
+        await cleanup();
+    });
+
+    it("prevents deleting another tenant's memory when user_id is provided", async () => {
+        const t_alice = "tenant-alice";
+        const t_bob = "tenant-bob";
+
+        await q.ins_mem.run(
+            "mem-bob-delete-test",
+            t_bob,
+            null,
+            0,
+            "Bob secret memory",
+            null,
+            "semantic",
+            null,
+            null,
+            Date.now(),
+            Date.now(),
+            Date.now(),
+            0.8,
+            0.01,
+            1,
+            null,
+            null,
+            null,
+            0,
+        );
+
+        // Alice tries to delete Bob's memory
+        const alice_deleted = await delete_memory("mem-bob-delete-test", t_alice);
+        expect(alice_deleted).toBe(false);
+
+        // Verify Bob's memory is intact
+        const bob_mem = await q.get_mem.get("mem-bob-delete-test");
+        expect(bob_mem).toBeTruthy();
+
+        // Bob deletes his memory successfully
+        const bob_deleted = await delete_memory("mem-bob-delete-test", t_bob);
+        expect(bob_deleted).toBe(true);
+
+        // Verify Bob's memory is deleted
+        const deleted_mem = await q.get_mem.get("mem-bob-delete-test");
+        expect(deleted_mem).toBeUndefined();
     });
 });
