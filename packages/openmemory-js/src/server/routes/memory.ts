@@ -222,7 +222,16 @@ export function mem(app: any) {
         try {
             const m = await q.get_mem.get(b.id);
             if (!m) return res.status(404).json({ err: "nf" });
-            if (reject_tenant_mismatch(res, tenant, m.user_id)) return;
+            // A persisted memory must be owned by the authenticated tenant.
+            // Unlike caller-provided user_id values, an absent stored owner is
+            // not an optional field: treating it as one would allow any tenant
+            // to reinforce a legacy or malformed record.
+            if (m.user_id !== tenant) {
+                return res.status(403).json({
+                    error: "tenant_mismatch",
+                    message: "memory does not belong to authenticated tenant",
+                });
+            }
             await reinforce_memory(b.id, b.boost);
             res.json({ ok: true });
         } catch (e: any) {

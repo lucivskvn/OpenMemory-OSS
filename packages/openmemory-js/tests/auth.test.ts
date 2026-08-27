@@ -689,5 +689,32 @@ describe("Authentication Middleware", () => {
 
         expect(status_owner).toBe(403);
         expect(json_owner?.error).toBe("tenant_mismatch");
+
+        // 3. Ownerless records are never public: a tenant must match exactly.
+        const ownerless_mem_spy = spyOn(dbModule.q.get_mem, "get").mockImplementationOnce(() =>
+            Promise.resolve({ id: "mem-123", salience: 0.5, user_id: undefined }),
+        );
+        let status_ownerless = 0;
+        let json_ownerless: unknown = null;
+        const res_ownerless = {
+            status: (code: number) => {
+                status_ownerless = code;
+                return res_ownerless;
+            },
+            json: (data: unknown) => {
+                json_ownerless = data;
+            },
+        };
+
+        try {
+            await handlers["/memory/reinforce"](req_owner, res_ownerless);
+        } finally {
+            ownerless_mem_spy.mockRestore();
+        }
+
+        expect(status_ownerless).toBe(403);
+        expect(json_ownerless).toEqual(
+            expect.objectContaining({ error: "tenant_mismatch" }),
+        );
     });
 });
