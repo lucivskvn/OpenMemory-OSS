@@ -618,9 +618,6 @@ export const create_mcp_srv = (tenant?: string) => {
         async ({ id, user_id, project_id }) => {
             const u = resolve_user_id(tenant, user_id);
             const proj = uid(project_id);
-            if (!u) {
-                throw new Error("tenant_required: openmemory_delete requires an authenticated tenant");
-            }
             if (u || proj) {
                 const mem = await q.get_mem.get(id);
                 if (mem) {
@@ -639,7 +636,7 @@ export const create_mcp_srv = (tenant?: string) => {
                 }
             }
 
-            const success = await delete_memory(id, u);
+            const success = await delete_memory(id);
             if (!success) {
                 return {
                     content: [
