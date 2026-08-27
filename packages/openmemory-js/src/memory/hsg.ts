@@ -1258,16 +1258,14 @@ export async function add_hsg_memory(
 }
 export async function delete_memory(
     id: string,
-    user_id?: string,
+    user_id: string,
 ): Promise<boolean> {
     const mem = await q.get_mem.get(id);
     if (!mem) return false;
-    const mem_user = mem.user_id || "anonymous";
-    if (user_id && mem_user !== user_id) return false;
-    const uid = user_id || mem.user_id || "anonymous";
-    await q.del_mem.run(id, uid);
-    await q.del_waypoints.run(id, id, uid);
-    await vector_store.deleteVectors(id, mem.user_id || undefined);
+    if (mem.user_id !== user_id) return false;
+    await q.del_mem.run(id, user_id);
+    await q.del_waypoints.run(id, id, user_id);
+    await vector_store.deleteVectors(id, user_id);
     return true;
 }
 export async function reinforce_memory(
