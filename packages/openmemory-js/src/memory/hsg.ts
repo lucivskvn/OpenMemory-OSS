@@ -1263,9 +1263,12 @@ export async function delete_memory(
     const mem = await q.get_mem.get(id);
     if (!mem) return false;
     if (mem.user_id !== user_id) return false;
-    await q.del_mem.run(id, user_id);
+    // Remove dependents before the owner row. If any cleanup fails, keeping
+    // the memory makes the operation safely retryable instead of orphaning
+    // waypoints or vectors behind an already-deleted record.
     await q.del_waypoints.run(id, id, user_id);
     await vector_store.deleteVectors(id, user_id);
+    await q.del_mem.run(id, user_id);
     return true;
 }
 export async function reinforce_memory(
