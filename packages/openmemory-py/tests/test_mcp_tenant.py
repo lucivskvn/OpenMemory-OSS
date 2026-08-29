@@ -49,3 +49,10 @@ async def test_mcp_tenant_get_and_delete_scenarios(monkeypatch):
     res_unbound2, tenant_u2, err_unbound2 = await _get_verified_memory(mem_unbound, {"id": mid_alice, "user_id": "alice"})
     assert res_unbound2 is None
     assert "Unauthenticated MCP session" in err_unbound2
+
+    # 6. Ownerless memory record (user_id is None) is rejected for any bound tenant
+    db.execute("INSERT INTO memories (id, user_id, content, primary_sector, created_at, salience, decay_lambda, version) VALUES (?, NULL, ?, ?, ?, 1.0, 0.02, 1)", ("m-ownerless", "Ownerless memory content", "semantic", 1000000000))
+    db.commit()
+    res_ownerless, tenant_o, err_ownerless = await _get_verified_memory(mem, {"id": "m-ownerless"})
+    assert res_ownerless is None
+    assert "not found for user" in err_ownerless
