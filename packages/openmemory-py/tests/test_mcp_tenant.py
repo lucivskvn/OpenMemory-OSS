@@ -12,7 +12,10 @@ def setup_db(tmp_path, monkeypatch):
     db.connect()
 
 @pytest.mark.asyncio
-async def test_mcp_tenant_get_and_delete_scenarios():
+async def test_mcp_tenant_get_and_delete_scenarios(monkeypatch):
+    monkeypatch.delenv("OM_TENANT", raising=False)
+    monkeypatch.delenv("OM_USER_ID", raising=False)
+
     mem = Memory(user="alice")
 
     # Add a memory for Alice
@@ -28,7 +31,7 @@ async def test_mcp_tenant_get_and_delete_scenarios():
     # 2. Mismatching tenant fails
     res_mismatch, tenant_m, err_mismatch = await _get_verified_memory(mem, {"id": mid_alice, "user_id": "bob"})
     assert res_mismatch is None
-    assert "tenant_mismatch" in err_mismatch or "not found for user" in err_mismatch
+    assert "tenant_mismatch" in err_mismatch
 
     # 3. Omitted/empty user_id with bound session defaults to bound tenant
     res_bound, tenant_b, err_bound = await _get_verified_memory(mem, {"id": mid_alice})
@@ -36,8 +39,13 @@ async def test_mcp_tenant_get_and_delete_scenarios():
     assert tenant_b == "alice"
     assert res_bound["id"] == mid_alice
 
-    # 4. Unbound session without user_id fails closed
+    # 4. Unbound session WITHOUT user_id fails closed
     mem_unbound = Memory(user=None)
-    res_unbound, tenant_u, err_unbound = await _get_verified_memory(mem_unbound, {"id": mid_alice})
-    assert res_unbound is None
-    assert err_unbound == "Error: user_id is required"
+    res_unbound1, tenant_u1, err_unbound1 = await _get_verified_memory(mem_unbound, {"id": mid_alice})
+    assert res_unbound1 is None
+    assert "Unauthenticated MCP session" in err_unbound1
+
+    # 5. Unbound session WITH non-empty claimed user_id STILL fails closed (prevents claimed identity bypass)
+    res_unbound2, tenant_u2, err_unbound2 = await _get_verified_memory(mem_unbound, {"id": mid_alice, "user_id": "alice"})
+    assert res_unbound2 is None
+    assert "Unauthenticated MCP session" in err_unbound2

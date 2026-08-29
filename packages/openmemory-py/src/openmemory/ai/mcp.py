@@ -22,18 +22,17 @@ mem = Memory()
 
 def _resolve_mcp_tenant(mem_inst: Memory, args: dict) -> tuple[str | None, str | None]:
     bound = getattr(mem_inst, "default_user", None) or os.getenv("OM_TENANT") or os.getenv("OM_USER_ID")
+    if not bound or not isinstance(bound, str) or not bound.strip():
+        return None, "Error: Unauthenticated MCP session. Tenant identity required."
+
+    bound_tenant = bound.strip()
     uid_arg = args.get("user_id")
-
-    if bound and isinstance(bound, str) and bound.strip():
-        bound = bound.strip()
-        if uid_arg and isinstance(uid_arg, str) and uid_arg.strip() and uid_arg.strip() != bound:
-            return None, f"Error: tenant_mismatch - requested user_id '{uid_arg.strip()}' does not match authenticated session tenant '{bound}'"
-        return bound, None
-
     if uid_arg and isinstance(uid_arg, str) and uid_arg.strip():
-        return uid_arg.strip(), None
+        trimmed_arg = uid_arg.strip()
+        if trimmed_arg != bound_tenant:
+            return None, f"Error: tenant_mismatch - requested user_id '{trimmed_arg}' does not match authenticated session tenant '{bound_tenant}'"
 
-    return None, "Error: user_id is required"
+    return bound_tenant, None
 
 async def _get_verified_memory(mem_inst: Memory, args: dict) -> tuple[dict | None, str | None, str | None]:
     mid = args.get("id")
