@@ -16,7 +16,42 @@ from ..core.config import env
 from ..temporal_graph.store import insert_fact
 from ..temporal_graph.query import query_facts_at_time
 
+import os
+
 mem = Memory()
+
+def _resolve_mcp_tenant(mem_inst: Memory, args: dict) -> tuple[str | None, str | None]:
+    bound = getattr(mem_inst, "default_user", None) or os.getenv("OM_TENANT") or os.getenv("OM_USER_ID")
+    if not bound or not isinstance(bound, str) or not bound.strip():
+        return None, "Error: Unauthenticated MCP session. Tenant identity required."
+
+    bound_tenant = bound.strip()
+    uid_arg = args.get("user_id")
+    if uid_arg and isinstance(uid_arg, str) and uid_arg.strip():
+        trimmed_arg = uid_arg.strip()
+        if trimmed_arg != bound_tenant:
+            return None, f"Error: tenant_mismatch - requested user_id '{trimmed_arg}' does not match authenticated session tenant '{bound_tenant}'"
+
+    return bound_tenant, None
+
+async def _get_verified_memory(mem_inst: Memory, args: dict) -> tuple[dict | None, str | None, str | None]:
+    mid = args.get("id")
+    if not mid or not isinstance(mid, str) or not mid.strip():
+        return None, None, "Error: id is required"
+
+    tenant, err = _resolve_mcp_tenant(mem_inst, args)
+    if err:
+        return None, None, err
+
+    m = await mem_inst.get(mid)
+    if not m:
+        return None, tenant, f"Memory {mid} not found"
+
+    m_dict = dict(m)
+    if m_dict.get("user_id") != tenant:
+        return None, tenant, f"Memory {mid} not found for user {tenant}"
+
+    return m_dict, tenant, None
 
 async def run_mcp_server():
     if not Server:
@@ -89,9 +124,10 @@ async def run_mcp_server():
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "id": {"type": "string"}
+                        "id": {"type": "string"},
+                        "user_id": {"type": "string"}
                     },
-                    "required": ["id"]
+                    "required": ["id", "user_id"]
                 }
             ),
              Tool(
@@ -103,7 +139,7 @@ async def run_mcp_server():
                         "id": {"type": "string"},
                         "user_id": {"type": "string"}
                     },
-                    "required": ["id"]
+                    "required": ["id", "user_id"]
                 }
             ),
              Tool(
@@ -266,26 +302,18 @@ async def run_mcp_server():
                 ]
 
             elif name == "openmemory_get":
-                mid = args.get("id")
-                m = mem.get(mid)
-                if not m:
-                    return [TextContent(type="text", text=f"Memory {mid} not found")]
-                return [TextContent(type="text", text=json.dumps(dict(m), default=str, indent=2))]
+                m_dict, tenant, err = await _get_verified_memory(mem, args)
+                if err:
+                    return [TextContent(type="text", text=err)]
+                return [TextContent(type="text", text=json.dumps(m_dict, default=str, indent=2))]
 
             elif name == "openmemory_delete":
-                mid = args.get("id")
-                uid = args.get("user_id")
-                
-                # Check exist/ownership
-                m = await mem.get(mid)
-                if not m:
-                    return [TextContent(type="text", text=f"Memory {mid} not found")]
-                
-                if uid and m["user_id"] != uid:
-                     return [TextContent(type="text", text=f"Memory {mid} not found for user {uid}")]
+                m_dict, tenant, err = await _get_verified_memory(mem, args)
+                if err:
+                    return [TextContent(type="text", text=err)]
 
-                await mem.delete(mid)
-                return [TextContent(type="text", text=f"Memory {mid} deleted")]
+                await mem.delete(m_dict["id"], user_id=tenant)
+                return [TextContent(type="text", text=f"Memory {m_dict['id']} deleted")]
 
             elif name == "openmemory_list":
                 limit = args.get("limit", 20)
