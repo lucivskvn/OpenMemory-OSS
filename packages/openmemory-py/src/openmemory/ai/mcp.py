@@ -89,7 +89,8 @@ async def run_mcp_server():
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "id": {"type": "string"}
+                        "id": {"type": "string"},
+                        "user_id": {"type": "string", "description": "Isolate lookup to specific user"}
                     },
                     "required": ["id"]
                 }
@@ -267,10 +268,15 @@ async def run_mcp_server():
 
             elif name == "openmemory_get":
                 mid = args.get("id")
-                m = mem.get(mid)
+                uid = args.get("user_id")
+                # Fix: mem.get is async and must be awaited; enforce tenant isolation
+                m = await mem.get(mid)
                 if not m:
                     return [TextContent(type="text", text=f"Memory {mid} not found")]
-                return [TextContent(type="text", text=json.dumps(dict(m), default=str, indent=2))]
+                m_dict = dict(m)
+                if uid and m_dict.get("user_id") != uid:
+                    return [TextContent(type="text", text=f"Memory {mid} not found")]
+                return [TextContent(type="text", text=json.dumps(m_dict, default=str, indent=2))]
 
             elif name == "openmemory_delete":
                 mid = args.get("id")
