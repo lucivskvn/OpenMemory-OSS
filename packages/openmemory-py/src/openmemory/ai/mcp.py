@@ -267,10 +267,14 @@ async def run_mcp_server():
 
             elif name == "openmemory_get":
                 mid = args.get("id")
-                m = mem.get(mid)
+                m = await mem.get(mid)
                 if not m:
                     return [TextContent(type="text", text=f"Memory {mid} not found")]
-                return [TextContent(type="text", text=json.dumps(dict(m), default=str, indent=2))]
+                m_dict = dict(m)
+                uid = args.get("user_id")
+                if uid and m_dict.get("user_id") != uid:
+                    return [TextContent(type="text", text=f"Memory {mid} not found for user {uid}")]
+                return [TextContent(type="text", text=json.dumps(m_dict, default=str, indent=2))]
 
             elif name == "openmemory_delete":
                 mid = args.get("id")
@@ -281,10 +285,12 @@ async def run_mcp_server():
                 if not m:
                     return [TextContent(type="text", text=f"Memory {mid} not found")]
                 
-                if uid and m["user_id"] != uid:
-                     return [TextContent(type="text", text=f"Memory {mid} not found for user {uid}")]
+                m_dict = dict(m)
+                target_uid = uid or m_dict.get("user_id")
+                if uid and m_dict.get("user_id") != uid:
+                    return [TextContent(type="text", text=f"Memory {mid} not found for user {uid}")]
 
-                await mem.delete(mid)
+                await mem.delete(mid, user_id=target_uid)
                 return [TextContent(type="text", text=f"Memory {mid} deleted")]
 
             elif name == "openmemory_list":
