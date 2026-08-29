@@ -89,9 +89,10 @@ async def run_mcp_server():
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "id": {"type": "string"}
+                        "id": {"type": "string"},
+                        "user_id": {"type": "string"}
                     },
-                    "required": ["id"]
+                    "required": ["id", "user_id"]
                 }
             ),
              Tool(
@@ -103,7 +104,7 @@ async def run_mcp_server():
                         "id": {"type": "string"},
                         "user_id": {"type": "string"}
                     },
-                    "required": ["id"]
+                    "required": ["id", "user_id"]
                 }
             ),
              Tool(
@@ -267,30 +268,37 @@ async def run_mcp_server():
 
             elif name == "openmemory_get":
                 mid = args.get("id")
+                if not mid or not isinstance(mid, str) or not mid.strip():
+                    return [TextContent(type="text", text="Error: id is required")]
+                uid = args.get("user_id")
+                if not uid or not isinstance(uid, str) or not uid.strip():
+                    return [TextContent(type="text", text="Error: user_id is required")]
+
                 m = await mem.get(mid)
                 if not m:
                     return [TextContent(type="text", text=f"Memory {mid} not found")]
                 m_dict = dict(m)
-                uid = args.get("user_id")
-                if uid and m_dict.get("user_id") != uid:
+                if m_dict.get("user_id") != uid:
                     return [TextContent(type="text", text=f"Memory {mid} not found for user {uid}")]
                 return [TextContent(type="text", text=json.dumps(m_dict, default=str, indent=2))]
 
             elif name == "openmemory_delete":
                 mid = args.get("id")
+                if not mid or not isinstance(mid, str) or not mid.strip():
+                    return [TextContent(type="text", text="Error: id is required")]
                 uid = args.get("user_id")
-                
-                # Check exist/ownership
+                if not uid or not isinstance(uid, str) or not uid.strip():
+                    return [TextContent(type="text", text="Error: user_id is required")]
+
                 m = await mem.get(mid)
                 if not m:
                     return [TextContent(type="text", text=f"Memory {mid} not found")]
-                
+
                 m_dict = dict(m)
-                target_uid = uid or m_dict.get("user_id")
-                if uid and m_dict.get("user_id") != uid:
+                if m_dict.get("user_id") != uid:
                     return [TextContent(type="text", text=f"Memory {mid} not found for user {uid}")]
 
-                await mem.delete(mid, user_id=target_uid)
+                await mem.delete(mid, user_id=uid)
                 return [TextContent(type="text", text=f"Memory {mid} deleted")]
 
             elif name == "openmemory_list":
