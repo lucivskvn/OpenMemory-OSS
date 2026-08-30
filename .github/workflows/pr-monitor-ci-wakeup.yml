@@ -103,5 +103,5 @@ jobs:
                 marker,
                 "",
                 `CI completed for the current PR head with conclusion: \`${run.conclusion}\`. This is an automated wake-up only; it does not approve the PR, resolve threads, or authorize a merge.`,
-              ].join("\\n"),
+              ].join("\n"),
             });
