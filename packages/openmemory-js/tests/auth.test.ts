@@ -4,6 +4,7 @@ import { env } from "../src/core/config";
 import { dash } from "../src/server/routes/dashboard";
 import { mem } from "../src/server/routes/memory";
 import { dynroutes } from "../src/server/routes/dynamics";
+import { sys } from "../src/server/routes/system";
 import * as hsgModule from "../src/memory/hsg";
 
 describe("Authentication Middleware", () => {
@@ -715,5 +716,50 @@ describe("Authentication Middleware", () => {
         expect(json_ownerless).toEqual(
             expect.objectContaining({ error: "tenant_mismatch" }),
         );
+    });
+
+    it("sanitizes Zod schema validation error details on /api/system/classifier/train", async () => {
+        const handlers: Record<string, any> = {};
+        const app_mock = {
+            post: (path: string, handler: any) => {
+                handlers[path] = handler;
+            },
+            get: () => {},
+        };
+
+        sys(app_mock);
+        expect(handlers["/api/system/classifier/train"]).toBeTruthy();
+
+        let status = 0;
+        let json_val: any = null;
+        const res = {
+            status: (code: number) => {
+                status = code;
+                return res;
+            },
+            json: (data: any) => {
+                json_val = data;
+            },
+        };
+        const req = {
+            tenant: "admin",
+            body: {
+                data: [
+                    {
+                        text: "Invalid sector value",
+                        sector: "invalid_sector_type",
+                    },
+                ],
+            },
+        };
+
+        await handlers["/api/system/classifier/train"](req, res);
+        expect(status).toBe(400);
+        expect(json_val).toEqual({
+            error: "Invalid payload format",
+            details: "Validation failed",
+        });
+        expect(json_val.issues).toBeUndefined();
+        expect(json_val.parsed).toBeUndefined();
     });
 });
