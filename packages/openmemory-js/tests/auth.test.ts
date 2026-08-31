@@ -619,7 +619,7 @@ describe("Authentication Middleware", () => {
         await handlers["/dynamics/activation/spreading"](req4, res4);
         expect(status4).toBe(400);
 
-        // 5. Authenticated request to /dynamics/retrieval/energy-based with missing query and tenant mismatch
+        // 5. Authenticated request to /dynamics/retrieval/energy-based with valid query and tenant mismatch
         let status5 = 0;
         let json5: any = null;
         const res5 = {
@@ -636,11 +636,13 @@ describe("Authentication Middleware", () => {
         const req5 = {
             tenant: "test-tenant",
             body: {
+                query: "valid query",
                 user_id: "other-tenant",
             },
         };
         await handlers["/dynamics/retrieval/energy-based"](req5, res5);
-        expect(status5).toBe(400);
+        expect(status5).toBe(403);
+        expect(json5?.error).toBe("tenant_mismatch");
     });
 
     it("rejects tenant mismatch on /memory/reinforce", async () => {
