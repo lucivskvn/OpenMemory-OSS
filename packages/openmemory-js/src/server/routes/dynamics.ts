@@ -49,6 +49,13 @@ const spreading_schema: schema = {
     user_id: { type: "string", max_length: 256 },
 };
 
+const energy_schema: schema = {
+    query: { type: "string", required: true, min_length: 1, max_length: 8192 },
+    sector: { type: "string", max_length: 64 },
+    min_energy: { type: "number", min: 0, max: 1 },
+    user_id: { type: "string", max_length: 256 },
+};
+
 export function dynroutes(app: any) {
     app.get(
         "/dynamics/constants",
@@ -232,31 +239,30 @@ export function dynroutes(app: any) {
                 outgoing_http_response,
             );
             if (!tenant) return;
-            try {
-                const incoming_request_body_payload =
-                    incoming_http_request.body;
-                const query_text_content_from_request =
-                    incoming_request_body_payload.query;
-                const query_sector_type_from_request =
-                    incoming_request_body_payload.sector || "semantic";
-                const minimum_energy_threshold_from_request =
-                    incoming_request_body_payload.min_energy ||
-                    TAU_ENERGY_THRESHOLD_FOR_RETRIEVAL;
-
-                if (
-                    reject_tenant_mismatch(
-                        outgoing_http_response,
-                        tenant,
-                        incoming_request_body_payload.user_id,
-                    )
+            const b = parse_or_400<{
+                query: string;
+                sector?: string;
+                min_energy?: number;
+                user_id?: string;
+            }>(
+                outgoing_http_response,
+                incoming_http_request.body,
+                energy_schema,
+            );
+            if (!b) return;
+            if (
+                reject_tenant_mismatch(
+                    outgoing_http_response,
+                    tenant,
+                    b.user_id,
                 )
-                    return;
-
-                if (!query_text_content_from_request) {
-                    return outgoing_http_response
-                        .status(400)
-                        .json({ err: "query_required" });
-                }
+            )
+                return;
+            try {
+                const query_text_content_from_request = b.query;
+                const query_sector_type_from_request = b.sector || "semantic";
+                const minimum_energy_threshold_from_request =
+                    b.min_energy ?? TAU_ENERGY_THRESHOLD_FOR_RETRIEVAL;
 
                 const { embedForSector } = await import("../../memory/embed");
                 const query_vector_embedding_array = await embedForSector(
