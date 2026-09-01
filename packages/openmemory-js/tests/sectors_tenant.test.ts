@@ -669,5 +669,16 @@ describe("Dynamics routes validation and tenant scoping", () => {
         status = 200;
         await energy_handler(req_mismatch_energy, res_mock);
         expect(status).toBe(403);
+
+        // 4. Mismatched user_id on trace reinforcement returns 403 and tenant_mismatch
+        const req_mismatch_trace = {
+            tenant: "tenant-alice",
+            body: { memory_id: "valid-mem-id", user_id: "tenant-bob" },
+        };
+        status = 200;
+        res_json = null;
+        await trace_handler(req_mismatch_trace, res_mock);
+        expect(status).toBe(403);
+        expect(res_json.error).toBe("tenant_mismatch");
     });
 });
