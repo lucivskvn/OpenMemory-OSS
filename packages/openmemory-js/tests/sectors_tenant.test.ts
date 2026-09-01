@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "bun:test";
 import { sys } from "../src/server/routes/system";
 import { dash } from "../src/server/routes/dashboard";
+import { dynroutes } from "../src/server/routes/dynamics";
 import { run_async, q, all_async } from "../src/core/db";
 
 async function cleanup() {
@@ -606,5 +607,67 @@ describe("Dashboard route hours parameter validation", () => {
             expect(status).toBe(400);
             expect(json_res.error).toBe("invalid_hours");
         }
+    });
+});
+
+describe("Dynamics routes validation and tenant scoping", () => {
+    let energy_handler: any = null;
+    let trace_handler: any = null;
+
+    beforeEach(() => {
+        const app_mock = {
+            post: (path: string, handler: any) => {
+                if (path === "/dynamics/retrieval/energy-based") {
+                    energy_handler = handler;
+                } else if (path === "/dynamics/reinforcement/trace") {
+                    trace_handler = handler;
+                }
+            },
+            get: () => {},
+        };
+        dynroutes(app_mock);
+    });
+
+    it("enforces schema validation on energy-based retrieval and trace reinforcement", async () => {
+        expect(energy_handler).toBeTruthy();
+        expect(trace_handler).toBeTruthy();
+
+        // 1. Missing query on energy-based retrieval returns 400
+        const req_bad_energy = { tenant: "tenant-alice", body: {} };
+        let status = 200;
+        let res_json: any = null;
+        const res_mock = {
+            status: function (code: number) {
+                status = code;
+                return this;
+            },
+            set: function () {
+                return this;
+            },
+            setHeader: function () {
+                return this;
+            },
+            json: (data: any) => {
+                res_json = data;
+            },
+        };
+
+        await energy_handler(req_bad_energy, res_mock);
+        expect(status).toBe(400);
+
+        // 2. Missing memory_id on trace reinforcement returns 400
+        const req_bad_trace = { tenant: "tenant-alice", body: {} };
+        status = 200;
+        await trace_handler(req_bad_trace, res_mock);
+        expect(status).toBe(400);
+
+        // 3. Mismatched user_id returns 403
+        const req_mismatch_energy = {
+            tenant: "tenant-alice",
+            body: { query: "test", user_id: "tenant-bob" },
+        };
+        status = 200;
+        await energy_handler(req_mismatch_energy, res_mock);
+        expect(status).toBe(403);
     });
 });
