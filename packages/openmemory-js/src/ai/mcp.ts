@@ -43,7 +43,15 @@ const assert_mcp_payload_size = (body: string) => {
 };
 
 const trunc = (val: string, max = 200) =>
-    val.length <= max ? val : `${val.slice(0, max).trimEnd()}...`;
+    val.length <= max ? val : \`${val.slice(0, max).trimEnd()}...\`;
+
+const sanitize_mcp_method = (pay: Record<string, unknown>) => {
+    if (typeof pay.method !== "string") return "unknown";
+    return (
+        trunc(pay.method.replace(/[\u0000-\u001f\u007f-\u009f]/g, ""), 100) ||
+        "unknown"
+    );
+};
 
 const build_mem_snap = (row: mem_row) => ({
     id: row.id,
@@ -920,13 +928,9 @@ export const mcp = (app: any) => {
                 send_err(res, -32600, "Request body must be a JSON object");
                 return;
             }
-            const method =
-                "method" in pay && typeof pay.method === "string"
-                    ? trunc(
-                          pay.method.replace(/[\u0000-\u001f\u007f-\u009f]/g, ""),
-                          100,
-                      ) || "unknown"
-                    : "unknown";
+            const method = sanitize_mcp_method(
+                pay as Record<string, unknown>,
+            );
             console.error("[MCP] Incoming request method:", method);
             set_hdrs(res);
 
