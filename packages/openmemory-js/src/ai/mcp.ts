@@ -29,6 +29,19 @@ const sec_enum = z.enum([
 
 const MAX_MCP_BODY_BYTES = 1024 * 1024;
 
+class McpBodyTooLargeError extends Error {
+    constructor() {
+        super("MCP request body exceeds the 1 MiB limit");
+        this.name = "McpBodyTooLargeError";
+    }
+}
+
+const assert_mcp_payload_size = (body: string) => {
+    if (Buffer.byteLength(body, "utf8") > MAX_MCP_BODY_BYTES) {
+        throw new McpBodyTooLargeError();
+    }
+};
+
 const trunc = (val: string, max = 200) =>
     val.length <= max ? val : `${val.slice(0, max).trimEnd()}...`;
 
@@ -855,9 +868,7 @@ export const create_mcp_srv = (tenant?: string) => {
 };
 
 const parse_mcp_payload = (body: string) => {
-    if (Buffer.byteLength(body, "utf8") > MAX_MCP_BODY_BYTES) {
-        throw new RangeError("MCP request body exceeds the 1 MiB limit");
-    }
+    assert_mcp_payload_size(body);
     return JSON.parse(body);
 };
 
@@ -867,7 +878,11 @@ const extract_pay = async (req: IncomingMessage & { body?: unknown }) => {
             if (!req.body.trim()) return undefined;
             return parse_mcp_payload(req.body);
         }
-        if (typeof req.body === "object" && req.body !== null) return req.body;
+        if (typeof req.body === "object" && req.body !== null) {
+            const serialized = JSON.stringify(req.body);
+            if (serialized !== undefined) assert_mcp_payload_size(serialized);
+            return req.body;
+        }
         return undefined;
     }
     const raw = await new Promise<string>((resolve, reject) => {
@@ -883,9 +898,7 @@ const extract_pay = async (req: IncomingMessage & { body?: unknown }) => {
             if (size > MAX_MCP_BODY_BYTES) {
                 rejected = true;
                 req.resume();
-                reject(
-                    new RangeError("MCP request body exceeds the 1 MiB limit"),
-                );
+                reject(new McpBodyTooLargeError());
                 return;
             }
             chunks.push(bytes);
@@ -909,7 +922,10 @@ export const mcp = (app: any) => {
             }
             const method =
                 "method" in pay && typeof pay.method === "string"
-                    ? pay.method
+                    ? trunc(
+                          pay.method.replace(/[\u0000-\u001f\u007f-\u009f]/g, ""),
+                          100,
+                      ) || "unknown"
                     : "unknown";
             console.error("[MCP] Incoming request method:", method);
             set_hdrs(res);
@@ -927,7 +943,7 @@ export const mcp = (app: any) => {
             await trans.handleRequest(req, res, pay);
         } catch (error) {
             console.error("[MCP] Request handling failed");
-            if (error instanceof RangeError) {
+            if (error instanceof McpBodyTooLargeError) {
                 send_err(
                     res,
                     -32600,
