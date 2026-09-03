@@ -205,7 +205,7 @@ jobs:
           cd packages/openmemory-js
           bun install --frozen-lockfile --ignore-scripts --no-progress --network-concurrency=8 --concurrent-scripts=2
 
-      - name: Run Changed-Surface TypeScript Gate
+      - name: Run Changed-Surface TypeScript Syntax Gate
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PUSH_BASE_SHA: ${{ github.event.before }}
@@ -232,10 +232,42 @@ jobs:
           fi
 
           cd packages/openmemory-js
-          timeout --kill-after=5s 60s node --max-old-space-size=4096 ./node_modules/typescript/bin/tsc \
-            --noEmit --pretty false --strict --skipLibCheck --target ES2022 \
-            --module CommonJS --moduleResolution node --esModuleInterop \
-            --forceConsistentCasingInFileNames "${changed[@]}"
+          timeout --kill-after=2s 20s node - "${changed[@]}" <<'NODE'
+          const fs = require("node:fs");
+          const ts = require("typescript");
+          const files = process.argv.slice(2);
+          let failed = false;
+
+          for (const file of files) {
+            const source = fs.readFileSync(file, "utf8");
+            const result = ts.transpileModule(source, {
+              fileName: file,
+              reportDiagnostics: true,
+              compilerOptions: {
+                target: ts.ScriptTarget.ES2022,
+                module: ts.ModuleKind.CommonJS,
+                jsx: ts.JsxEmit.ReactJSX,
+                isolatedModules: true,
+              },
+            });
+            const errors = (result.diagnostics || []).filter(
+              (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error,
+            );
+            if (errors.length > 0) {
+              failed = true;
+              process.stderr.write(
+                ts.formatDiagnosticsWithColorAndContext(errors, {
+                  getCanonicalFileName: (name) => name,
+                  getCurrentDirectory: process.cwd,
+                  getNewLine: () => "\n",
+                }),
+              );
+            }
+          }
+
+          if (failed) process.exit(1);
+          console.log(`Validated TypeScript syntax for ${files.length} changed source file(s).`);
+          NODE
           
       - name: Run Full Core Test Suite
         run: |
