@@ -504,6 +504,28 @@ describe("Classifier training route scoping", () => {
         expect(admin_status).toBe(200);
         expect(admin_json.ok).toBe(true);
         expect(admin_json.message).toBe("Training started");
+
+        // 4. Invalid body payload error sanitization check (must not leak raw Zod tree)
+        const req_invalid_body = {
+            tenant: "admin",
+            body: { invalid_key: "bad_format" },
+        };
+        let invalid_status = 200;
+        let invalid_json: any = null;
+        const res_invalid = {
+            status: function (code: number) {
+                invalid_status = code;
+                return this;
+            },
+            json: (data: any) => {
+                invalid_json = data;
+            },
+        };
+
+        await train_handler(req_invalid_body, res_invalid);
+        expect(invalid_status).toBe(400);
+        expect(invalid_json.error).toBe("Invalid payload format");
+        expect(invalid_json.details).toBe("Validation failed");
     });
 });
 
