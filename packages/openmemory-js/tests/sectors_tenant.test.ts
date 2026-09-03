@@ -504,6 +504,56 @@ describe("Classifier training route scoping", () => {
         expect(admin_status).toBe(200);
         expect(admin_json.ok).toBe(true);
         expect(admin_json.message).toBe("Training started");
+
+        // 4. Invalid body payload error sanitization check (must not leak raw Zod tree)
+        const req_invalid_body = {
+            tenant: "admin",
+            body: { invalid_key: "bad_format" },
+        };
+        let invalid_status = 200;
+        let invalid_json: any = null;
+        const res_invalid = {
+            status: function (code: number) {
+                invalid_status = code;
+                return this;
+            },
+            json: (data: any) => {
+                invalid_json = data;
+            },
+        };
+
+        await train_handler(req_invalid_body, res_invalid);
+        expect(invalid_status).toBe(400);
+        expect(invalid_json.error).toBe("Invalid payload format");
+        expect(invalid_json.details).toBe("Validation failed");
+        expect(invalid_json.issues).toBeUndefined();
+        expect(invalid_json.parsed).toBeUndefined();
+
+        // 5. Present data array with invalid sector enum value error sanitization check
+        const req_invalid_sector = {
+            tenant: "admin",
+            body: {
+                data: [{ text: "Invalid sector item", sector: "invalid_sector_enum" }],
+            },
+        };
+        let sector_status = 200;
+        let sector_json: any = null;
+        const res_sector_invalid = {
+            status: function (code: number) {
+                sector_status = code;
+                return this;
+            },
+            json: (data: any) => {
+                sector_json = data;
+            },
+        };
+
+        await train_handler(req_invalid_sector, res_sector_invalid);
+        expect(sector_status).toBe(400);
+        expect(sector_json.error).toBe("Invalid payload format");
+        expect(sector_json.details).toBe("Validation failed");
+        expect(sector_json.issues).toBeUndefined();
+        expect(sector_json.parsed).toBeUndefined();
     });
 });
 
