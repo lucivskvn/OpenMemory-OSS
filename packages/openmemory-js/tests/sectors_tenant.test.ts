@@ -526,6 +526,8 @@ describe("Classifier training route scoping", () => {
         expect(invalid_status).toBe(400);
         expect(invalid_json.error).toBe("Invalid payload format");
         expect(invalid_json.details).toBe("Validation failed");
+        expect(invalid_json.issues).toBeUndefined();
+        expect(invalid_json.parsed).toBeUndefined();
     });
 });
 
