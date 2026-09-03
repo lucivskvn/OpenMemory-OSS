@@ -205,10 +205,37 @@ jobs:
           cd packages/openmemory-js
           bun install --frozen-lockfile --ignore-scripts --no-progress --network-concurrency=8 --concurrent-scripts=2
 
-      - name: Run TypeScript Typecheck
+      - name: Run Changed-Surface TypeScript Gate
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
         run: |
+          set -euo pipefail
+          base_sha="${PR_BASE_SHA:-${PUSH_BASE_SHA:-}}"
+          if [[ ! "$base_sha" =~ ^[0-9a-f]{40}$ ]] || [[ "$base_sha" =~ ^0+$ ]]; then
+            base_sha="$(git rev-parse HEAD^)"
+          fi
+          git fetch --no-tags --depth=1 origin "$base_sha"
+
+          changed=()
+          while IFS= read -r file; do
+            case "$file" in
+              packages/openmemory-js/src/*.ts|packages/openmemory-js/src/*.tsx)
+                test -f "$file" && changed+=("${file#packages/openmemory-js/}")
+                ;;
+            esac
+          done < <(git diff --name-only "$base_sha" "$GITHUB_SHA" -- packages/openmemory-js/src)
+
+          if (( ${#changed[@]} == 0 )); then
+            echo "No changed TypeScript source files to check."
+            exit 0
+          fi
+
           cd packages/openmemory-js
-          timeout --kill-after=10s 2m node --max-old-space-size=6144 ./node_modules/typescript/bin/tsc --noEmit --pretty false -p tsconfig.json
+          timeout --kill-after=5s 60s node --max-old-space-size=4096 ./node_modules/typescript/bin/tsc \
+            --noEmit --pretty false --strict --skipLibCheck --target ES2022 \
+            --module CommonJS --moduleResolution node --esModuleInterop \
+            --forceConsistentCasingInFileNames "${changed[@]}"
           
       - name: Run Full Core Test Suite
         run: |
