@@ -43,7 +43,7 @@ const assert_mcp_payload_size = (body: string) => {
 };
 
 const trunc = (val: string, max = 200) =>
-    val.length <= max ? val : \`${val.slice(0, max).trimEnd()}...\`;
+    val.length <= max ? val : `${val.slice(0, max).trimEnd()}...`;
 
 const sanitize_mcp_method = (pay: Record<string, unknown>) => {
     if (typeof pay.method !== "string") return "unknown";
