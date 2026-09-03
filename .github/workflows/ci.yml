@@ -38,7 +38,7 @@ jobs:
 
       - name: Install PowerShell Analysis Sensor
         shell: pwsh
-        run: Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force
+        run: Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force
 
       - name: Enforce Desloppify Baseline
         env:
@@ -52,14 +52,14 @@ jobs:
 
           report=".desloppify/reports/latest.findings.json"
           test -s "$report"
-          node - "$report" <<'NODE'
-          const fs = require("fs");
-          const report = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-          if (!Array.isArray(report.findings) || !report.summary) process.exit(2);
-          if ((report.summary.critical ?? 0) > 0) process.exit(1);
-          if ((report.summary.high ?? Number.POSITIVE_INFINITY) > 462) process.exit(1);
-          if (report.findings.length > 708) process.exit(1);
-          NODE
+          jq -e '.findings | type == "array"' "$report" >/dev/null
+          critical_count="$(jq -r '.summary.critical // 0' "$report")"
+          high_count="$(jq -r '.summary.high // empty' "$report")"
+          finding_count="$(jq -r '.findings | length' "$report")"
+          test -n "$high_count"
+          test "$critical_count" -eq 0
+          test "$high_count" -le 462
+          test "$finding_count" -le 708
 
       - name: Upload Desloppify Report
         if: always()
@@ -206,7 +206,6 @@ jobs:
           bun install --frozen-lockfile --ignore-scripts --no-progress --network-concurrency=8 --concurrent-scripts=2
 
       - name: Run TypeScript Typecheck
-        continue-on-error: true
         run: |
           cd packages/openmemory-js
           timeout --kill-after=10s 2m node --max-old-space-size=4096 ./node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
