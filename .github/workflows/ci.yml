@@ -208,7 +208,7 @@ jobs:
       - name: Run TypeScript Typecheck
         run: |
           cd packages/openmemory-js
-          timeout --kill-after=10s 2m node --max-old-space-size=4096 ./node_modules/typescript/bin/tsc --noEmit -p tsconfig.json
+          timeout --kill-after=10s 2m node --max-old-space-size=6144 ./node_modules/typescript/bin/tsc --noEmit --pretty false -p tsconfig.json
           
       - name: Run Full Core Test Suite
         run: |
