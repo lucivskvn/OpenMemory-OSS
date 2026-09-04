@@ -896,24 +896,24 @@ const extract_pay = async (req: IncomingMessage & { body?: unknown }) => {
     const raw = await new Promise<string>((resolve, reject) => {
         const chunks: Buffer[] = [];
         let size = 0;
-        let rejected = false;
-        req.on("data", (chunk) => {
-            if (rejected) return;
+        const collect_chunk = (chunk: Buffer | string) => {
             const bytes = Buffer.isBuffer(chunk)
                 ? chunk
                 : Buffer.from(String(chunk));
             size += bytes.length;
-            if (size > MAX_MCP_BODY_BYTES) {
-                rejected = true;
-                req.resume();
-                reject(new McpBodyTooLargeError());
+            if (size <= MAX_MCP_BODY_BYTES) {
+                chunks.push(bytes);
                 return;
             }
-            chunks.push(bytes);
-        });
-        req.on("end", () => {
-            if (!rejected) resolve(Buffer.concat(chunks).toString("utf8"));
-        });
+            req.off("data", collect_chunk);
+            chunks.length = 0;
+            req.resume();
+            reject(new McpBodyTooLargeError());
+        };
+        req.on("data", collect_chunk);
+        req.on("end", () =>
+            resolve(Buffer.concat(chunks).toString("utf8")),
+        );
         req.on("error", reject);
     });
     if (!raw.trim()) return undefined;
