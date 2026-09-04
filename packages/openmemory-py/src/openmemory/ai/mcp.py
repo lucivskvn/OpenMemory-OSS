@@ -317,8 +317,10 @@ async def run_mcp_server():
 
             elif name == "openmemory_list":
                 limit = args.get("limit", 20)
-                uid = args.get("user_id")
-                res = mem.history(user_id=uid, limit=limit)
+                tenant, err = _resolve_mcp_tenant(mem, args)
+                if err:
+                    return [TextContent(type="text", text=err)]
+                res = mem.history(user_id=tenant, limit=limit)
                 return [TextContent(type="text", text=json.dumps([dict(r) for r in res], default=str, indent=2))]
 
             else:
