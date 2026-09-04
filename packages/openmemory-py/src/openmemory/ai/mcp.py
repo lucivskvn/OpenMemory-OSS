@@ -53,6 +53,20 @@ async def _get_verified_memory(mem_inst: Memory, args: dict) -> tuple[dict | Non
 
     return m_dict, tenant, None
 
+class DummyTextContent:
+    def __init__(self, type: str, text: str):
+        self.type = type
+        self.text = text
+
+async def _handle_mcp_list(mem_inst: Memory, args: dict) -> list[Any]:
+    limit = args.get("limit", 20)
+    tenant, err = _resolve_mcp_tenant(mem_inst, args)
+    text_cls = TextContent if 'TextContent' in globals() and TextContent is not None else DummyTextContent
+    if err:
+        return [text_cls(type="text", text=err)]
+    res = mem_inst.history(user_id=tenant, limit=limit)
+    return [text_cls(type="text", text=json.dumps([dict(r) for r in res], default=str, indent=2))]
+
 async def run_mcp_server():
     if not Server:
         print("Error: 'mcp' package not found. Install it via 'pip install mcp'", file=sys.stderr)
@@ -316,10 +330,7 @@ async def run_mcp_server():
                 return [TextContent(type="text", text=f"Memory {m_dict['id']} deleted")]
 
             elif name == "openmemory_list":
-                limit = args.get("limit", 20)
-                uid = args.get("user_id")
-                res = mem.history(user_id=uid, limit=limit)
-                return [TextContent(type="text", text=json.dumps([dict(r) for r in res], default=str, indent=2))]
+                return await _handle_mcp_list(mem, args)
 
             else:
                 raise ValueError(f"Unknown tool: {name}")
