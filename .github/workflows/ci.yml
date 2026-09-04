@@ -194,6 +194,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Set up Bun Runtime
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -213,9 +214,15 @@ jobs:
           set -euo pipefail
           base_sha="${PR_BASE_SHA:-${PUSH_BASE_SHA:-}}"
           if [[ ! "$base_sha" =~ ^[0-9a-f]{40}$ ]] || [[ "$base_sha" =~ ^0+$ ]]; then
-            base_sha="$(git rev-parse HEAD^)"
+            if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+              base_sha="$(git rev-parse HEAD^)"
+            else
+              base_sha="$(git hash-object -t tree /dev/null)"
+            fi
           fi
-          git fetch --no-tags --depth=1 origin "$base_sha"
+          if git cat-file -e "$base_sha^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=1 origin "$base_sha"
+          fi
 
           changed=()
           while IFS= read -r file; do
@@ -268,6 +275,8 @@ jobs:
           if (failed) process.exit(1);
           console.log(`Validated TypeScript syntax for ${files.length} changed source file(s).`);
           NODE
+
+          timeout --kill-after=2s 60s ./node_modules/.bin/tsc --noEmit --pretty false
           
       - name: Run Full Core Test Suite
         run: |
