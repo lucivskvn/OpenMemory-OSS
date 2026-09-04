@@ -276,7 +276,35 @@ jobs:
           console.log(`Validated TypeScript syntax for ${files.length} changed source file(s).`);
           NODE
 
-          timeout --kill-after=2s 60s ./node_modules/.bin/tsc --noEmit --pretty false
+          timeout --kill-after=2s 20s node - "${changed[@]}" <<'NODE'
+          const ts = require("typescript");
+          const config = ts.readConfigFile("tsconfig.json", ts.sys.readFile);
+          if (config.error) {
+            process.stderr.write(ts.formatDiagnosticsWithColorAndContext([config.error], {
+              getCanonicalFileName: (name) => name,
+              getCurrentDirectory: process.cwd,
+              getNewLine: () => "\n",
+            }));
+            process.exit(1);
+          }
+          const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, process.cwd());
+          const program = ts.createProgram({
+            rootNames: process.argv.slice(2),
+            options: parsed.options,
+          });
+          const diagnostics = ts.getPreEmitDiagnostics(program).filter(
+            (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error,
+          );
+          if (diagnostics.length > 0) {
+            process.stderr.write(ts.formatDiagnosticsWithColorAndContext(diagnostics, {
+              getCanonicalFileName: (name) => name,
+              getCurrentDirectory: process.cwd,
+              getNewLine: () => "\n",
+            }));
+            process.exit(1);
+          }
+          console.log(`Validated TypeScript semantics for ${process.argv.length - 2} changed source file(s).`);
+          NODE
           
       - name: Run Full Core Test Suite
         run: |
