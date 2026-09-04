@@ -8,6 +8,10 @@ from openmemory.core.db import db, q
 def setup_db(tmp_path, monkeypatch):
     db_file = tmp_path / "test.db"
     monkeypatch.setenv("OM_DATABASE_URL", f"sqlite:///{db_file}")
+    from openmemory.core.config import env
+    env.database_url = f"sqlite:///{db_file}"
+    if db.conn:
+        db.conn.close()
     db.conn = None
     db.connect()
 
@@ -57,26 +61,47 @@ async def test_mcp_tenant_get_and_delete_scenarios(monkeypatch):
     assert res_ownerless is None
     assert "not found for user" in err_ownerless
 
+from openmemory.ai.mcp import _handle_mcp_list
+
 @pytest.mark.asyncio
-async def test_mcp_list_tenant_isolation(monkeypatch):
+async def test_mcp_list_boundary_handler_cases(monkeypatch):
     monkeypatch.delenv("OM_TENANT", raising=False)
     monkeypatch.delenv("OM_USER_ID", raising=False)
 
     mem_alice = Memory(user="alice")
     mem_bob = Memory(user="bob")
 
-    await mem_alice.add("Alice private memory", user_id="alice")
-    await mem_bob.add("Bob private memory", user_id="bob")
+    await mem_alice.add("Alice secret memory", user_id="alice")
+    await mem_bob.add("Bob secret memory", user_id="bob")
+    db.execute("INSERT INTO memories (id, user_id, content, primary_sector, created_at, salience, decay_lambda, version) VALUES (?, NULL, ?, ?, ?, 1.0, 0.02, 1)", ("m-ownerless-list", "Ownerless content", "semantic", 1000000000))
+    db.commit()
 
-    # 1. Resolving list for Alice only returns Alice's tenant memories
-    t_alice, err_a = _resolve_mcp_tenant(mem_alice, {"user_id": "alice"})
-    assert err_a is None
-    assert t_alice == "alice"
-    list_alice = mem_alice.history(user_id=t_alice, limit=10)
-    assert len(list_alice) >= 1
-    assert all(item["user_id"] == "alice" for item in list_alice)
+    # 1. Matching authenticated tenant returns only that tenant's records
+    res_alice = await _handle_mcp_list(mem_alice, {"user_id": "alice"})
+    parsed_alice = json.loads(res_alice[0].text)
+    assert len(parsed_alice) >= 1
+    assert all(m["user_id"] == "alice" for m in parsed_alice)
 
-    # 2. Resolving list for Alice with mismatched user_id returns tenant_mismatch error
-    _, err_mismatch = _resolve_mcp_tenant(mem_alice, {"user_id": "bob"})
-    assert err_mismatch is not None
-    assert "tenant_mismatch" in err_mismatch
+    # 2. Omitted and whitespace-only user_id remain bound to authenticated tenant
+    res_omitted = await _handle_mcp_list(mem_alice, {})
+    parsed_omitted = json.loads(res_omitted[0].text)
+    assert len(parsed_omitted) >= 1
+    assert all(m["user_id"] == "alice" for m in parsed_omitted)
+
+    res_ws = await _handle_mcp_list(mem_alice, {"user_id": "   "})
+    parsed_ws = json.loads(res_ws[0].text)
+    assert len(parsed_ws) >= 1
+    assert all(m["user_id"] == "alice" for m in parsed_ws)
+
+    # 3. Wrong-tenant value is rejected
+    res_wrong = await _handle_mcp_list(mem_alice, {"user_id": "bob"})
+    assert "tenant_mismatch" in res_wrong[0].text
+
+    # 4. Unbound session fails closed even when caller supplies a non-empty identity
+    mem_unbound = Memory(user=None)
+    res_unbound = await _handle_mcp_list(mem_unbound, {"user_id": "alice"})
+    assert "Unauthenticated MCP session" in res_unbound[0].text
+
+    # 5. Ownerless records are never returned to any tenant
+    for record in parsed_alice:
+        assert record["id"] != "m-ownerless-list"
