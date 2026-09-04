@@ -246,11 +246,7 @@ jobs:
           fi
 
           cd packages/openmemory-js
-          # Keep semantic checking bounded without disabling it: 4 GiB virtual-memory cap
-          # and a 90-second wall-clock limit for the changed source graph.
-          (
-            ulimit -Sv 4194304
-            timeout --kill-after=5s 90s node - "${changed[@]}" <<'NODE'
+          timeout --kill-after=2s 20s node - "${changed[@]}" <<'NODE'
           const fs = require("node:fs");
           const ts = require("typescript");
           const files = process.argv.slice(2);
@@ -287,7 +283,11 @@ jobs:
           console.log(`Validated TypeScript syntax for ${files.length} changed source file(s).`);
           NODE
 
-          timeout --kill-after=2s 20s node - "${changed[@]}" <<'NODE'
+          # Keep semantic checking bounded without disabling it: 4 GiB virtual-memory cap
+          # and a 90-second wall-clock limit for the changed source graph.
+          (
+            ulimit -Sv 4194304
+            timeout --kill-after=5s 90s node - "${changed[@]}" <<'NODE'
           const ts = require("typescript");
           const config = ts.readConfigFile("tsconfig.json", ts.sys.readFile);
           if (config.error) {
