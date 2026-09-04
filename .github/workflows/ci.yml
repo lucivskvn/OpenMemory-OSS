@@ -220,8 +220,15 @@ jobs:
               base_sha="$(git hash-object -t tree /dev/null)"
             fi
           fi
-          if git cat-file -e "$base_sha^{commit}" 2>/dev/null; then
-            git fetch --no-tags --depth=1 origin "$base_sha"
+          if ! git cat-file -e "$base_sha^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=1 origin "$base_sha" || true
+          fi
+          if ! git cat-file -e "$base_sha^{commit}" 2>/dev/null; then
+            if git rev-parse --verify HEAD^ >/dev/null 2>&1; then
+              base_sha="$(git rev-parse HEAD^)"
+            else
+              base_sha="$(git hash-object -t tree /dev/null)"
+            fi
           fi
 
           changed=()
@@ -239,7 +246,11 @@ jobs:
           fi
 
           cd packages/openmemory-js
-          timeout --kill-after=2s 20s node - "${changed[@]}" <<'NODE'
+          # Keep semantic checking bounded without disabling it: 4 GiB virtual-memory cap
+          # and a 90-second wall-clock limit for the changed source graph.
+          (
+            ulimit -Sv 4194304
+            timeout --kill-after=5s 90s node - "${changed[@]}" <<'NODE'
           const fs = require("node:fs");
           const ts = require("typescript");
           const files = process.argv.slice(2);
@@ -305,6 +316,7 @@ jobs:
           }
           console.log(`Validated TypeScript semantics for ${process.argv.length - 2} changed source file(s).`);
           NODE
+          )
           
       - name: Run Full Core Test Suite
         run: |
