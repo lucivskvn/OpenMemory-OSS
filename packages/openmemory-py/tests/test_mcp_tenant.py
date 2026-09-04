@@ -9,11 +9,17 @@ def setup_db(tmp_path, monkeypatch):
     db_file = tmp_path / "test.db"
     monkeypatch.setenv("OM_DATABASE_URL", f"sqlite:///{db_file}")
     from openmemory.core.config import env
+    orig_url = env.database_url
     env.database_url = f"sqlite:///{db_file}"
     if db.conn:
         db.conn.close()
     db.conn = None
     db.connect()
+    yield
+    if db.conn:
+        db.conn.close()
+    db.conn = None
+    env.database_url = orig_url
 
 @pytest.mark.asyncio
 async def test_mcp_tenant_get_and_delete_scenarios(monkeypatch):
