@@ -51,12 +51,13 @@ async def test_mcp_tenant_get_and_delete_scenarios(monkeypatch):
     assert "Unauthenticated MCP session" in err_unbound2
 
     # 6. Ownerless memory record (user_id is None) is rejected for any bound tenant
-    db.execute("INSERT INTO memories (id, user_id, content, primary_sector, created_at, salience, decay_lambda, version) VALUES (?, NULL, ?, ?, ?, 1.0, 0.02, 1)", ("m-ownerless", "Ownerless memory content", "semantic", 1000000000))
+    db.execute("INSERT OR REPLACE INTO memories (id, user_id, content, primary_sector, created_at, salience, decay_lambda, version) VALUES (?, NULL, ?, ?, ?, 1.0, 0.02, 1)", ("m-ownerless", "Ownerless memory content", "semantic", 1000000000))
     db.commit()
     res_ownerless, tenant_o, err_ownerless = await _get_verified_memory(mem, {"id": "m-ownerless"})
     assert res_ownerless is None
     assert "not found for user" in err_ownerless
 
+import openmemory.ai.mcp as mcp_module
 from openmemory.ai.mcp import handle_mcp_tool_call
 from unittest.mock import AsyncMock, MagicMock
 
@@ -127,8 +128,8 @@ async def test_mcp_tool_handler_tenant_isolation_boundary(monkeypatch):
     # 6. Temporal fact boundary verification (type="factual" / "unified" / "both")
     query_fact_mock = AsyncMock(return_value=[])
     insert_fact_mock = AsyncMock(return_value="fact-123")
-    monkeypatch.setattr("openmemory.ai.mcp.query_facts_at_time", query_fact_mock)
-    monkeypatch.setattr("openmemory.ai.mcp.insert_fact", insert_fact_mock)
+    monkeypatch.setattr(mcp_module, "query_facts_at_time", query_fact_mock)
+    monkeypatch.setattr(mcp_module, "insert_fact", insert_fact_mock)
 
     # Unauthenticated session rejected before invoking temporal functions
     res_q_unbound = await handle_mcp_tool_call("openmemory_query", {"query": "test", "type": "factual"}, mem_unbound)
