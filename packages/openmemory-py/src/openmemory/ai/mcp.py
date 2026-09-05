@@ -221,6 +221,12 @@ async def handle_mcp_tool_call(name: str, arguments: dict | None, mem_inst: Memo
         return _text_resp(f"Error: {str(e)}")
 
 async def run_mcp_server(tenant: Optional[str] = None, mem_inst: Optional[Memory] = None):
+    """Run the MCP stdio server.
+
+    In stdio mode, each server process serves a single authenticated tenant bound via the
+    `tenant` / `mem_inst` parameters or process environment variables (`OM_TENANT` / `OM_USER_ID`).
+    Unauthenticated processes without a bound tenant fail closed on all tool calls.
+    """
     if not Server:
         print("Error: 'mcp' package not found. Install it via 'pip install mcp'", file=sys.stderr)
         sys.exit(1)
