@@ -161,10 +161,12 @@ async def run_mcp_server():
 
         try:
             if name == "openmemory_query":
+                tenant, err = _resolve_mcp_tenant(mem, args)
+                if err:
+                    return [TextContent(type="text", text=err)]
                 q = args.get("query")
                 qtype = args.get("type", "contextual")
                 limit = args.get("k", 10)
-                uid = args.get("user_id")
                 sector = args.get("sector")
                 fact_pattern = args.get("fact_pattern", {})
                 at_str = args.get("at")
@@ -180,7 +182,7 @@ async def run_mcp_server():
                     filters = {}
                     if sector: filters["sector"] = sector
                     
-                    contextual = await mem.search(q, user_id=uid, limit=limit, **filters)
+                    contextual = await mem.search(q, user_id=tenant, limit=limit, **filters)
                     results["contextual"] = [{
                         "source": "hsg",
                         "id": m.get("id"),
@@ -198,7 +200,7 @@ async def run_mcp_server():
                         obj=fact_pattern.get("object"),
                         at_time=at_ts,
                         min_confidence=0.0,
-                        user_id=uid
+                        user_id=tenant
                     )
                     results["factual"] = [{
                         "source": "temporal",
@@ -230,9 +232,11 @@ async def run_mcp_server():
                 ]
 
             elif name == "openmemory_store":
+                tenant, err = _resolve_mcp_tenant(mem, args)
+                if err:
+                    return [TextContent(type="text", text=err)]
                 content = args.get("content")
                 stype = args.get("type", "contextual")
-                uid = args.get("user_id")
                 tags = args.get("tags", [])
                 meta = args.get("metadata", {})
                 facts_data = args.get("facts", [])
@@ -246,7 +250,7 @@ async def run_mcp_server():
                 # store contextual memory
                 if stype in ["contextual", "both"]:
                     if tags: meta["tags"] = tags
-                    res = await mem.add(content, user_id=uid, meta=meta)
+                    res = await mem.add(content, user_id=tenant, meta=meta)
                     results["hsg"] = {
                         "id": res.get('root_memory_id') or res.get('id'),
                         "primary_sector": res.get('primary_sector')
@@ -269,7 +273,7 @@ async def run_mcp_server():
                             valid_from=valid_from_ts,
                             confidence=confidence,
                             metadata=meta,
-                            user_id=uid
+                            user_id=tenant
                         )
                         
                         temporal_results.append({
@@ -285,16 +289,16 @@ async def run_mcp_server():
                 # build response message
                 if stype == "contextual":
                     txt = f"Stored memory {results['hsg']['id']}"
-                    if uid:
-                        txt += f" [user={uid}]"
+                    if tenant:
+                        txt += f" [user={tenant}]"
                 elif stype == "factual":
                     txt = f"Stored {len(results['temporal'])} temporal fact(s)"
-                    if uid:
-                        txt += f" [user={uid}]"
+                    if tenant:
+                        txt += f" [user={tenant}]"
                 else:  # both
                     txt = f"Stored in both systems: HSG memory {results['hsg']['id']} + {len(results['temporal'])} temporal fact(s)"
-                    if uid:
-                        txt += f" [user={uid}]"
+                    if tenant:
+                        txt += f" [user={tenant}]"
                 
                 return [
                     TextContent(type="text", text=txt),
@@ -316,9 +320,11 @@ async def run_mcp_server():
                 return [TextContent(type="text", text=f"Memory {m_dict['id']} deleted")]
 
             elif name == "openmemory_list":
+                tenant, err = _resolve_mcp_tenant(mem, args)
+                if err:
+                    return [TextContent(type="text", text=err)]
                 limit = args.get("limit", 20)
-                uid = args.get("user_id")
-                res = mem.history(user_id=uid, limit=limit)
+                res = mem.history(user_id=tenant, limit=limit)
                 return [TextContent(type="text", text=json.dumps([dict(r) for r in res], default=str, indent=2))]
 
             else:

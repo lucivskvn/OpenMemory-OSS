@@ -56,3 +56,31 @@ async def test_mcp_tenant_get_and_delete_scenarios(monkeypatch):
     res_ownerless, tenant_o, err_ownerless = await _get_verified_memory(mem, {"id": "m-ownerless"})
     assert res_ownerless is None
     assert "not found for user" in err_ownerless
+
+@pytest.mark.asyncio
+async def test_mcp_tenant_resolution_for_query_store_list(monkeypatch):
+    monkeypatch.delenv("OM_TENANT", raising=False)
+    monkeypatch.delenv("OM_USER_ID", raising=False)
+
+    mem_alice = Memory(user="alice")
+
+    # 1. Matching user_id resolves successfully to bound tenant
+    tenant, err = _resolve_mcp_tenant(mem_alice, {"user_id": "alice"})
+    assert err is None
+    assert tenant == "alice"
+
+    # 2. Omitted user_id resolves to bound tenant
+    tenant, err = _resolve_mcp_tenant(mem_alice, {})
+    assert err is None
+    assert tenant == "alice"
+
+    # 3. Mismatching claimed user_id is rejected
+    tenant, err = _resolve_mcp_tenant(mem_alice, {"user_id": "bob"})
+    assert tenant is None
+    assert "tenant_mismatch" in err
+
+    # 4. Unauthenticated session fails closed
+    mem_unbound = Memory(user=None)
+    tenant, err = _resolve_mcp_tenant(mem_unbound, {"user_id": "alice"})
+    assert tenant is None
+    assert "Unauthenticated MCP session" in err
