@@ -57,30 +57,109 @@ async def test_mcp_tenant_get_and_delete_scenarios(monkeypatch):
     assert res_ownerless is None
     assert "not found for user" in err_ownerless
 
+from openmemory.ai.mcp import handle_mcp_tool_call
+from unittest.mock import AsyncMock, MagicMock
+
 @pytest.mark.asyncio
-async def test_mcp_tenant_resolution_for_query_store_list(monkeypatch):
+async def test_mcp_tool_handler_tenant_isolation_boundary(monkeypatch):
     monkeypatch.delenv("OM_TENANT", raising=False)
     monkeypatch.delenv("OM_USER_ID", raising=False)
 
     mem_alice = Memory(user="alice")
-
-    # 1. Matching user_id resolves successfully to bound tenant
-    tenant, err = _resolve_mcp_tenant(mem_alice, {"user_id": "alice"})
-    assert err is None
-    assert tenant == "alice"
-
-    # 2. Omitted user_id resolves to bound tenant
-    tenant, err = _resolve_mcp_tenant(mem_alice, {})
-    assert err is None
-    assert tenant == "alice"
-
-    # 3. Mismatching claimed user_id is rejected
-    tenant, err = _resolve_mcp_tenant(mem_alice, {"user_id": "bob"})
-    assert tenant is None
-    assert "tenant_mismatch" in err
-
-    # 4. Unauthenticated session fails closed
     mem_unbound = Memory(user=None)
-    tenant, err = _resolve_mcp_tenant(mem_unbound, {"user_id": "alice"})
-    assert tenant is None
-    assert "Unauthenticated MCP session" in err
+
+    tools = ["openmemory_query", "openmemory_store", "openmemory_list"]
+
+    # 1. Unauthenticated / empty server-bound tenant fails closed for all public tools
+    for tool in tools:
+        search_mock = AsyncMock(return_value=[])
+        add_mock = AsyncMock(return_value={"id": "1", "primary_sector": "semantic"})
+        hist_mock = MagicMock(return_value=[])
+        monkeypatch.setattr(mem_unbound, "search", search_mock)
+        monkeypatch.setattr(mem_unbound, "add", add_mock)
+        monkeypatch.setattr(mem_unbound, "history", hist_mock)
+
+        query_args = {"query": "test"} if tool == "openmemory_query" else ({"content": "test"} if tool == "openmemory_store" else {})
+        res = await handle_mcp_tool_call(tool, query_args, mem_unbound)
+        assert len(res) == 1
+        assert "Unauthenticated MCP session" in res[0].text
+        search_mock.assert_not_called()
+        add_mock.assert_not_called()
+        hist_mock.assert_not_called()
+
+    # 2. Mismatching caller-supplied tenant fails closed and never calls underlying storage
+    for tool in tools:
+        search_mock = AsyncMock(return_value=[])
+        add_mock = AsyncMock(return_value={"id": "1", "primary_sector": "semantic"})
+        hist_mock = MagicMock(return_value=[])
+        monkeypatch.setattr(mem_alice, "search", search_mock)
+        monkeypatch.setattr(mem_alice, "add", add_mock)
+        monkeypatch.setattr(mem_alice, "history", hist_mock)
+
+        query_args = {"query": "test", "user_id": "bob"} if tool == "openmemory_query" else ({"content": "test", "user_id": "bob"} if tool == "openmemory_store" else {"user_id": "bob"})
+        res = await handle_mcp_tool_call(tool, query_args, mem_alice)
+        assert len(res) == 1
+        assert "tenant_mismatch" in res[0].text
+        search_mock.assert_not_called()
+        add_mock.assert_not_called()
+        hist_mock.assert_not_called()
+
+    # 3. Omitted caller user_id defaults to bound tenant
+    for tool, uid_val in [("openmemory_query", None), ("openmemory_store", None), ("openmemory_list", None)]:
+        search_mock = AsyncMock(return_value=[])
+        add_mock = AsyncMock(return_value={"id": "1", "primary_sector": "semantic"})
+        hist_mock = MagicMock(return_value=[])
+        monkeypatch.setattr(mem_alice, "search", search_mock)
+        monkeypatch.setattr(mem_alice, "add", add_mock)
+        monkeypatch.setattr(mem_alice, "history", hist_mock)
+
+        query_args = {"query": "test"} if tool == "openmemory_query" else ({"content": "test"} if tool == "openmemory_store" else {})
+        res = await handle_mcp_tool_call(tool, query_args, mem_alice)
+        assert "Error" not in res[0].text
+
+        if tool == "openmemory_query":
+            assert search_mock.call_args.kwargs["user_id"] == "alice"
+        elif tool == "openmemory_store":
+            assert add_mock.call_args.kwargs["user_id"] == "alice"
+        elif tool == "openmemory_list":
+            assert hist_mock.call_args.kwargs["user_id"] == "alice"
+
+    # 4. Matching caller user_id succeeds and receives bound tenant
+    for tool in tools:
+        search_mock = AsyncMock(return_value=[])
+        add_mock = AsyncMock(return_value={"id": "1", "primary_sector": "semantic"})
+        hist_mock = MagicMock(return_value=[])
+        monkeypatch.setattr(mem_alice, "search", search_mock)
+        monkeypatch.setattr(mem_alice, "add", add_mock)
+        monkeypatch.setattr(mem_alice, "history", hist_mock)
+
+        query_args = {"query": "test", "user_id": "alice"} if tool == "openmemory_query" else ({"content": "test", "user_id": "alice"} if tool == "openmemory_store" else {"user_id": "alice"})
+        res = await handle_mcp_tool_call(tool, query_args, mem_alice)
+        assert "Error" not in res[0].text
+
+        if tool == "openmemory_query":
+            assert search_mock.call_args.kwargs["user_id"] == "alice"
+        elif tool == "openmemory_store":
+            assert add_mock.call_args.kwargs["user_id"] == "alice"
+        elif tool == "openmemory_list":
+            assert hist_mock.call_args.kwargs["user_id"] == "alice"
+
+    # 5. Empty caller identity ("") defaults to bound tenant
+    for tool in tools:
+        search_mock = AsyncMock(return_value=[])
+        add_mock = AsyncMock(return_value={"id": "1", "primary_sector": "semantic"})
+        hist_mock = MagicMock(return_value=[])
+        monkeypatch.setattr(mem_alice, "search", search_mock)
+        monkeypatch.setattr(mem_alice, "add", add_mock)
+        monkeypatch.setattr(mem_alice, "history", hist_mock)
+
+        query_args = {"query": "test", "user_id": ""} if tool == "openmemory_query" else ({"content": "test", "user_id": ""} if tool == "openmemory_store" else {"user_id": ""})
+        res = await handle_mcp_tool_call(tool, query_args, mem_alice)
+        assert "Error" not in res[0].text
+
+        if tool == "openmemory_query":
+            assert search_mock.call_args.kwargs["user_id"] == "alice"
+        elif tool == "openmemory_store":
+            assert add_mock.call_args.kwargs["user_id"] == "alice"
+        elif tool == "openmemory_list":
+            assert hist_mock.call_args.kwargs["user_id"] == "alice"
