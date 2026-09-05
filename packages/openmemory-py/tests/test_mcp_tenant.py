@@ -1,18 +1,37 @@
 import pytest
 import asyncio
 import json
+import os
 from openmemory.ai.mcp import _get_verified_memory, _resolve_mcp_tenant, Memory
 from openmemory.core.db import db, q
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def setup_db(tmp_path, monkeypatch):
+    old_db = os.environ.get("OM_DATABASE_URL")
     db_file = tmp_path / "test.db"
     monkeypatch.setenv("OM_DATABASE_URL", f"sqlite:///{db_file}")
+    if db.conn:
+        try:
+            db.conn.close()
+        except Exception:
+            pass
     db.conn = None
+    db.connect()
+    yield
+    if db.conn:
+        try:
+            db.conn.close()
+        except Exception:
+            pass
+    db.conn = None
+    if old_db:
+        os.environ["OM_DATABASE_URL"] = old_db
+    else:
+        os.environ.pop("OM_DATABASE_URL", None)
     db.connect()
 
 @pytest.mark.asyncio
-async def test_mcp_tenant_get_and_delete_scenarios(monkeypatch):
+async def test_mcp_tenant_get_and_delete_scenarios(setup_db, monkeypatch):
     monkeypatch.delenv("OM_TENANT", raising=False)
     monkeypatch.delenv("OM_USER_ID", raising=False)
 
@@ -62,7 +81,7 @@ from openmemory.ai.mcp import handle_mcp_tool_call
 from unittest.mock import AsyncMock, MagicMock
 
 @pytest.mark.asyncio
-async def test_mcp_tool_handler_tenant_isolation_boundary(monkeypatch):
+async def test_mcp_tool_handler_tenant_isolation_boundary(setup_db, monkeypatch):
     monkeypatch.delenv("OM_TENANT", raising=False)
     monkeypatch.delenv("OM_USER_ID", raising=False)
 
@@ -124,6 +143,27 @@ async def test_mcp_tool_handler_tenant_isolation_boundary(monkeypatch):
             assert add_mock.call_args.kwargs["user_id"] == "alice"
         elif tool == "openmemory_list":
             assert hist_mock.call_args.kwargs["user_id"] == "alice"
+
+@pytest.mark.asyncio
+async def test_mcp_server_session_tenant_isolation(setup_db, monkeypatch):
+    monkeypatch.delenv("OM_TENANT", raising=False)
+    monkeypatch.delenv("OM_USER_ID", raising=False)
+
+    tools = ["openmemory_query", "openmemory_store", "openmemory_list"]
+    mem_alice = Memory(user="alice")
+    mem_bob = Memory(user="bob")
+    mem_unbound = Memory(user=None)
+
+    await mem_alice.add("Alice session secret", user_id="alice")
+    await mem_bob.add("Bob session secret", user_id="bob")
+
+    res_alice = await handle_mcp_tool_call("openmemory_list", {}, mem_alice)
+    assert "Alice session secret" in res_alice[0].text
+    assert "Bob session secret" not in res_alice[0].text
+
+    res_bob = await handle_mcp_tool_call("openmemory_list", {}, mem_bob)
+    assert "Bob session secret" in res_bob[0].text
+    assert "Alice session secret" not in res_bob[0].text
 
     # 6. Temporal fact boundary verification (type="factual" / "unified" / "both")
     query_fact_mock = AsyncMock(return_value=[])

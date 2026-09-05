@@ -220,11 +220,12 @@ async def handle_mcp_tool_call(name: str, arguments: dict | None, mem_inst: Memo
         traceback.print_exc(file=sys.stderr)
         return _text_resp(f"Error: {str(e)}")
 
-async def run_mcp_server():
+async def run_mcp_server(tenant: Optional[str] = None, mem_inst: Optional[Memory] = None):
     if not Server:
         print("Error: 'mcp' package not found. Install it via 'pip install mcp'", file=sys.stderr)
         sys.exit(1)
 
+    srv_mem = mem_inst if mem_inst is not None else Memory(user=tenant)
     server = Server("openmemory-mcp")
 
     @server.list_tools()
@@ -324,7 +325,7 @@ async def run_mcp_server():
 
     @server.call_tool()
     async def handle_call_tool(name: str, arguments: dict | None) -> list[TextContent | ImageContent | EmbeddedResource]:
-        return await handle_mcp_tool_call(name, arguments, mem)
+        return await handle_mcp_tool_call(name, arguments, srv_mem)
 
     async with stdio_server() as (read, write):
         await server.run(read, write, NotificationOptions(), raise_exceptions=False)
