@@ -27,8 +27,31 @@ const sec_enum = z.enum([
     "reflective",
 ] as const);
 
+const MAX_MCP_BODY_BYTES = 1024 * 1024;
+
+class McpBodyTooLargeError extends Error {
+    constructor() {
+        super("MCP request body exceeds the 1 MiB limit");
+        this.name = "McpBodyTooLargeError";
+    }
+}
+
+const assert_mcp_payload_size = (body: string) => {
+    if (Buffer.byteLength(body, "utf8") > MAX_MCP_BODY_BYTES) {
+        throw new McpBodyTooLargeError();
+    }
+};
+
 const trunc = (val: string, max = 200) =>
     val.length <= max ? val : `${val.slice(0, max).trimEnd()}...`;
+
+const sanitize_mcp_method = (pay: Record<string, unknown>) => {
+    if (typeof pay.method !== "string") return "unknown";
+    return (
+        trunc(pay.method.replace(/[\u0000-\u001f\u007f-\u009f]/g, ""), 100) ||
+        "unknown"
+    );
+};
 
 const build_mem_snap = (row: mem_row) => ({
     id: row.id,
@@ -852,25 +875,49 @@ export const create_mcp_srv = (tenant?: string) => {
     return srv;
 };
 
-const extract_pay = async (req: IncomingMessage & { body?: any }) => {
+const parse_mcp_payload = (body: string) => {
+    assert_mcp_payload_size(body);
+    return JSON.parse(body);
+};
+
+const extract_pay = async (req: IncomingMessage & { body?: unknown }) => {
     if (req.body !== undefined) {
         if (typeof req.body === "string") {
             if (!req.body.trim()) return undefined;
-            return JSON.parse(req.body);
+            return parse_mcp_payload(req.body);
         }
-        if (typeof req.body === "object" && req.body !== null) return req.body;
+        if (typeof req.body === "object" && req.body !== null) {
+            const serialized = JSON.stringify(req.body);
+            if (serialized !== undefined) assert_mcp_payload_size(serialized);
+            return req.body;
+        }
         return undefined;
     }
     const raw = await new Promise<string>((resolve, reject) => {
-        let buf = "";
-        req.on("data", (chunk) => {
-            buf += chunk;
-        });
-        req.on("end", () => resolve(buf));
+        const chunks: Buffer[] = [];
+        let size = 0;
+        const collect_chunk = (chunk: Buffer | string) => {
+            const bytes = Buffer.isBuffer(chunk)
+                ? chunk
+                : Buffer.from(String(chunk));
+            size += bytes.length;
+            if (size <= MAX_MCP_BODY_BYTES) {
+                chunks.push(bytes);
+                return;
+            }
+            req.off("data", collect_chunk);
+            chunks.length = 0;
+            req.resume();
+            reject(new McpBodyTooLargeError());
+        };
+        req.on("data", collect_chunk);
+        req.on("end", () =>
+            resolve(Buffer.concat(chunks).toString("utf8")),
+        );
         req.on("error", reject);
     });
     if (!raw.trim()) return undefined;
-    return JSON.parse(raw);
+    return parse_mcp_payload(raw);
 };
 
 export const mcp = (app: any) => {
@@ -881,7 +928,10 @@ export const mcp = (app: any) => {
                 send_err(res, -32600, "Request body must be a JSON object");
                 return;
             }
-            console.error("[MCP] Incoming request:", JSON.stringify(pay));
+            const method = sanitize_mcp_method(
+                pay as Record<string, unknown>,
+            );
+            console.error("[MCP] Incoming request method:", method);
             set_hdrs(res);
 
             const tenant_from_req =
@@ -896,7 +946,17 @@ export const mcp = (app: any) => {
             await srv.connect(trans);
             await trans.handleRequest(req, res, pay);
         } catch (error) {
-            console.error("[MCP] Error handling request:", error);
+            console.error("[MCP] Request handling failed");
+            if (error instanceof McpBodyTooLargeError) {
+                send_err(
+                    res,
+                    -32600,
+                    "Request body exceeds the 1 MiB limit",
+                    null,
+                    413,
+                );
+                return;
+            }
             if (error instanceof SyntaxError) {
                 send_err(res, -32600, "Invalid JSON payload");
                 return;
