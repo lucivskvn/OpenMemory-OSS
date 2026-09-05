@@ -1,24 +1,26 @@
-
 import asyncio
 import json
 import traceback
 import sys
+import os
 from typing import Any, Optional, Dict, List
-try:
-    from mcp.server import Server, NotificationOptions
-    from mcp.server.stdio import stdio_server
-    from mcp.types import Tool, TextContent, ImageContent, EmbeddedResource
-except ImportError:
-    Server = None
+
+from mcp.server import Server, NotificationOptions
+from mcp.server.stdio import stdio_server
+from mcp.types import Tool, TextContent, ImageContent, EmbeddedResource
 
 from ..main import Memory
 from ..core.config import env
 from ..temporal_graph.store import insert_fact
 from ..temporal_graph.query import query_facts_at_time
 
-import os
-
 mem = Memory()
+
+def _text_resp(txt: str, data: Any = None) -> list[Any]:
+    out = [TextContent(type="text", text=txt)]
+    if data is not None:
+        out.append(TextContent(type="text", text=json.dumps(data, default=str, indent=2)))
+    return out
 
 def _resolve_mcp_tenant(mem_inst: Memory, args: dict) -> tuple[str | None, str | None]:
     bound = getattr(mem_inst, "default_user", None) or os.getenv("OM_TENANT") or os.getenv("OM_USER_ID")
@@ -52,6 +54,171 @@ async def _get_verified_memory(mem_inst: Memory, args: dict) -> tuple[dict | Non
         return None, tenant, f"Memory {mid} not found for user {tenant}"
 
     return m_dict, tenant, None
+
+async def handle_mcp_tool_call(name: str, arguments: dict | None, mem_inst: Memory = mem) -> list[Any]:
+    args = arguments or {}
+
+    try:
+        if name == "openmemory_query":
+            tenant, err = _resolve_mcp_tenant(mem_inst, args)
+            if err:
+                return _text_resp(err)
+            q = args.get("query")
+            qtype = args.get("type", "contextual")
+            limit = args.get("k", 10)
+            sector = args.get("sector")
+            fact_pattern = args.get("fact_pattern", {})
+            at_str = args.get("at")
+
+            import datetime
+            at_date = datetime.datetime.fromisoformat(at_str) if at_str else datetime.datetime.now()
+            at_ts = int(at_date.timestamp() * 1000)
+
+            results = {"type": qtype, "query": q}
+
+            if qtype in ["contextual", "unified"]:
+                filters = {}
+                if sector: filters["sector"] = sector
+
+                contextual = await mem_inst.search(q, user_id=tenant, limit=limit, **filters)
+                results["contextual"] = [{
+                    "source": "hsg",
+                    "id": m.get("id"),
+                    "score": round(m.get("score", 0), 4),
+                    "primary_sector": m.get("primary_sector"),
+                    "salience": round(m.get("salience", 0), 4),
+                    "content": m.get("content")
+                } for m in contextual]
+
+            if qtype in ["factual", "unified"]:
+                facts = await query_facts_at_time(
+                    subject=fact_pattern.get("subject"),
+                    predicate=fact_pattern.get("predicate"),
+                    obj=fact_pattern.get("object"),
+                    at_time=at_ts,
+                    min_confidence=0.0,
+                    user_id=tenant
+                )
+                results["factual"] = [{
+                    "source": "temporal",
+                    "id": f["id"],
+                    "subject": f["subject"],
+                    "predicate": f["predicate"],
+                    "object": f["object"],
+                    "valid_from": f["valid_from"],
+                    "valid_to": f.get("valid_to"),
+                    "confidence": round(f["confidence"], 4),
+                    "content": f"{f['subject']} {f['predicate']} {f['object']}"
+                } for f in facts]
+
+            if qtype == "contextual":
+                count = len(results.get("contextual", []))
+                summary = f"Found {count} contextual memories for '{q}'" if count > 0 else "No contextual memories matched."
+            elif qtype == "factual":
+                count = len(results.get("factual", []))
+                summary = f"Found {count} temporal facts" if count > 0 else "No temporal facts matched."
+            else:
+                ctx_count = len(results.get("contextual", []))
+                fact_count = len(results.get("factual", []))
+                summary = f"Found {ctx_count} contextual memories and {fact_count} temporal facts"
+
+            return _text_resp(summary, results)
+
+        elif name == "openmemory_store":
+            tenant, err = _resolve_mcp_tenant(mem_inst, args)
+            if err:
+                return _text_resp(err)
+            content = args.get("content")
+            stype = args.get("type", "contextual")
+            tags = args.get("tags", [])
+            meta = args.get("metadata", {})
+            facts_data = args.get("facts", [])
+
+            if stype in ["factual", "both"] and not facts_data:
+                raise ValueError(f"Facts array is required when type is '{stype}'. Please provide at least one fact.")
+
+            results = {"type": stype}
+
+            if stype in ["contextual", "both"]:
+                if tags: meta["tags"] = tags
+                res = await mem_inst.add(content, user_id=tenant, meta=meta)
+                results["hsg"] = {
+                    "id": res.get('root_memory_id') or res.get('id'),
+                    "primary_sector": res.get('primary_sector')
+                }
+
+            if stype in ["factual", "both"] and facts_data:
+                import datetime
+                temporal_results = []
+                for fact in facts_data:
+                    valid_from_str = fact.get("valid_from")
+                    valid_from_dt = datetime.datetime.fromisoformat(valid_from_str) if valid_from_str else datetime.datetime.now()
+                    valid_from_ts = int(valid_from_dt.timestamp() * 1000)
+                    confidence = fact.get("confidence", 1.0)
+
+                    fact_id = await insert_fact(
+                        subject=fact["subject"],
+                        predicate=fact["predicate"],
+                        subject_object=fact["object"],
+                        valid_from=valid_from_ts,
+                        confidence=confidence,
+                        metadata=meta,
+                        user_id=tenant
+                    )
+
+                    temporal_results.append({
+                        "id": fact_id,
+                        "subject": fact["subject"],
+                        "predicate": fact["predicate"],
+                        "object": fact["object"],
+                        "valid_from": valid_from_dt.isoformat(),
+                        "confidence": confidence
+                    })
+                results["temporal"] = temporal_results
+
+            if stype == "contextual":
+                txt = f"Stored memory {results['hsg']['id']}"
+                if tenant:
+                    txt += f" [user={tenant}]"
+            elif stype == "factual":
+                txt = f"Stored {len(results['temporal'])} temporal fact(s)"
+                if tenant:
+                    txt += f" [user={tenant}]"
+            else:
+                txt = f"Stored in both systems: HSG memory {results['hsg']['id']} + {len(results['temporal'])} temporal fact(s)"
+                if tenant:
+                    txt += f" [user={tenant}]"
+
+            return _text_resp(txt, results)
+
+        elif name == "openmemory_get":
+            m_dict, tenant, err = await _get_verified_memory(mem_inst, args)
+            if err:
+                return _text_resp(err)
+            return _text_resp(json.dumps(m_dict, default=str, indent=2))
+
+        elif name == "openmemory_delete":
+            m_dict, tenant, err = await _get_verified_memory(mem_inst, args)
+            if err:
+                return _text_resp(err)
+
+            await mem_inst.delete(m_dict["id"], user_id=tenant)
+            return _text_resp(f"Memory {m_dict['id']} deleted")
+
+        elif name == "openmemory_list":
+            tenant, err = _resolve_mcp_tenant(mem_inst, args)
+            if err:
+                return _text_resp(err)
+            limit = args.get("limit", 20)
+            res = mem_inst.history(user_id=tenant, limit=limit)
+            return _text_resp(json.dumps([dict(r) for r in res], default=str, indent=2))
+
+        else:
+            raise ValueError(f"Unknown tool: {name}")
+
+    except Exception as e:
+        traceback.print_exc(file=sys.stderr)
+        return _text_resp(f"Error: {str(e)}")
 
 async def run_mcp_server():
     if not Server:
@@ -158,184 +325,6 @@ async def run_mcp_server():
     @server.call_tool()
     async def handle_call_tool(name: str, arguments: dict | None) -> list[TextContent | ImageContent | EmbeddedResource]:
         return await handle_mcp_tool_call(name, arguments, mem)
-
-async def handle_mcp_tool_call(name: str, arguments: dict | None, mem_inst: Memory = mem) -> list[TextContent | ImageContent | EmbeddedResource]:
-    args = arguments or {}
-
-    try:
-        if name == "openmemory_query":
-            tenant, err = _resolve_mcp_tenant(mem_inst, args)
-            if err:
-                return [TextContent(type="text", text=err)]
-            q = args.get("query")
-            qtype = args.get("type", "contextual")
-            limit = args.get("k", 10)
-            sector = args.get("sector")
-            fact_pattern = args.get("fact_pattern", {})
-            at_str = args.get("at")
-
-            import datetime
-            at_date = datetime.datetime.fromisoformat(at_str) if at_str else datetime.datetime.now()
-            at_ts = int(at_date.timestamp() * 1000)
-
-            results = {"type": qtype, "query": q}
-
-            # contextual (hsg) query
-            if qtype in ["contextual", "unified"]:
-                filters = {}
-                if sector: filters["sector"] = sector
-                
-                contextual = await mem_inst.search(q, user_id=tenant, limit=limit, **filters)
-                results["contextual"] = [{
-                    "source": "hsg",
-                    "id": m.get("id"),
-                    "score": round(m.get("score", 0), 4),
-                    "primary_sector": m.get("primary_sector"),
-                    "salience": round(m.get("salience", 0), 4),
-                    "content": m.get("content")
-                } for m in contextual]
-
-            # temporal fact query
-            if qtype in ["factual", "unified"]:
-                facts = await query_facts_at_time(
-                    subject=fact_pattern.get("subject"),
-                    predicate=fact_pattern.get("predicate"),
-                    obj=fact_pattern.get("object"),
-                    at_time=at_ts,
-                    min_confidence=0.0,
-                    user_id=tenant
-                )
-                results["factual"] = [{
-                    "source": "temporal",
-                    "id": f["id"],
-                    "subject": f["subject"],
-                    "predicate": f["predicate"],
-                    "object": f["object"],
-                    "valid_from": f["valid_from"],
-                    "valid_to": f.get("valid_to"),
-                    "confidence": round(f["confidence"], 4),
-                    "content": f"{f['subject']} {f['predicate']} {f['object']}"
-                } for f in facts]
-
-            # build summary
-            if qtype == "contextual":
-                count = len(results.get("contextual", []))
-                summary = f"Found {count} contextual memories for '{q}'" if count > 0 else "No contextual memories matched."
-            elif qtype == "factual":
-                count = len(results.get("factual", []))
-                summary = f"Found {count} temporal facts" if count > 0 else "No temporal facts matched."
-            else:  # unified
-                ctx_count = len(results.get("contextual", []))
-                fact_count = len(results.get("factual", []))
-                summary = f"Found {ctx_count} contextual memories and {fact_count} temporal facts"
-
-            return [
-                TextContent(type="text", text=summary),
-                TextContent(type="text", text=json.dumps(results, default=str, indent=2))
-            ]
-
-        elif name == "openmemory_store":
-            tenant, err = _resolve_mcp_tenant(mem_inst, args)
-            if err:
-                return [TextContent(type="text", text=err)]
-            content = args.get("content")
-            stype = args.get("type", "contextual")
-            tags = args.get("tags", [])
-            meta = args.get("metadata", {})
-            facts_data = args.get("facts", [])
-
-            # validate facts requirement
-            if stype in ["factual", "both"] and not facts_data:
-                raise ValueError(f"Facts array is required when type is '{stype}'. Please provide at least one fact.")
-
-            results = {"type": stype}
-
-            # store contextual memory
-            if stype in ["contextual", "both"]:
-                if tags: meta["tags"] = tags
-                res = await mem_inst.add(content, user_id=tenant, meta=meta)
-                results["hsg"] = {
-                    "id": res.get('root_memory_id') or res.get('id'),
-                    "primary_sector": res.get('primary_sector')
-                }
-
-            # store temporal facts
-            if stype in ["factual", "both"] and facts_data:
-                import datetime
-                temporal_results = []
-                for fact in facts_data:
-                    valid_from_str = fact.get("valid_from")
-                    valid_from_dt = datetime.datetime.fromisoformat(valid_from_str) if valid_from_str else datetime.datetime.now()
-                    valid_from_ts = int(valid_from_dt.timestamp() * 1000)
-                    confidence = fact.get("confidence", 1.0)
-                    
-                    fact_id = await insert_fact(
-                        subject=fact["subject"],
-                        predicate=fact["predicate"],
-                        subject_object=fact["object"],
-                        valid_from=valid_from_ts,
-                        confidence=confidence,
-                        metadata=meta,
-                        user_id=tenant
-                    )
-
-                    temporal_results.append({
-                        "id": fact_id,
-                        "subject": fact["subject"],
-                        "predicate": fact["predicate"],
-                        "object": fact["object"],
-                        "valid_from": valid_from_dt.isoformat(),
-                        "confidence": confidence
-                    })
-                results["temporal"] = temporal_results
-
-            # build response message
-            if stype == "contextual":
-                txt = f"Stored memory {results['hsg']['id']}"
-                if tenant:
-                    txt += f" [user={tenant}]"
-            elif stype == "factual":
-                txt = f"Stored {len(results['temporal'])} temporal fact(s)"
-                if tenant:
-                    txt += f" [user={tenant}]"
-            else:  # both
-                txt = f"Stored in both systems: HSG memory {results['hsg']['id']} + {len(results['temporal'])} temporal fact(s)"
-                if tenant:
-                    txt += f" [user={tenant}]"
-
-            return [
-                TextContent(type="text", text=txt),
-                TextContent(type="text", text=json.dumps(results, default=str, indent=2))
-            ]
-
-        elif name == "openmemory_get":
-            m_dict, tenant, err = await _get_verified_memory(mem_inst, args)
-            if err:
-                return [TextContent(type="text", text=err)]
-            return [TextContent(type="text", text=json.dumps(m_dict, default=str, indent=2))]
-
-        elif name == "openmemory_delete":
-            m_dict, tenant, err = await _get_verified_memory(mem_inst, args)
-            if err:
-                return [TextContent(type="text", text=err)]
-
-            await mem_inst.delete(m_dict["id"], user_id=tenant)
-            return [TextContent(type="text", text=f"Memory {m_dict['id']} deleted")]
-
-        elif name == "openmemory_list":
-            tenant, err = _resolve_mcp_tenant(mem_inst, args)
-            if err:
-                return [TextContent(type="text", text=err)]
-            limit = args.get("limit", 20)
-            res = mem_inst.history(user_id=tenant, limit=limit)
-            return [TextContent(type="text", text=json.dumps([dict(r) for r in res], default=str, indent=2))]
-
-        else:
-            raise ValueError(f"Unknown tool: {name}")
-
-    except Exception as e:
-        traceback.print_exc(file=sys.stderr)
-        return [TextContent(type="text", text=f"Error: {str(e)}")]
 
     async with stdio_server() as (read, write):
         await server.run(read, write, NotificationOptions(), raise_exceptions=False)

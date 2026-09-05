@@ -124,6 +124,49 @@ async def test_mcp_tool_handler_tenant_isolation_boundary(monkeypatch):
         elif tool == "openmemory_list":
             assert hist_mock.call_args.kwargs["user_id"] == "alice"
 
+    # 6. Temporal fact boundary verification (type="factual" / "unified" / "both")
+    query_fact_mock = AsyncMock(return_value=[])
+    insert_fact_mock = AsyncMock(return_value="fact-123")
+    monkeypatch.setattr("openmemory.ai.mcp.query_facts_at_time", query_fact_mock)
+    monkeypatch.setattr("openmemory.ai.mcp.insert_fact", insert_fact_mock)
+
+    # Unauthenticated session rejected before invoking temporal functions
+    res_q_unbound = await handle_mcp_tool_call("openmemory_query", {"query": "test", "type": "factual"}, mem_unbound)
+    assert "Unauthenticated MCP session" in res_q_unbound[0].text
+    query_fact_mock.assert_not_called()
+
+    res_s_unbound = await handle_mcp_tool_call("openmemory_store", {"content": "test", "type": "factual", "facts": [{"subject": "s", "predicate": "p", "object": "o"}]}, mem_unbound)
+    assert "Unauthenticated MCP session" in res_s_unbound[0].text
+    insert_fact_mock.assert_not_called()
+
+    # Mismatched user_id rejected before invoking temporal functions
+    res_q_mismatch = await handle_mcp_tool_call("openmemory_query", {"query": "test", "type": "factual", "user_id": "bob"}, mem_alice)
+    assert "tenant_mismatch" in res_q_mismatch[0].text
+    query_fact_mock.assert_not_called()
+
+    res_s_mismatch = await handle_mcp_tool_call("openmemory_store", {"content": "test", "type": "factual", "user_id": "bob", "facts": [{"subject": "s", "predicate": "p", "object": "o"}]}, mem_alice)
+    assert "tenant_mismatch" in res_s_mismatch[0].text
+    insert_fact_mock.assert_not_called()
+
+    # Authorized temporal fact queries pass user_id="alice"
+    await handle_mcp_tool_call("openmemory_query", {"query": "test", "type": "factual"}, mem_alice)
+    assert query_fact_mock.call_args.kwargs["user_id"] == "alice"
+    query_fact_mock.reset_mock()
+
+    await handle_mcp_tool_call("openmemory_query", {"query": "test", "type": "unified", "user_id": "alice"}, mem_alice)
+    assert query_fact_mock.call_args.kwargs["user_id"] == "alice"
+    query_fact_mock.reset_mock()
+
+    # Authorized temporal fact stores pass user_id="alice"
+    facts_payload = [{"subject": "Alice", "predicate": "knows", "object": "Python"}]
+    await handle_mcp_tool_call("openmemory_store", {"content": "fact store", "type": "factual", "facts": facts_payload}, mem_alice)
+    assert insert_fact_mock.call_args.kwargs["user_id"] == "alice"
+    insert_fact_mock.reset_mock()
+
+    await handle_mcp_tool_call("openmemory_store", {"content": "both store", "type": "both", "user_id": "alice", "facts": facts_payload}, mem_alice)
+    assert insert_fact_mock.call_args.kwargs["user_id"] == "alice"
+    insert_fact_mock.reset_mock()
+
     # 4. Matching caller user_id succeeds and receives bound tenant
     for tool in tools:
         search_mock = AsyncMock(return_value=[])
