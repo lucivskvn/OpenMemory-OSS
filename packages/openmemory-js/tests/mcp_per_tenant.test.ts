@@ -9,7 +9,7 @@ process.env.OM_VECTOR_BACKEND = process.env.OM_VECTOR_BACKEND || "sqlite";
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { create_mcp_srv, start_mcp_stdio } from "../src/ai/mcp";
+import { create_mcp_srv, start_mcp_stdio, derive_mcp_tenant_id } from "../src/ai/mcp";
 import { run_async, q } from "../src/core/db";
 
 const T_ALICE = "tenant-alice-mcp";
@@ -312,7 +312,7 @@ describe("MCP per-tenant scoping", () => {
         expect(row_after_success.salience).toBeGreaterThan(initial_salience);
     });
 
-    it("start_mcp_stdio fails startup closed when missing tenant and binds configured tenant when present", async () => {
+    it("start_mcp_stdio fails startup closed when missing tenant and derives hashed tenant for API key", async () => {
         const old_tenant = process.env.OM_TENANT;
         const old_uid = process.env.OM_USER_ID;
         const old_key = process.env.OM_API_KEY;
@@ -322,11 +322,23 @@ describe("MCP per-tenant scoping", () => {
         delete process.env.OM_API_KEY;
 
         // 1. Missing trusted tenant in environment must fail startup closed
-        expect(start_mcp_stdio()).rejects.toThrow(/Missing trusted server tenant configuration/);
+        await expect(start_mcp_stdio()).rejects.toThrow(/Missing trusted server tenant configuration/);
 
         // 2. Empty string trusted tenant must fail startup closed
         process.env.OM_TENANT = "   ";
-        expect(start_mcp_stdio()).rejects.toThrow(/Missing trusted server tenant configuration/);
+        await expect(start_mcp_stdio()).rejects.toThrow(/Missing trusted server tenant configuration/);
+
+        // 3. OM_TENANT / OM_USER_ID returns exact string
+        delete process.env.OM_TENANT;
+        process.env.OM_USER_ID = "user-mcp-123";
+        expect(derive_mcp_tenant_id()).toBe("user-mcp-123");
+
+        // 4. OM_API_KEY generates a 16-hex SHA256 hash, never exposing raw secret key
+        delete process.env.OM_USER_ID;
+        process.env.OM_API_KEY = "sk_live_secret_key_123456789";
+        const derived = derive_mcp_tenant_id();
+        expect(derived).not.toBe("sk_live_secret_key_123456789");
+        expect(derived).toMatch(/^[0-9a-f]{16}$/);
 
         // Restore env vars
         if (old_tenant) process.env.OM_TENANT = old_tenant; else delete process.env.OM_TENANT;

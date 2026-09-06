@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "http";
+import crypto from "crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -585,20 +586,21 @@ export const create_mcp_srv = (tenant?: string) => {
                 ),
         },
         async ({ id, boost, user_id }) => {
-            if (!tenant || !tenant.trim()) {
+            const active_tenant = tenant?.trim();
+            if (!active_tenant) {
                 throw new Error(
                     "Unauthenticated MCP session: trusted server-bound tenant context required for reinforcement",
                 );
             }
-            if (user_id && user_id.trim() !== tenant) {
+            if (user_id && user_id.trim() !== active_tenant) {
                 throw new Error(
-                    `tenant_mismatch: user_id '${user_id}' does not match authenticated session tenant '${tenant}'`,
+                    `tenant_mismatch: user_id '${user_id}' does not match authenticated session tenant '${active_tenant}'`,
                 );
             }
             const mem = await q.get_mem.get(id);
-            if (!mem || mem.user_id !== tenant) {
+            if (!mem || mem.user_id !== active_tenant) {
                 throw new Error(
-                    `Memory ${id} not found for user ${tenant}`,
+                    `Memory ${id} not found for user ${active_tenant}`,
                 );
             }
             await reinforce_memory(id, boost);
@@ -951,12 +953,25 @@ export const mcp = (app: any) => {
     app.put("/mcp", method_not_allowed);
 };
 
+export function derive_mcp_tenant_id(): string | undefined {
+    const direct = process.env.OM_TENANT || process.env.OM_USER_ID;
+    if (direct && direct.trim()) {
+        return direct.trim();
+    }
+    const api_key = process.env.OM_API_KEY;
+    if (api_key && api_key.trim()) {
+        return crypto
+            .createHash("sha256")
+            .update(api_key.trim())
+            .digest("hex")
+            .slice(0, 16);
+    }
+    return undefined;
+}
+
 export const start_mcp_stdio = async () => {
-    const bound_tenant =
-        process.env.OM_TENANT ||
-        process.env.OM_USER_ID ||
-        process.env.OM_API_KEY;
-    if (!bound_tenant || !bound_tenant.trim()) {
+    const tenant = derive_mcp_tenant_id();
+    if (!tenant) {
         console.error(
             "[MCP] FATAL: Stdio MCP server startup failed: no trusted tenant configured in environment (OM_TENANT, OM_USER_ID, or OM_API_KEY required).",
         );
@@ -964,7 +979,6 @@ export const start_mcp_stdio = async () => {
             "Fatal MCP stdio startup error: Missing trusted server tenant configuration (OM_TENANT, OM_USER_ID, or OM_API_KEY).",
         );
     }
-    const tenant = bound_tenant.trim();
     const srv = create_mcp_srv(tenant);
     const trans = new StdioServerTransport();
     await srv.connect(trans);
