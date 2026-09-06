@@ -585,14 +585,21 @@ export const create_mcp_srv = (tenant?: string) => {
                 ),
         },
         async ({ id, boost, user_id }) => {
-            const u = resolve_user_id(tenant, user_id);
-            if (u) {
-                const mem = await q.get_mem.get(id);
-                if (!mem || mem.user_id !== u) {
-                    throw new Error(
-                        `Memory ${id} not found for user ${u}`,
-                    );
-                }
+            if (!tenant || !tenant.trim()) {
+                throw new Error(
+                    "Unauthenticated MCP session: trusted server-bound tenant context required for reinforcement",
+                );
+            }
+            if (user_id && user_id.trim() !== tenant) {
+                throw new Error(
+                    `tenant_mismatch: user_id '${user_id}' does not match authenticated session tenant '${tenant}'`,
+                );
+            }
+            const mem = await q.get_mem.get(id);
+            if (!mem || mem.user_id !== tenant) {
+                throw new Error(
+                    `Memory ${id} not found for user ${tenant}`,
+                );
             }
             await reinforce_memory(id, boost);
             return {

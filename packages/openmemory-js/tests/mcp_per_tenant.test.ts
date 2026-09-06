@@ -236,41 +236,79 @@ describe("MCP per-tenant scoping", () => {
         expect(bob_count).toBe(2);
     });
 
-    it("openmemory_reinforce rejects tenant mismatch and cross-tenant memory reinforcement", async () => {
+    it("openmemory_reinforce fails closed on unauthenticated or mismatched sessions", async () => {
         const alice = await connect_client(T_ALICE);
         const bob = await connect_client(T_BOB);
+        const unauthenticated = await connect_client(undefined);
 
         // Store a memory for Alice
         const alice_stored = await alice.client.callTool({
             name: "openmemory_store",
-            arguments: { content: "Alice's memory for reinforcement test" },
+            arguments: { content: "Alice's memory for reinforcement security tests" },
         });
         const { id: alice_mem_id } = parse_store(alice_stored);
         expect(alice_mem_id).toBeTruthy();
 
-        // 1. Bob attempting to reinforce Alice's memory should be rejected
+        const row_initial = await q.get_mem.get(alice_mem_id!);
+        const initial_salience = row_initial.salience;
+
+        // 1. Unauthenticated stdio server (missing tenant) with omitted user_id must fail closed
+        const unauth_no_uid: any = await unauthenticated.client.callTool({
+            name: "openmemory_reinforce",
+            arguments: { id: alice_mem_id!, boost: 0.2 },
+        });
+        expect(unauth_no_uid.isError).toBe(true);
+        expect(
+            (unauth_no_uid.content ?? []).map((b: any) => b.text).join("\n"),
+        ).toMatch(/Unauthenticated MCP session/);
+
+        // 2. Unauthenticated stdio server (missing tenant) with caller-supplied user_id must fail closed
+        const unauth_with_uid: any = await unauthenticated.client.callTool({
+            name: "openmemory_reinforce",
+            arguments: { id: alice_mem_id!, boost: 0.2, user_id: T_ALICE },
+        });
+        expect(unauth_with_uid.isError).toBe(true);
+        expect(
+            (unauth_with_uid.content ?? []).map((b: any) => b.text).join("\n"),
+        ).toMatch(/Unauthenticated MCP session/);
+
+        // 3. Authenticated session (Bob) trying to reinforce Alice's memory must fail
         const bob_reinforce_alice: any = await bob.client.callTool({
             name: "openmemory_reinforce",
             arguments: { id: alice_mem_id!, boost: 0.2 },
         });
         expect(bob_reinforce_alice.isError).toBe(true);
 
-        // 2. Supplying a mismatched user_id to openmemory_reinforce should be rejected
+        // 4. Authenticated session (Alice) with mismatched user_id must fail with tenant_mismatch
         const alice_mismatch: any = await alice.client.callTool({
             name: "openmemory_reinforce",
             arguments: { id: alice_mem_id!, boost: 0.2, user_id: T_BOB },
         });
         expect(alice_mismatch.isError).toBe(true);
-        const text = (alice_mismatch.content ?? [])
-            .map((b: any) => b.text ?? "")
-            .join("\n");
-        expect(text).toMatch(/tenant_mismatch/);
+        expect(
+            (alice_mismatch.content ?? []).map((b: any) => b.text).join("\n"),
+        ).toMatch(/tenant_mismatch/);
 
-        // 3. Alice reinforcing her own memory should succeed
+        // 5. Authenticated session (Alice) reinforcing non-existent / missing memory ID must fail
+        const alice_missing_id: any = await alice.client.callTool({
+            name: "openmemory_reinforce",
+            arguments: { id: "non-existent-memory-id", boost: 0.2 },
+        });
+        expect(alice_missing_id.isError).toBe(true);
+
+        // Verify salience in database was NOT altered during any rejected attempt
+        const row_after_rejections = await q.get_mem.get(alice_mem_id!);
+        expect(row_after_rejections.salience).toBe(initial_salience);
+
+        // 6. Alice reinforcing her own memory with matching tenant context must succeed
         const alice_ok: any = await alice.client.callTool({
             name: "openmemory_reinforce",
             arguments: { id: alice_mem_id!, boost: 0.2, user_id: T_ALICE },
         });
         expect(alice_ok.isError).toBeFalsy();
+
+        // Verify salience in database WAS boosted after successful reinforcement
+        const row_after_success = await q.get_mem.get(alice_mem_id!);
+        expect(row_after_success.salience).toBeGreaterThan(initial_salience);
     });
 });
