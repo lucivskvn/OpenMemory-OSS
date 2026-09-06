@@ -1,5 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "http";
-import crypto from "crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -594,14 +593,12 @@ export const create_mcp_srv = (tenant?: string) => {
             }
             if (user_id && user_id.trim() !== active_tenant) {
                 throw new Error(
-                    `tenant_mismatch: user_id '${user_id}' does not match authenticated session tenant '${active_tenant}'`,
+                    "tenant_mismatch: user_id does not match authenticated tenant; omit user_id or pass the tenant identifier",
                 );
             }
             const mem = await q.get_mem.get(id);
             if (!mem || mem.user_id !== active_tenant) {
-                throw new Error(
-                    `Memory ${id} not found for user ${active_tenant}`,
-                );
+                throw new Error(`Memory ${id} not found.`);
             }
             await reinforce_memory(id, boost);
             return {

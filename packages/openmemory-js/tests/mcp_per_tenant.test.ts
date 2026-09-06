@@ -236,7 +236,7 @@ describe("MCP per-tenant scoping", () => {
         expect(bob_count).toBe(2);
     });
 
-    it("openmemory_reinforce fails closed on unauthenticated or mismatched sessions", async () => {
+    it("openmemory_reinforce fails closed on unauthenticated, mismatched, or ownerless sessions", async () => {
         const alice = await connect_client(T_ALICE);
         const bob = await connect_client(T_BOB);
         const unauthenticated = await connect_client(undefined);
@@ -249,6 +249,13 @@ describe("MCP per-tenant scoping", () => {
         const { id: alice_mem_id } = parse_store(alice_stored);
         expect(alice_mem_id).toBeTruthy();
 
+        // Store an ownerless memory (anonymous user_id) directly in DB
+        const ownerless_id = "ownerless-memory-123";
+        await run_async(
+            "insert into memories(id, user_id, primary_sector, content, created_at, updated_at, last_seen_at, salience) values(?, ?, ?, ?, ?, ?, ?, ?)",
+            [ownerless_id, "anonymous", "semantic", "Ownerless content", Date.now(), Date.now(), Date.now(), 0.4],
+        );
+
         const row_initial = await q.get_mem.get(alice_mem_id!);
         const initial_salience = row_initial.salience;
 
@@ -258,9 +265,8 @@ describe("MCP per-tenant scoping", () => {
             arguments: { id: alice_mem_id!, boost: 0.2 },
         });
         expect(unauth_no_uid.isError).toBe(true);
-        expect(
-            (unauth_no_uid.content ?? []).map((b: any) => b.text).join("\n"),
-        ).toMatch(/Unauthenticated MCP session/);
+        const unauth_text = (unauth_no_uid.content ?? []).map((b: any) => b.text).join("\n");
+        expect(unauth_text).toMatch(/Unauthenticated MCP session/);
 
         // 2. Unauthenticated stdio server (missing tenant) with caller-supplied user_id must fail closed
         const unauth_with_uid: any = await unauthenticated.client.callTool({
@@ -268,28 +274,36 @@ describe("MCP per-tenant scoping", () => {
             arguments: { id: alice_mem_id!, boost: 0.2, user_id: T_ALICE },
         });
         expect(unauth_with_uid.isError).toBe(true);
-        expect(
-            (unauth_with_uid.content ?? []).map((b: any) => b.text).join("\n"),
-        ).toMatch(/Unauthenticated MCP session/);
 
-        // 3. Authenticated session (Bob) trying to reinforce Alice's memory must fail
+        // 3. Authenticated session (Bob) trying to reinforce Alice's memory must fail without leaking identities
         const bob_reinforce_alice: any = await bob.client.callTool({
             name: "openmemory_reinforce",
             arguments: { id: alice_mem_id!, boost: 0.2 },
         });
         expect(bob_reinforce_alice.isError).toBe(true);
+        const bob_text = (bob_reinforce_alice.content ?? []).map((b: any) => b.text).join("\n");
+        expect(bob_text).not.toMatch(T_ALICE);
+        expect(bob_text).not.toMatch(T_BOB);
 
-        // 4. Authenticated session (Alice) with mismatched user_id must fail with tenant_mismatch
+        // 4. Authenticated session (Alice) trying to reinforce ownerless memory must fail
+        const alice_reinforce_ownerless: any = await alice.client.callTool({
+            name: "openmemory_reinforce",
+            arguments: { id: ownerless_id, boost: 0.2 },
+        });
+        expect(alice_reinforce_ownerless.isError).toBe(true);
+
+        // 5. Authenticated session (Alice) with mismatched user_id must fail with tenant_mismatch without leaking
         const alice_mismatch: any = await alice.client.callTool({
             name: "openmemory_reinforce",
             arguments: { id: alice_mem_id!, boost: 0.2, user_id: T_BOB },
         });
         expect(alice_mismatch.isError).toBe(true);
-        expect(
-            (alice_mismatch.content ?? []).map((b: any) => b.text).join("\n"),
-        ).toMatch(/tenant_mismatch/);
+        const mismatch_text = (alice_mismatch.content ?? []).map((b: any) => b.text).join("\n");
+        expect(mismatch_text).toMatch(/tenant_mismatch/);
+        expect(mismatch_text).not.toMatch(T_ALICE);
+        expect(mismatch_text).not.toMatch(T_BOB);
 
-        // 5. Authenticated session (Alice) reinforcing non-existent / missing memory ID must fail
+        // 6. Authenticated session (Alice) reinforcing non-existent / missing memory ID must fail
         const alice_missing_id: any = await alice.client.callTool({
             name: "openmemory_reinforce",
             arguments: { id: "non-existent-memory-id", boost: 0.2 },
@@ -300,7 +314,7 @@ describe("MCP per-tenant scoping", () => {
         const row_after_rejections = await q.get_mem.get(alice_mem_id!);
         expect(row_after_rejections.salience).toBe(initial_salience);
 
-        // 6. Alice reinforcing her own memory with matching tenant context must succeed
+        // 7. Alice reinforcing her own memory with matching tenant context must succeed
         const alice_ok: any = await alice.client.callTool({
             name: "openmemory_reinforce",
             arguments: { id: alice_mem_id!, boost: 0.2, user_id: T_ALICE },
