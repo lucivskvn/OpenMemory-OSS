@@ -957,7 +957,7 @@ export function derive_mcp_tenant_id(): string | undefined {
     return undefined;
 }
 
-export const start_mcp_stdio = async () => {
+export const start_mcp_stdio = async (custom_trans?: any) => {
     const tenant = derive_mcp_tenant_id();
     if (!tenant) {
         console.error(
@@ -968,8 +968,9 @@ export const start_mcp_stdio = async () => {
         );
     }
     const srv = create_mcp_srv(tenant);
-    const trans = new StdioServerTransport();
+    const trans = custom_trans || new StdioServerTransport();
     await srv.connect(trans);
+    return { srv, trans, tenant };
 };
 
 if (typeof require !== "undefined" && require.main === module) {

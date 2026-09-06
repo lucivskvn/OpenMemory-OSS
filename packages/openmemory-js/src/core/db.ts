@@ -149,18 +149,26 @@ const _exec_direct = async (sql: string, args: any[] = []) => {
 /**
  * Internal executor that respects transaction buffering.
  */
-const exec = async (sql: string, args: any[] = []): Promise<number> => {
+const exec = async (sql: string, args: any[] = []): Promise<void> => {
+    if (txStmts) {
+        txStmts.push({ sql, args });
+        return;
+    }
+    await _exec_direct(sql, args);
+};
+
+export const run_async = exec;
+export const run_async_direct = async (sql: string, args: any[] = []) => {
+    await _exec_direct(sql, args);
+};
+
+export const run_affected_async = async (sql: string, args: any[] = []): Promise<number> => {
     if (txStmts) {
         txStmts.push({ sql, args });
         return 0;
     }
     const result = await _exec_direct(sql, args);
     return result.rowsAffected ?? 0;
-};
-
-export const run_async = exec;
-export const run_async_direct = async (sql: string, args: any[] = []) => {
-    await _exec_direct(sql, args);
 };
 
 export const get_async = async (sql: string, args: any[] = []) => {
@@ -335,21 +343,12 @@ export const q: q_type = {
             ),
     },
     upd_seen: {
-        run: (...p) => {
-            const last_seen_at = p[0];
-            const salience = p[1];
-            const updated_at = p[2];
-            const id = p[3];
-            const user_id = p[4];
-            if (user_id) {
-                return exec(
-                    "update memories set last_seen_at=?,salience=?,updated_at=? where id=? and user_id=?",
-                    [last_seen_at, salience, updated_at, id, user_id],
-                );
-            }
-            return exec(
-                "update memories set last_seen_at=?,salience=?,updated_at=? where id=?",
-                [last_seen_at, salience, updated_at, id],
+        run: (last_seen_at: number, salience: number, updated_at: number, id: string, user_id: string) => {
+            const active_user = user_id?.trim();
+            if (!active_user) return Promise.resolve(0);
+            return run_affected_async(
+                "update memories set last_seen_at=?,salience=?,updated_at=? where id=? and user_id=?",
+                [last_seen_at, salience, updated_at, id, active_user],
             );
         },
     },

@@ -374,11 +374,14 @@ describe("MCP per-tenant scoping", () => {
 
         // 5. Configured stdio startup passes server-bound tenant to handler and enables reinforcement
         process.env.OM_TENANT = "tenant-stdio-canonical";
-        const stdio_tenant = derive_mcp_tenant_id();
-        expect(stdio_tenant).toBe("tenant-stdio-canonical");
+        const [stdio_client_trans, stdio_server_trans] = InMemoryTransport.createLinkedPair();
+        const stdio_res = await start_mcp_stdio(stdio_server_trans);
+        expect(stdio_res.tenant).toBe("tenant-stdio-canonical");
 
-        const stdio_server = await connect_client(stdio_tenant);
-        const stdio_store = await stdio_server.client.callTool({
+        const stdio_client = new Client({ name: "stdio-test-client", version: "0.0.0" });
+        await stdio_client.connect(stdio_client_trans);
+
+        const stdio_store = await stdio_client.callTool({
             name: "openmemory_store",
             arguments: { content: "Stored memory via stdio canonical tenant" },
         });
@@ -388,7 +391,7 @@ describe("MCP per-tenant scoping", () => {
         const stdio_row_before = await q.get_mem.get(stdio_mem_id!);
         expect(stdio_row_before.user_id).toBe("tenant-stdio-canonical");
 
-        const stdio_reinforce: any = await stdio_server.client.callTool({
+        const stdio_reinforce: any = await stdio_client.callTool({
             name: "openmemory_reinforce",
             arguments: { id: stdio_mem_id!, boost: 0.2 },
         });
