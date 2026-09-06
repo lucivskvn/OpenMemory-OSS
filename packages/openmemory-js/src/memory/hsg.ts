@@ -1030,46 +1030,49 @@ export async function hsg_query(
                 coact_buf.push([a, b]);
             }
         }
-        for (const r of top) {
-            const rsal = await applyRetrievalTraceReinforcementToMemory(
-                r.id,
-                r.salience,
-            );
-            await q.upd_seen.run(Date.now(), rsal, Date.now(), r.id, f?.user_id || "anonymous");
-            if (r.path.length > 1) {
-                await reinforce_waypoints(r.path);
-                const wps = await q.get_waypoints_by_src.all(r.id);
-                const lns = wps.map((wp: any) => ({
-                    target_id: wp.dst_id,
-                    weight: wp.weight,
-                }));
-                const pru =
-                    await propagateAssociativeReinforcementToLinkedNodes(
-                        r.id,
-                        rsal,
-                        lns,
-                    );
-                for (const u of pru) {
-                    const linked_mem = await q.get_mem.get(u.node_id);
-                    if (linked_mem) {
-                        const time_diff =
-                            (Date.now() - linked_mem.last_seen_at) / 86400000;
-                        const decay_fact = Math.exp(-0.02 * time_diff);
-                        const ctx_boost =
-                            hybrid_params.gamma *
-                            (rsal - linked_mem.salience) *
-                            decay_fact;
-                        const new_sal = Math.max(
-                            0,
-                            Math.min(1, linked_mem.salience + ctx_boost),
+        const query_user = f?.user_id?.trim();
+        if (query_user) {
+            for (const r of top) {
+                const rsal = await applyRetrievalTraceReinforcementToMemory(
+                    r.id,
+                    r.salience,
+                );
+                await q.upd_seen.run(Date.now(), rsal, Date.now(), r.id, query_user);
+                if (r.path.length > 1) {
+                    await reinforce_waypoints(r.path);
+                    const wps = await q.get_waypoints_by_src.all(r.id);
+                    const lns = wps.map((wp: any) => ({
+                        target_id: wp.dst_id,
+                        weight: wp.weight,
+                    }));
+                    const pru =
+                        await propagateAssociativeReinforcementToLinkedNodes(
+                            r.id,
+                            rsal,
+                            lns,
                         );
-                        await q.upd_seen.run(
-                            Date.now(),
-                            new_sal,
-                            Date.now(),
-                            u.node_id,
-                            linked_mem.user_id || "anonymous",
-                        );
+                    for (const u of pru) {
+                        const linked_mem = await q.get_mem.get(u.node_id);
+                        if (linked_mem && linked_mem.user_id === query_user) {
+                            const time_diff =
+                                (Date.now() - linked_mem.last_seen_at) / 86400000;
+                            const decay_fact = Math.exp(-0.02 * time_diff);
+                            const ctx_boost =
+                                hybrid_params.gamma *
+                                (rsal - linked_mem.salience) *
+                                decay_fact;
+                            const new_sal = Math.max(
+                                0,
+                                Math.min(1, linked_mem.salience + ctx_boost),
+                            );
+                            await q.upd_seen.run(
+                                Date.now(),
+                                new_sal,
+                                Date.now(),
+                                u.node_id,
+                                query_user,
+                            );
+                        }
                     }
                 }
             }
@@ -1100,18 +1103,21 @@ export async function hsg_query(
         dec_q();
     }
 }
-export async function run_decay_process(): Promise<{
+export async function run_decay_process(user_id?: string): Promise<{
     processed: number;
     decayed: number;
 }> {
-    const mems = await q.all_mem.all(10000, 0);
+    const active_user = user_id?.trim();
+    if (!active_user) return { processed: 0, decayed: 0 };
+
+    const mems = await q.all_mem_by_user.all(active_user, 10000, 0);
     let p = 0,
         d = 0;
     for (const m of mems) {
         const ds = (Date.now() - m.last_seen_at) / 86400000;
         const ns = calc_decay(m.primary_sector, m.salience, ds);
         if (ns !== m.salience) {
-            await q.upd_seen.run(m.last_seen_at, ns, Date.now(), m.id, m.user_id || "anonymous");
+            await q.upd_seen.run(m.last_seen_at, ns, Date.now(), m.id, active_user);
             d++;
         }
         p++;
@@ -1155,7 +1161,10 @@ export async function add_hsg_memory(
     if (existing && hamming_dist(simhash, existing.simhash) <= 3) {
         const now = Date.now();
         const boosted_sal = Math.min(1, existing.salience + 0.15);
-        await q.upd_seen.run(now, boosted_sal, now, existing.id, existing.user_id || "anonymous");
+        const add_user = user_id?.trim();
+        if (add_user && existing.user_id === add_user) {
+            await q.upd_seen.run(now, boosted_sal, now, existing.id, add_user);
+        }
         return {
             id: existing.id,
             primary_sector: existing.primary_sector,
