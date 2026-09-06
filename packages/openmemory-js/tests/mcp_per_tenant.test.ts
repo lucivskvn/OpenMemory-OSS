@@ -312,33 +312,32 @@ describe("MCP per-tenant scoping", () => {
         expect(row_after_success.salience).toBeGreaterThan(initial_salience);
     });
 
-    it("start_mcp_stdio fails startup closed when missing tenant and derives hashed tenant for API key", async () => {
+    it("start_mcp_stdio fails startup closed when missing tenant and binds configured tenant when present", async () => {
         const old_tenant = process.env.OM_TENANT;
         const old_uid = process.env.OM_USER_ID;
         const old_key = process.env.OM_API_KEY;
 
         delete process.env.OM_TENANT;
         delete process.env.OM_USER_ID;
-        delete process.env.OM_API_KEY;
+        process.env.OM_API_KEY = "sk_live_secret_key_123456789";
 
-        // 1. Missing trusted tenant in environment must fail startup closed
+        // 1. Missing OM_TENANT or OM_USER_ID must fail startup closed, even if OM_API_KEY is present
         await expect(start_mcp_stdio()).rejects.toThrow(/Missing trusted server tenant configuration/);
+        expect(derive_mcp_tenant_id()).toBeUndefined();
 
-        // 2. Empty string trusted tenant must fail startup closed
+        // 2. Empty string OM_TENANT must fail startup closed
         process.env.OM_TENANT = "   ";
         await expect(start_mcp_stdio()).rejects.toThrow(/Missing trusted server tenant configuration/);
+        expect(derive_mcp_tenant_id()).toBeUndefined();
 
-        // 3. OM_TENANT / OM_USER_ID returns exact string
+        // 3. Valid OM_TENANT binds exact tenant string
+        process.env.OM_TENANT = "tenant-stdio-canonical";
+        expect(derive_mcp_tenant_id()).toBe("tenant-stdio-canonical");
+
+        // 4. Valid OM_USER_ID binds exact user string
         delete process.env.OM_TENANT;
-        process.env.OM_USER_ID = "user-mcp-123";
-        expect(derive_mcp_tenant_id()).toBe("user-mcp-123");
-
-        // 4. OM_API_KEY generates a 16-hex SHA256 hash, never exposing raw secret key
-        delete process.env.OM_USER_ID;
-        process.env.OM_API_KEY = "sk_live_secret_key_123456789";
-        const derived = derive_mcp_tenant_id();
-        expect(derived).not.toBe("sk_live_secret_key_123456789");
-        expect(derived).toMatch(/^[0-9a-f]{16}$/);
+        process.env.OM_USER_ID = "user-mcp-456";
+        expect(derive_mcp_tenant_id()).toBe("user-mcp-456");
 
         // Restore env vars
         if (old_tenant) process.env.OM_TENANT = old_tenant; else delete process.env.OM_TENANT;

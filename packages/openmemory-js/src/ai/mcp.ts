@@ -958,14 +958,6 @@ export function derive_mcp_tenant_id(): string | undefined {
     if (direct && direct.trim()) {
         return direct.trim();
     }
-    const api_key = process.env.OM_API_KEY;
-    if (api_key && api_key.trim()) {
-        return crypto
-            .createHash("sha256")
-            .update(api_key.trim())
-            .digest("hex")
-            .slice(0, 16);
-    }
     return undefined;
 }
 
@@ -973,10 +965,10 @@ export const start_mcp_stdio = async () => {
     const tenant = derive_mcp_tenant_id();
     if (!tenant) {
         console.error(
-            "[MCP] FATAL: Stdio MCP server startup failed: no trusted tenant configured in environment (OM_TENANT, OM_USER_ID, or OM_API_KEY required).",
+            "[MCP] FATAL: Stdio MCP server startup failed: no trusted tenant configured in environment (OM_TENANT or OM_USER_ID required).",
         );
         throw new Error(
-            "Fatal MCP stdio startup error: Missing trusted server tenant configuration (OM_TENANT, OM_USER_ID, or OM_API_KEY).",
+            "Fatal MCP stdio startup error: Missing trusted server tenant configuration (OM_TENANT or OM_USER_ID required).",
         );
     }
     const srv = create_mcp_srv(tenant);
