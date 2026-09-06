@@ -11,6 +11,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { create_mcp_srv, start_mcp_stdio, derive_mcp_tenant_id } from "../src/ai/mcp";
 import { reinforce_memory, add_hsg_memory, hsg_query } from "../src/memory/hsg";
+import { run_reflection } from "../src/memory/reflect";
 import { run_async, q } from "../src/core/db";
 
 const T_ALICE = "tenant-alice-mcp";
@@ -450,4 +451,26 @@ describe("MCP per-tenant scoping", () => {
         const row_after_alice = await q.get_mem.get(alice_res.id);
         expect(row_after_alice.salience).toBeGreaterThan(salience_before);
     }, 20000);
+
+    it("run_reflection requires tenant context and reinforces only trusted tenant memories", async () => {
+        // 1. Untrusted/tenantless call fails closed
+        const unauth_reflect = await run_reflection();
+        expect(unauth_reflect.reason).toBe("tenant_required");
+
+        // 2. Add memories for Alice to form a cluster (min 2 memories with sim > 0.8)
+        const m1 = await add_hsg_memory("Docker container network bridge interface setup step by step configuration guide", undefined, undefined, T_ALICE);
+        const m2 = await add_hsg_memory("Docker container network bridge interface setup step by step configuration instructions", undefined, undefined, T_ALICE);
+
+        const old_min = process.env.OM_REFLECT_MIN;
+        process.env.OM_REFLECT_MIN = "2";
+
+        const m1_before = await q.get_mem.get(m1.id);
+        const reflect_res = await run_reflection(T_ALICE, 2);
+        expect(reflect_res.created).toBeGreaterThan(0);
+
+        if (old_min) process.env.OM_REFLECT_MIN = old_min; else delete process.env.OM_REFLECT_MIN;
+
+        const m1_after = await q.get_mem.get(m1.id);
+        expect(m1_after.salience).toBeGreaterThan(m1_before.salience);
+    }, 30000);
 });

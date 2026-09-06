@@ -80,10 +80,11 @@ const summ = (c: any): string => {
     return `${n} ${sec} pattern: ${txt.substring(0, 200)}`;
 };
 
-const mark = async (ids: string[]) => {
+const mark = async (ids: string[], user_id?: string) => {
+    const active_user = user_id?.trim();
     for (const id of ids) {
         const m = await q.get_mem.get(id);
-        if (m) {
+        if (m && active_user && m.user_id === active_user) {
             const meta = JSON.parse(m.meta || "{}");
             meta.consolidated = true;
             await q.upd_mem.run(
@@ -97,25 +98,32 @@ const mark = async (ids: string[]) => {
     }
 };
 
-const boost = async (ids: string[]) => {
+const boost = async (ids: string[], user_id?: string) => {
+    const active_user = user_id?.trim();
     for (const id of ids) {
         const m = await q.get_mem.get(id);
-        if (m) await q.upd_mem.run(m.content, m.tags, m.meta, Date.now(), id);
-        await q.upd_seen.run(
-            id,
-            m.last_seen_at,
-            Math.min(1, m.salience * 1.1),
-            Date.now(),
-        );
+        if (m && active_user && m.user_id === active_user) {
+            await q.upd_mem.run(m.content, m.tags, m.meta, Date.now(), id);
+            await q.upd_seen.run(
+                m.last_seen_at,
+                Math.min(1, m.salience * 1.1),
+                Date.now(),
+                id,
+                active_user,
+            );
+        }
     }
 };
 
-export const run_reflection = async () => {
-    console.error("[REFLECT] Starting reflection job...");
-    const min = env.reflect_min || 20;
-    const mems = await q.all_mem.all(100, 0);
+export const run_reflection = async (user_id?: string, min_override?: number) => {
+    const active_user = user_id?.trim();
+    if (!active_user) return { created: 0, reason: "tenant_required" };
+
+    console.error(`[REFLECT] Starting reflection job for ${active_user}...`);
+    const min = min_override ?? env.reflect_min ?? 20;
+    const mems = await q.all_mem_by_user.all(active_user, 100, 0);
     console.error(
-        `[REFLECT] Fetched ${mems.length} memories (min required: ${min})`,
+        `[REFLECT] Fetched ${mems.length} memories for ${active_user} (min required: ${min})`,
     );
     if (mems.length < min) {
         console.error("[REFLECT] Not enough memories, skipping");
@@ -137,9 +145,9 @@ export const run_reflection = async () => {
         console.error(
             `[REFLECT] Creating reflection: ${c.n} memories, salience=${s.toFixed(3)}, sector=${c.mem[0].primary_sector}`,
         );
-        await add_hsg_memory(txt, j(["reflect:auto"]), meta);
-        await mark(src);
-        await boost(src);
+        await add_hsg_memory(txt, j(["reflect:auto"]), meta, active_user);
+        await mark(src, active_user);
+        await boost(src, active_user);
         n++;
     }
     if (n > 0) await log_maint_op("reflect", n);
