@@ -228,7 +228,8 @@ export function mem(app: any) {
                     message: "memory does not belong to authenticated tenant",
                 });
             }
-            await reinforce_memory(b.id, b.boost);
+            const success = await reinforce_memory(b.id, b.boost, tenant);
+            if (!success) return res.status(404).json({ err: "nf" });
             res.json({ ok: true });
         } catch (e: any) {
             console.error("[mem] /memory/reinforce failed:", e);

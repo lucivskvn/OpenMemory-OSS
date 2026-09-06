@@ -596,11 +596,10 @@ export const create_mcp_srv = (tenant?: string) => {
                     "tenant_mismatch: user_id does not match authenticated tenant; omit user_id or pass the tenant identifier",
                 );
             }
-            const mem = await q.get_mem.get(id);
-            if (!mem || mem.user_id !== active_tenant) {
+            const success = await reinforce_memory(id, boost, active_tenant);
+            if (!success) {
                 throw new Error(`Memory ${id} not found.`);
             }
-            await reinforce_memory(id, boost);
             return {
                 content: [
                     {

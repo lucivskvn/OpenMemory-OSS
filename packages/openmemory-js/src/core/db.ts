@@ -334,11 +334,23 @@ export const q: q_type = {
             ),
     },
     upd_seen: {
-        run: (...p) =>
-            exec(
+        run: (...p) => {
+            const last_seen_at = p[0];
+            const salience = p[1];
+            const updated_at = p[2];
+            const id = p[3];
+            const user_id = p[4];
+            if (user_id) {
+                return exec(
+                    "update memories set last_seen_at=?,salience=?,updated_at=? where id=? and user_id=?",
+                    [last_seen_at, salience, updated_at, id, user_id],
+                );
+            }
+            return exec(
                 "update memories set last_seen_at=?,salience=?,updated_at=? where id=?",
-                p,
-            ),
+                [last_seen_at, salience, updated_at, id],
+            );
+        },
     },
     upd_mem: {
         run: (...p) => {

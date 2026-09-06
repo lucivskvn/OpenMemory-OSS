@@ -1275,12 +1275,15 @@ export async function delete_memory(id: string): Promise<boolean> {
 export async function reinforce_memory(
     id: string,
     boost: number = 0.1,
-): Promise<void> {
+    user_id?: string,
+): Promise<boolean> {
     const mem = await q.get_mem.get(id);
-    if (!mem) throw new Error(`Memory ${id} not found`);
+    if (!mem) return false;
+    if (user_id && mem.user_id !== user_id) return false;
     const new_sal = Math.min(reinforcement.max_salience, mem.salience + boost);
-    await q.upd_seen.run(Date.now(), new_sal, Date.now(), id);
+    await q.upd_seen.run(Date.now(), new_sal, Date.now(), id, user_id || mem.user_id);
     if (new_sal > 0.8) await log_maint_op("consolidate", 1);
+    return true;
 }
 export async function update_memory(
     id: string,
