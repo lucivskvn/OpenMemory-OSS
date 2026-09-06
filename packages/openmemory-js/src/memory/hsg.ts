@@ -1275,13 +1275,24 @@ export async function delete_memory(id: string): Promise<boolean> {
 export async function reinforce_memory(
     id: string,
     boost: number = 0.1,
-    user_id?: string,
+    user_id: string = "",
 ): Promise<boolean> {
+    const active_user = user_id?.trim();
+    if (!active_user) return false;
+
     const mem = await q.get_mem.get(id);
-    if (!mem) return false;
-    if (user_id && mem.user_id !== user_id) return false;
+    if (!mem || mem.user_id !== active_user) return false;
+
     const new_sal = Math.min(reinforcement.max_salience, mem.salience + boost);
-    await q.upd_seen.run(Date.now(), new_sal, Date.now(), id, user_id || mem.user_id);
+    const affected = await q.upd_seen.run(
+        Date.now(),
+        new_sal,
+        Date.now(),
+        id,
+        active_user,
+    );
+    if (affected === 0) return false;
+
     if (new_sal > 0.8) await log_maint_op("consolidate", 1);
     return true;
 }

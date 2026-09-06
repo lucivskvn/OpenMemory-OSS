@@ -20,7 +20,7 @@ type q_type = {
     upd_mean_vec: { run: (...p: any[]) => Promise<void> };
     upd_compressed_vec: { run: (...p: any[]) => Promise<void> };
     upd_feedback: { run: (...p: any[]) => Promise<void> };
-    upd_seen: { run: (...p: any[]) => Promise<void> };
+    upd_seen: { run: (...p: any[]) => Promise<number> };
     upd_mem: { run: (...p: any[]) => Promise<void> };
     upd_mem_with_sector: { run: (...p: any[]) => Promise<void> };
     del_mem: { run: (...p: any[]) => Promise<void> };
@@ -149,12 +149,13 @@ const _exec_direct = async (sql: string, args: any[] = []) => {
 /**
  * Internal executor that respects transaction buffering.
  */
-const exec = async (sql: string, args: any[] = []) => {
+const exec = async (sql: string, args: any[] = []): Promise<number> => {
     if (txStmts) {
         txStmts.push({ sql, args });
-        return;
+        return 0;
     }
-    await _exec_direct(sql, args);
+    const result = await _exec_direct(sql, args);
+    return result.rowsAffected ?? 0;
 };
 
 export const run_async = exec;
@@ -340,15 +341,9 @@ export const q: q_type = {
             const updated_at = p[2];
             const id = p[3];
             const user_id = p[4];
-            if (user_id) {
-                return exec(
-                    "update memories set last_seen_at=?,salience=?,updated_at=? where id=? and user_id=?",
-                    [last_seen_at, salience, updated_at, id, user_id],
-                );
-            }
             return exec(
-                "update memories set last_seen_at=?,salience=?,updated_at=? where id=?",
-                [last_seen_at, salience, updated_at, id],
+                "update memories set last_seen_at=?,salience=?,updated_at=? where id=? and user_id=?",
+                [last_seen_at, salience, updated_at, id, user_id],
             );
         },
     },

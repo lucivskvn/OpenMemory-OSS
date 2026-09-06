@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { create_mcp_srv, start_mcp_stdio, derive_mcp_tenant_id } from "../src/ai/mcp";
+import { reinforce_memory } from "../src/memory/hsg";
 import { run_async, q } from "../src/core/db";
 
 const T_ALICE = "tenant-alice-mcp";
@@ -249,11 +250,16 @@ describe("MCP per-tenant scoping", () => {
         const { id: alice_mem_id } = parse_store(alice_stored);
         expect(alice_mem_id).toBeTruthy();
 
-        // Store an ownerless memory (anonymous user_id) directly in DB
-        const ownerless_id = "ownerless-memory-123";
+        // Store true NULL and empty-string ownerless records directly in DB
+        const null_owner_id = "null-owner-memory-123";
+        const empty_owner_id = "empty-owner-memory-123";
         await run_async(
             "insert into memories(id, user_id, primary_sector, content, created_at, updated_at, last_seen_at, salience) values(?, ?, ?, ?, ?, ?, ?, ?)",
-            [ownerless_id, "anonymous", "semantic", "Ownerless content", Date.now(), Date.now(), Date.now(), 0.4],
+            [null_owner_id, null, "semantic", "Null owner content", Date.now(), Date.now(), Date.now(), 0.4],
+        );
+        await run_async(
+            "insert into memories(id, user_id, primary_sector, content, created_at, updated_at, last_seen_at, salience) values(?, ?, ?, ?, ?, ?, ?, ?)",
+            [empty_owner_id, "", "semantic", "Empty owner content", Date.now(), Date.now(), Date.now(), 0.4],
         );
 
         const row_initial = await q.get_mem.get(alice_mem_id!);
@@ -285,12 +291,25 @@ describe("MCP per-tenant scoping", () => {
         expect(bob_text).not.toMatch(T_ALICE);
         expect(bob_text).not.toMatch(T_BOB);
 
-        // 4. Authenticated session (Alice) trying to reinforce ownerless memory must fail
-        const alice_reinforce_ownerless: any = await alice.client.callTool({
+        // 4. Authenticated session (Alice) trying to reinforce NULL and empty ownerless memories must fail
+        const alice_reinforce_null: any = await alice.client.callTool({
             name: "openmemory_reinforce",
-            arguments: { id: ownerless_id, boost: 0.2 },
+            arguments: { id: null_owner_id, boost: 0.2 },
         });
-        expect(alice_reinforce_ownerless.isError).toBe(true);
+        expect(alice_reinforce_null.isError).toBe(true);
+
+        const alice_reinforce_empty: any = await alice.client.callTool({
+            name: "openmemory_reinforce",
+            arguments: { id: empty_owner_id, boost: 0.2 },
+        });
+        expect(alice_reinforce_empty.isError).toBe(true);
+
+        // 4b. Direct helper call boundary: reinforce_memory fails closed on missing/empty/wrong tenant identity
+        expect(await reinforce_memory(alice_mem_id!, 0.2, "")).toBe(false);
+        expect(await reinforce_memory(alice_mem_id!, 0.2, "   ")).toBe(false);
+        expect(await reinforce_memory(alice_mem_id!, 0.2, T_BOB)).toBe(false);
+        expect(await reinforce_memory(null_owner_id, 0.2, T_ALICE)).toBe(false);
+        expect(await reinforce_memory(empty_owner_id, 0.2, T_ALICE)).toBe(false);
 
         // 5. Authenticated session (Alice) with mismatched user_id must fail with tenant_mismatch without leaking
         const alice_mismatch: any = await alice.client.callTool({
@@ -352,6 +371,31 @@ describe("MCP per-tenant scoping", () => {
         delete process.env.OM_TENANT;
         process.env.OM_USER_ID = "user-mcp-456";
         expect(derive_mcp_tenant_id()).toBe("user-mcp-456");
+
+        // 5. Configured stdio startup passes server-bound tenant to handler and enables reinforcement
+        process.env.OM_TENANT = "tenant-stdio-canonical";
+        const stdio_tenant = derive_mcp_tenant_id();
+        expect(stdio_tenant).toBe("tenant-stdio-canonical");
+
+        const stdio_server = await connect_client(stdio_tenant);
+        const stdio_store = await stdio_server.client.callTool({
+            name: "openmemory_store",
+            arguments: { content: "Stored memory via stdio canonical tenant" },
+        });
+        const { id: stdio_mem_id } = parse_store(stdio_store);
+        expect(stdio_mem_id).toBeTruthy();
+
+        const stdio_row_before = await q.get_mem.get(stdio_mem_id!);
+        expect(stdio_row_before.user_id).toBe("tenant-stdio-canonical");
+
+        const stdio_reinforce: any = await stdio_server.client.callTool({
+            name: "openmemory_reinforce",
+            arguments: { id: stdio_mem_id!, boost: 0.2 },
+        });
+        expect(stdio_reinforce.isError).toBeFalsy();
+
+        const stdio_row_after = await q.get_mem.get(stdio_mem_id!);
+        expect(stdio_row_after.salience).toBeGreaterThan(stdio_row_before.salience);
 
         // Restore env vars
         if (old_tenant) process.env.OM_TENANT = old_tenant; else delete process.env.OM_TENANT;
