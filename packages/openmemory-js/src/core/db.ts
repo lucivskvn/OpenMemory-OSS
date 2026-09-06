@@ -341,9 +341,15 @@ export const q: q_type = {
             const updated_at = p[2];
             const id = p[3];
             const user_id = p[4];
+            if (user_id) {
+                return exec(
+                    "update memories set last_seen_at=?,salience=?,updated_at=? where id=? and user_id=?",
+                    [last_seen_at, salience, updated_at, id, user_id],
+                );
+            }
             return exec(
-                "update memories set last_seen_at=?,salience=?,updated_at=? where id=? and user_id=?",
-                [last_seen_at, salience, updated_at, id, user_id],
+                "update memories set last_seen_at=?,salience=?,updated_at=? where id=?",
+                [last_seen_at, salience, updated_at, id],
             );
         },
     },
