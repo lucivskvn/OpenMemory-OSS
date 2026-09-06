@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { create_mcp_srv, start_mcp_stdio, derive_mcp_tenant_id } from "../src/ai/mcp";
-import { reinforce_memory } from "../src/memory/hsg";
+import { reinforce_memory, add_hsg_memory, hsg_query } from "../src/memory/hsg";
 import { run_async, q } from "../src/core/db";
 
 const T_ALICE = "tenant-alice-mcp";
@@ -405,4 +405,49 @@ describe("MCP per-tenant scoping", () => {
         if (old_uid) process.env.OM_USER_ID = old_uid; else delete process.env.OM_USER_ID;
         if (old_key) process.env.OM_API_KEY = old_key; else delete process.env.OM_API_KEY;
     });
+
+    it("add_hsg_memory isolates same-content dedup across different tenants", async () => {
+        const content = "Unique same content for cross-tenant dedup test";
+
+        // 1. Alice adds memory
+        const alice_res = await add_hsg_memory(content, undefined, undefined, T_ALICE);
+        expect(alice_res.id).toBeTruthy();
+        expect(alice_res.deduplicated).toBeFalsy();
+
+        // 2. Bob adds same memory -> Bob must NOT get Alice's memory as deduplicated
+        const bob_res = await add_hsg_memory(content, undefined, undefined, T_BOB);
+        expect(bob_res.id).toBeTruthy();
+        expect(bob_res.id).not.toBe(alice_res.id);
+        expect(bob_res.deduplicated).toBeFalsy();
+
+        const alice_row = await q.get_mem.get(alice_res.id);
+        const bob_row = await q.get_mem.get(bob_res.id);
+        expect(alice_row.user_id).toBe(T_ALICE);
+        expect(bob_row.user_id).toBe(T_BOB);
+
+        // 3. Alice adding same memory again SHOULD deduplicate against Alice's own record
+        const alice_dup = await add_hsg_memory(content, undefined, undefined, T_ALICE);
+        expect(alice_dup.id).toBe(alice_res.id);
+        expect(alice_dup.deduplicated).toBe(true);
+    });
+
+    it("hsg_query isolates trace reinforcement and search results per tenant", async () => {
+        const alice_res = await add_hsg_memory("Semantic recall query test text", undefined, undefined, T_ALICE);
+        const row_before = await q.get_mem.get(alice_res.id);
+        const salience_before = row_before.salience;
+
+        // Bob querying for Alice's memory -> 0 results returned, Alice's salience is NOT mutated
+        const bob_results = await hsg_query("Semantic recall query test text", 5, { user_id: T_BOB });
+        expect(bob_results.length).toBe(0);
+
+        const row_after_bob = await q.get_mem.get(alice_res.id);
+        expect(row_after_bob.salience).toBe(salience_before);
+
+        // Alice querying her own memory -> result returned and salience reinforced for T_ALICE
+        const alice_results = await hsg_query("Semantic recall query test text", 5, { user_id: T_ALICE });
+        expect(alice_results.length).toBeGreaterThan(0);
+
+        const row_after_alice = await q.get_mem.get(alice_res.id);
+        expect(row_after_alice.salience).toBeGreaterThan(salience_before);
+    }, 20000);
 });

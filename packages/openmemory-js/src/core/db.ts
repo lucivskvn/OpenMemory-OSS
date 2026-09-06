@@ -25,7 +25,7 @@ type q_type = {
     upd_mem_with_sector: { run: (...p: any[]) => Promise<void> };
     del_mem: { run: (...p: any[]) => Promise<void> };
     get_mem: { get: (id: string) => Promise<any> };
-    get_mem_by_simhash: { get: (simhash: string) => Promise<any> };
+    get_mem_by_simhash: { get: (simhash: string, user_id?: string) => Promise<any> };
     all_mem: { all: (limit: number, offset: number) => Promise<any[]> };
     all_mem_by_sector: {
         all: (sector: string, limit: number, offset: number) => Promise<any[]>;
@@ -74,7 +74,7 @@ type q_type = {
     ins_waypoint: { run: (...p: any[]) => Promise<void> };
     get_neighbors: { all: (src: string) => Promise<any[]> };
     get_waypoints_by_src: { all: (src: string) => Promise<any[]> };
-    get_waypoint: { get: (src: string, dst: string) => Promise<any> };
+    get_waypoint: { get: (src: string, dst: string, user_id?: string) => Promise<any> };
     upd_waypoint: { run: (...p: any[]) => Promise<void> };
     del_waypoints: { run: (...p: any[]) => Promise<void> };
     prune_waypoints: { run: (t: number) => Promise<void> };
@@ -336,11 +336,19 @@ export const q: q_type = {
             exec("update memories set compressed_vec=? where id=?", p),
     },
     upd_feedback: {
-        run: (...p) =>
-            exec(
+        run: (feedback_score: number, updated_at: number, id: string, user_id?: string) => {
+            const active_user = user_id?.trim();
+            if (active_user) {
+                return exec(
+                    "update memories set feedback_score=?,coactivations=coactivations+1,updated_at=? where id=? and user_id=?",
+                    [feedback_score, updated_at, id, active_user],
+                );
+            }
+            return exec(
                 "update memories set feedback_score=?,coactivations=coactivations+1,updated_at=? where id=?",
-                p,
-            ),
+                [feedback_score, updated_at, id],
+            );
+        },
     },
     upd_seen: {
         run: (last_seen_at: number, salience: number, updated_at: number, id: string, user_id: string) => {
@@ -425,11 +433,19 @@ export const q: q_type = {
         get: (id) => get_async("select * from memories where id=?", [id]),
     },
     get_mem_by_simhash: {
-        get: (simhash) =>
-            get_async(
+        get: (simhash, user_id) => {
+            const active_user = user_id?.trim();
+            if (active_user) {
+                return get_async(
+                    "select * from memories where simhash=? and user_id=? order by salience desc limit 1",
+                    [simhash, active_user],
+                );
+            }
+            return get_async(
                 "select * from memories where simhash=? order by salience desc limit 1",
                 [simhash],
-            ),
+            );
+        },
     },
     all_mem: {
         all: (limit, offset) =>
@@ -542,18 +558,39 @@ export const q: q_type = {
             ),
     },
     get_waypoint: {
-        get: (src, dst) =>
-            get_async(
+        get: (src, dst, user_id) => {
+            const active_user = user_id?.trim();
+            if (active_user) {
+                return get_async(
+                    "select weight from waypoints where src_id=? and dst_id=? and user_id=?",
+                    [src, dst, active_user],
+                );
+            }
+            return get_async(
                 "select weight from waypoints where src_id=? and dst_id=?",
                 [src, dst],
-            ),
+            );
+        },
     },
     upd_waypoint: {
-        run: (...p) =>
-            exec(
+        run: (...p) => {
+            const weight = p[0];
+            const updated_at = p[1];
+            const src_id = p[2];
+            const dst_id = p[3];
+            const user_id = p[4];
+            const active_user = typeof user_id === "string" ? user_id.trim() : "";
+            if (active_user) {
+                return exec(
+                    "update waypoints set weight=?,updated_at=? where src_id=? and dst_id=? and user_id=?",
+                    [weight, updated_at, src_id, dst_id, active_user],
+                );
+            }
+            return exec(
                 "update waypoints set weight=?,updated_at=? where src_id=? and dst_id=?",
-                p,
-            ),
+                [weight, updated_at, src_id, dst_id],
+            );
+        },
     },
     del_waypoints: {
         run: (...p) => {

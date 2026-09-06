@@ -676,18 +676,23 @@ export async function expand_via_waypoints(
     }
     return exp;
 }
-export async function reinforce_waypoints(trav_path: string[]): Promise<void> {
+export async function reinforce_waypoints(
+    trav_path: string[],
+    user_id?: string,
+): Promise<void> {
+    const active_user = user_id?.trim();
+    if (!active_user) return;
     const now = Date.now();
     for (let i = 0; i < trav_path.length - 1; i++) {
         const src_id = trav_path[i];
         const dst_id = trav_path[i + 1];
-        const wp = await q.get_waypoint.get(src_id, dst_id);
+        const wp = await q.get_waypoint.get(src_id, dst_id, active_user);
         if (wp) {
             const new_wt = Math.min(
                 reinforcement.max_waypoint_weight,
                 wp.weight + reinforcement.waypoint_boost,
             );
-            await q.upd_waypoint.run(src_id, new_wt, now, dst_id);
+            await q.upd_waypoint.run(new_wt, now, src_id, dst_id, active_user);
         }
     }
 }
@@ -751,7 +756,7 @@ const cache = new Map<string, { r: hsg_q_result[]; t: number }>();
 const sal_cache = new Map<string, { s: number; t: number }>();
 
 const seg_cache = new Map<number, any[]>();
-const coact_buf: Array<[string, string]> = [];
+const coact_buf: Array<[string, string, string]> = [];
 const TTL = 60000;
 const VEC_CACHE_MAX = 1000;
 let active_queries = 0;
@@ -771,16 +776,18 @@ setInterval(async () => {
     const pairs = coact_buf.splice(0, 50);
     const now = Date.now();
     const tau_ms = hybrid_params.tau_hours * 3600000;
-    for (const [a, b] of pairs) {
+    for (const [a, b, uid] of pairs) {
+        if (!uid || uid === "anonymous") continue;
         try {
             const [memA, memB] = await Promise.all([
                 q.get_mem.get(a),
                 q.get_mem.get(b),
             ]);
             if (!memA || !memB) continue;
+            if (memA.user_id !== uid || memB.user_id !== uid) continue;
             const time_diff = Math.abs(memA.last_seen_at - memB.last_seen_at);
             const temp_fact = Math.exp(-time_diff / tau_ms);
-            const wp = await q.get_waypoint.get(a, b);
+            const wp = await q.get_waypoint.get(a, b, uid);
             const cur_wt = wp?.weight || 0;
             const new_wt = Math.min(
                 1,
@@ -788,8 +795,6 @@ setInterval(async () => {
             );
             const project_id =
                 memA?.project_id || memB?.project_id || wp?.project_id || null;
-            const uid =
-                memA?.user_id || memB?.user_id || wp?.user_id || "anonymous";
             await q.ins_waypoint.run(
                 a,
                 b,
@@ -1018,20 +1023,21 @@ export async function hsg_query(
         const top = top_cands.slice(0, k);
         const tids = top.map((r) => r.id);
 
-        for (const r of top) {
-            const cur_fb = (await q.get_mem.get(r.id))?.feedback_score || 0;
-            const new_fb = cur_fb * 0.9 + r.score * 0.1;
-            await q.upd_feedback.run(new_fb, Date.now(), r.id);
-        }
-
-        for (let i = 0; i < tids.length; i++) {
-            for (let j = i + 1; j < tids.length; j++) {
-                const [a, b] = [tids[i], tids[j]].sort();
-                coact_buf.push([a, b]);
-            }
-        }
         const query_user = f?.user_id?.trim();
         if (query_user) {
+            for (const r of top) {
+                const cur_fb = (await q.get_mem.get(r.id))?.feedback_score || 0;
+                const new_fb = cur_fb * 0.9 + r.score * 0.1;
+                await q.upd_feedback.run(new_fb, Date.now(), r.id, query_user);
+            }
+
+            for (let i = 0; i < tids.length; i++) {
+                for (let j = i + 1; j < tids.length; j++) {
+                    const [a, b] = [tids[i], tids[j]].sort();
+                    coact_buf.push([a, b, query_user]);
+                }
+            }
+
             for (const r of top) {
                 const rsal = await applyRetrievalTraceReinforcementToMemory(
                     r.id,
@@ -1039,7 +1045,7 @@ export async function hsg_query(
                 );
                 await q.upd_seen.run(Date.now(), rsal, Date.now(), r.id, query_user);
                 if (r.path.length > 1) {
-                    await reinforce_waypoints(r.path);
+                    await reinforce_waypoints(r.path, query_user);
                     const wps = await q.get_waypoints_by_src.all(r.id);
                     const lns = wps.map((wp: any) => ({
                         target_id: wp.dst_id,
@@ -1156,14 +1162,14 @@ export async function add_hsg_memory(
     chunks?: number;
     deduplicated?: boolean;
 }> {
+    const active_user = user_id?.trim() || "anonymous";
     const simhash = compute_simhash(content);
-    const existing = await q.get_mem_by_simhash.get(simhash);
-    if (existing && hamming_dist(simhash, existing.simhash) <= 3) {
+    const existing = await q.get_mem_by_simhash.get(simhash, active_user);
+    if (existing && existing.user_id === active_user && hamming_dist(simhash, existing.simhash) <= 3) {
         const now = Date.now();
         const boosted_sal = Math.min(1, existing.salience + 0.15);
-        const add_user = user_id?.trim();
-        if (add_user && existing.user_id === add_user) {
-            await q.upd_seen.run(now, boosted_sal, now, existing.id, add_user);
+        if (active_user !== "anonymous") {
+            await q.upd_seen.run(now, boosted_sal, now, existing.id, active_user);
         }
         return {
             id: existing.id,
