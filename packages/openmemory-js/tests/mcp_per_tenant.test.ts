@@ -9,7 +9,7 @@ process.env.OM_VECTOR_BACKEND = process.env.OM_VECTOR_BACKEND || "sqlite";
 import { beforeEach, describe, expect, it } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { create_mcp_srv } from "../src/ai/mcp";
+import { create_mcp_srv, start_mcp_stdio } from "../src/ai/mcp";
 import { run_async, q } from "../src/core/db";
 
 const T_ALICE = "tenant-alice-mcp";
@@ -310,5 +310,27 @@ describe("MCP per-tenant scoping", () => {
         // Verify salience in database WAS boosted after successful reinforcement
         const row_after_success = await q.get_mem.get(alice_mem_id!);
         expect(row_after_success.salience).toBeGreaterThan(initial_salience);
+    });
+
+    it("start_mcp_stdio fails startup closed when missing tenant and binds configured tenant when present", async () => {
+        const old_tenant = process.env.OM_TENANT;
+        const old_uid = process.env.OM_USER_ID;
+        const old_key = process.env.OM_API_KEY;
+
+        delete process.env.OM_TENANT;
+        delete process.env.OM_USER_ID;
+        delete process.env.OM_API_KEY;
+
+        // 1. Missing trusted tenant in environment must fail startup closed
+        expect(start_mcp_stdio()).rejects.toThrow(/Missing trusted server tenant configuration/);
+
+        // 2. Empty string trusted tenant must fail startup closed
+        process.env.OM_TENANT = "   ";
+        expect(start_mcp_stdio()).rejects.toThrow(/Missing trusted server tenant configuration/);
+
+        // Restore env vars
+        if (old_tenant) process.env.OM_TENANT = old_tenant; else delete process.env.OM_TENANT;
+        if (old_uid) process.env.OM_USER_ID = old_uid; else delete process.env.OM_USER_ID;
+        if (old_key) process.env.OM_API_KEY = old_key; else delete process.env.OM_API_KEY;
     });
 });
