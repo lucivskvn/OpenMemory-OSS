@@ -575,13 +575,22 @@ export const create_mcp_srv = (tenant?: string) => {
                 .max(1)
                 .default(0.1)
                 .describe("Salience boost amount (default 0.1)"),
+            user_id: z
+                .string()
+                .trim()
+                .min(1)
+                .optional()
+                .describe(
+                    "Validate ownership against a specific user identifier",
+                ),
         },
-        async ({ id, boost }) => {
-            if (tenant) {
+        async ({ id, boost, user_id }) => {
+            const u = resolve_user_id(tenant, user_id);
+            if (u) {
                 const mem = await q.get_mem.get(id);
-                if (!mem || mem.user_id !== tenant) {
+                if (!mem || mem.user_id !== u) {
                     throw new Error(
-                        `Memory ${id} not found for user ${tenant}`,
+                        `Memory ${id} not found for user ${u}`,
                     );
                 }
             }

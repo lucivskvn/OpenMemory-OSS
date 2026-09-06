@@ -235,4 +235,42 @@ describe("MCP per-tenant scoping", () => {
         const bob_count = bob_cfg.stats.reduce((acc: number, item: any) => acc + item.count, 0);
         expect(bob_count).toBe(2);
     });
+
+    it("openmemory_reinforce rejects tenant mismatch and cross-tenant memory reinforcement", async () => {
+        const alice = await connect_client(T_ALICE);
+        const bob = await connect_client(T_BOB);
+
+        // Store a memory for Alice
+        const alice_stored = await alice.client.callTool({
+            name: "openmemory_store",
+            arguments: { content: "Alice's memory for reinforcement test" },
+        });
+        const { id: alice_mem_id } = parse_store(alice_stored);
+        expect(alice_mem_id).toBeTruthy();
+
+        // 1. Bob attempting to reinforce Alice's memory should be rejected
+        const bob_reinforce_alice: any = await bob.client.callTool({
+            name: "openmemory_reinforce",
+            arguments: { id: alice_mem_id!, boost: 0.2 },
+        });
+        expect(bob_reinforce_alice.isError).toBe(true);
+
+        // 2. Supplying a mismatched user_id to openmemory_reinforce should be rejected
+        const alice_mismatch: any = await alice.client.callTool({
+            name: "openmemory_reinforce",
+            arguments: { id: alice_mem_id!, boost: 0.2, user_id: T_BOB },
+        });
+        expect(alice_mismatch.isError).toBe(true);
+        const text = (alice_mismatch.content ?? [])
+            .map((b: any) => b.text ?? "")
+            .join("\n");
+        expect(text).toMatch(/tenant_mismatch/);
+
+        // 3. Alice reinforcing her own memory should succeed
+        const alice_ok: any = await alice.client.callTool({
+            name: "openmemory_reinforce",
+            arguments: { id: alice_mem_id!, boost: 0.2, user_id: T_ALICE },
+        });
+        expect(alice_ok.isError).toBeFalsy();
+    });
 });
