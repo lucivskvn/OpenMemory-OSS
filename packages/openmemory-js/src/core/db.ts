@@ -19,13 +19,13 @@ type q_type = {
     ins_mem: { run: (...p: any[]) => Promise<void> };
     upd_mean_vec: { run: (...p: any[]) => Promise<void> };
     upd_compressed_vec: { run: (...p: any[]) => Promise<void> };
-    upd_feedback: { run: (...p: any[]) => Promise<void> };
-    upd_seen: { run: (...p: any[]) => Promise<number> };
-    upd_mem: { run: (...p: any[]) => Promise<void> };
+    upd_feedback: { run: (feedback_score: number, updated_at: number, id: string, user_id: string) => Promise<number> };
+    upd_seen: { run: (last_seen_at: number, salience: number, updated_at: number, id: string, user_id: string) => Promise<number> };
+    upd_mem: { run: (content: string, tags: string, meta: string, updated_at: number, id: string, user_id: string) => Promise<number> };
     upd_mem_with_sector: { run: (...p: any[]) => Promise<void> };
     del_mem: { run: (...p: any[]) => Promise<void> };
     get_mem: { get: (id: string) => Promise<any> };
-    get_mem_by_simhash: { get: (simhash: string, user_id?: string) => Promise<any> };
+    get_mem_by_simhash: { get: (simhash: string, user_id: string) => Promise<any> };
     all_mem: { all: (limit: number, offset: number) => Promise<any[]> };
     all_mem_by_sector: {
         all: (sector: string, limit: number, offset: number) => Promise<any[]>;
@@ -74,8 +74,8 @@ type q_type = {
     ins_waypoint: { run: (...p: any[]) => Promise<void> };
     get_neighbors: { all: (src: string) => Promise<any[]> };
     get_waypoints_by_src: { all: (src: string) => Promise<any[]> };
-    get_waypoint: { get: (src: string, dst: string, user_id?: string) => Promise<any> };
-    upd_waypoint: { run: (...p: any[]) => Promise<void> };
+    get_waypoint: { get: (src: string, dst: string, user_id: string) => Promise<any> };
+    upd_waypoint: { run: (weight: number, updated_at: number, src_id: string, dst_id: string, user_id: string) => Promise<number> };
     del_waypoints: { run: (...p: any[]) => Promise<void> };
     prune_waypoints: { run: (t: number) => Promise<void> };
 
@@ -336,17 +336,12 @@ export const q: q_type = {
             exec("update memories set compressed_vec=? where id=?", p),
     },
     upd_feedback: {
-        run: (feedback_score: number, updated_at: number, id: string, user_id?: string) => {
+        run: (feedback_score: number, updated_at: number, id: string, user_id: string) => {
             const active_user = user_id?.trim();
-            if (active_user) {
-                return exec(
-                    "update memories set feedback_score=?,coactivations=coactivations+1,updated_at=? where id=? and user_id=?",
-                    [feedback_score, updated_at, id, active_user],
-                );
-            }
-            return exec(
-                "update memories set feedback_score=?,coactivations=coactivations+1,updated_at=? where id=?",
-                [feedback_score, updated_at, id],
+            if (!active_user) return Promise.resolve(0);
+            return run_affected_async(
+                "update memories set feedback_score=?,coactivations=coactivations+1,updated_at=? where id=? and user_id=?",
+                [feedback_score, updated_at, id, active_user],
             );
         },
     },
@@ -361,16 +356,18 @@ export const q: q_type = {
         },
     },
     upd_mem: {
-        run: (...p) => {
-            const encryptedP = [...p];
+        run: (content: string, tags: string, meta: string, updated_at: number, id: string, user_id: string) => {
+            const active_user = user_id?.trim();
+            if (!active_user) return Promise.resolve(0);
+            const encryptedP: any[] = [content, tags, meta, updated_at, id, active_user];
             if (encryptedP[0] !== undefined && encryptedP[0] !== null) {
                 encryptedP[0] = encrypt(encryptedP[0]);
             }
             if (encryptedP[2] !== undefined && encryptedP[2] !== null) {
                 encryptedP[2] = encrypt(encryptedP[2]);
             }
-            return exec(
-                "update memories set content=?,tags=?,meta=?,updated_at=?,version=version+1 where id=?",
+            return run_affected_async(
+                "update memories set content=?,tags=?,meta=?,updated_at=?,version=version+1 where id=? and user_id=?",
                 encryptedP,
             );
         },
@@ -435,15 +432,10 @@ export const q: q_type = {
     get_mem_by_simhash: {
         get: (simhash, user_id) => {
             const active_user = user_id?.trim();
-            if (active_user) {
-                return get_async(
-                    "select * from memories where simhash=? and user_id=? order by salience desc limit 1",
-                    [simhash, active_user],
-                );
-            }
+            if (!active_user) return Promise.resolve(undefined);
             return get_async(
-                "select * from memories where simhash=? order by salience desc limit 1",
-                [simhash],
+                "select * from memories where simhash=? and user_id=? order by salience desc limit 1",
+                [simhash, active_user],
             );
         },
     },
@@ -560,35 +552,20 @@ export const q: q_type = {
     get_waypoint: {
         get: (src, dst, user_id) => {
             const active_user = user_id?.trim();
-            if (active_user) {
-                return get_async(
-                    "select weight from waypoints where src_id=? and dst_id=? and user_id=?",
-                    [src, dst, active_user],
-                );
-            }
+            if (!active_user) return Promise.resolve(undefined);
             return get_async(
-                "select weight from waypoints where src_id=? and dst_id=?",
-                [src, dst],
+                "select weight from waypoints where src_id=? and dst_id=? and user_id=?",
+                [src, dst, active_user],
             );
         },
     },
     upd_waypoint: {
-        run: (...p) => {
-            const weight = p[0];
-            const updated_at = p[1];
-            const src_id = p[2];
-            const dst_id = p[3];
-            const user_id = p[4];
-            const active_user = typeof user_id === "string" ? user_id.trim() : "";
-            if (active_user) {
-                return exec(
-                    "update waypoints set weight=?,updated_at=? where src_id=? and dst_id=? and user_id=?",
-                    [weight, updated_at, src_id, dst_id, active_user],
-                );
-            }
-            return exec(
-                "update waypoints set weight=?,updated_at=? where src_id=? and dst_id=?",
-                [weight, updated_at, src_id, dst_id],
+        run: (weight: number, updated_at: number, src_id: string, dst_id: string, user_id: string) => {
+            const active_user = user_id?.trim();
+            if (!active_user) return Promise.resolve(0);
+            return run_affected_async(
+                "update waypoints set weight=?,updated_at=? where src_id=? and dst_id=? and user_id=?",
+                [weight, updated_at, src_id, dst_id, active_user],
             );
         },
     },

@@ -80,11 +80,12 @@ const summ = (c: any): string => {
     return `${n} ${sec} pattern: ${txt.substring(0, 200)}`;
 };
 
-const mark = async (ids: string[], user_id?: string) => {
+const mark = async (ids: string[], user_id: string) => {
     const active_user = user_id?.trim();
+    if (!active_user) return;
     for (const id of ids) {
         const m = await q.get_mem.get(id);
-        if (m && active_user && m.user_id === active_user) {
+        if (m && m.user_id === active_user) {
             const meta = JSON.parse(m.meta || "{}");
             meta.consolidated = true;
             await q.upd_mem.run(
@@ -93,17 +94,19 @@ const mark = async (ids: string[], user_id?: string) => {
                 JSON.stringify(meta),
                 Date.now(),
                 id,
+                active_user,
             );
         }
     }
 };
 
-const boost = async (ids: string[], user_id?: string) => {
+const boost = async (ids: string[], user_id: string) => {
     const active_user = user_id?.trim();
+    if (!active_user) return;
     for (const id of ids) {
         const m = await q.get_mem.get(id);
-        if (m && active_user && m.user_id === active_user) {
-            await q.upd_mem.run(m.content, m.tags, m.meta, Date.now(), id);
+        if (m && m.user_id === active_user) {
+            await q.upd_mem.run(m.content, m.tags, m.meta, Date.now(), id, active_user);
             await q.upd_seen.run(
                 m.last_seen_at,
                 Math.min(1, m.salience * 1.1),
@@ -115,9 +118,11 @@ const boost = async (ids: string[], user_id?: string) => {
     }
 };
 
-export const run_reflection = async (user_id?: string, min_override?: number) => {
+export const run_reflection = async (user_id: string, min_override?: number) => {
     const active_user = user_id?.trim();
-    if (!active_user) return { created: 0, reason: "tenant_required" };
+    if (!active_user) {
+        throw new Error("tenant_required: run_reflection requires an authenticated non-empty user_id");
+    }
 
     console.error(`[REFLECT] Starting reflection job for ${active_user}...`);
     const min = min_override ?? env.reflect_min ?? 20;

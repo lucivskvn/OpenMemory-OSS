@@ -176,29 +176,80 @@ describe("MCP per-tenant scoping", () => {
         expect(text).toMatch(/tenant_mismatch/);
     });
 
-    it("stdio-style server (no tenant) preserves legacy behaviour", async () => {
-        // No tenant bound — this is the stdio MCP shape. Stored memories
-        // get the "anonymous" fallback from add_hsg_memory and openmemory_list
-        // returns everything in the table (the pre-existing local-dev contract).
+    it("stdio-style server without tenant fails closed on unauthenticated writes and queries", async () => {
+        // Unbound server session without a tenant context must fail closed rather than writing as "anonymous"
         const { client } = await connect_client(undefined);
-        const stored = await client.callTool({
+        const stored: any = await client.callTool({
             name: "openmemory_store",
             arguments: { content: "stdio-mode memory with no tenant binding" },
         });
-        const { id } = parse_store(stored);
+        expect(stored.isError).toBe(true);
+        const store_text = (stored.content ?? []).map((b: any) => b.text).join("\n");
+        expect(store_text).toMatch(/tenant_required/);
+
+        // Explicit user_id on unbound server allows write
+        const stored_with_uid = await client.callTool({
+            name: "openmemory_store",
+            arguments: { content: "stdio-mode memory with explicit user_id", user_id: T_ALICE },
+        });
+        const { id } = parse_store(stored_with_uid);
         expect(id).toBeTruthy();
 
         const row = await q.get_mem.get(id!);
-        expect(row.user_id).toBe("anonymous");
+        expect(row.user_id).toBe(T_ALICE);
+    });
 
-        const items = parse_items(
-            await client.callTool({
-                name: "openmemory_list",
-                arguments: { limit: 50 },
-            }),
+    it("requires tenant identity across exported contract boundaries and DB query helpers", async () => {
+        // 1. add_hsg_memory fails closed on missing/blank user_id
+        await expect(add_hsg_memory("test content", undefined, undefined, "")).rejects.toThrow(/tenant_required/);
+        await expect(add_hsg_memory("test content", undefined, undefined, "   ")).rejects.toThrow(/tenant_required/);
+        await expect(add_hsg_memory("test content", undefined, undefined, undefined)).rejects.toThrow(/tenant_required/);
+
+        // 2. hsg_query fails closed on missing/blank user_id
+        await expect(hsg_query("test query", 5, { user_id: "" })).rejects.toThrow(/tenant_required/);
+        await expect(hsg_query("test query", 5, { user_id: "   " })).rejects.toThrow(/tenant_required/);
+        await expect(hsg_query("test query", 5, undefined)).rejects.toThrow(/tenant_required/);
+
+        // 3. run_reflection fails closed on missing/blank user_id
+        await expect(run_reflection("")).rejects.toThrow(/tenant_required/);
+        await expect(run_reflection("   ")).rejects.toThrow(/tenant_required/);
+        await expect(run_reflection(undefined as any)).rejects.toThrow(/tenant_required/);
+
+        // 4. DB helper contracts return 0 / undefined on missing, blank, or wrong tenant
+        const simhash = "a1b2c3d4e5f67890";
+        expect(await q.get_mem_by_simhash.get(simhash, "")).toBeUndefined();
+        expect(await q.get_mem_by_simhash.get(simhash, "   ")).toBeUndefined();
+        expect(await q.get_waypoint.get("src1", "dst1", "")).toBeUndefined();
+        expect(await q.get_waypoint.get("src1", "dst1", "   ")).toBeUndefined();
+
+        expect(await q.upd_feedback.run(0.8, Date.now(), "mem-1", "")).toBe(0);
+        expect(await q.upd_feedback.run(0.8, Date.now(), "mem-1", "   ")).toBe(0);
+        expect(await q.upd_seen.run(Date.now(), 0.9, Date.now(), "mem-1", "")).toBe(0);
+        expect(await q.upd_seen.run(Date.now(), 0.9, Date.now(), "mem-1", "   ")).toBe(0);
+        expect(await q.upd_mem.run("new text", "[]", "{}", Date.now(), "mem-1", "")).toBe(0);
+        expect(await q.upd_mem.run("new text", "[]", "{}", Date.now(), "mem-1", "   ")).toBe(0);
+        expect(await q.upd_waypoint.run(0.5, Date.now(), "src1", "dst1", "")).toBe(0);
+        expect(await q.upd_waypoint.run(0.5, Date.now(), "src1", "dst1", "   ")).toBe(0);
+
+        // 5. Zero affected rows on wrong tenant, ownerless (NULL/empty string), or ownership change
+        const mem_alice = await add_hsg_memory("Alice test memory content for DB updates", undefined, undefined, T_ALICE);
+        expect(await q.upd_seen.run(Date.now(), 0.9, Date.now(), mem_alice.id, T_BOB)).toBe(0);
+        expect(await q.upd_mem.run("Tampered text", "[]", "{}", Date.now(), mem_alice.id, T_BOB)).toBe(0);
+        expect(await q.upd_feedback.run(0.9, Date.now(), mem_alice.id, T_BOB)).toBe(0);
+
+        // Ownerless (NULL) record
+        const null_id = "null-owner-db-test";
+        await run_async(
+            "insert into memories(id, user_id, primary_sector, content, created_at, updated_at, last_seen_at, salience) values(?, ?, ?, ?, ?, ?, ?, ?)",
+            [null_id, null, "semantic", "Null owner DB test content", Date.now(), Date.now(), Date.now(), 0.4],
         );
-        expect(items.length).toBe(1);
-        expect(items[0].id).toBe(id);
+        expect(await q.upd_seen.run(Date.now(), 0.9, Date.now(), null_id, T_ALICE)).toBe(0);
+        expect(await q.upd_mem.run("Tampered text", "[]", "{}", Date.now(), null_id, T_ALICE)).toBe(0);
+
+        // Ownership change mid-flight
+        await run_async("update memories set user_id=? where id=?", [T_BOB, mem_alice.id]);
+        expect(await q.upd_seen.run(Date.now(), 0.95, Date.now(), mem_alice.id, T_ALICE)).toBe(0);
+        expect(await q.upd_mem.run("Re-tampered text", "[]", "{}", Date.now(), mem_alice.id, T_ALICE)).toBe(0);
     });
 
     it("openmemory-config resource isolates stats per tenant", async () => {
@@ -454,8 +505,7 @@ describe("MCP per-tenant scoping", () => {
 
     it("run_reflection requires tenant context and reinforces only trusted tenant memories", async () => {
         // 1. Untrusted/tenantless call fails closed
-        const unauth_reflect = await run_reflection();
-        expect(unauth_reflect.reason).toBe("tenant_required");
+        await expect(run_reflection(undefined as any)).rejects.toThrow(/tenant_required/);
 
         // 2. Add memories for Alice to form a cluster (min 2 memories with sim > 0.8)
         const m1 = await add_hsg_memory("Docker container network bridge interface setup step by step configuration guide", undefined, undefined, T_ALICE);

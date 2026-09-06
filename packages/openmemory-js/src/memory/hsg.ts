@@ -480,16 +480,18 @@ export async function create_cross_sector_waypoints(
     prim_id: string,
     prim_sec: string,
     add_secs: string[],
-    user_id?: string | null,
+    user_id: string,
     project_id?: string | null,
 ): Promise<void> {
+    const active_user = user_id?.trim();
+    if (!active_user) throw new Error("tenant_required: create_cross_sector_waypoints requires a user_id");
     const now = Date.now();
     const wt = 0.5;
     for (const sec of add_secs) {
         await q.ins_waypoint.run(
             prim_id,
             `${prim_id}:${sec}`,
-            user_id || "anonymous",
+            active_user,
             project_id || null,
             wt,
             now,
@@ -498,7 +500,7 @@ export async function create_cross_sector_waypoints(
         await q.ins_waypoint.run(
             `${prim_id}:${sec}`,
             prim_id,
-            user_id || "anonymous",
+            active_user,
             project_id || null,
             wt,
             now,
@@ -537,13 +539,12 @@ export async function create_single_waypoint(
     new_id: string,
     new_mean: number[],
     ts: number,
-    user_id?: string | null,
+    user_id: string,
     project_id?: string | null,
 ): Promise<void> {
-    const thresh = 0.75;
-    const mems = user_id
-        ? await q.all_mem_by_user.all(user_id, 1000, 0)
-        : await q.all_mem.all(1000, 0);
+    const active_user = user_id?.trim();
+    if (!active_user) throw new Error("tenant_required: create_single_waypoint requires a user_id");
+    const mems = await q.all_mem_by_user.all(active_user, 1000, 0);
     let best: { id: string; similarity: number } | null = null;
     for (const mem of mems) {
         if (mem.id === new_id || !mem.mean_vec) continue;
@@ -557,7 +558,7 @@ export async function create_single_waypoint(
         await q.ins_waypoint.run(
             new_id,
             best.id,
-            user_id || "anonymous",
+            active_user,
             project_id || null,
             best.similarity,
             ts,
@@ -567,7 +568,7 @@ export async function create_single_waypoint(
         await q.ins_waypoint.run(
             new_id,
             new_id,
-            user_id || "anonymous",
+            active_user,
             project_id || null,
             1.0,
             ts,
@@ -580,12 +581,14 @@ export async function create_inter_mem_waypoints(
     prim_sec: string,
     new_vec: number[],
     ts: number,
-    user_id?: string | null,
+    user_id: string,
     project_id?: string | null,
 ): Promise<void> {
+    const active_user = user_id?.trim();
+    if (!active_user) throw new Error("tenant_required: create_inter_mem_waypoints requires a user_id");
     const thresh = 0.75;
     const wt = 0.5;
-    const vecs = await vector_store.getVectorsBySector(prim_sec);
+    const vecs = await vector_store.getVectorsBySector(prim_sec, active_user);
     for (const vr of vecs) {
         if (vr.id === new_id) continue;
         const ex_vec = vr.vector;
@@ -597,7 +600,7 @@ export async function create_inter_mem_waypoints(
             await q.ins_waypoint.run(
                 new_id,
                 vr.id,
-                user_id || "anonymous",
+                active_user,
                 project_id || null,
                 wt,
                 ts,
@@ -606,7 +609,7 @@ export async function create_inter_mem_waypoints(
             await q.ins_waypoint.run(
                 vr.id,
                 new_id,
-                user_id || "anonymous",
+                active_user,
                 project_id || null,
                 wt,
                 ts,
@@ -619,21 +622,23 @@ export async function create_contextual_waypoints(
     mem_id: string,
     rel_ids: string[],
     base_wt: number = 0.3,
-    user_id?: string | null,
+    user_id?: string,
     project_id?: string | null,
 ): Promise<void> {
+    const active_user = user_id?.trim();
+    if (!active_user) throw new Error("tenant_required: create_contextual_waypoints requires a user_id");
     const now = Date.now();
     for (const rel_id of rel_ids) {
         if (mem_id === rel_id) continue;
-        const existing = await q.get_waypoint.get(mem_id, rel_id);
+        const existing = await q.get_waypoint.get(mem_id, rel_id, active_user);
         if (existing) {
             const new_wt = Math.min(1.0, existing.weight + 0.1);
-            await q.upd_waypoint.run(mem_id, new_wt, now, rel_id);
+            await q.upd_waypoint.run(new_wt, now, mem_id, rel_id, active_user);
         } else {
             await q.ins_waypoint.run(
                 mem_id,
                 rel_id,
-                user_id || "anonymous",
+                active_user,
                 project_id || null,
                 base_wt,
                 now,
@@ -678,10 +683,12 @@ export async function expand_via_waypoints(
 }
 export async function reinforce_waypoints(
     trav_path: string[],
-    user_id?: string,
+    user_id: string,
 ): Promise<void> {
     const active_user = user_id?.trim();
-    if (!active_user) return;
+    if (!active_user) {
+        throw new Error("tenant_required: reinforce_waypoints requires a valid non-empty user_id");
+    }
     const now = Date.now();
     for (let i = 0; i < trav_path.length - 1; i++) {
         const src_id = trav_path[i];
@@ -827,6 +834,11 @@ export async function hsg_query(
         endTime?: number;
     },
 ): Promise<hsg_q_result[]> {
+    const query_user = f?.user_id?.trim();
+    if (!query_user) {
+        throw new Error("tenant_required: hsg_query requires a valid non-empty user_id in filter options");
+    }
+
     if (active_queries >= env.max_active) {
         throw new Error(
             `Rate limit: ${active_queries} active queries (max ${env.max_active})`,
@@ -872,7 +884,7 @@ export async function hsg_query(
                 s,
                 qv,
                 k * 3,
-                f?.user_id,
+                query_user,
                 f?.project_id,
             );
             sr[s] = results.map((r) => ({ id: r.id, similarity: r.score }));
@@ -1023,68 +1035,65 @@ export async function hsg_query(
         const top = top_cands.slice(0, k);
         const tids = top.map((r) => r.id);
 
-        const query_user = f?.user_id?.trim();
-        if (query_user) {
-            for (const r of top) {
-                const cur_fb = (await q.get_mem.get(r.id))?.feedback_score || 0;
-                const new_fb = cur_fb * 0.9 + r.score * 0.1;
-                await q.upd_feedback.run(new_fb, Date.now(), r.id, query_user);
-            }
+        for (const r of top) {
+            const cur_fb = (await q.get_mem.get(r.id))?.feedback_score || 0;
+            const new_fb = cur_fb * 0.9 + r.score * 0.1;
+            await q.upd_feedback.run(new_fb, Date.now(), r.id, query_user);
+        }
 
-            for (let i = 0; i < tids.length; i++) {
-                for (let j = i + 1; j < tids.length; j++) {
-                    const [a, b] = [tids[i], tids[j]].sort();
-                    coact_buf.push([a, b, query_user]);
-                }
+        for (let i = 0; i < tids.length; i++) {
+            for (let j = i + 1; j < tids.length; j++) {
+                const [a, b] = [tids[i], tids[j]].sort();
+                coact_buf.push([a, b, query_user]);
             }
+        }
 
-            for (const r of top) {
-                const rsal = await applyRetrievalTraceReinforcementToMemory(
-                    r.id,
-                    r.salience,
-                );
-                await q.upd_seen.run(Date.now(), rsal, Date.now(), r.id, query_user);
-                if (r.path.length > 1) {
-                    await reinforce_waypoints(r.path, query_user);
-                    const wps = await q.get_waypoints_by_src.all(r.id);
-                    const lns = wps.map((wp: any) => ({
-                        target_id: wp.dst_id,
-                        weight: wp.weight,
-                    }));
-                    const pru =
-                        await propagateAssociativeReinforcementToLinkedNodes(
-                            r.id,
-                            rsal,
-                            lns,
+        for (const r of top) {
+            const rsal = await applyRetrievalTraceReinforcementToMemory(
+                r.id,
+                r.salience,
+            );
+            await q.upd_seen.run(Date.now(), rsal, Date.now(), r.id, query_user);
+            if (r.path.length > 1) {
+                await reinforce_waypoints(r.path, query_user);
+                const wps = await q.get_waypoints_by_src.all(r.id);
+                const lns = wps.map((wp: any) => ({
+                    target_id: wp.dst_id,
+                    weight: wp.weight,
+                }));
+                const pru =
+                    await propagateAssociativeReinforcementToLinkedNodes(
+                        r.id,
+                        rsal,
+                        lns,
+                    );
+                for (const u of pru) {
+                    const linked_mem = await q.get_mem.get(u.node_id);
+                    if (linked_mem && linked_mem.user_id === query_user) {
+                        const time_diff =
+                            (Date.now() - linked_mem.last_seen_at) / 86400000;
+                        const decay_fact = Math.exp(-0.02 * time_diff);
+                        const ctx_boost =
+                            hybrid_params.gamma *
+                            (rsal - linked_mem.salience) *
+                            decay_fact;
+                        const new_sal = Math.max(
+                            0,
+                            Math.min(1, linked_mem.salience + ctx_boost),
                         );
-                    for (const u of pru) {
-                        const linked_mem = await q.get_mem.get(u.node_id);
-                        if (linked_mem && linked_mem.user_id === query_user) {
-                            const time_diff =
-                                (Date.now() - linked_mem.last_seen_at) / 86400000;
-                            const decay_fact = Math.exp(-0.02 * time_diff);
-                            const ctx_boost =
-                                hybrid_params.gamma *
-                                (rsal - linked_mem.salience) *
-                                decay_fact;
-                            const new_sal = Math.max(
-                                0,
-                                Math.min(1, linked_mem.salience + ctx_boost),
-                            );
-                            await q.upd_seen.run(
-                                Date.now(),
-                                new_sal,
-                                Date.now(),
-                                u.node_id,
-                                query_user,
-                            );
-                        }
+                        await q.upd_seen.run(
+                            Date.now(),
+                            new_sal,
+                            Date.now(),
+                            u.node_id,
+                            query_user,
+                        );
                     }
                 }
             }
         }
 
-        // Process on_query_hit callbacks with bounded concurrency (limit: 5)
+        // Process on_query_hit callbacks for authenticated query hits with bounded concurrency (limit: 5)
         const processBatched = async <T>(
             items: T[],
             concurrency: number,
@@ -1109,12 +1118,14 @@ export async function hsg_query(
         dec_q();
     }
 }
-export async function run_decay_process(user_id?: string): Promise<{
+export async function run_decay_process(user_id: string): Promise<{
     processed: number;
     decayed: number;
 }> {
     const active_user = user_id?.trim();
-    if (!active_user) return { processed: 0, decayed: 0 };
+    if (!active_user) {
+        throw new Error("tenant_required: run_decay_process requires a valid non-empty user_id");
+    }
 
     const mems = await q.all_mem_by_user.all(active_user, 10000, 0);
     let p = 0,
@@ -1162,15 +1173,17 @@ export async function add_hsg_memory(
     chunks?: number;
     deduplicated?: boolean;
 }> {
-    const active_user = user_id?.trim() || "anonymous";
+    const active_user = user_id?.trim();
+    if (!active_user) {
+        throw new Error("tenant_required: add_hsg_memory requires an authenticated non-empty user_id");
+    }
+
     const simhash = compute_simhash(content);
     const existing = await q.get_mem_by_simhash.get(simhash, active_user);
     if (existing && existing.user_id === active_user && hamming_dist(simhash, existing.simhash) <= 3) {
         const now = Date.now();
         const boosted_sal = Math.min(1, existing.salience + 0.15);
-        if (active_user !== "anonymous") {
-            await q.upd_seen.run(now, boosted_sal, now, existing.id, active_user);
-        }
+        await q.upd_seen.run(now, boosted_sal, now, existing.id, active_user);
         return {
             id: existing.id,
             primary_sector: existing.primary_sector,
@@ -1181,9 +1194,7 @@ export async function add_hsg_memory(
     const id = crypto.randomUUID();
     const now = Date.now();
 
-    if (user_id) {
-        await ensure_user_exists(user_id);
-    }
+    await ensure_user_exists(active_user);
 
     const chunks = chunk_text(content);
     const use_chunking = chunks.length > 1;
@@ -1214,7 +1225,7 @@ export async function add_hsg_memory(
         );
         await q.ins_mem.run(
             id,
-            user_id || "anonymous",
+            active_user,
             project_id || null,
             cur_seg,
             stored_content,
@@ -1245,7 +1256,7 @@ export async function add_hsg_memory(
                 result.sector,
                 result.vector,
                 result.dim,
-                user_id || "anonymous",
+                active_user,
                 project_id || undefined,
             );
         }
@@ -1259,7 +1270,7 @@ export async function add_hsg_memory(
             await q.upd_compressed_vec.run(comp_buf, id);
         }
 
-        await create_single_waypoint(id, mean_vec, now, user_id, project_id);
+        await create_single_waypoint(id, mean_vec, now, active_user, project_id);
         await transaction.commit();
         return {
             id,
@@ -1272,15 +1283,16 @@ export async function add_hsg_memory(
         throw error;
     }
 }
-export async function delete_memory(id: string): Promise<boolean> {
+export async function delete_memory(id: string, user_id?: string): Promise<boolean> {
     const mem = await q.get_mem.get(id);
     if (!mem) return false;
+    const active_user = user_id?.trim() || mem.user_id;
+    if (mem.user_id && mem.user_id !== active_user) return false;
     await transaction.begin();
     try {
-        const user_id = mem.user_id || "anonymous";
-        await q.del_mem.run(id, user_id);
-        await q.del_waypoints.run(id, id, user_id);
-        await vector_store.deleteVectors(id, mem.user_id || undefined);
+        await q.del_mem.run(id, active_user);
+        await q.del_waypoints.run(id, id, active_user);
+        await vector_store.deleteVectors(id, active_user || undefined);
         await transaction.commit();
         return true;
     } catch (error) {
