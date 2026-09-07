@@ -10,14 +10,16 @@ import { beforeEach, describe, expect, it } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { create_mcp_srv, start_mcp_stdio, derive_mcp_tenant_id } from "../src/ai/mcp";
-import { reinforce_memory, add_hsg_memory, hsg_query, update_memory, delete_memory, expand_via_waypoints } from "../src/memory/hsg";
+import { reinforce_memory, add_hsg_memory, hsg_query, update_memory, delete_memory, expand_via_waypoints, process_pending_vector_outbox } from "../src/memory/hsg";
 import { run_reflection } from "../src/memory/reflect";
-import { run_async, q } from "../src/core/db";
+import { run_async, q, vector_store, all_async, init_db } from "../src/core/db";
+import { spyOn } from "bun:test";
 
 const T_ALICE = "tenant-alice-mcp";
 const T_BOB = "tenant-bob-mcp";
 
 async function cleanup() {
+    await init_db();
     await run_async(`DELETE FROM memories`);
     try {
         await run_async(`DELETE FROM vectors`);
@@ -31,6 +33,11 @@ async function cleanup() {
     }
     try {
         await run_async(`DELETE FROM waypoints`);
+    } catch {
+        /* schema variant */
+    }
+    try {
+        await run_async(`DELETE FROM vector_outbox`);
     } catch {
         /* schema variant */
     }
@@ -261,7 +268,28 @@ describe("MCP per-tenant scoping", () => {
         // 6. Authorized delete_memory by Alice succeeds
         expect(await delete_memory(mem_alice.id, T_ALICE)).toBe(true);
         expect(await q.get_mem.get(mem_alice.id)).toBeUndefined();
-    }, 20000);
+
+        // 7. Fault-injection & Outbox recovery: simulate vector_store failure during delete_memory
+        const mem_outbox = await add_hsg_memory("Memory for outbox recovery test", undefined, undefined, T_ALICE);
+        const spyDel = spyOn(vector_store, "deleteVectors").mockImplementationOnce(() =>
+            Promise.reject(new Error("Simulated Valkey vector network disconnect")),
+        );
+
+        // Relational deletion commits and outbox tombstone is logged
+        expect(await delete_memory(mem_outbox.id, T_ALICE)).toBe(true);
+        expect(await q.get_mem.get(mem_outbox.id)).toBeUndefined();
+
+        const outbox_failed = await all_async("select * from vector_outbox where id=? and user_id=?", [mem_outbox.id, T_ALICE]);
+        expect(outbox_failed.length).toBeGreaterThan(0);
+        expect(outbox_failed[0].status).toBe("failed");
+        spyDel.mockRestore();
+
+        // Outbox retry worker processes outbox item and converges to completed
+        const recovered = await process_pending_vector_outbox();
+        expect(recovered).toBeGreaterThan(0);
+        const outbox_done = await all_async("select * from vector_outbox where id=? and user_id=?", [mem_outbox.id, T_ALICE]);
+        expect(outbox_done[0].status).toBe("completed");
+    }, 30000);
 
     it("isolates cross-tenant waypoints and path expansion in expand_via_waypoints", async () => {
         const mem_alice_src = await add_hsg_memory("Alice source node", undefined, undefined, T_ALICE);

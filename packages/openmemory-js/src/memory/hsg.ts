@@ -1309,6 +1309,49 @@ export async function add_hsg_memory(
         throw error;
     }
 }
+export async function process_pending_vector_outbox(): Promise<number> {
+    const pending = await all_async(
+        "select * from vector_outbox where status = 'pending' or (status = 'failed' and attempts < 5) order by created_at asc limit 50",
+    );
+    let processed = 0;
+    for (const item of pending) {
+        if (!item.id || !item.user_id) continue;
+        try {
+            if (item.action === "delete") {
+                await vector_store.deleteVectors(item.id, item.user_id);
+            } else if (item.action === "reindex") {
+                const mem = await q.get_mem.get(item.id);
+                if (mem && mem.user_id === item.user_id) {
+                    const sectors = item.sectors ? JSON.parse(item.sectors) : [mem.primary_sector];
+                    const chunks = chunk_text(mem.content);
+                    const emb_res = await embedMultiSector(
+                        mem.id,
+                        mem.content,
+                        sectors,
+                        chunks.length > 1 ? chunks : undefined,
+                    );
+                    await vector_store.deleteVectors(mem.id, item.user_id);
+                    for (const result of emb_res) {
+                        await vector_store.storeVector(
+                            mem.id,
+                            result.sector,
+                            result.vector,
+                            result.dim,
+                            item.user_id,
+                            mem.project_id || undefined,
+                        );
+                    }
+                }
+            }
+            await q.mark_outbox_completed.run(item.id, item.user_id, item.action);
+            processed++;
+        } catch (e: any) {
+            await q.mark_outbox_failed.run(item.id, item.user_id, item.action, String(e?.message || e));
+        }
+    }
+    return processed;
+}
+
 export async function delete_memory(id: string, user_id: string): Promise<boolean> {
     const active_user = user_id?.trim();
     if (!active_user) {
@@ -1321,6 +1364,7 @@ export async function delete_memory(id: string, user_id: string): Promise<boolea
     try {
         await q.del_mem.run(id, active_user);
         await q.del_waypoints.run(id, id, active_user);
+        await q.enqueue_outbox.run(id, active_user, "delete", null);
         await transaction.commit();
     } catch (error) {
         await transaction.rollback();
@@ -1329,8 +1373,10 @@ export async function delete_memory(id: string, user_id: string): Promise<boolea
 
     try {
         await vector_store.deleteVectors(id, active_user);
+        await q.mark_outbox_completed.run(id, active_user, "delete");
     } catch (vectorError) {
-        console.error(`[HSG] Vector deletion failed for memory ${id}:`, vectorError);
+        await q.mark_outbox_failed.run(id, active_user, "delete", String((vectorError as Error)?.message || vectorError));
+        console.error("[HSG] Vector deletion failed for memory", id, "err:", vectorError);
     }
 
     return true;
@@ -1407,8 +1453,9 @@ export async function update_memory(
                 id,
                 active_user,
             );
+            await q.enqueue_outbox.run(id, active_user, "reindex", JSON.stringify(all_sectors));
             const batchResults = await transaction.commit();
-            const mainUpdateResult = batchResults[batchResults.length - 1];
+            const mainUpdateResult = batchResults[batchResults.length - 2];
             if (!mainUpdateResult || mainUpdateResult.rowsAffected === 0) {
                 throw new Error(`Memory ${id} not found or ownership changed`);
             }
@@ -1428,8 +1475,10 @@ export async function update_memory(
                     active_user,
                 );
             }
+            await q.mark_outbox_completed.run(id, active_user, "reindex");
         } catch (vectorError) {
-            console.error(`[HSG] Vector update failed for memory ${id}:`, vectorError);
+            await q.mark_outbox_failed.run(id, active_user, "reindex", String((vectorError as Error)?.message || vectorError));
+            console.error("[HSG] Vector update failed for memory", id, "err:", vectorError);
         }
     } else {
         await transaction.begin();
