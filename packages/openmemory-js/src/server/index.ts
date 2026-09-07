@@ -1,5 +1,6 @@
 import { server } from "./server";
 import { env, tier } from "../core/config";
+import { init_db } from "../core/db";
 import { run_decay_process_all_tenants, prune_weak_waypoints, process_pending_vector_outbox } from "../memory/hsg";
 import { mcp } from "../ai/mcp";
 import { routes } from "./routes";
@@ -34,6 +35,11 @@ const ASC = `   ____                   __  __
         |_|                                                |___/ `;
 
 const app = server({ max_payload_size: env.max_payload_size });
+
+await init_db().catch((err) => {
+    console.error("[FATAL] DB schema initialization failed:", err);
+    process.exit(1);
+});
 
 console.log(ASC);
 console.log(`[CONFIG] Vector Dimension: ${env.vec_dim}`);
