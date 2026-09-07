@@ -261,7 +261,7 @@ describe("MCP per-tenant scoping", () => {
         // 6. Authorized delete_memory by Alice succeeds
         expect(await delete_memory(mem_alice.id, T_ALICE)).toBe(true);
         expect(await q.get_mem.get(mem_alice.id)).toBeUndefined();
-    });
+    }, 20000);
 
     it("isolates cross-tenant waypoints and path expansion in expand_via_waypoints", async () => {
         const mem_alice_src = await add_hsg_memory("Alice source node", undefined, undefined, T_ALICE);

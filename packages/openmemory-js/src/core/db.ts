@@ -17,8 +17,8 @@ export { DEFAULT_VECTOR_TABLE };
 
 type q_type = {
     ins_mem: { run: (...p: any[]) => Promise<void> };
-    upd_mean_vec: { run: (...p: any[]) => Promise<void> };
-    upd_compressed_vec: { run: (...p: any[]) => Promise<void> };
+    upd_mean_vec: { run: (mean_dim: number, mean_vec: Buffer, id: string, user_id: string) => Promise<number> };
+    upd_compressed_vec: { run: (compressed_vec: Buffer, id: string, user_id: string) => Promise<number> };
     upd_feedback: { run: (feedback_score: number, updated_at: number, id: string, user_id: string) => Promise<number> };
     upd_seen: { run: (last_seen_at: number, salience: number, updated_at: number, id: string, user_id: string) => Promise<number> };
     upd_mem: { run: (content: string, tags: string, meta: string, updated_at: number, id: string, user_id: string) => Promise<number> };
@@ -328,12 +328,24 @@ export const q: q_type = {
         },
     },
     upd_mean_vec: {
-        run: (...p) =>
-            exec("update memories set mean_dim=?,mean_vec=? where id=?", p),
+        run: (mean_dim: number, mean_vec: Buffer, id: string, user_id: string) => {
+            const active_user = user_id?.trim();
+            if (!active_user) return Promise.resolve(0);
+            return run_affected_async(
+                "update memories set mean_dim=?,mean_vec=? where id=? and user_id=?",
+                [mean_dim, mean_vec, id, active_user],
+            );
+        },
     },
     upd_compressed_vec: {
-        run: (...p) =>
-            exec("update memories set compressed_vec=? where id=?", p),
+        run: (compressed_vec: Buffer, id: string, user_id: string) => {
+            const active_user = user_id?.trim();
+            if (!active_user) return Promise.resolve(0);
+            return run_affected_async(
+                "update memories set compressed_vec=? where id=? and user_id=?",
+                [compressed_vec, id, active_user],
+            );
+        },
     },
     upd_feedback: {
         run: (feedback_score: number, updated_at: number, id: string, user_id: string) => {

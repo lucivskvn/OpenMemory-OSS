@@ -1288,12 +1288,12 @@ export async function add_hsg_memory(
         }
         const mean_vec = calc_mean_vec(emb_res, all_sectors);
         const mean_vec_buf = vectorToBuffer(mean_vec);
-        await q.upd_mean_vec.run(mean_vec.length, mean_vec_buf, id);
+        await q.upd_mean_vec.run(mean_vec.length, mean_vec_buf, id, active_user);
 
         if (tier === "smart" && mean_vec.length > 128) {
             const comp = compress_vec_for_storage(mean_vec, 128);
             const comp_buf = vectorToBuffer(comp);
-            await q.upd_compressed_vec.run(comp_buf, id);
+            await q.upd_compressed_vec.run(comp_buf, id, active_user);
         }
 
         await create_single_waypoint(id, mean_vec, now, active_user, project_id);
@@ -1316,17 +1316,24 @@ export async function delete_memory(id: string, user_id: string): Promise<boolea
     }
     const mem = await q.get_mem.get(id);
     if (!mem || mem.user_id !== active_user) return false;
+
     await transaction.begin();
     try {
         await q.del_mem.run(id, active_user);
         await q.del_waypoints.run(id, id, active_user);
-        await vector_store.deleteVectors(id, active_user);
         await transaction.commit();
-        return true;
     } catch (error) {
         await transaction.rollback();
         throw error;
     }
+
+    try {
+        await vector_store.deleteVectors(id, active_user);
+    } catch (vectorError) {
+        console.error(`[HSG] Vector deletion failed for memory ${id}:`, vectorError);
+    }
+
+    return true;
 }
 export async function reinforce_memory(
     id: string,
@@ -1368,37 +1375,29 @@ export async function update_memory(
         throw new Error(`Memory ${id} not found`);
     }
     const new_content = content !== undefined ? content : mem.content;
-    const new_tags = tags !== undefined ? j(tags) : mem.tags || "[]";
+    const new_tags = tags !== undefined ? (typeof tags === "string" ? tags : j(tags)) : mem.tags || "[]";
     const new_meta = metadata !== undefined ? j(metadata) : mem.meta || "{}";
-    await transaction.begin();
-    try {
-        if (content !== undefined && content !== mem.content) {
-            const chunks = chunk_text(new_content);
-            const use_chunking = chunks.length > 1;
-            const classification = classify_content(new_content, metadata);
-            const all_sectors = [
-                classification.primary,
-                ...classification.additional,
-            ];
-            await vector_store.deleteVectors(id, active_user);
-            const emb_res = await embedMultiSector(
-                id,
-                new_content,
-                all_sectors,
-                use_chunking ? chunks : undefined,
-            );
-            for (const result of emb_res) {
-                await vector_store.storeVector(
-                    id,
-                    result.sector,
-                    result.vector,
-                    result.dim,
-                    active_user,
-                );
-            }
-            const mean_vec = calc_mean_vec(emb_res, all_sectors);
-            const mean_vec_buf = vectorToBuffer(mean_vec);
-            await q.upd_mean_vec.run(mean_vec.length, mean_vec_buf, id);
+
+    if (content !== undefined && content !== mem.content) {
+        const chunks = chunk_text(new_content);
+        const use_chunking = chunks.length > 1;
+        const classification = classify_content(new_content, metadata);
+        const all_sectors = [
+            classification.primary,
+            ...classification.additional,
+        ];
+        const emb_res = await embedMultiSector(
+            id,
+            new_content,
+            all_sectors,
+            use_chunking ? chunks : undefined,
+        );
+        const mean_vec = calc_mean_vec(emb_res, all_sectors);
+        const mean_vec_buf = vectorToBuffer(mean_vec);
+
+        await transaction.begin();
+        try {
+            await q.upd_mean_vec.run(mean_vec.length, mean_vec_buf, id, active_user);
             await q.upd_mem_with_sector.run(
                 new_content,
                 classification.primary,
@@ -1408,7 +1407,33 @@ export async function update_memory(
                 id,
                 active_user,
             );
-        } else {
+            const batchResults = await transaction.commit();
+            const mainUpdateResult = batchResults[batchResults.length - 1];
+            if (!mainUpdateResult || mainUpdateResult.rowsAffected === 0) {
+                throw new Error(`Memory ${id} not found or ownership changed`);
+            }
+        } catch (error) {
+            await transaction.rollback();
+            throw error;
+        }
+
+        try {
+            await vector_store.deleteVectors(id, active_user);
+            for (const result of emb_res) {
+                await vector_store.storeVector(
+                    id,
+                    result.sector,
+                    result.vector,
+                    result.dim,
+                    active_user,
+                );
+            }
+        } catch (vectorError) {
+            console.error(`[HSG] Vector update failed for memory ${id}:`, vectorError);
+        }
+    } else {
+        await transaction.begin();
+        try {
             await q.upd_mem.run(
                 new_content,
                 new_tags,
@@ -1417,16 +1442,16 @@ export async function update_memory(
                 id,
                 active_user,
             );
+            const batchResults = await transaction.commit();
+            const mainUpdateResult = batchResults[batchResults.length - 1];
+            if (!mainUpdateResult || mainUpdateResult.rowsAffected === 0) {
+                throw new Error(`Memory ${id} not found or ownership changed`);
+            }
+        } catch (error) {
+            await transaction.rollback();
+            throw error;
         }
-        const batchResults = await transaction.commit();
-        const mainUpdateResult = batchResults[batchResults.length - 1];
-        const affected = mainUpdateResult?.rowsAffected ?? 0;
-        if (affected === 0) {
-            throw new Error(`Memory ${id} not found or update failed`);
-        }
-        return { id, updated: true };
-    } catch (error) {
-        await transaction.rollback();
-        throw error;
     }
+
+    return { id, updated: true };
 }
