@@ -263,7 +263,6 @@ export function dynroutes(app: any) {
                 )
             )
                 return;
-
             try {
                 const query_text_content_from_request = b.query;
                 const query_sector_type_from_request = b.sector || "semantic";
