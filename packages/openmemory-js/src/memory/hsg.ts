@@ -1227,40 +1227,47 @@ export async function add_hsg_memory(
     const use_chunking = chunks.length > 1;
     const classification = classify_content(content, metadata);
     const all_sectors = [classification.primary, ...classification.additional];
-    await transaction.begin();
-    try {
-        const max_seg_res = await q.get_max_segment.get();
-        let cur_seg = max_seg_res?.max_seg ?? 0;
-        const seg_cnt_res = await q.get_segment_count.get(cur_seg);
-        const seg_cnt = seg_cnt_res?.c ?? 0;
-        if (seg_cnt >= env.seg_size) {
-            cur_seg++;
 
-            console.error(
-                `[HSG] Rotated to segment ${cur_seg} (previous segment full: ${seg_cnt} memories)`,
-            );
-        }
-        const stored_content = extract_essence(
-            content,
-            classification.primary,
-            env.summary_max_length,
+    const max_seg_res = await q.get_max_segment.get();
+    let cur_seg = max_seg_res?.max_seg ?? 0;
+    const seg_cnt_res = await q.get_segment_count.get(cur_seg);
+    const seg_cnt = seg_cnt_res?.c ?? 0;
+    if (seg_cnt >= env.seg_size) {
+        cur_seg++;
+
+        console.error(
+            `[HSG] Rotated to segment ${cur_seg} (previous segment full: ${seg_cnt} memories)`,
         );
-        const sec_cfg = sector_configs[classification.primary];
-        const init_sal = Math.max(
-            0,
-            Math.min(1, 0.4 + 0.1 * classification.additional.length),
-        );
-        const tags_str = typeof tags === "string" ? tags : tags ? j(tags) : null;
-        await q.ins_mem.run(
+    }
+    const stored_content = extract_essence(
+        content,
+        classification.primary,
+        env.summary_max_length,
+    );
+    const sec_cfg = sector_configs[classification.primary];
+    const init_sal = Math.max(
+        0,
+        Math.min(1, 0.4 + 0.1 * classification.additional.length),
+    );
+    const tags_str = typeof tags === "string" ? tags : tags ? j(tags) : null;
+    const meta_str = JSON.stringify(metadata || {});
+
+    const job_id = crypto.randomUUID();
+    const owner_token = crypto.randomUUID();
+
+    const tx = begin_tx();
+    tx.exec(
+        "insert into memories(id,user_id,project_id,segment,content,simhash,primary_sector,tags,meta,created_at,updated_at,last_seen_at,salience,decay_lambda,version,mean_dim,mean_vec,compressed_vec,feedback_score) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [
             id,
             active_user,
             project_id || null,
             cur_seg,
-            stored_content,
+            encrypt(stored_content),
             simhash,
             classification.primary,
             tags_str,
-            JSON.stringify(metadata || {}),
+            encrypt(meta_str),
             now,
             now,
             now,
@@ -1271,13 +1278,28 @@ export async function add_hsg_memory(
             null,
             null,
             0,
-        );
+        ],
+    );
+    tx.exec(
+        "insert into vector_outbox(job_id, id, user_id, action, sectors, status, created_at, updated_at) values(?, ?, ?, 'create', ?, 'pending', ?, ?)",
+        [job_id, id, active_user, JSON.stringify(all_sectors), now, now],
+    );
+
+    const batchResults = await tx.commit();
+    const insMemResult = batchResults[0];
+    if (!insMemResult || insMemResult.rowsAffected === 0) {
+        throw new Error("Failed to insert memory into database");
+    }
+
+    try {
         const emb_res = await embedMultiSector(
             id,
             content,
             all_sectors,
             use_chunking ? chunks : undefined,
         );
+
+        await q.claim_outbox_job.run(job_id, owner_token);
         for (const result of emb_res) {
             await vector_store.storeVector(
                 id,
@@ -1299,21 +1321,24 @@ export async function add_hsg_memory(
         }
 
         await create_single_waypoint(id, mean_vec, now, active_user, project_id);
-        await transaction.commit();
-        return {
-            id,
-            primary_sector: classification.primary,
-            sectors: all_sectors,
-            chunks: chunks.length,
-        };
-    } catch (error) {
-        await transaction.rollback();
-        throw error;
+        await q.mark_outbox_completed.run(job_id, owner_token);
+    } catch (vectorError) {
+        await q.mark_outbox_failed.run(job_id, owner_token, String((vectorError as Error)?.message || vectorError));
+        console.error("[HSG] Vector embedding/store failed for memory", id, "err:", vectorError);
     }
+
+    return {
+        id,
+        primary_sector: classification.primary,
+        sectors: all_sectors,
+        chunks: chunks.length,
+    };
 }
 export async function process_pending_vector_outbox(): Promise<number> {
+    const now_ts = Date.now();
     const pending = await all_async(
-        "select * from vector_outbox where status = 'pending' or (status = 'failed' and attempts < 5) order by created_at asc limit 50",
+        "select * from vector_outbox where status = 'pending' or (status = 'failed' and attempts < 5) or (status = 'processing' and lease_expires_at < ?) order by created_at asc limit 50",
+        [now_ts],
     );
     let processed = 0;
     for (const item of pending) {
@@ -1325,7 +1350,7 @@ export async function process_pending_vector_outbox(): Promise<number> {
         try {
             if (item.action === "delete") {
                 await vector_store.deleteVectors(item.id, item.user_id);
-            } else if (item.action === "reindex") {
+            } else if (item.action === "create" || item.action === "reindex") {
                 const mem = await q.get_mem.get(item.id);
                 if (mem && mem.user_id === item.user_id) {
                     const sectors = item.sectors ? JSON.parse(item.sectors) : [mem.primary_sector];
@@ -1336,7 +1361,9 @@ export async function process_pending_vector_outbox(): Promise<number> {
                         sectors,
                         chunks.length > 1 ? chunks : undefined,
                     );
-                    await vector_store.deleteVectors(mem.id, item.user_id);
+                    if (item.action === "reindex") {
+                        await vector_store.deleteVectors(mem.id, item.user_id);
+                    }
                     for (const result of emb_res) {
                         await vector_store.storeVector(
                             mem.id,

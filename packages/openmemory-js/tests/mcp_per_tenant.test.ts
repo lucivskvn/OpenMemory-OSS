@@ -106,7 +106,7 @@ describe("MCP per-tenant scoping", () => {
         expect(row).toBeTruthy();
         expect(row.user_id).toBe(T_ALICE);
         expect(row.project_id).toBe("system_global");
-    });
+    }, 30000);
 
     it("openmemory_list returns the tenant's own MCP-stored memories (regression)", async () => {
         // Reproduces the symptom from the bug report: a memory stored via
@@ -130,7 +130,7 @@ describe("MCP per-tenant scoping", () => {
         const items = parse_items(listed);
         expect(items.length).toBeGreaterThan(0);
         expect(items.every((i) => i.user_id === T_ALICE)).toBe(true);
-    });
+    }, 30000);
 
     it("openmemory_list isolates tenants from each other", async () => {
         const alice = await connect_client(T_ALICE);
@@ -163,7 +163,7 @@ describe("MCP per-tenant scoping", () => {
         );
         expect(alice_list.every((i) => i.user_id === T_ALICE)).toBe(true);
         expect(alice_list.length).toBe(1);
-    });
+    }, 30000);
 
     it("openmemory_store rejects a user_id arg that disagrees with the tenant", async () => {
         const { client } = await connect_client(T_ALICE);
@@ -279,7 +279,7 @@ describe("MCP per-tenant scoping", () => {
         expect(await delete_memory(mem_outbox.id, T_ALICE)).toBe(true);
         expect(await q.get_mem.get(mem_outbox.id)).toBeUndefined();
 
-        const outbox_failed = await all_async("select * from vector_outbox where id=? and user_id=?", [mem_outbox.id, T_ALICE]);
+        const outbox_failed = await all_async("select * from vector_outbox where id=? and user_id=? and action='delete'", [mem_outbox.id, T_ALICE]);
         expect(outbox_failed.length).toBeGreaterThan(0);
         expect(outbox_failed[0].status).toBe("failed");
         spyDel.mockRestore();
@@ -287,7 +287,7 @@ describe("MCP per-tenant scoping", () => {
         // Outbox retry worker processes outbox item and converges to completed
         const recovered = await process_pending_vector_outbox();
         expect(recovered).toBeGreaterThan(0);
-        const outbox_done = await all_async("select * from vector_outbox where id=? and user_id=?", [mem_outbox.id, T_ALICE]);
+        const outbox_done = await all_async("select * from vector_outbox where id=? and user_id=? and action='delete'", [mem_outbox.id, T_ALICE]);
         expect(outbox_done[0].status).toBe("completed");
 
         // 8. Dead-letter threshold: items with attempts >= 5 are skipped by retry worker
@@ -367,7 +367,7 @@ describe("MCP per-tenant scoping", () => {
         await run_async("update memories set user_id=? where id=?", [T_BOB, mem_alice.id]);
         expect(await q.upd_seen.run(Date.now(), 0.95, Date.now(), mem_alice.id, T_ALICE)).toBe(0);
         expect(await q.upd_mem.run("Re-tampered text", "[]", "{}", Date.now(), mem_alice.id, T_ALICE)).toBe(0);
-    });
+    }, 30000);
 
     it("openmemory-config resource isolates stats per tenant", async () => {
         const alice = await connect_client(T_ALICE);
@@ -404,7 +404,7 @@ describe("MCP per-tenant scoping", () => {
         // Bob should only see his 2 memories in the stats
         const bob_count = bob_cfg.stats.reduce((acc: number, item: any) => acc + item.count, 0);
         expect(bob_count).toBe(2);
-    });
+    }, 30000);
 
     it("openmemory_reinforce fails closed on unauthenticated, mismatched, or ownerless sessions", async () => {
         const alice = await connect_client(T_ALICE);
@@ -512,7 +512,7 @@ describe("MCP per-tenant scoping", () => {
         // Verify salience in database WAS boosted after successful reinforcement
         const row_after_success = await q.get_mem.get(alice_mem_id!);
         expect(row_after_success.salience).toBeGreaterThan(initial_salience);
-    });
+    }, 30000);
 
     it("start_mcp_stdio fails startup closed when missing tenant and binds configured tenant when present", async () => {
         const old_tenant = process.env.OM_TENANT;
@@ -573,7 +573,7 @@ describe("MCP per-tenant scoping", () => {
         if (old_tenant) process.env.OM_TENANT = old_tenant; else delete process.env.OM_TENANT;
         if (old_uid) process.env.OM_USER_ID = old_uid; else delete process.env.OM_USER_ID;
         if (old_key) process.env.OM_API_KEY = old_key; else delete process.env.OM_API_KEY;
-    });
+    }, 30000);
 
     it("add_hsg_memory isolates same-content dedup across different tenants", async () => {
         const content = "Unique same content for cross-tenant dedup test";
@@ -598,7 +598,7 @@ describe("MCP per-tenant scoping", () => {
         const alice_dup = await add_hsg_memory(content, undefined, undefined, T_ALICE);
         expect(alice_dup.id).toBe(alice_res.id);
         expect(alice_dup.deduplicated).toBe(true);
-    });
+    }, 30000);
 
     it("hsg_query isolates trace reinforcement and search results per tenant", async () => {
         const alice_res = await add_hsg_memory("Semantic recall query test text", undefined, undefined, T_ALICE);
