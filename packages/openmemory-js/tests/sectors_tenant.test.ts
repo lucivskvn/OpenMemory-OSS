@@ -3,6 +3,7 @@ import { sys } from "../src/server/routes/system";
 import { dash } from "../src/server/routes/dashboard";
 import { dynroutes } from "../src/server/routes/dynamics";
 import { run_async, q, all_async } from "../src/core/db";
+import { delete_memory } from "../src/memory/hsg";
 
 async function cleanup() {
     await run_async(`DELETE FROM memories`);
@@ -126,6 +127,23 @@ describe("Sectors route tenant scoping", () => {
         const bob_stats = bob_res_json.stats;
         expect(bob_stats).toHaveLength(1);
         expect(bob_stats[0].sector).toBe("semantic");
+    });
+});
+
+describe("delete_memory tenant isolation", () => {
+    beforeEach(cleanup);
+
+    it("rejects deletion by a non-owner", async () => {
+        const owner = "tenant-bob";
+        await q.ins_mem.run(
+            "mem-bob-delete-test", owner, null, 0, "Bob secret memory", null,
+            "semantic", null, null, Date.now(), Date.now(), Date.now(), 0.8,
+            0.01, 1, null, null, null, 0,
+        );
+        expect(await delete_memory("mem-bob-delete-test", "tenant-alice")).toBe(false);
+        expect(await q.get_mem.get("mem-bob-delete-test")).toBeTruthy();
+        expect(await delete_memory("mem-bob-delete-test", owner)).toBe(true);
+        expect(await q.get_mem.get("mem-bob-delete-test")).toBeUndefined();
     });
 });
 
