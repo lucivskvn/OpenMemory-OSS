@@ -179,7 +179,9 @@ class MemoryCompressionEngine:
         }
 
     def hash(self, t: str) -> str:
-        return hashlib.md5(t.encode("utf-8")).hexdigest()[:16]
+        # This is a cache/deduplication key, not a security credential.  Use a
+        # modern digest nonetheless so quality gates do not normalize weak hashes.
+        return hashlib.sha256(t.encode("utf-8")).hexdigest()[:16]
 
     def up(self, m):
         self.stats["total"] += 1
