@@ -329,30 +329,37 @@ export const init_db = async () => {
             if (!has_job_id || !has_owner_token) {
                 console.warn("[DB] Migrating vector_outbox table to new schema with preserved data...");
                 try {
-                    await _exec_direct(`
-                        create table vector_outbox_new(
-                            job_id text primary key,
-                            id text not null,
-                            user_id text not null,
-                            action text not null,
-                            sectors text,
-                            status text not null default 'pending',
-                            attempts integer default 0,
-                            version integer default 1,
-                            owner_token text,
-                            lease_expires_at integer default 0,
-                            last_error text,
-                            created_at integer not null,
-                            updated_at integer not null
-                        )
-                    `);
-
                     const oldRows = await all_async_direct("select * from vector_outbox");
+                    const migrationStmts: InStatement[] = [
+                        {
+                            sql: `create table vector_outbox_new(
+                                job_id text primary key,
+                                id text not null,
+                                user_id text not null,
+                                action text not null,
+                                sectors text,
+                                status text not null default 'pending',
+                                attempts integer default 0,
+                                version integer default 1,
+                                owner_token text,
+                                lease_expires_at integer default 0,
+                                last_error text,
+                                created_at integer not null,
+                                updated_at integer not null
+                            )`,
+                            args: [],
+                        },
+                    ];
+
                     for (const r of oldRows) {
+                        if (!r.id || !r.user_id || typeof r.user_id !== "string" || !r.user_id.trim()) {
+                            console.warn(`[DB] Quarantining invalid vector_outbox row during migration: job_id=${r.job_id || "missing"}`);
+                            continue;
+                        }
                         const job_id = r.job_id || crypto.randomUUID();
-                        const id = r.id || "unknown";
-                        const user_id = r.user_id || "system";
-                        const action = r.action || "reindex";
+                        const id = r.id;
+                        const user_id = r.user_id.trim();
+                        const action = r.action || "delete";
                         const sectors = r.sectors || null;
                         const status = r.status || "pending";
                         const attempts = typeof r.attempts === "number" ? r.attempts : 0;
@@ -363,14 +370,16 @@ export const init_db = async () => {
                         const created_at = r.created_at || Date.now();
                         const updated_at = r.updated_at || Date.now();
 
-                        await _exec_direct(
-                            "insert into vector_outbox_new(job_id, id, user_id, action, sectors, status, attempts, version, owner_token, lease_expires_at, last_error, created_at, updated_at) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                            [job_id, id, user_id, action, sectors, status, attempts, version, owner_token, lease_expires_at, last_error, created_at, updated_at],
-                        );
+                        migrationStmts.push({
+                            sql: "insert into vector_outbox_new(job_id, id, user_id, action, sectors, status, attempts, version, owner_token, lease_expires_at, last_error, created_at, updated_at) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            args: [job_id, id, user_id, action, sectors, status, attempts, version, owner_token, lease_expires_at, last_error, created_at, updated_at],
+                        });
                     }
 
-                    await _exec_direct("drop table vector_outbox");
-                    await _exec_direct("alter table vector_outbox_new rename to vector_outbox");
+                    migrationStmts.push({ sql: "drop table vector_outbox", args: [] });
+                    migrationStmts.push({ sql: "alter table vector_outbox_new rename to vector_outbox", args: [] });
+
+                    await client.batch(migrationStmts, "write");
                     console.log("[DB] vector_outbox migration completed successfully");
                 } catch (migrationError: any) {
                     console.error("[DB] vector_outbox migration failed:", migrationError.message);
