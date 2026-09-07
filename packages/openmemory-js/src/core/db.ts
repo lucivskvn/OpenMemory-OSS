@@ -327,10 +327,63 @@ export const init_db = async () => {
             const has_job_id = outboxInfo.some((c: any) => c.name === "job_id");
             const has_owner_token = outboxInfo.some((c: any) => c.name === "owner_token");
             if (!has_job_id || !has_owner_token) {
-                await _exec_direct("drop table vector_outbox");
+                console.warn("[DB] Migrating vector_outbox table to new schema with preserved data...");
+                try {
+                    await _exec_direct(`
+                        create table vector_outbox_new(
+                            job_id text primary key,
+                            id text not null,
+                            user_id text not null,
+                            action text not null,
+                            sectors text,
+                            status text not null default 'pending',
+                            attempts integer default 0,
+                            version integer default 1,
+                            owner_token text,
+                            lease_expires_at integer default 0,
+                            last_error text,
+                            created_at integer not null,
+                            updated_at integer not null
+                        )
+                    `);
+
+                    const oldRows = await all_async_direct("select * from vector_outbox");
+                    for (const r of oldRows) {
+                        const job_id = r.job_id || crypto.randomUUID();
+                        const id = r.id || "unknown";
+                        const user_id = r.user_id || "system";
+                        const action = r.action || "reindex";
+                        const sectors = r.sectors || null;
+                        const status = r.status || "pending";
+                        const attempts = typeof r.attempts === "number" ? r.attempts : 0;
+                        const version = typeof r.version === "number" ? r.version : 1;
+                        const owner_token = r.owner_token || null;
+                        const lease_expires_at = typeof r.lease_expires_at === "number" ? r.lease_expires_at : 0;
+                        const last_error = r.last_error || null;
+                        const created_at = r.created_at || Date.now();
+                        const updated_at = r.updated_at || Date.now();
+
+                        await _exec_direct(
+                            "insert into vector_outbox_new(job_id, id, user_id, action, sectors, status, attempts, version, owner_token, lease_expires_at, last_error, created_at, updated_at) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            [job_id, id, user_id, action, sectors, status, attempts, version, owner_token, lease_expires_at, last_error, created_at, updated_at],
+                        );
+                    }
+
+                    await _exec_direct("drop table vector_outbox");
+                    await _exec_direct("alter table vector_outbox_new rename to vector_outbox");
+                    console.log("[DB] vector_outbox migration completed successfully");
+                } catch (migrationError: any) {
+                    console.error("[DB] vector_outbox migration failed:", migrationError.message);
+                    try {
+                        await _exec_direct("drop table if exists vector_outbox_new");
+                    } catch {}
+                    throw new DbInitError(`vector_outbox migration failed: ${migrationError.message}`);
+                }
             }
         }
-    } catch {}
+    } catch (e: any) {
+        if (e instanceof DbInitError) throw e;
+    }
 
     const SCHEMA_TABLES = [
         "create table if not exists memories(id text primary key,user_id text,project_id text,segment integer default 0,content text not null,summary text,simhash text,primary_sector text not null,tags text,meta text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0,coactivations integer default 0)",
