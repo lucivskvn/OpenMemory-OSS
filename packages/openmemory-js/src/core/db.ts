@@ -88,10 +88,11 @@ type q_type = {
     get_user: { get: (user_id: string) => Promise<any> };
     upd_user_summary: { run: (...p: any[]) => Promise<void> };
 
-    enqueue_outbox: { run: (job_id: string, id: string, user_id: string, action: "delete" | "reindex", sectors: string | null) => Promise<number> };
-    claim_outbox_job: { run: (job_id: string) => Promise<number> };
-    mark_outbox_completed: { run: (job_id: string) => Promise<number> };
-    mark_outbox_failed: { run: (job_id: string, err_msg: string) => Promise<number> };
+    enqueue_outbox: { run: (job_id: string, id: string, user_id: string, action: "create" | "delete" | "reindex", sectors: string | null) => Promise<number> };
+    claim_outbox_job: { run: (job_id: string, owner_token: string, lease_duration_ms?: number) => Promise<number> };
+    mark_outbox_completed: { run: (job_id: string, owner_token: string) => Promise<number> };
+    mark_outbox_failed: { run: (job_id: string, owner_token: string, err_msg: string) => Promise<number> };
+    retry_dead_letter_job: { run: (job_id: string, user_id: string) => Promise<number> };
 
     clear_all: { run: () => Promise<void> };
 };
@@ -324,7 +325,8 @@ export const init_db = async () => {
         const outboxInfo = await all_async_direct("PRAGMA table_info(vector_outbox)");
         if (outboxInfo && outboxInfo.length > 0) {
             const has_job_id = outboxInfo.some((c: any) => c.name === "job_id");
-            if (!has_job_id) {
+            const has_owner_token = outboxInfo.some((c: any) => c.name === "owner_token");
+            if (!has_job_id || !has_owner_token) {
                 await _exec_direct("drop table vector_outbox");
             }
         }
@@ -343,8 +345,8 @@ export const init_db = async () => {
         "create table if not exists stats(id integer primary key autoincrement,type text not null,count integer default 1,ts integer not null)",
         "create table if not exists temporal_facts(id text primary key,user_id text,project_id text,subject text not null,predicate text not null,object text not null,valid_from integer not null,valid_to integer,confidence real not null check(confidence >= 0 and confidence <= 1),last_updated integer not null,metadata text,unique(subject,predicate,object,valid_from))",
         "create table if not exists temporal_edges(id text primary key,source_id text not null,target_id text not null,relation_type text not null,valid_from integer not null,valid_to integer,weight real not null,metadata text,foreign key(source_id) references temporal_facts(id),foreign key(target_id) references temporal_facts(id))",
-        "create table if not exists vector_outbox(job_id text primary key, id text not null, user_id text not null, action text not null, sectors text, status text not null default 'pending', attempts integer default 0, version integer default 1, last_error text, created_at integer not null, updated_at integer not null)",
-        "create index if not exists idx_outbox_status on vector_outbox(status, attempts, created_at)",
+        "create table if not exists vector_outbox(job_id text primary key, id text not null, user_id text not null, action text not null, sectors text, status text not null default 'pending', attempts integer default 0, version integer default 1, owner_token text, lease_expires_at integer default 0, last_error text, created_at integer not null, updated_at integer not null)",
+        "create index if not exists idx_outbox_status on vector_outbox(status, attempts, lease_expires_at)",
         "create index if not exists idx_outbox_mem_user on vector_outbox(id, user_id)",
     ];
     for (const sql of SCHEMA_TABLES) {
@@ -592,7 +594,7 @@ export const q: q_type = {
             ),
     },
     enqueue_outbox: {
-        run: (job_id: string, id: string, user_id: string, action: "delete" | "reindex", sectors: string | null) => {
+        run: (job_id: string, id: string, user_id: string, action: "create" | "delete" | "reindex", sectors: string | null) => {
             const active_user = user_id?.trim();
             if (!active_user) return Promise.resolve(0);
             const now_ts = Date.now();
@@ -603,26 +605,39 @@ export const q: q_type = {
         },
     },
     claim_outbox_job: {
-        run: (job_id: string) => {
+        run: (job_id: string, owner_token: string, lease_duration_ms: number = 60000) => {
+            const now_ts = Date.now();
+            const lease_expires = now_ts + lease_duration_ms;
             return run_affected_async(
-                "update vector_outbox set status='processing', updated_at=? where job_id=? and (status='pending' or (status='failed' and attempts < 5))",
-                [Date.now(), job_id],
+                "update vector_outbox set status='processing', owner_token=?, lease_expires_at=?, updated_at=? where job_id=? and (status='pending' or (status='failed' and attempts < 5) or (status='processing' and lease_expires_at < ?))",
+                [owner_token, lease_expires, now_ts, job_id, now_ts],
             );
         },
     },
     mark_outbox_completed: {
-        run: (job_id: string) => {
+        run: (job_id: string, owner_token: string) => {
             return run_affected_async(
-                "update vector_outbox set status='completed', updated_at=? where job_id=? and status='processing'",
-                [Date.now(), job_id],
+                "update vector_outbox set status='completed', updated_at=? where job_id=? and owner_token=? and status='processing'",
+                [Date.now(), job_id, owner_token],
             );
         },
     },
     mark_outbox_failed: {
-        run: (job_id: string, err_msg: string) => {
+        run: (job_id: string, owner_token: string, err_msg?: string) => {
+            const safe_msg = String(err_msg || "Vector operation failed").substring(0, 500);
             return run_affected_async(
-                "update vector_outbox set status='failed', attempts=attempts+1, last_error=?, updated_at=? where job_id=? and status='processing'",
-                [err_msg.substring(0, 500), Date.now(), job_id],
+                "update vector_outbox set status = case when attempts + 1 >= 5 then 'dead_letter' else 'failed' end, attempts = attempts + 1, last_error = ?, updated_at = ? where job_id = ? and owner_token = ? and status = 'processing'",
+                [safe_msg, Date.now(), job_id, owner_token],
+            );
+        },
+    },
+    retry_dead_letter_job: {
+        run: (job_id: string, user_id: string) => {
+            const active_user = user_id?.trim();
+            if (!active_user) return Promise.resolve(0);
+            return run_affected_async(
+                "update vector_outbox set status='pending', attempts=0, lease_expires_at=0, updated_at=? where job_id=? and user_id=? and status='dead_letter'",
+                [Date.now(), job_id, active_user],
             );
         },
     },

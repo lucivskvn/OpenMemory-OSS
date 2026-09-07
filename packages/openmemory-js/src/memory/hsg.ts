@@ -1318,7 +1318,8 @@ export async function process_pending_vector_outbox(): Promise<number> {
     let processed = 0;
     for (const item of pending) {
         if (!item.job_id || !item.id || !item.user_id) continue;
-        const claimed = await q.claim_outbox_job.run(item.job_id);
+        const owner_token = crypto.randomUUID();
+        const claimed = await q.claim_outbox_job.run(item.job_id, owner_token);
         if (claimed === 0) continue;
 
         try {
@@ -1348,10 +1349,10 @@ export async function process_pending_vector_outbox(): Promise<number> {
                     }
                 }
             }
-            await q.mark_outbox_completed.run(item.job_id);
+            await q.mark_outbox_completed.run(item.job_id, owner_token);
             processed++;
         } catch (e: any) {
-            await q.mark_outbox_failed.run(item.job_id, String(e?.message || e));
+            await q.mark_outbox_failed.run(item.job_id, owner_token, String(e?.message || e));
         }
     }
     return processed;
@@ -1366,6 +1367,7 @@ export async function delete_memory(id: string, user_id: string): Promise<boolea
     if (!mem || mem.user_id !== active_user) return false;
 
     const job_id = crypto.randomUUID();
+    const owner_token = crypto.randomUUID();
     const tx = begin_tx();
     tx.exec("delete from memories where id=? and user_id=?", [id, active_user]);
     tx.exec("delete from waypoints where (src_id=? or dst_id=?) and user_id=?", [id, id, active_user]);
@@ -1379,11 +1381,11 @@ export async function delete_memory(id: string, user_id: string): Promise<boolea
     }
 
     try {
-        await q.claim_outbox_job.run(job_id);
+        await q.claim_outbox_job.run(job_id, owner_token);
         await vector_store.deleteVectors(id, active_user);
-        await q.mark_outbox_completed.run(job_id);
+        await q.mark_outbox_completed.run(job_id, owner_token);
     } catch (vectorError) {
-        await q.mark_outbox_failed.run(job_id, String((vectorError as Error)?.message || vectorError));
+        await q.mark_outbox_failed.run(job_id, owner_token, String((vectorError as Error)?.message || vectorError));
         console.error("[HSG] Vector deletion failed for memory", id, "err:", vectorError);
     }
 
@@ -1452,6 +1454,7 @@ export async function update_memory(
         const mean_vec_buf = vectorToBuffer(mean_vec);
 
         const job_id = crypto.randomUUID();
+        const owner_token = crypto.randomUUID();
         const tx = begin_tx();
         tx.exec("update memories set mean_dim=?,mean_vec=? where id=? and user_id=?", [mean_vec.length, mean_vec_buf, id, active_user]);
         tx.exec("update memories set content=?,primary_sector=?,tags=?,meta=?,updated_at=?,version=version+1 where id=? and user_id=?", [enc_content, classification.primary, new_tags, enc_meta, Date.now(), id, active_user]);
@@ -1464,7 +1467,7 @@ export async function update_memory(
         }
 
         try {
-            await q.claim_outbox_job.run(job_id);
+            await q.claim_outbox_job.run(job_id, owner_token);
             await vector_store.deleteVectors(id, active_user);
             for (const result of emb_res) {
                 await vector_store.storeVector(
@@ -1475,9 +1478,9 @@ export async function update_memory(
                     active_user,
                 );
             }
-            await q.mark_outbox_completed.run(job_id);
+            await q.mark_outbox_completed.run(job_id, owner_token);
         } catch (vectorError) {
-            await q.mark_outbox_failed.run(job_id, String((vectorError as Error)?.message || vectorError));
+            await q.mark_outbox_failed.run(job_id, owner_token, String((vectorError as Error)?.message || vectorError));
             console.error("[HSG] Vector update failed for memory", id, "err:", vectorError);
         }
     } else {
