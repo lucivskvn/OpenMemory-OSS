@@ -224,7 +224,7 @@ describe("MCP per-tenant scoping", () => {
 
     it("verifies update_memory and delete_memory tenant boundaries across all branches", async () => {
         // 1. Setup Alice memory
-        const mem_alice = await add_hsg_memory("Initial Alice memory content", ["v1"], { rev: 1 }, T_ALICE);
+        const mem_alice = await add_hsg_memory("Initial Alice memory content", JSON.stringify(["v1"]), { rev: 1 }, T_ALICE);
 
         // 2. update_memory metadata-only branch (tags/metadata)
         const meta_upd = await update_memory(mem_alice.id, undefined, ["v2"], { rev: 2 }, T_ALICE);

@@ -1229,6 +1229,7 @@ export async function add_hsg_memory(
             0,
             Math.min(1, 0.4 + 0.1 * classification.additional.length),
         );
+        const tags_str = typeof tags === "string" ? tags : tags ? j(tags) : null;
         await q.ins_mem.run(
             id,
             active_user,
@@ -1237,7 +1238,7 @@ export async function add_hsg_memory(
             stored_content,
             simhash,
             classification.primary,
-            tags || null,
+            tags_str,
             JSON.stringify(metadata || {}),
             now,
             now,
