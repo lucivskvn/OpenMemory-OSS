@@ -473,9 +473,11 @@ import {
     get_async,
     all_async,
     run_async,
+    begin_tx,
     transaction,
     log_maint_op,
 } from "../core/db";
+import { encrypt } from "../core/crypto";
 export async function create_cross_sector_waypoints(
     prim_id: string,
     prim_sec: string,
@@ -1315,7 +1317,10 @@ export async function process_pending_vector_outbox(): Promise<number> {
     );
     let processed = 0;
     for (const item of pending) {
-        if (!item.id || !item.user_id) continue;
+        if (!item.job_id || !item.id || !item.user_id) continue;
+        const claimed = await q.claim_outbox_job.run(item.job_id);
+        if (claimed === 0) continue;
+
         try {
             if (item.action === "delete") {
                 await vector_store.deleteVectors(item.id, item.user_id);
@@ -1343,10 +1348,10 @@ export async function process_pending_vector_outbox(): Promise<number> {
                     }
                 }
             }
-            await q.mark_outbox_completed.run(item.id, item.user_id, item.action);
+            await q.mark_outbox_completed.run(item.job_id);
             processed++;
         } catch (e: any) {
-            await q.mark_outbox_failed.run(item.id, item.user_id, item.action, String(e?.message || e));
+            await q.mark_outbox_failed.run(item.job_id, String(e?.message || e));
         }
     }
     return processed;
@@ -1360,22 +1365,25 @@ export async function delete_memory(id: string, user_id: string): Promise<boolea
     const mem = await q.get_mem.get(id);
     if (!mem || mem.user_id !== active_user) return false;
 
-    await transaction.begin();
-    try {
-        await q.del_mem.run(id, active_user);
-        await q.del_waypoints.run(id, id, active_user);
-        await q.enqueue_outbox.run(id, active_user, "delete", null);
-        await transaction.commit();
-    } catch (error) {
-        await transaction.rollback();
-        throw error;
+    const job_id = crypto.randomUUID();
+    const tx = begin_tx();
+    tx.exec("delete from memories where id=? and user_id=?", [id, active_user]);
+    tx.exec("delete from waypoints where (src_id=? or dst_id=?) and user_id=?", [id, id, active_user]);
+    tx.exec("delete from temporal_facts where metadata like ? and user_id=?", [`%"source_memory_id":"${id}"%`, active_user]);
+    tx.exec("insert into vector_outbox(job_id, id, user_id, action, status, created_at, updated_at) values(?, ?, ?, 'delete', 'pending', ?, ?)", [job_id, id, active_user, Date.now(), Date.now()]);
+
+    const batchResults = await tx.commit();
+    const memDelResult = batchResults[0];
+    if (!memDelResult || memDelResult.rowsAffected === 0) {
+        return false;
     }
 
     try {
+        await q.claim_outbox_job.run(job_id);
         await vector_store.deleteVectors(id, active_user);
-        await q.mark_outbox_completed.run(id, active_user, "delete");
+        await q.mark_outbox_completed.run(job_id);
     } catch (vectorError) {
-        await q.mark_outbox_failed.run(id, active_user, "delete", String((vectorError as Error)?.message || vectorError));
+        await q.mark_outbox_failed.run(job_id, String((vectorError as Error)?.message || vectorError));
         console.error("[HSG] Vector deletion failed for memory", id, "err:", vectorError);
     }
 
@@ -1422,7 +1430,9 @@ export async function update_memory(
     }
     const new_content = content !== undefined ? content : mem.content;
     const new_tags = tags !== undefined ? (typeof tags === "string" ? tags : j(tags)) : mem.tags || "[]";
-    const new_meta = metadata !== undefined ? j(metadata) : mem.meta || "{}";
+    const new_meta = metadata !== undefined ? (typeof metadata === "string" ? metadata : j(metadata)) : mem.meta || "{}";
+    const enc_content = encrypt(new_content);
+    const enc_meta = encrypt(new_meta);
 
     if (content !== undefined && content !== mem.content) {
         const chunks = chunk_text(new_content);
@@ -1441,30 +1451,20 @@ export async function update_memory(
         const mean_vec = calc_mean_vec(emb_res, all_sectors);
         const mean_vec_buf = vectorToBuffer(mean_vec);
 
-        await transaction.begin();
-        try {
-            await q.upd_mean_vec.run(mean_vec.length, mean_vec_buf, id, active_user);
-            await q.upd_mem_with_sector.run(
-                new_content,
-                classification.primary,
-                new_tags,
-                new_meta,
-                Date.now(),
-                id,
-                active_user,
-            );
-            await q.enqueue_outbox.run(id, active_user, "reindex", JSON.stringify(all_sectors));
-            const batchResults = await transaction.commit();
-            const mainUpdateResult = batchResults[batchResults.length - 2];
-            if (!mainUpdateResult || mainUpdateResult.rowsAffected === 0) {
-                throw new Error(`Memory ${id} not found or ownership changed`);
-            }
-        } catch (error) {
-            await transaction.rollback();
-            throw error;
+        const job_id = crypto.randomUUID();
+        const tx = begin_tx();
+        tx.exec("update memories set mean_dim=?,mean_vec=? where id=? and user_id=?", [mean_vec.length, mean_vec_buf, id, active_user]);
+        tx.exec("update memories set content=?,primary_sector=?,tags=?,meta=?,updated_at=?,version=version+1 where id=? and user_id=?", [enc_content, classification.primary, new_tags, enc_meta, Date.now(), id, active_user]);
+        tx.exec("insert into vector_outbox(job_id, id, user_id, action, sectors, status, created_at, updated_at) values(?, ?, ?, 'reindex', ?, 'pending', ?, ?)", [job_id, id, active_user, JSON.stringify(all_sectors), Date.now(), Date.now()]);
+
+        const batchResults = await tx.commit();
+        const mainUpdateResult = batchResults[1];
+        if (!mainUpdateResult || mainUpdateResult.rowsAffected === 0) {
+            throw new Error(`Memory ${id} not found or ownership changed`);
         }
 
         try {
+            await q.claim_outbox_job.run(job_id);
             await vector_store.deleteVectors(id, active_user);
             for (const result of emb_res) {
                 await vector_store.storeVector(
@@ -1475,30 +1475,18 @@ export async function update_memory(
                     active_user,
                 );
             }
-            await q.mark_outbox_completed.run(id, active_user, "reindex");
+            await q.mark_outbox_completed.run(job_id);
         } catch (vectorError) {
-            await q.mark_outbox_failed.run(id, active_user, "reindex", String((vectorError as Error)?.message || vectorError));
+            await q.mark_outbox_failed.run(job_id, String((vectorError as Error)?.message || vectorError));
             console.error("[HSG] Vector update failed for memory", id, "err:", vectorError);
         }
     } else {
-        await transaction.begin();
-        try {
-            await q.upd_mem.run(
-                new_content,
-                new_tags,
-                new_meta,
-                Date.now(),
-                id,
-                active_user,
-            );
-            const batchResults = await transaction.commit();
-            const mainUpdateResult = batchResults[batchResults.length - 1];
-            if (!mainUpdateResult || mainUpdateResult.rowsAffected === 0) {
-                throw new Error(`Memory ${id} not found or ownership changed`);
-            }
-        } catch (error) {
-            await transaction.rollback();
-            throw error;
+        const tx = begin_tx();
+        tx.exec("update memories set content=?,tags=?,meta=?,updated_at=?,version=version+1 where id=? and user_id=?", [enc_content, new_tags, enc_meta, Date.now(), id, active_user]);
+        const batchResults = await tx.commit();
+        const mainUpdateResult = batchResults[0];
+        if (!mainUpdateResult || mainUpdateResult.rowsAffected === 0) {
+            throw new Error(`Memory ${id} not found or ownership changed`);
         }
     }
 

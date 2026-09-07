@@ -289,6 +289,11 @@ describe("MCP per-tenant scoping", () => {
         expect(recovered).toBeGreaterThan(0);
         const outbox_done = await all_async("select * from vector_outbox where id=? and user_id=?", [mem_outbox.id, T_ALICE]);
         expect(outbox_done[0].status).toBe("completed");
+
+        // 8. Dead-letter threshold: items with attempts >= 5 are skipped by retry worker
+        await run_async("insert into vector_outbox(job_id, id, user_id, action, status, attempts, created_at, updated_at) values(?, ?, ?, 'delete', 'failed', 5, ?, ?)", ["dead-letter-job-1", "mem-dead-1", T_ALICE, Date.now(), Date.now()]);
+        const deadLetterProcessed = await process_pending_vector_outbox();
+        expect(deadLetterProcessed).toBe(0);
     }, 30000);
 
     it("isolates cross-tenant waypoints and path expansion in expand_via_waypoints", async () => {

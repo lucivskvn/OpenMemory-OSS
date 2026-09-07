@@ -1,6 +1,6 @@
 import { server } from "./server";
 import { env, tier } from "../core/config";
-import { run_decay_process_all_tenants, prune_weak_waypoints } from "../memory/hsg";
+import { run_decay_process_all_tenants, prune_weak_waypoints, process_pending_vector_outbox } from "../memory/hsg";
 import { mcp } from "../ai/mcp";
 import { routes } from "./routes";
 import {
@@ -133,6 +133,22 @@ setTimeout(() => {
 
 start_reflection();
 start_user_summary_reflection();
+
+const outboxIntervalMs = 30000;
+setInterval(async () => {
+    try {
+        const processed = await process_pending_vector_outbox();
+        if (processed > 0) {
+            console.log(`[OUTBOX] Processed ${processed} pending vector outbox jobs`);
+        }
+    } catch (error) {
+        console.error("[OUTBOX] Worker process failed:", error);
+    }
+}, outboxIntervalMs);
+
+setTimeout(() => {
+    process_pending_vector_outbox().catch((e) => console.error("[OUTBOX] Initial worker failed:", e));
+}, 2000);
 
 console.log(`[SERVER] Starting on port ${env.port}`);
 app.listen(env.port, () => {
