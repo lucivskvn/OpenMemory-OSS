@@ -228,7 +228,8 @@ export function mem(app: any) {
                     message: "memory does not belong to authenticated tenant",
                 });
             }
-            await reinforce_memory(b.id, b.boost);
+            const success = await reinforce_memory(b.id, b.boost, tenant);
+            if (!success) return res.status(404).json({ err: "nf" });
             res.json({ ok: true });
         } catch (e: any) {
             console.error("[mem] /memory/reinforce failed:", e);
@@ -255,7 +256,7 @@ export function mem(app: any) {
             if (m.user_id && m.user_id !== tenant) {
                 return res.status(403).json({ err: "forbidden" });
             }
-            const r = await update_memory(id, b.content, b.tags, b.metadata);
+            const r = await update_memory(id, b.content, b.tags, b.metadata, tenant);
             res.json(r);
         } catch (e: any) {
             if (e.message && e.message.includes("not found")) {

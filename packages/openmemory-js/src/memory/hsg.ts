@@ -473,23 +473,27 @@ import {
     get_async,
     all_async,
     run_async,
+    begin_tx,
     transaction,
     log_maint_op,
 } from "../core/db";
+import { encrypt } from "../core/crypto";
 export async function create_cross_sector_waypoints(
     prim_id: string,
     prim_sec: string,
     add_secs: string[],
-    user_id?: string | null,
+    user_id: string,
     project_id?: string | null,
 ): Promise<void> {
+    const active_user = user_id?.trim();
+    if (!active_user) throw new Error("tenant_required: create_cross_sector_waypoints requires a user_id");
     const now = Date.now();
     const wt = 0.5;
     for (const sec of add_secs) {
         await q.ins_waypoint.run(
             prim_id,
             `${prim_id}:${sec}`,
-            user_id || "anonymous",
+            active_user,
             project_id || null,
             wt,
             now,
@@ -498,7 +502,7 @@ export async function create_cross_sector_waypoints(
         await q.ins_waypoint.run(
             `${prim_id}:${sec}`,
             prim_id,
-            user_id || "anonymous",
+            active_user,
             project_id || null,
             wt,
             now,
@@ -537,13 +541,12 @@ export async function create_single_waypoint(
     new_id: string,
     new_mean: number[],
     ts: number,
-    user_id?: string | null,
+    user_id: string,
     project_id?: string | null,
 ): Promise<void> {
-    const thresh = 0.75;
-    const mems = user_id
-        ? await q.all_mem_by_user.all(user_id, 1000, 0)
-        : await q.all_mem.all(1000, 0);
+    const active_user = user_id?.trim();
+    if (!active_user) throw new Error("tenant_required: create_single_waypoint requires a user_id");
+    const mems = await q.all_mem_by_user.all(active_user, 1000, 0);
     let best: { id: string; similarity: number } | null = null;
     for (const mem of mems) {
         if (mem.id === new_id || !mem.mean_vec) continue;
@@ -557,7 +560,7 @@ export async function create_single_waypoint(
         await q.ins_waypoint.run(
             new_id,
             best.id,
-            user_id || "anonymous",
+            active_user,
             project_id || null,
             best.similarity,
             ts,
@@ -567,7 +570,7 @@ export async function create_single_waypoint(
         await q.ins_waypoint.run(
             new_id,
             new_id,
-            user_id || "anonymous",
+            active_user,
             project_id || null,
             1.0,
             ts,
@@ -580,12 +583,14 @@ export async function create_inter_mem_waypoints(
     prim_sec: string,
     new_vec: number[],
     ts: number,
-    user_id?: string | null,
+    user_id: string,
     project_id?: string | null,
 ): Promise<void> {
+    const active_user = user_id?.trim();
+    if (!active_user) throw new Error("tenant_required: create_inter_mem_waypoints requires a user_id");
     const thresh = 0.75;
     const wt = 0.5;
-    const vecs = await vector_store.getVectorsBySector(prim_sec);
+    const vecs = await vector_store.getVectorsBySector(prim_sec, active_user);
     for (const vr of vecs) {
         if (vr.id === new_id) continue;
         const ex_vec = vr.vector;
@@ -597,7 +602,7 @@ export async function create_inter_mem_waypoints(
             await q.ins_waypoint.run(
                 new_id,
                 vr.id,
-                user_id || "anonymous",
+                active_user,
                 project_id || null,
                 wt,
                 ts,
@@ -606,7 +611,7 @@ export async function create_inter_mem_waypoints(
             await q.ins_waypoint.run(
                 vr.id,
                 new_id,
-                user_id || "anonymous",
+                active_user,
                 project_id || null,
                 wt,
                 ts,
@@ -619,21 +624,23 @@ export async function create_contextual_waypoints(
     mem_id: string,
     rel_ids: string[],
     base_wt: number = 0.3,
-    user_id?: string | null,
+    user_id?: string,
     project_id?: string | null,
 ): Promise<void> {
+    const active_user = user_id?.trim();
+    if (!active_user) throw new Error("tenant_required: create_contextual_waypoints requires a user_id");
     const now = Date.now();
     for (const rel_id of rel_ids) {
         if (mem_id === rel_id) continue;
-        const existing = await q.get_waypoint.get(mem_id, rel_id);
+        const existing = await q.get_waypoint.get(mem_id, rel_id, active_user);
         if (existing) {
             const new_wt = Math.min(1.0, existing.weight + 0.1);
-            await q.upd_waypoint.run(mem_id, new_wt, now, rel_id);
+            await q.upd_waypoint.run(new_wt, now, mem_id, rel_id, active_user);
         } else {
             await q.ins_waypoint.run(
                 mem_id,
                 rel_id,
-                user_id || "anonymous",
+                active_user,
                 project_id || null,
                 base_wt,
                 now,
@@ -644,8 +651,11 @@ export async function create_contextual_waypoints(
 }
 export async function expand_via_waypoints(
     init_res: string[],
+    user_id: string,
     max_exp: number = 10,
 ): Promise<Array<{ id: string; weight: number; path: string[] }>> {
+    const active_user = user_id?.trim();
+    if (!active_user) return [];
     const exp: Array<{ id: string; weight: number; path: string[] }> = [];
     const vis = new Set<string>();
     for (const id of init_res) {
@@ -656,7 +666,7 @@ export async function expand_via_waypoints(
     let exp_cnt = 0;
     while (q_arr.length > 0 && exp_cnt < max_exp) {
         const cur = q_arr.shift()!;
-        const neighs = await q.get_neighbors.all(cur.id);
+        const neighs = await q.get_neighbors.all(cur.id, active_user);
         for (const neigh of neighs) {
             if (vis.has(neigh.dst_id)) continue;
 
@@ -676,18 +686,25 @@ export async function expand_via_waypoints(
     }
     return exp;
 }
-export async function reinforce_waypoints(trav_path: string[]): Promise<void> {
+export async function reinforce_waypoints(
+    trav_path: string[],
+    user_id: string,
+): Promise<void> {
+    const active_user = user_id?.trim();
+    if (!active_user) {
+        throw new Error("tenant_required: reinforce_waypoints requires a valid non-empty user_id");
+    }
     const now = Date.now();
     for (let i = 0; i < trav_path.length - 1; i++) {
         const src_id = trav_path[i];
         const dst_id = trav_path[i + 1];
-        const wp = await q.get_waypoint.get(src_id, dst_id);
+        const wp = await q.get_waypoint.get(src_id, dst_id, active_user);
         if (wp) {
             const new_wt = Math.min(
                 reinforcement.max_waypoint_weight,
                 wp.weight + reinforcement.waypoint_boost,
             );
-            await q.upd_waypoint.run(src_id, new_wt, now, dst_id);
+            await q.upd_waypoint.run(new_wt, now, src_id, dst_id, active_user);
         }
     }
 }
@@ -751,7 +768,7 @@ const cache = new Map<string, { r: hsg_q_result[]; t: number }>();
 const sal_cache = new Map<string, { s: number; t: number }>();
 
 const seg_cache = new Map<number, any[]>();
-const coact_buf: Array<[string, string]> = [];
+const coact_buf: Array<[string, string, string]> = [];
 const TTL = 60000;
 const VEC_CACHE_MAX = 1000;
 let active_queries = 0;
@@ -771,16 +788,18 @@ setInterval(async () => {
     const pairs = coact_buf.splice(0, 50);
     const now = Date.now();
     const tau_ms = hybrid_params.tau_hours * 3600000;
-    for (const [a, b] of pairs) {
+    for (const [a, b, uid] of pairs) {
+        if (!uid || uid === "anonymous") continue;
         try {
             const [memA, memB] = await Promise.all([
                 q.get_mem.get(a),
                 q.get_mem.get(b),
             ]);
             if (!memA || !memB) continue;
+            if (memA.user_id !== uid || memB.user_id !== uid) continue;
             const time_diff = Math.abs(memA.last_seen_at - memB.last_seen_at);
             const temp_fact = Math.exp(-time_diff / tau_ms);
-            const wp = await q.get_waypoint.get(a, b);
+            const wp = await q.get_waypoint.get(a, b, uid);
             const cur_wt = wp?.weight || 0;
             const new_wt = Math.min(
                 1,
@@ -788,8 +807,6 @@ setInterval(async () => {
             );
             const project_id =
                 memA?.project_id || memB?.project_id || wp?.project_id || null;
-            const uid =
-                memA?.user_id || memB?.user_id || wp?.user_id || "anonymous";
             await q.ins_waypoint.run(
                 a,
                 b,
@@ -822,6 +839,11 @@ export async function hsg_query(
         endTime?: number;
     },
 ): Promise<hsg_q_result[]> {
+    const query_user = f?.user_id?.trim();
+    if (!query_user) {
+        throw new Error("tenant_required: hsg_query requires a valid non-empty user_id in filter options");
+    }
+
     if (active_queries >= env.max_active) {
         throw new Error(
             `Rate limit: ${active_queries} active queries (max ${env.max_active})`,
@@ -867,7 +889,7 @@ export async function hsg_query(
                 s,
                 qv,
                 k * 3,
-                f?.user_id,
+                query_user,
                 f?.project_id,
             );
             sr[s] = results.map((r) => ({ id: r.id, similarity: r.score }));
@@ -885,7 +907,7 @@ export async function hsg_query(
         for (const r of Object.values(sr)) for (const x of r) ids.add(x.id);
         const exp = high_conf
             ? []
-            : await expand_via_waypoints(Array.from(ids), k * 2);
+            : await expand_via_waypoints(Array.from(ids), query_user, k * 2);
         for (const e of exp) ids.add(e.id);
 
         let keyword_scores = new Map<string, number>();
@@ -1021,24 +1043,25 @@ export async function hsg_query(
         for (const r of top) {
             const cur_fb = (await q.get_mem.get(r.id))?.feedback_score || 0;
             const new_fb = cur_fb * 0.9 + r.score * 0.1;
-            await q.upd_feedback.run(new_fb, Date.now(), r.id);
+            await q.upd_feedback.run(new_fb, Date.now(), r.id, query_user);
         }
 
         for (let i = 0; i < tids.length; i++) {
             for (let j = i + 1; j < tids.length; j++) {
                 const [a, b] = [tids[i], tids[j]].sort();
-                coact_buf.push([a, b]);
+                coact_buf.push([a, b, query_user]);
             }
         }
+
         for (const r of top) {
             const rsal = await applyRetrievalTraceReinforcementToMemory(
                 r.id,
                 r.salience,
             );
-            await q.upd_seen.run(r.id, Date.now(), rsal, Date.now());
+            await q.upd_seen.run(Date.now(), rsal, Date.now(), r.id, query_user);
             if (r.path.length > 1) {
-                await reinforce_waypoints(r.path);
-                const wps = await q.get_waypoints_by_src.all(r.id);
+                await reinforce_waypoints(r.path, query_user);
+                const wps = await q.get_waypoints_by_src.all(r.id, query_user);
                 const lns = wps.map((wp: any) => ({
                     target_id: wp.dst_id,
                     weight: wp.weight,
@@ -1051,7 +1074,7 @@ export async function hsg_query(
                     );
                 for (const u of pru) {
                     const linked_mem = await q.get_mem.get(u.node_id);
-                    if (linked_mem) {
+                    if (linked_mem && linked_mem.user_id === query_user) {
                         const time_diff =
                             (Date.now() - linked_mem.last_seen_at) / 86400000;
                         const decay_fact = Math.exp(-0.02 * time_diff);
@@ -1064,17 +1087,18 @@ export async function hsg_query(
                             Math.min(1, linked_mem.salience + ctx_boost),
                         );
                         await q.upd_seen.run(
-                            u.node_id,
                             Date.now(),
                             new_sal,
                             Date.now(),
+                            u.node_id,
+                            query_user,
                         );
                     }
                 }
             }
         }
 
-        // Process on_query_hit callbacks with bounded concurrency (limit: 5)
+        // Process on_query_hit callbacks for authenticated query hits with bounded concurrency (limit: 5)
         const processBatched = async <T>(
             items: T[],
             concurrency: number,
@@ -1087,8 +1111,11 @@ export async function hsg_query(
         };
 
         await processBatched(top, 5, async (r) => {
-            await on_query_hit(r.id, r.primary_sector, (text) =>
-                embedForSector(text, r.primary_sector),
+            await on_query_hit(
+                r.id,
+                r.primary_sector,
+                (text) => embedForSector(text, r.primary_sector),
+                query_user,
             ).catch(() => {});
         });
 
@@ -1099,23 +1126,47 @@ export async function hsg_query(
         dec_q();
     }
 }
-export async function run_decay_process(): Promise<{
+export async function run_decay_process(user_id: string): Promise<{
     processed: number;
     decayed: number;
 }> {
-    const mems = await q.all_mem.all(10000, 0);
+    const active_user = user_id?.trim();
+    if (!active_user) {
+        throw new Error("tenant_required: run_decay_process requires a valid non-empty user_id");
+    }
+
+    const mems = await q.all_mem_by_user.all(active_user, 10000, 0);
     let p = 0,
         d = 0;
     for (const m of mems) {
         const ds = (Date.now() - m.last_seen_at) / 86400000;
         const ns = calc_decay(m.primary_sector, m.salience, ds);
         if (ns !== m.salience) {
-            await q.upd_seen.run(m.id, m.last_seen_at, ns, Date.now());
+            await q.upd_seen.run(m.last_seen_at, ns, Date.now(), m.id, active_user);
             d++;
         }
         p++;
     }
     if (d > 0) await log_maint_op("decay", d);
+    return { processed: p, decayed: d };
+}
+
+export async function run_decay_process_all_tenants(): Promise<{
+    processed: number;
+    decayed: number;
+}> {
+    const tenant_rows = await all_async(
+        "select distinct user_id from memories where user_id is not null and user_id != ''",
+    );
+    let p = 0,
+        d = 0;
+    for (const row of tenant_rows) {
+        if (row.user_id?.trim()) {
+            const res = await run_decay_process(row.user_id.trim());
+            p += res.processed;
+            d += res.decayed;
+        }
+    }
     return { processed: p, decayed: d };
 }
 
@@ -1149,12 +1200,17 @@ export async function add_hsg_memory(
     chunks?: number;
     deduplicated?: boolean;
 }> {
+    const active_user = user_id?.trim();
+    if (!active_user) {
+        throw new Error("tenant_required: add_hsg_memory requires an authenticated non-empty user_id");
+    }
+
     const simhash = compute_simhash(content);
-    const existing = await q.get_mem_by_simhash.get(simhash);
-    if (existing && hamming_dist(simhash, existing.simhash) <= 3) {
+    const existing = await q.get_mem_by_simhash.get(simhash, active_user);
+    if (existing && existing.user_id === active_user && hamming_dist(simhash, existing.simhash) <= 3) {
         const now = Date.now();
         const boosted_sal = Math.min(1, existing.salience + 0.15);
-        await q.upd_seen.run(existing.id, now, boosted_sal, now);
+        await q.upd_seen.run(now, boosted_sal, now, existing.id, active_user);
         return {
             id: existing.id,
             primary_sector: existing.primary_sector,
@@ -1165,47 +1221,53 @@ export async function add_hsg_memory(
     const id = crypto.randomUUID();
     const now = Date.now();
 
-    if (user_id) {
-        await ensure_user_exists(user_id);
-    }
+    await ensure_user_exists(active_user);
 
     const chunks = chunk_text(content);
     const use_chunking = chunks.length > 1;
     const classification = classify_content(content, metadata);
     const all_sectors = [classification.primary, ...classification.additional];
-    await transaction.begin();
-    try {
-        const max_seg_res = await q.get_max_segment.get();
-        let cur_seg = max_seg_res?.max_seg ?? 0;
-        const seg_cnt_res = await q.get_segment_count.get(cur_seg);
-        const seg_cnt = seg_cnt_res?.c ?? 0;
-        if (seg_cnt >= env.seg_size) {
-            cur_seg++;
 
-            console.error(
-                `[HSG] Rotated to segment ${cur_seg} (previous segment full: ${seg_cnt} memories)`,
-            );
-        }
-        const stored_content = extract_essence(
-            content,
-            classification.primary,
-            env.summary_max_length,
+    const max_seg_res = await q.get_max_segment.get();
+    let cur_seg = max_seg_res?.max_seg ?? 0;
+    const seg_cnt_res = await q.get_segment_count.get(cur_seg);
+    const seg_cnt = seg_cnt_res?.c ?? 0;
+    if (seg_cnt >= env.seg_size) {
+        cur_seg++;
+
+        console.error(
+            `[HSG] Rotated to segment ${cur_seg} (previous segment full: ${seg_cnt} memories)`,
         );
-        const sec_cfg = sector_configs[classification.primary];
-        const init_sal = Math.max(
-            0,
-            Math.min(1, 0.4 + 0.1 * classification.additional.length),
-        );
-        await q.ins_mem.run(
+    }
+    const stored_content = extract_essence(
+        content,
+        classification.primary,
+        env.summary_max_length,
+    );
+    const sec_cfg = sector_configs[classification.primary];
+    const init_sal = Math.max(
+        0,
+        Math.min(1, 0.4 + 0.1 * classification.additional.length),
+    );
+    const tags_str = typeof tags === "string" ? tags : tags ? j(tags) : null;
+    const meta_str = JSON.stringify(metadata || {});
+
+    const job_id = crypto.randomUUID();
+    const owner_token = crypto.randomUUID();
+
+    const tx = begin_tx();
+    tx.exec(
+        "insert into memories(id,user_id,project_id,segment,content,simhash,primary_sector,tags,meta,created_at,updated_at,last_seen_at,salience,decay_lambda,version,mean_dim,mean_vec,compressed_vec,feedback_score) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [
             id,
-            user_id || "anonymous",
+            active_user,
             project_id || null,
             cur_seg,
-            stored_content,
+            encrypt(stored_content),
             simhash,
             classification.primary,
-            tags || null,
-            JSON.stringify(metadata || {}),
+            tags_str,
+            encrypt(meta_str),
             now,
             now,
             now,
@@ -1216,133 +1278,247 @@ export async function add_hsg_memory(
             null,
             null,
             0,
-        );
+        ],
+    );
+    tx.exec(
+        "insert into vector_outbox(job_id, id, user_id, action, sectors, status, created_at, updated_at) values(?, ?, ?, 'create', ?, 'pending', ?, ?)",
+        [job_id, id, active_user, JSON.stringify(all_sectors), now, now],
+    );
+
+    const batchResults = await tx.commit();
+    const insMemResult = batchResults[0];
+    if (!insMemResult || insMemResult.rowsAffected === 0) {
+        throw new Error("Failed to insert memory into database");
+    }
+
+    try {
         const emb_res = await embedMultiSector(
             id,
             content,
             all_sectors,
             use_chunking ? chunks : undefined,
         );
+
+        await q.claim_outbox_job.run(job_id, owner_token);
         for (const result of emb_res) {
             await vector_store.storeVector(
                 id,
                 result.sector,
                 result.vector,
                 result.dim,
-                user_id || "anonymous",
+                active_user,
                 project_id || undefined,
             );
         }
         const mean_vec = calc_mean_vec(emb_res, all_sectors);
         const mean_vec_buf = vectorToBuffer(mean_vec);
-        await q.upd_mean_vec.run(mean_vec.length, mean_vec_buf, id);
+        await q.upd_mean_vec.run(mean_vec.length, mean_vec_buf, id, active_user);
 
         if (tier === "smart" && mean_vec.length > 128) {
             const comp = compress_vec_for_storage(mean_vec, 128);
             const comp_buf = vectorToBuffer(comp);
-            await q.upd_compressed_vec.run(comp_buf, id);
+            await q.upd_compressed_vec.run(comp_buf, id, active_user);
         }
 
-        await create_single_waypoint(id, mean_vec, now, user_id, project_id);
-        await transaction.commit();
-        return {
-            id,
-            primary_sector: classification.primary,
-            sectors: all_sectors,
-            chunks: chunks.length,
-        };
-    } catch (error) {
-        await transaction.rollback();
-        throw error;
+        await create_single_waypoint(id, mean_vec, now, active_user, project_id);
+        await q.mark_outbox_completed.run(job_id, owner_token);
+    } catch (vectorError) {
+        await q.mark_outbox_failed.run(job_id, owner_token, String((vectorError as Error)?.message || vectorError));
+        console.error("[HSG] Vector embedding/store failed for memory", id, "err:", vectorError);
     }
+
+    return {
+        id,
+        primary_sector: classification.primary,
+        sectors: all_sectors,
+        chunks: chunks.length,
+    };
 }
-export async function delete_memory(id: string): Promise<boolean> {
-    const mem = await q.get_mem.get(id);
-    if (!mem) return false;
-    await transaction.begin();
-    try {
-        const user_id = mem.user_id || "anonymous";
-        await q.del_mem.run(id, user_id);
-        await q.del_waypoints.run(id, id, user_id);
-        await vector_store.deleteVectors(id, mem.user_id || undefined);
-        await transaction.commit();
-        return true;
-    } catch (error) {
-        await transaction.rollback();
-        throw error;
+export async function process_pending_vector_outbox(): Promise<number> {
+    const now_ts = Date.now();
+    const pending = await all_async(
+        "select * from vector_outbox where status = 'pending' or (status = 'failed' and attempts < 5) or (status = 'processing' and lease_expires_at < ?) order by created_at asc limit 50",
+        [now_ts],
+    );
+    let processed = 0;
+    for (const item of pending) {
+        if (!item.job_id || !item.id || !item.user_id) continue;
+        const owner_token = crypto.randomUUID();
+        const claimed = await q.claim_outbox_job.run(item.job_id, owner_token);
+        if (claimed === 0) continue;
+
+        try {
+            if (item.action === "delete") {
+                await vector_store.deleteVectors(item.id, item.user_id);
+            } else if (item.action === "create" || item.action === "reindex") {
+                const mem = await q.get_mem.get(item.id);
+                if (mem && mem.user_id === item.user_id) {
+                    const sectors = item.sectors ? JSON.parse(item.sectors) : [mem.primary_sector];
+                    const chunks = chunk_text(mem.content);
+                    const emb_res = await embedMultiSector(
+                        mem.id,
+                        mem.content,
+                        sectors,
+                        chunks.length > 1 ? chunks : undefined,
+                    );
+                    if (item.action === "reindex") {
+                        await vector_store.deleteVectors(mem.id, item.user_id);
+                    }
+                    for (const result of emb_res) {
+                        await vector_store.storeVector(
+                            mem.id,
+                            result.sector,
+                            result.vector,
+                            result.dim,
+                            item.user_id,
+                            mem.project_id || undefined,
+                        );
+                    }
+                }
+            }
+            await q.mark_outbox_completed.run(item.job_id, owner_token);
+            processed++;
+        } catch (e: any) {
+            await q.mark_outbox_failed.run(item.job_id, owner_token, String(e?.message || e));
+        }
     }
+    return processed;
+}
+
+export async function delete_memory(id: string, user_id: string): Promise<boolean> {
+    const active_user = user_id?.trim();
+    if (!active_user) {
+        throw new Error("tenant_required: delete_memory requires an authenticated user_id");
+    }
+    const mem = await q.get_mem.get(id);
+    if (!mem || mem.user_id !== active_user) return false;
+
+    const job_id = crypto.randomUUID();
+    const owner_token = crypto.randomUUID();
+    const tx = begin_tx();
+    tx.exec("delete from memories where id=? and user_id=?", [id, active_user]);
+    tx.exec("delete from waypoints where (src_id=? or dst_id=?) and user_id=?", [id, id, active_user]);
+    tx.exec("delete from temporal_facts where metadata like ? and user_id=?", [`%"source_memory_id":"${id}"%`, active_user]);
+    tx.exec("insert into vector_outbox(job_id, id, user_id, action, status, created_at, updated_at) values(?, ?, ?, 'delete', 'pending', ?, ?)", [job_id, id, active_user, Date.now(), Date.now()]);
+
+    const batchResults = await tx.commit();
+    const memDelResult = batchResults[0];
+    if (!memDelResult || memDelResult.rowsAffected === 0) {
+        return false;
+    }
+
+    try {
+        await q.claim_outbox_job.run(job_id, owner_token);
+        await vector_store.deleteVectors(id, active_user);
+        await q.mark_outbox_completed.run(job_id, owner_token);
+    } catch (vectorError) {
+        await q.mark_outbox_failed.run(job_id, owner_token, String((vectorError as Error)?.message || vectorError));
+        console.error("[HSG] Vector deletion failed for memory", id, "err:", vectorError);
+    }
+
+    return true;
 }
 export async function reinforce_memory(
     id: string,
     boost: number = 0.1,
-): Promise<void> {
+    user_id: string = "",
+): Promise<boolean> {
+    const active_user = user_id?.trim();
+    if (!active_user) return false;
+
     const mem = await q.get_mem.get(id);
-    if (!mem) throw new Error(`Memory ${id} not found`);
+    if (!mem || mem.user_id !== active_user) return false;
+
     const new_sal = Math.min(reinforcement.max_salience, mem.salience + boost);
-    await q.upd_seen.run(id, Date.now(), new_sal, Date.now());
+    const affected = await q.upd_seen.run(
+        Date.now(),
+        new_sal,
+        Date.now(),
+        id,
+        active_user,
+    );
+    if (affected === 0) return false;
+
     if (new_sal > 0.8) await log_maint_op("consolidate", 1);
+    return true;
 }
 export async function update_memory(
     id: string,
     content?: string,
     tags?: string[],
     metadata?: any,
+    user_id?: string,
 ): Promise<{ id: string; updated: boolean }> {
+    const active_user = user_id?.trim();
+    if (!active_user) {
+        throw new Error("tenant_required: update_memory requires an authenticated user_id");
+    }
     const mem = await q.get_mem.get(id);
-    if (!mem) throw new Error(`Memory ${id} not found`);
+    if (!mem || mem.user_id !== active_user) {
+        throw new Error(`Memory ${id} not found`);
+    }
     const new_content = content !== undefined ? content : mem.content;
-    const new_tags = tags !== undefined ? j(tags) : mem.tags || "[]";
-    const new_meta = metadata !== undefined ? j(metadata) : mem.meta || "{}";
-    await transaction.begin();
-    try {
-        if (content !== undefined && content !== mem.content) {
-            const chunks = chunk_text(new_content);
-            const use_chunking = chunks.length > 1;
-            const classification = classify_content(new_content, metadata);
-            const all_sectors = [
-                classification.primary,
-                ...classification.additional,
-            ];
-            await vector_store.deleteVectors(id, mem.user_id || undefined);
-            const emb_res = await embedMultiSector(
-                id,
-                new_content,
-                all_sectors,
-                use_chunking ? chunks : undefined,
-            );
+    const new_tags = tags !== undefined ? (typeof tags === "string" ? tags : j(tags)) : mem.tags || "[]";
+    const new_meta = metadata !== undefined ? (typeof metadata === "string" ? metadata : j(metadata)) : mem.meta || "{}";
+    const enc_content = encrypt(new_content);
+    const enc_meta = encrypt(new_meta);
+
+    if (content !== undefined && content !== mem.content) {
+        const chunks = chunk_text(new_content);
+        const use_chunking = chunks.length > 1;
+        const classification = classify_content(new_content, metadata);
+        const all_sectors = [
+            classification.primary,
+            ...classification.additional,
+        ];
+        const emb_res = await embedMultiSector(
+            id,
+            new_content,
+            all_sectors,
+            use_chunking ? chunks : undefined,
+        );
+        const mean_vec = calc_mean_vec(emb_res, all_sectors);
+        const mean_vec_buf = vectorToBuffer(mean_vec);
+
+        const job_id = crypto.randomUUID();
+        const owner_token = crypto.randomUUID();
+        const tx = begin_tx();
+        tx.exec("update memories set mean_dim=?,mean_vec=? where id=? and user_id=?", [mean_vec.length, mean_vec_buf, id, active_user]);
+        tx.exec("update memories set content=?,primary_sector=?,tags=?,meta=?,updated_at=?,version=version+1 where id=? and user_id=?", [enc_content, classification.primary, new_tags, enc_meta, Date.now(), id, active_user]);
+        tx.exec("insert into vector_outbox(job_id, id, user_id, action, sectors, status, created_at, updated_at) values(?, ?, ?, 'reindex', ?, 'pending', ?, ?)", [job_id, id, active_user, JSON.stringify(all_sectors), Date.now(), Date.now()]);
+
+        const batchResults = await tx.commit();
+        const mainUpdateResult = batchResults[1];
+        if (!mainUpdateResult || mainUpdateResult.rowsAffected === 0) {
+            throw new Error(`Memory ${id} not found or ownership changed`);
+        }
+
+        try {
+            await q.claim_outbox_job.run(job_id, owner_token);
+            await vector_store.deleteVectors(id, active_user);
             for (const result of emb_res) {
                 await vector_store.storeVector(
                     id,
                     result.sector,
                     result.vector,
                     result.dim,
-                    mem.user_id || "anonymous",
+                    active_user,
                 );
             }
-            const mean_vec = calc_mean_vec(emb_res, all_sectors);
-            const mean_vec_buf = vectorToBuffer(mean_vec);
-            await q.upd_mean_vec.run(mean_vec.length, mean_vec_buf, id);
-            await q.upd_mem_with_sector.run(
-                new_content,
-                classification.primary,
-                new_tags,
-                new_meta,
-                Date.now(),
-                id,
-            );
-        } else {
-            await q.upd_mem.run(
-                new_content,
-                new_tags,
-                new_meta,
-                Date.now(),
-                id,
-            );
+            await q.mark_outbox_completed.run(job_id, owner_token);
+        } catch (vectorError) {
+            await q.mark_outbox_failed.run(job_id, owner_token, String((vectorError as Error)?.message || vectorError));
+            console.error("[HSG] Vector update failed for memory", id, "err:", vectorError);
         }
-        await transaction.commit();
-        return { id, updated: true };
-    } catch (error) {
-        await transaction.rollback();
-        throw error;
+    } else {
+        const tx = begin_tx();
+        tx.exec("update memories set content=?,tags=?,meta=?,updated_at=?,version=version+1 where id=? and user_id=?", [enc_content, new_tags, enc_meta, Date.now(), id, active_user]);
+        const batchResults = await tx.commit();
+        const mainUpdateResult = batchResults[0];
+        if (!mainUpdateResult || mainUpdateResult.rowsAffected === 0) {
+            throw new Error(`Memory ${id} not found or ownership changed`);
+        }
     }
+
+    return { id, updated: true };
 }

@@ -83,17 +83,20 @@ const uid = (val?: string | null) => (val?.trim() ? val.trim() : undefined);
 const resolve_user_id = (
     tenant: string | undefined,
     arg: string | null | undefined,
-): string | undefined => {
-    const trimmed = uid(arg);
-    if (tenant) {
-        if (trimmed && trimmed !== tenant) {
-            throw new Error(
-                "tenant_mismatch: user_id does not match authenticated tenant; omit user_id or pass the tenant identifier",
-            );
-        }
-        return tenant;
+): string => {
+    const active_tenant = tenant?.trim();
+    if (!active_tenant) {
+        throw new Error(
+            "Unauthenticated MCP session: trusted server-bound tenant context required",
+        );
     }
-    return trimmed;
+    const trimmed_arg = uid(arg);
+    if (trimmed_arg && trimmed_arg !== active_tenant) {
+        throw new Error(
+            "tenant_mismatch: user_id does not match authenticated tenant; omit user_id or pass the tenant identifier",
+        );
+    }
+    return active_tenant;
 };
 
 export const create_mcp_srv = (tenant?: string) => {
@@ -575,17 +578,31 @@ export const create_mcp_srv = (tenant?: string) => {
                 .max(1)
                 .default(0.1)
                 .describe("Salience boost amount (default 0.1)"),
+            user_id: z
+                .string()
+                .trim()
+                .min(1)
+                .optional()
+                .describe(
+                    "Validate ownership against a specific user identifier",
+                ),
         },
-        async ({ id, boost }) => {
-            if (tenant) {
-                const mem = await q.get_mem.get(id);
-                if (!mem || mem.user_id !== tenant) {
-                    throw new Error(
-                        `Memory ${id} not found for user ${tenant}`,
-                    );
-                }
+        async ({ id, boost, user_id }) => {
+            const active_tenant = tenant?.trim();
+            if (!active_tenant) {
+                throw new Error(
+                    "Unauthenticated MCP session: trusted server-bound tenant context required for reinforcement",
+                );
             }
-            await reinforce_memory(id, boost);
+            if (user_id && user_id.trim() !== active_tenant) {
+                throw new Error(
+                    "tenant_mismatch: user_id does not match authenticated tenant; omit user_id or pass the tenant identifier",
+                );
+            }
+            const success = await reinforce_memory(id, boost, active_tenant);
+            if (!success) {
+                throw new Error(`Memory ${id} not found.`);
+            }
             return {
                 content: [
                     {
@@ -618,25 +635,30 @@ export const create_mcp_srv = (tenant?: string) => {
         async ({ id, user_id, project_id }) => {
             const u = resolve_user_id(tenant, user_id);
             const proj = uid(project_id);
-            if (u || proj) {
-                const mem = await q.get_mem.get(id);
-                if (mem) {
-                    if (u && mem.user_id !== u)
-                        throw new Error(`Memory ${id} not found for user ${u}`);
-                    if (
-                        proj &&
-                        mem.project_id &&
-                        mem.project_id !== proj &&
-                        mem.project_id !== "system_global"
-                    ) {
-                        throw new Error(
-                            `Memory ${id} belongs to another project and cannot be deleted from ${proj}`,
-                        );
-                    }
-                }
+            const mem = await q.get_mem.get(id);
+            if (!mem || mem.user_id !== u) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: `Memory ${id} not found.`,
+                        },
+                    ],
+                    isError: true,
+                };
+            }
+            if (
+                proj &&
+                mem.project_id &&
+                mem.project_id !== proj &&
+                mem.project_id !== "system_global"
+            ) {
+                throw new Error(
+                    `Memory ${id} belongs to another project and cannot be deleted from ${proj}`,
+                );
             }
 
-            const success = await delete_memory(id);
+            const success = await delete_memory(id, u);
             if (!success) {
                 return {
                     content: [
@@ -760,19 +782,10 @@ export const create_mcp_srv = (tenant?: string) => {
         async ({ id, include_vectors, user_id }) => {
             const u = resolve_user_id(tenant, user_id);
             const mem = await q.get_mem.get(id);
-            if (!mem)
+            if (!mem || mem.user_id !== u)
                 return {
                     content: [
                         { type: "text", text: `Memory ${id} not found.` },
-                    ],
-                };
-            if (u && mem.user_id !== u)
-                return {
-                    content: [
-                        {
-                            type: "text",
-                            text: `Memory ${id} not found for user ${u}.`,
-                        },
                     ],
                 };
             const vecs = include_vectors
@@ -935,10 +948,28 @@ export const mcp = (app: any) => {
     app.put("/mcp", method_not_allowed);
 };
 
-export const start_mcp_stdio = async () => {
-    const srv = create_mcp_srv();
-    const trans = new StdioServerTransport();
+export function derive_mcp_tenant_id(): string | undefined {
+    const direct = process.env.OM_TENANT || process.env.OM_USER_ID;
+    if (direct && direct.trim()) {
+        return direct.trim();
+    }
+    return undefined;
+}
+
+export const start_mcp_stdio = async (custom_trans?: any) => {
+    const tenant = derive_mcp_tenant_id();
+    if (!tenant) {
+        console.error(
+            "[MCP] FATAL: Stdio MCP server startup failed: no trusted tenant configured in environment (OM_TENANT or OM_USER_ID required).",
+        );
+        throw new Error(
+            "Fatal MCP stdio startup error: Missing trusted server tenant configuration (OM_TENANT or OM_USER_ID required).",
+        );
+    }
+    const srv = create_mcp_srv(tenant);
+    const trans = custom_trans || new StdioServerTransport();
     await srv.connect(trans);
+    return { srv, trans, tenant };
 };
 
 if (typeof require !== "undefined" && require.main === module) {

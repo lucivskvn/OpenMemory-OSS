@@ -17,15 +17,15 @@ export { DEFAULT_VECTOR_TABLE };
 
 type q_type = {
     ins_mem: { run: (...p: any[]) => Promise<void> };
-    upd_mean_vec: { run: (...p: any[]) => Promise<void> };
-    upd_compressed_vec: { run: (...p: any[]) => Promise<void> };
-    upd_feedback: { run: (...p: any[]) => Promise<void> };
-    upd_seen: { run: (...p: any[]) => Promise<void> };
-    upd_mem: { run: (...p: any[]) => Promise<void> };
-    upd_mem_with_sector: { run: (...p: any[]) => Promise<void> };
+    upd_mean_vec: { run: (mean_dim: number, mean_vec: Buffer, id: string, user_id: string) => Promise<number> };
+    upd_compressed_vec: { run: (compressed_vec: Buffer, id: string, user_id: string) => Promise<number> };
+    upd_feedback: { run: (feedback_score: number, updated_at: number, id: string, user_id: string) => Promise<number> };
+    upd_seen: { run: (last_seen_at: number, salience: number, updated_at: number, id: string, user_id: string) => Promise<number> };
+    upd_mem: { run: (content: string, tags: string, meta: string, updated_at: number, id: string, user_id: string) => Promise<number> };
+    upd_mem_with_sector: { run: (content: string, primary_sector: string, tags: string, meta: string, updated_at: number, id: string, user_id: string) => Promise<number> };
     del_mem: { run: (...p: any[]) => Promise<void> };
     get_mem: { get: (id: string) => Promise<any> };
-    get_mem_by_simhash: { get: (simhash: string) => Promise<any> };
+    get_mem_by_simhash: { get: (simhash: string, user_id: string) => Promise<any> };
     all_mem: { all: (limit: number, offset: number) => Promise<any[]> };
     all_mem_by_sector: {
         all: (sector: string, limit: number, offset: number) => Promise<any[]>;
@@ -72,10 +72,10 @@ type q_type = {
     };
 
     ins_waypoint: { run: (...p: any[]) => Promise<void> };
-    get_neighbors: { all: (src: string) => Promise<any[]> };
-    get_waypoints_by_src: { all: (src: string) => Promise<any[]> };
-    get_waypoint: { get: (src: string, dst: string) => Promise<any> };
-    upd_waypoint: { run: (...p: any[]) => Promise<void> };
+    get_neighbors: { all: (src: string, user_id: string) => Promise<any[]> };
+    get_waypoints_by_src: { all: (src: string, user_id: string) => Promise<any[]> };
+    get_waypoint: { get: (src: string, dst: string, user_id: string) => Promise<any> };
+    upd_waypoint: { run: (weight: number, updated_at: number, src_id: string, dst_id: string, user_id: string) => Promise<number> };
     del_waypoints: { run: (...p: any[]) => Promise<void> };
     prune_waypoints: { run: (t: number) => Promise<void> };
 
@@ -87,6 +87,12 @@ type q_type = {
     ins_user: { run: (...p: any[]) => Promise<void> };
     get_user: { get: (user_id: string) => Promise<any> };
     upd_user_summary: { run: (...p: any[]) => Promise<void> };
+
+    enqueue_outbox: { run: (job_id: string, id: string, user_id: string, action: "create" | "delete" | "reindex", sectors: string | null) => Promise<number> };
+    claim_outbox_job: { run: (job_id: string, owner_token: string, lease_duration_ms?: number) => Promise<number> };
+    mark_outbox_completed: { run: (job_id: string, owner_token: string) => Promise<number> };
+    mark_outbox_failed: { run: (job_id: string, owner_token: string, err_msg: string) => Promise<number> };
+    retry_dead_letter_job: { run: (job_id: string, user_id: string) => Promise<number> };
 
     clear_all: { run: () => Promise<void> };
 };
@@ -149,7 +155,7 @@ const _exec_direct = async (sql: string, args: any[] = []) => {
 /**
  * Internal executor that respects transaction buffering.
  */
-const exec = async (sql: string, args: any[] = []) => {
+const exec = async (sql: string, args: any[] = []): Promise<void> => {
     if (txStmts) {
         txStmts.push({ sql, args });
         return;
@@ -160,6 +166,15 @@ const exec = async (sql: string, args: any[] = []) => {
 export const run_async = exec;
 export const run_async_direct = async (sql: string, args: any[] = []) => {
     await _exec_direct(sql, args);
+};
+
+export const run_affected_async = async (sql: string, args: any[] = []): Promise<number> => {
+    if (txStmts) {
+        txStmts.push({ sql, args });
+        return 0;
+    }
+    const result = await _exec_direct(sql, args);
+    return result.rowsAffected ?? 0;
 };
 
 export const get_async = async (sql: string, args: any[] = []) => {
@@ -184,6 +199,29 @@ export const all_async_direct = async (sql: string, args: any[] = []) => {
     return mapRows(result.rows);
 };
 
+export interface TxContext {
+    stmts: InStatement[];
+    exec: (sql: string, args?: any[]) => void;
+    commit: () => Promise<any[]>;
+}
+
+export const begin_tx = (): TxContext => {
+    const ctx: TxContext = {
+        stmts: [],
+        exec(sql: string, args: any[] = []) {
+            const encryptedP = [...args];
+            ctx.stmts.push({ sql, args: encryptedP });
+        },
+        async commit() {
+            const stmts = ctx.stmts;
+            ctx.stmts = [];
+            if (stmts.length === 0) return [];
+            return await client.batch(stmts, "write");
+        },
+    };
+    return ctx;
+};
+
 export const transaction = {
     begin: async () => {
         if (txStmts) {
@@ -192,10 +230,10 @@ export const transaction = {
         txStmts = [];
     },
     commit: async () => {
-        if (!txStmts) return;
+        if (!txStmts) return [];
         const stmts = txStmts;
         txStmts = null;
-        await client.batch(stmts, "write");
+        return await client.batch(stmts, "write");
     },
     rollback: async () => {
         txStmts = null;
@@ -283,6 +321,17 @@ export const init_db = async () => {
         // Otherwise ignore (table might not exist yet)
     }
 
+    try {
+        const outboxInfo = await all_async_direct("PRAGMA table_info(vector_outbox)");
+        if (outboxInfo && outboxInfo.length > 0) {
+            const has_job_id = outboxInfo.some((c: any) => c.name === "job_id");
+            const has_owner_token = outboxInfo.some((c: any) => c.name === "owner_token");
+            if (!has_job_id || !has_owner_token) {
+                await _exec_direct("drop table vector_outbox");
+            }
+        }
+    } catch {}
+
     const SCHEMA_TABLES = [
         "create table if not exists memories(id text primary key,user_id text,project_id text,segment integer default 0,content text not null,summary text,simhash text,primary_sector text not null,tags text,meta text,created_at integer,updated_at integer,last_seen_at integer,salience real,decay_lambda real,version integer default 1,mean_dim integer,mean_vec blob,compressed_vec blob,feedback_score real default 0,coactivations integer default 0)",
         "create index if not exists idx_mem_user_id on memories(user_id)",
@@ -296,6 +345,9 @@ export const init_db = async () => {
         "create table if not exists stats(id integer primary key autoincrement,type text not null,count integer default 1,ts integer not null)",
         "create table if not exists temporal_facts(id text primary key,user_id text,project_id text,subject text not null,predicate text not null,object text not null,valid_from integer not null,valid_to integer,confidence real not null check(confidence >= 0 and confidence <= 1),last_updated integer not null,metadata text,unique(subject,predicate,object,valid_from))",
         "create table if not exists temporal_edges(id text primary key,source_id text not null,target_id text not null,relation_type text not null,valid_from integer not null,valid_to integer,weight real not null,metadata text,foreign key(source_id) references temporal_facts(id),foreign key(target_id) references temporal_facts(id))",
+        "create table if not exists vector_outbox(job_id text primary key, id text not null, user_id text not null, action text not null, sectors text, status text not null default 'pending', attempts integer default 0, version integer default 1, owner_token text, lease_expires_at integer default 0, last_error text, created_at integer not null, updated_at integer not null)",
+        "create index if not exists idx_outbox_status on vector_outbox(status, attempts, lease_expires_at)",
+        "create index if not exists idx_outbox_mem_user on vector_outbox(id, user_id)",
     ];
     for (const sql of SCHEMA_TABLES) {
         await exec(sql);
@@ -319,53 +371,75 @@ export const q: q_type = {
         },
     },
     upd_mean_vec: {
-        run: (...p) =>
-            exec("update memories set mean_dim=?,mean_vec=? where id=?", p),
+        run: (mean_dim: number, mean_vec: Buffer, id: string, user_id: string) => {
+            const active_user = user_id?.trim();
+            if (!active_user) return Promise.resolve(0);
+            return run_affected_async(
+                "update memories set mean_dim=?,mean_vec=? where id=? and user_id=?",
+                [mean_dim, mean_vec, id, active_user],
+            );
+        },
     },
     upd_compressed_vec: {
-        run: (...p) =>
-            exec("update memories set compressed_vec=? where id=?", p),
+        run: (compressed_vec: Buffer, id: string, user_id: string) => {
+            const active_user = user_id?.trim();
+            if (!active_user) return Promise.resolve(0);
+            return run_affected_async(
+                "update memories set compressed_vec=? where id=? and user_id=?",
+                [compressed_vec, id, active_user],
+            );
+        },
     },
     upd_feedback: {
-        run: (...p) =>
-            exec(
-                "update memories set feedback_score=?,coactivations=coactivations+1,updated_at=? where id=?",
-                p,
-            ),
+        run: (feedback_score: number, updated_at: number, id: string, user_id: string) => {
+            const active_user = user_id?.trim();
+            if (!active_user) return Promise.resolve(0);
+            return run_affected_async(
+                "update memories set feedback_score=?,coactivations=coactivations+1,updated_at=? where id=? and user_id=?",
+                [feedback_score, updated_at, id, active_user],
+            );
+        },
     },
     upd_seen: {
-        run: (...p) =>
-            exec(
-                "update memories set last_seen_at=?,salience=?,updated_at=? where id=?",
-                p,
-            ),
+        run: (last_seen_at: number, salience: number, updated_at: number, id: string, user_id: string) => {
+            const active_user = user_id?.trim();
+            if (!active_user) return Promise.resolve(0);
+            return run_affected_async(
+                "update memories set last_seen_at=?,salience=?,updated_at=? where id=? and user_id=?",
+                [last_seen_at, salience, updated_at, id, active_user],
+            );
+        },
     },
     upd_mem: {
-        run: (...p) => {
-            const encryptedP = [...p];
+        run: (content: string, tags: string, meta: string, updated_at: number, id: string, user_id: string) => {
+            const active_user = user_id?.trim();
+            if (!active_user) return Promise.resolve(0);
+            const encryptedP: any[] = [content, tags, meta, updated_at, id, active_user];
             if (encryptedP[0] !== undefined && encryptedP[0] !== null) {
                 encryptedP[0] = encrypt(encryptedP[0]);
             }
             if (encryptedP[2] !== undefined && encryptedP[2] !== null) {
                 encryptedP[2] = encrypt(encryptedP[2]);
             }
-            return exec(
-                "update memories set content=?,tags=?,meta=?,updated_at=?,version=version+1 where id=?",
+            return run_affected_async(
+                "update memories set content=?,tags=?,meta=?,updated_at=?,version=version+1 where id=? and user_id=?",
                 encryptedP,
             );
         },
     },
     upd_mem_with_sector: {
-        run: (...p) => {
-            const encryptedP = [...p];
+        run: (content: string, primary_sector: string, tags: string, meta: string, updated_at: number, id: string, user_id: string) => {
+            const active_user = user_id?.trim();
+            if (!active_user) return Promise.resolve(0);
+            const encryptedP: any[] = [content, primary_sector, tags, meta, updated_at, id, active_user];
             if (encryptedP[0] !== undefined && encryptedP[0] !== null) {
                 encryptedP[0] = encrypt(encryptedP[0]);
             }
             if (encryptedP[3] !== undefined && encryptedP[3] !== null) {
                 encryptedP[3] = encrypt(encryptedP[3]);
             }
-            return exec(
-                "update memories set content=?,primary_sector=?,tags=?,meta=?,updated_at=?,version=version+1 where id=?",
+            return run_affected_async(
+                "update memories set content=?,primary_sector=?,tags=?,meta=?,updated_at=?,version=version+1 where id=? and user_id=?",
                 encryptedP,
             );
         },
@@ -375,8 +449,9 @@ export const q: q_type = {
             const id = p[0];
             const user_id = p[1];
             const project_id = p[2];
+            const in_tx = txStmts !== null;
             try {
-                await transaction.begin();
+                if (!in_tx) await transaction.begin();
                 let sql = "delete from memories where id=?";
                 const params: any[] = [id];
                 if (user_id) {
@@ -402,9 +477,9 @@ export const q: q_type = {
                 }
                 await exec(factSql, factParams);
 
-                await transaction.commit();
+                if (!in_tx) await transaction.commit();
             } catch (err) {
-                await transaction.rollback();
+                if (!in_tx) await transaction.rollback();
                 throw err;
             }
         },
@@ -413,11 +488,14 @@ export const q: q_type = {
         get: (id) => get_async("select * from memories where id=?", [id]),
     },
     get_mem_by_simhash: {
-        get: (simhash) =>
-            get_async(
-                "select * from memories where simhash=? order by salience desc limit 1",
-                [simhash],
-            ),
+        get: (simhash, user_id) => {
+            const active_user = user_id?.trim();
+            if (!active_user) return Promise.resolve(undefined);
+            return get_async(
+                "select * from memories where simhash=? and user_id=? order by salience desc limit 1",
+                [simhash, active_user],
+            );
+        },
     },
     all_mem: {
         all: (limit, offset) =>
@@ -515,33 +593,93 @@ export const q: q_type = {
                 p,
             ),
     },
+    enqueue_outbox: {
+        run: (job_id: string, id: string, user_id: string, action: "create" | "delete" | "reindex", sectors: string | null) => {
+            const active_user = user_id?.trim();
+            if (!active_user) return Promise.resolve(0);
+            const now_ts = Date.now();
+            return run_affected_async(
+                "insert into vector_outbox(job_id, id, user_id, action, sectors, status, created_at, updated_at) values(?, ?, ?, ?, ?, 'pending', ?, ?)",
+                [job_id, id, active_user, action, sectors, now_ts, now_ts],
+            );
+        },
+    },
+    claim_outbox_job: {
+        run: (job_id: string, owner_token: string, lease_duration_ms: number = 60000) => {
+            const now_ts = Date.now();
+            const lease_expires = now_ts + lease_duration_ms;
+            return run_affected_async(
+                "update vector_outbox set status='processing', owner_token=?, lease_expires_at=?, updated_at=? where job_id=? and (status='pending' or (status='failed' and attempts < 5) or (status='processing' and lease_expires_at < ?))",
+                [owner_token, lease_expires, now_ts, job_id, now_ts],
+            );
+        },
+    },
+    mark_outbox_completed: {
+        run: (job_id: string, owner_token: string) => {
+            return run_affected_async(
+                "update vector_outbox set status='completed', updated_at=? where job_id=? and owner_token=? and status='processing'",
+                [Date.now(), job_id, owner_token],
+            );
+        },
+    },
+    mark_outbox_failed: {
+        run: (job_id: string, owner_token: string, err_msg?: string) => {
+            const safe_msg = String(err_msg || "Vector operation failed").substring(0, 500);
+            return run_affected_async(
+                "update vector_outbox set status = case when attempts + 1 >= 5 then 'dead_letter' else 'failed' end, attempts = attempts + 1, last_error = ?, updated_at = ? where job_id = ? and owner_token = ? and status = 'processing'",
+                [safe_msg, Date.now(), job_id, owner_token],
+            );
+        },
+    },
+    retry_dead_letter_job: {
+        run: (job_id: string, user_id: string) => {
+            const active_user = user_id?.trim();
+            if (!active_user) return Promise.resolve(0);
+            return run_affected_async(
+                "update vector_outbox set status='pending', attempts=0, lease_expires_at=0, updated_at=? where job_id=? and user_id=? and status='dead_letter'",
+                [Date.now(), job_id, active_user],
+            );
+        },
+    },
     get_neighbors: {
-        all: (src) =>
-            all_async(
-                "select dst_id,weight from waypoints where src_id=? order by weight desc",
-                [src],
-            ),
+        all: (src, user_id) => {
+            const active_user = user_id?.trim();
+            if (!active_user) return Promise.resolve([]);
+            return all_async(
+                "select dst_id,weight from waypoints where src_id=? and user_id=? order by weight desc",
+                [src, active_user],
+            );
+        },
     },
     get_waypoints_by_src: {
-        all: (src) =>
-            all_async(
-                "select src_id,dst_id,weight,created_at,updated_at from waypoints where src_id=?",
-                [src],
-            ),
+        all: (src, user_id) => {
+            const active_user = user_id?.trim();
+            if (!active_user) return Promise.resolve([]);
+            return all_async(
+                "select src_id,dst_id,weight,created_at,updated_at from waypoints where src_id=? and user_id=?",
+                [src, active_user],
+            );
+        },
     },
     get_waypoint: {
-        get: (src, dst) =>
-            get_async(
-                "select weight from waypoints where src_id=? and dst_id=?",
-                [src, dst],
-            ),
+        get: (src, dst, user_id) => {
+            const active_user = user_id?.trim();
+            if (!active_user) return Promise.resolve(undefined);
+            return get_async(
+                "select weight from waypoints where src_id=? and dst_id=? and user_id=?",
+                [src, dst, active_user],
+            );
+        },
     },
     upd_waypoint: {
-        run: (...p) =>
-            exec(
-                "update waypoints set weight=?,updated_at=? where src_id=? and dst_id=?",
-                p,
-            ),
+        run: (weight: number, updated_at: number, src_id: string, dst_id: string, user_id: string) => {
+            const active_user = user_id?.trim();
+            if (!active_user) return Promise.resolve(0);
+            return run_affected_async(
+                "update waypoints set weight=?,updated_at=? where src_id=? and dst_id=? and user_id=?",
+                [weight, updated_at, src_id, dst_id, active_user],
+            );
+        },
     },
     del_waypoints: {
         run: (...p) => {

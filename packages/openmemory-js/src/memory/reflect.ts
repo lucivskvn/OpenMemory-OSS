@@ -1,4 +1,4 @@
-import { q, log_maint_op } from "../core/db";
+import { q, log_maint_op, all_async } from "../core/db";
 import { add_hsg_memory } from "./hsg";
 import { env } from "../core/config";
 import { j } from "../utils";
@@ -80,10 +80,12 @@ const summ = (c: any): string => {
     return `${n} ${sec} pattern: ${txt.substring(0, 200)}`;
 };
 
-const mark = async (ids: string[]) => {
+const mark = async (ids: string[], user_id: string) => {
+    const active_user = user_id?.trim();
+    if (!active_user) return;
     for (const id of ids) {
         const m = await q.get_mem.get(id);
-        if (m) {
+        if (m && m.user_id === active_user) {
             const meta = JSON.parse(m.meta || "{}");
             meta.consolidated = true;
             await q.upd_mem.run(
@@ -92,28 +94,39 @@ const mark = async (ids: string[]) => {
                 JSON.stringify(meta),
                 Date.now(),
                 id,
+                active_user,
             );
         }
     }
 };
 
-const boost = async (ids: string[]) => {
+const boost = async (ids: string[], user_id: string) => {
+    const active_user = user_id?.trim();
+    if (!active_user) return;
     for (const id of ids) {
         const m = await q.get_mem.get(id);
-        if (m) await q.upd_mem.run(m.content, m.tags, m.meta, Date.now(), id);
-        await q.upd_seen.run(
-            id,
-            m.last_seen_at,
-            Math.min(1, m.salience * 1.1),
-            Date.now(),
-        );
+        if (m && m.user_id === active_user) {
+            await q.upd_mem.run(m.content, m.tags, m.meta, Date.now(), id, active_user);
+            await q.upd_seen.run(
+                m.last_seen_at,
+                Math.min(1, m.salience * 1.1),
+                Date.now(),
+                id,
+                active_user,
+            );
+        }
     }
 };
 
-export const run_reflection = async () => {
-    console.error("[REFLECT] Starting reflection job...");
-    const min = env.reflect_min || 20;
-    const mems = await q.all_mem.all(100, 0);
+export const run_reflection = async (user_id: string, min_override?: number) => {
+    const active_user = user_id?.trim();
+    if (!active_user) {
+        throw new Error("tenant_required: run_reflection requires an authenticated non-empty user_id");
+    }
+
+    console.error(`[REFLECT] Starting reflection job...`);
+    const min = min_override ?? env.reflect_min ?? 20;
+    const mems = await q.all_mem_by_user.all(active_user, 100, 0);
     console.error(
         `[REFLECT] Fetched ${mems.length} memories (min required: ${min})`,
     );
@@ -137,9 +150,9 @@ export const run_reflection = async () => {
         console.error(
             `[REFLECT] Creating reflection: ${c.n} memories, salience=${s.toFixed(3)}, sector=${c.mem[0].primary_sector}`,
         );
-        await add_hsg_memory(txt, j(["reflect:auto"]), meta);
-        await mark(src);
-        await boost(src);
+        await add_hsg_memory(txt, j(["reflect:auto"]), meta, active_user);
+        await mark(src, active_user);
+        await boost(src, active_user);
         n++;
     }
     if (n > 0) await log_maint_op("reflect", n);
@@ -149,11 +162,25 @@ export const run_reflection = async () => {
 
 let timer: NodeJS.Timeout | null = null;
 
+export const run_reflection_all_tenants = async (min_override?: number) => {
+    const tenant_rows = await all_async(
+        "select distinct user_id from memories where user_id is not null and user_id != ''",
+    );
+    let total_created = 0;
+    for (const row of tenant_rows) {
+        if (row.user_id?.trim()) {
+            const res = await run_reflection(row.user_id.trim(), min_override);
+            total_created += res.created || 0;
+        }
+    }
+    return { created: total_created, tenants: tenant_rows.length };
+};
+
 export const start_reflection = () => {
     if (!env.auto_reflect || timer) return;
     const int = (env.reflect_interval || 10) * 60000;
     timer = setInterval(
-        () => run_reflection().catch((e) => console.error("[REFLECT]", e)),
+        () => run_reflection_all_tenants().catch((e) => console.error("[REFLECT]", e)),
         int,
     );
     console.error(`[REFLECT] Started: every ${env.reflect_interval || 10}m`);
