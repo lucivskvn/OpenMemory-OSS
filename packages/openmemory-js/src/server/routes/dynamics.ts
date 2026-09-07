@@ -356,10 +356,11 @@ export function dynroutes(app: any) {
                     );
 
                 await q.upd_seen.run(
-                    target_memory_id_from_request,
                     Date.now(),
                     updated_salience_after_reinforcement,
                     Date.now(),
+                    target_memory_id_from_request,
+                    tenant,
                 );
 
                 const connected_waypoints_from_database =
@@ -391,10 +392,11 @@ export function dynroutes(app: any) {
                     );
                     if (linked_mem?.user_id === tenant) {
                         await q.upd_seen.run(
-                            reinforcement_update_record.node_id,
                             Date.now(),
                             reinforcement_update_record.new_salience,
                             Date.now(),
+                            reinforcement_update_record.node_id,
+                            tenant,
                         );
                     }
                 }

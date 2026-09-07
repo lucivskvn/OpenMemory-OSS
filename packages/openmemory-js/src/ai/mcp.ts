@@ -641,7 +641,7 @@ export const create_mcp_srv = (tenant?: string) => {
                     content: [
                         {
                             type: "text",
-                            text: `Memory ${id} not found for user ${u}.`,
+                            text: `Memory ${id} not found.`,
                         },
                     ],
                     isError: true,
@@ -782,19 +782,10 @@ export const create_mcp_srv = (tenant?: string) => {
         async ({ id, include_vectors, user_id }) => {
             const u = resolve_user_id(tenant, user_id);
             const mem = await q.get_mem.get(id);
-            if (!mem)
+            if (!mem || mem.user_id !== u)
                 return {
                     content: [
                         { type: "text", text: `Memory ${id} not found.` },
-                    ],
-                };
-            if (u && mem.user_id !== u)
-                return {
-                    content: [
-                        {
-                            type: "text",
-                            text: `Memory ${id} not found for user ${u}.`,
-                        },
                     ],
                 };
             const vecs = include_vectors

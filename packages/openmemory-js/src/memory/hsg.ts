@@ -1149,6 +1149,25 @@ export async function run_decay_process(user_id: string): Promise<{
     return { processed: p, decayed: d };
 }
 
+export async function run_decay_process_all_tenants(): Promise<{
+    processed: number;
+    decayed: number;
+}> {
+    const tenant_rows = await all_async(
+        "select distinct user_id from memories where user_id is not null and user_id != ''",
+    );
+    let p = 0,
+        d = 0;
+    for (const row of tenant_rows) {
+        if (row.user_id?.trim()) {
+            const res = await run_decay_process(row.user_id.trim());
+            p += res.processed;
+            d += res.decayed;
+        }
+    }
+    return { processed: p, decayed: d };
+}
+
 async function ensure_user_exists(user_id: string): Promise<void> {
     try {
         const existing = await q.get_user.get(user_id);
@@ -1353,7 +1372,6 @@ export async function update_memory(
     const new_meta = metadata !== undefined ? j(metadata) : mem.meta || "{}";
     await transaction.begin();
     try {
-        let affected = 0;
         if (content !== undefined && content !== mem.content) {
             const chunks = chunk_text(new_content);
             const use_chunking = chunks.length > 1;
@@ -1400,7 +1418,12 @@ export async function update_memory(
                 active_user,
             );
         }
-        await transaction.commit();
+        const batchResults = await transaction.commit();
+        const mainUpdateResult = batchResults[batchResults.length - 1];
+        const affected = mainUpdateResult?.rowsAffected ?? 0;
+        if (affected === 0) {
+            throw new Error(`Memory ${id} not found or update failed`);
+        }
         return { id, updated: true };
     } catch (error) {
         await transaction.rollback();

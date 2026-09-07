@@ -1,6 +1,6 @@
 import { server } from "./server";
 import { env, tier } from "../core/config";
-import { run_decay_process, prune_weak_waypoints } from "../memory/hsg";
+import { run_decay_process_all_tenants, prune_weak_waypoints } from "../memory/hsg";
 import { mcp } from "../ai/mcp";
 import { routes } from "./routes";
 import {
@@ -101,7 +101,7 @@ console.log(
 setInterval(async () => {
     console.log("[DECAY] Running HSG decay process...");
     try {
-        const result = await run_decay_process();
+        const result = await run_decay_process_all_tenants();
         console.log(
             `[DECAY] Completed: ${result.decayed}/${result.processed} memories updated`,
         );
@@ -122,7 +122,7 @@ setInterval(
     7 * 24 * 60 * 60 * 1000,
 );
 setTimeout(() => {
-    run_decay_process()
+    run_decay_process_all_tenants()
         .then((result: any) => {
             console.log(
                 `[INIT] Initial decay: ${result.decayed}/${result.processed} memories updated`,

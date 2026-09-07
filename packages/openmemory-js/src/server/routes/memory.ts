@@ -256,7 +256,7 @@ export function mem(app: any) {
             if (m.user_id && m.user_id !== tenant) {
                 return res.status(403).json({ err: "forbidden" });
             }
-            const r = await update_memory(id, b.content, b.tags, b.metadata);
+            const r = await update_memory(id, b.content, b.tags, b.metadata, tenant);
             res.json(r);
         } catch (e: any) {
             if (e.message && e.message.includes("not found")) {

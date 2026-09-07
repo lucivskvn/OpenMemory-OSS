@@ -201,10 +201,10 @@ export const transaction = {
         txStmts = [];
     },
     commit: async () => {
-        if (!txStmts) return;
+        if (!txStmts) return [];
         const stmts = txStmts;
         txStmts = null;
-        await client.batch(stmts, "write");
+        return await client.batch(stmts, "write");
     },
     rollback: async () => {
         txStmts = null;

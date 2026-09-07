@@ -1,4 +1,4 @@
-import { q, log_maint_op } from "../core/db";
+import { q, log_maint_op, all_async } from "../core/db";
 import { add_hsg_memory } from "./hsg";
 import { env } from "../core/config";
 import { j } from "../utils";
@@ -124,11 +124,11 @@ export const run_reflection = async (user_id: string, min_override?: number) => 
         throw new Error("tenant_required: run_reflection requires an authenticated non-empty user_id");
     }
 
-    console.error(`[REFLECT] Starting reflection job for ${active_user}...`);
+    console.error(`[REFLECT] Starting reflection job...`);
     const min = min_override ?? env.reflect_min ?? 20;
     const mems = await q.all_mem_by_user.all(active_user, 100, 0);
     console.error(
-        `[REFLECT] Fetched ${mems.length} memories for ${active_user} (min required: ${min})`,
+        `[REFLECT] Fetched ${mems.length} memories (min required: ${min})`,
     );
     if (mems.length < min) {
         console.error("[REFLECT] Not enough memories, skipping");
@@ -162,11 +162,25 @@ export const run_reflection = async (user_id: string, min_override?: number) => 
 
 let timer: NodeJS.Timeout | null = null;
 
+export const run_reflection_all_tenants = async (min_override?: number) => {
+    const tenant_rows = await all_async(
+        "select distinct user_id from memories where user_id is not null and user_id != ''",
+    );
+    let total_created = 0;
+    for (const row of tenant_rows) {
+        if (row.user_id?.trim()) {
+            const res = await run_reflection(row.user_id.trim(), min_override);
+            total_created += res.created || 0;
+        }
+    }
+    return { created: total_created, tenants: tenant_rows.length };
+};
+
 export const start_reflection = () => {
     if (!env.auto_reflect || timer) return;
     const int = (env.reflect_interval || 10) * 60000;
     timer = setInterval(
-        () => run_reflection().catch((e) => console.error("[REFLECT]", e)),
+        () => run_reflection_all_tenants().catch((e) => console.error("[REFLECT]", e)),
         int,
     );
     console.error(`[REFLECT] Started: every ${env.reflect_interval || 10}m`);
