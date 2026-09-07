@@ -538,6 +538,7 @@ describe("Authentication Middleware", () => {
         expect(handlers["/dynamics/salience/calculate"]).toBeTruthy();
         expect(handlers["/dynamics/resonance/calculate"]).toBeTruthy();
         expect(handlers["/dynamics/activation/spreading"]).toBeTruthy();
+        expect(handlers["/dynamics/retrieval/energy-based"]).toBeTruthy();
 
         // 1. Unauthenticated request to /dynamics/salience/calculate
         let status1 = 0;
@@ -617,5 +618,128 @@ describe("Authentication Middleware", () => {
         };
         await handlers["/dynamics/activation/spreading"](req4, res4);
         expect(status4).toBe(400);
+
+        // 5. Authenticated request to /dynamics/retrieval/energy-based with valid query and tenant mismatch
+        let status5 = 0;
+        let json5: any = null;
+        const res5 = {
+            status: (s: number) => {
+                status5 = s;
+                return res5;
+            },
+            json: (j: any) => {
+                json5 = j;
+                return res5;
+            },
+            set: () => res5,
+        };
+        const req5 = {
+            tenant: "test-tenant",
+            body: {
+                query: "valid query",
+                user_id: "other-tenant",
+            },
+        };
+        await handlers["/dynamics/retrieval/energy-based"](req5, res5);
+        expect(status5).toBe(403);
+        expect(json5?.error).toBe("tenant_mismatch");
+    });
+
+    it("rejects tenant mismatch on /memory/reinforce", async () => {
+        const handlers: Record<string, any> = {};
+        const app_mock = {
+            post: (path: string, handler: any) => {
+                handlers[path] = handler;
+            },
+            get: () => {},
+            patch: () => {},
+            delete: () => {},
+        };
+
+        mem(app_mock);
+        expect(handlers["/memory/reinforce"]).toBeTruthy();
+
+        // 1. Mismatched user_id in payload
+        let status = 0;
+        let json_val: any = null;
+        const res = {
+            status: (code: number) => {
+                status = code;
+                return res;
+            },
+            json: (data: any) => {
+                json_val = data;
+            },
+        };
+        const req = {
+            tenant: "tenant-alice",
+            body: {
+                id: "mem-123",
+                user_id: "tenant-bob",
+            },
+        };
+
+        await handlers["/memory/reinforce"](req, res);
+        expect(status).toBe(403);
+        expect(json_val?.error).toBe("tenant_mismatch");
+
+        // 2. Mismatched owner on target memory record in DB
+        const dbModule = await import("../src/core/db");
+        const get_mem_spy = spyOn(dbModule.q.get_mem, "get").mockImplementationOnce(() =>
+            Promise.resolve({ id: "mem-123", salience: 0.5, user_id: "tenant-bob" }),
+        );
+
+        let status_owner = 0;
+        let json_owner: any = null;
+        const res_owner = {
+            status: (code: number) => {
+                status_owner = code;
+                return res_owner;
+            },
+            json: (data: any) => {
+                json_owner = data;
+            },
+        };
+        const req_owner = {
+            tenant: "tenant-alice",
+            body: {
+                id: "mem-123",
+            },
+        };
+
+        try {
+            await handlers["/memory/reinforce"](req_owner, res_owner);
+        } finally {
+            get_mem_spy.mockRestore();
+        }
+
+        expect(status_owner).toBe(403);
+        expect(json_owner?.error).toBe("tenant_mismatch");
+
+        const ownerless_mem_spy = spyOn(dbModule.q.get_mem, "get").mockImplementationOnce(() =>
+            Promise.resolve({ id: "mem-123", salience: 0.5, user_id: undefined }),
+        );
+        let status_ownerless = 0;
+        let json_ownerless: unknown = null;
+        const res_ownerless = {
+            status: (code: number) => {
+                status_ownerless = code;
+                return res_ownerless;
+            },
+            json: (data: unknown) => {
+                json_ownerless = data;
+            },
+        };
+
+        try {
+            await handlers["/memory/reinforce"](req_owner, res_ownerless);
+        } finally {
+            ownerless_mem_spy.mockRestore();
+        }
+
+        expect(status_ownerless).toBe(403);
+        expect(json_ownerless).toEqual(
+            expect.objectContaining({ error: "tenant_mismatch" }),
+        );
     });
 });

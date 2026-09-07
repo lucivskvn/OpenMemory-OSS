@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "bun:test";
 import { sys } from "../src/server/routes/system";
 import { dash } from "../src/server/routes/dashboard";
+import { dynroutes } from "../src/server/routes/dynamics";
 import { run_async, q, all_async } from "../src/core/db";
 import { delete_memory } from "../src/memory/hsg";
 
@@ -126,6 +127,23 @@ describe("Sectors route tenant scoping", () => {
         const bob_stats = bob_res_json.stats;
         expect(bob_stats).toHaveLength(1);
         expect(bob_stats[0].sector).toBe("semantic");
+    });
+});
+
+describe("delete_memory tenant isolation", () => {
+    beforeEach(cleanup);
+
+    it("rejects deletion by a non-owner", async () => {
+        const owner = "tenant-bob";
+        await q.ins_mem.run(
+            "mem-bob-delete-test", owner, null, 0, "Bob secret memory", null,
+            "semantic", null, null, Date.now(), Date.now(), Date.now(), 0.8,
+            0.01, 1, null, null, null, 0,
+        );
+        expect(await delete_memory("mem-bob-delete-test", "tenant-alice")).toBe(false);
+        expect(await q.get_mem.get("mem-bob-delete-test")).toBeTruthy();
+        expect(await delete_memory("mem-bob-delete-test", owner)).toBe(true);
+        expect(await q.get_mem.get("mem-bob-delete-test")).toBeUndefined();
     });
 });
 
@@ -505,6 +523,56 @@ describe("Classifier training route scoping", () => {
         expect(admin_status).toBe(200);
         expect(admin_json.ok).toBe(true);
         expect(admin_json.message).toBe("Training started");
+
+        // 4. Invalid body payload error sanitization check (must not leak raw Zod tree)
+        const req_invalid_body = {
+            tenant: "admin",
+            body: { invalid_key: "bad_format" },
+        };
+        let invalid_status = 200;
+        let invalid_json: any = null;
+        const res_invalid = {
+            status: function (code: number) {
+                invalid_status = code;
+                return this;
+            },
+            json: (data: any) => {
+                invalid_json = data;
+            },
+        };
+
+        await train_handler(req_invalid_body, res_invalid);
+        expect(invalid_status).toBe(400);
+        expect(invalid_json.error).toBe("Invalid payload format");
+        expect(invalid_json.details).toBe("Validation failed");
+        expect(invalid_json.issues).toBeUndefined();
+        expect(invalid_json.parsed).toBeUndefined();
+
+        // 5. Present data array with invalid sector enum value error sanitization check
+        const req_invalid_sector = {
+            tenant: "admin",
+            body: {
+                data: [{ text: "Invalid sector item", sector: "invalid_sector_enum" }],
+            },
+        };
+        let sector_status = 200;
+        let sector_json: any = null;
+        const res_sector_invalid = {
+            status: function (code: number) {
+                sector_status = code;
+                return this;
+            },
+            json: (data: any) => {
+                sector_json = data;
+            },
+        };
+
+        await train_handler(req_invalid_sector, res_sector_invalid);
+        expect(sector_status).toBe(400);
+        expect(sector_json.error).toBe("Invalid payload format");
+        expect(sector_json.details).toBe("Validation failed");
+        expect(sector_json.issues).toBeUndefined();
+        expect(sector_json.parsed).toBeUndefined();
     });
 });
 
@@ -610,51 +678,75 @@ describe("Dashboard route hours parameter validation", () => {
     });
 });
 
-describe("delete_memory tenant isolation", () => {
-    beforeEach(async () => {
-        await cleanup();
+describe("Dynamics routes validation and tenant scoping", () => {
+    let energy_handler: any = null;
+    let trace_handler: any = null;
+
+    beforeEach(() => {
+        const app_mock = {
+            post: (path: string, handler: any) => {
+                if (path === "/dynamics/retrieval/energy-based") {
+                    energy_handler = handler;
+                } else if (path === "/dynamics/reinforcement/trace") {
+                    trace_handler = handler;
+                }
+            },
+            get: () => {},
+        };
+        dynroutes(app_mock);
     });
 
-    it("prevents deleting another tenant's memory when user_id is provided", async () => {
-        const t_alice = "tenant-alice";
-        const t_bob = "tenant-bob";
+    it("enforces schema validation on energy-based retrieval and trace reinforcement", async () => {
+        expect(energy_handler).toBeTruthy();
+        expect(trace_handler).toBeTruthy();
 
-        await q.ins_mem.run(
-            "mem-bob-delete-test",
-            t_bob,
-            null,
-            0,
-            "Bob secret memory",
-            null,
-            "semantic",
-            null,
-            null,
-            Date.now(),
-            Date.now(),
-            Date.now(),
-            0.8,
-            0.01,
-            1,
-            null,
-            null,
-            null,
-            0,
-        );
+        // 1. Missing query on energy-based retrieval returns 400
+        const req_bad_energy = { tenant: "tenant-alice", body: {} };
+        let status = 200;
+        let res_json: any = null;
+        const res_mock = {
+            status: function (code: number) {
+                status = code;
+                return this;
+            },
+            set: function () {
+                return this;
+            },
+            setHeader: function () {
+                return this;
+            },
+            json: (data: any) => {
+                res_json = data;
+            },
+        };
 
-        // Alice tries to delete Bob's memory
-        const alice_deleted = await delete_memory("mem-bob-delete-test", t_alice);
-        expect(alice_deleted).toBe(false);
+        await energy_handler(req_bad_energy, res_mock);
+        expect(status).toBe(400);
 
-        // Verify Bob's memory is intact
-        const bob_mem = await q.get_mem.get("mem-bob-delete-test");
-        expect(bob_mem).toBeTruthy();
+        // 2. Missing memory_id on trace reinforcement returns 400
+        const req_bad_trace = { tenant: "tenant-alice", body: {} };
+        status = 200;
+        await trace_handler(req_bad_trace, res_mock);
+        expect(status).toBe(400);
 
-        // Bob deletes his memory successfully
-        const bob_deleted = await delete_memory("mem-bob-delete-test", t_bob);
-        expect(bob_deleted).toBe(true);
+        // 3. Mismatched user_id returns 403
+        const req_mismatch_energy = {
+            tenant: "tenant-alice",
+            body: { query: "test", user_id: "tenant-bob" },
+        };
+        status = 200;
+        await energy_handler(req_mismatch_energy, res_mock);
+        expect(status).toBe(403);
 
-        // Verify Bob's memory is deleted
-        const deleted_mem = await q.get_mem.get("mem-bob-delete-test");
-        expect(deleted_mem).toBeUndefined();
+        // 4. Mismatched user_id on trace reinforcement returns 403 and tenant_mismatch
+        const req_mismatch_trace = {
+            tenant: "tenant-alice",
+            body: { memory_id: "valid-mem-id", user_id: "tenant-bob" },
+        };
+        status = 200;
+        res_json = null;
+        await trace_handler(req_mismatch_trace, res_mock);
+        expect(status).toBe(403);
+        expect(res_json.error).toBe("tenant_mismatch");
     });
 });

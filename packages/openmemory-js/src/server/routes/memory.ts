@@ -63,6 +63,7 @@ const query_schema: schema = {
 const reinforce_schema: schema = {
     id: { type: "string", required: true, min_length: 1, max_length: 256 },
     boost: { type: "number", min: 0, max: 100 },
+    user_id: { type: "string", max_length: 256 },
 };
 
 const patch_schema: schema = {
@@ -211,21 +212,27 @@ export function mem(app: any) {
     app.post("/memory/reinforce", async (req: any, res: any) => {
         const tenant = require_tenant(req, res);
         if (!tenant) return;
-        const b = parse_or_400<{ id: string; boost?: number }>(
-            res,
-            req.body,
-            reinforce_schema,
-        );
+        const b = parse_or_400<{
+            id: string;
+            boost?: number;
+            user_id?: string;
+        }>(res, req.body, reinforce_schema);
         if (!b) return;
+        if (reject_tenant_mismatch(res, tenant, b.user_id)) return;
         try {
             const m = await q.get_mem.get(b.id);
             if (!m) return res.status(404).json({ err: "nf" });
-            if (m.user_id && m.user_id !== tenant)
-                return res.status(403).json({ err: "forbidden" });
+            if (m.user_id !== tenant) {
+                return res.status(403).json({
+                    error: "tenant_mismatch",
+                    message: "memory does not belong to authenticated tenant",
+                });
+            }
             await reinforce_memory(b.id, b.boost);
             res.json({ ok: true });
         } catch (e: any) {
-            res.status(404).json({ err: "nf" });
+            console.error("[mem] /memory/reinforce failed:", e);
+            res.status(500).json({ err: "internal" });
         }
     });
 
