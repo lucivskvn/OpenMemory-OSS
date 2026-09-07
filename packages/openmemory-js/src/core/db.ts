@@ -22,7 +22,7 @@ type q_type = {
     upd_feedback: { run: (feedback_score: number, updated_at: number, id: string, user_id: string) => Promise<number> };
     upd_seen: { run: (last_seen_at: number, salience: number, updated_at: number, id: string, user_id: string) => Promise<number> };
     upd_mem: { run: (content: string, tags: string, meta: string, updated_at: number, id: string, user_id: string) => Promise<number> };
-    upd_mem_with_sector: { run: (...p: any[]) => Promise<void> };
+    upd_mem_with_sector: { run: (content: string, primary_sector: string, tags: string, meta: string, updated_at: number, id: string, user_id: string) => Promise<number> };
     del_mem: { run: (...p: any[]) => Promise<void> };
     get_mem: { get: (id: string) => Promise<any> };
     get_mem_by_simhash: { get: (simhash: string, user_id: string) => Promise<any> };
@@ -72,8 +72,8 @@ type q_type = {
     };
 
     ins_waypoint: { run: (...p: any[]) => Promise<void> };
-    get_neighbors: { all: (src: string) => Promise<any[]> };
-    get_waypoints_by_src: { all: (src: string) => Promise<any[]> };
+    get_neighbors: { all: (src: string, user_id: string) => Promise<any[]> };
+    get_waypoints_by_src: { all: (src: string, user_id: string) => Promise<any[]> };
     get_waypoint: { get: (src: string, dst: string, user_id: string) => Promise<any> };
     upd_waypoint: { run: (weight: number, updated_at: number, src_id: string, dst_id: string, user_id: string) => Promise<number> };
     del_waypoints: { run: (...p: any[]) => Promise<void> };
@@ -373,16 +373,18 @@ export const q: q_type = {
         },
     },
     upd_mem_with_sector: {
-        run: (...p) => {
-            const encryptedP = [...p];
+        run: (content: string, primary_sector: string, tags: string, meta: string, updated_at: number, id: string, user_id: string) => {
+            const active_user = user_id?.trim();
+            if (!active_user) return Promise.resolve(0);
+            const encryptedP: any[] = [content, primary_sector, tags, meta, updated_at, id, active_user];
             if (encryptedP[0] !== undefined && encryptedP[0] !== null) {
                 encryptedP[0] = encrypt(encryptedP[0]);
             }
             if (encryptedP[3] !== undefined && encryptedP[3] !== null) {
                 encryptedP[3] = encrypt(encryptedP[3]);
             }
-            return exec(
-                "update memories set content=?,primary_sector=?,tags=?,meta=?,updated_at=?,version=version+1 where id=?",
+            return run_affected_async(
+                "update memories set content=?,primary_sector=?,tags=?,meta=?,updated_at=?,version=version+1 where id=? and user_id=?",
                 encryptedP,
             );
         },
@@ -392,8 +394,9 @@ export const q: q_type = {
             const id = p[0];
             const user_id = p[1];
             const project_id = p[2];
+            const in_tx = txStmts !== null;
             try {
-                await transaction.begin();
+                if (!in_tx) await transaction.begin();
                 let sql = "delete from memories where id=?";
                 const params: any[] = [id];
                 if (user_id) {
@@ -419,9 +422,9 @@ export const q: q_type = {
                 }
                 await exec(factSql, factParams);
 
-                await transaction.commit();
+                if (!in_tx) await transaction.commit();
             } catch (err) {
-                await transaction.rollback();
+                if (!in_tx) await transaction.rollback();
                 throw err;
             }
         },
@@ -536,18 +539,24 @@ export const q: q_type = {
             ),
     },
     get_neighbors: {
-        all: (src) =>
-            all_async(
-                "select dst_id,weight from waypoints where src_id=? order by weight desc",
-                [src],
-            ),
+        all: (src, user_id) => {
+            const active_user = user_id?.trim();
+            if (!active_user) return Promise.resolve([]);
+            return all_async(
+                "select dst_id,weight from waypoints where src_id=? and user_id=? order by weight desc",
+                [src, active_user],
+            );
+        },
     },
     get_waypoints_by_src: {
-        all: (src) =>
-            all_async(
-                "select src_id,dst_id,weight,created_at,updated_at from waypoints where src_id=?",
-                [src],
-            ),
+        all: (src, user_id) => {
+            const active_user = user_id?.trim();
+            if (!active_user) return Promise.resolve([]);
+            return all_async(
+                "select src_id,dst_id,weight,created_at,updated_at from waypoints where src_id=? and user_id=?",
+                [src, active_user],
+            );
+        },
     },
     get_waypoint: {
         get: (src, dst, user_id) => {

@@ -83,17 +83,20 @@ const uid = (val?: string | null) => (val?.trim() ? val.trim() : undefined);
 const resolve_user_id = (
     tenant: string | undefined,
     arg: string | null | undefined,
-): string | undefined => {
-    const trimmed = uid(arg);
-    if (tenant) {
-        if (trimmed && trimmed !== tenant) {
-            throw new Error(
-                "tenant_mismatch: user_id does not match authenticated tenant; omit user_id or pass the tenant identifier",
-            );
-        }
-        return tenant;
+): string => {
+    const active_tenant = tenant?.trim();
+    if (!active_tenant) {
+        throw new Error(
+            "Unauthenticated MCP session: trusted server-bound tenant context required",
+        );
     }
-    return trimmed;
+    const trimmed_arg = uid(arg);
+    if (trimmed_arg && trimmed_arg !== active_tenant) {
+        throw new Error(
+            "tenant_mismatch: user_id does not match authenticated tenant; omit user_id or pass the tenant identifier",
+        );
+    }
+    return active_tenant;
 };
 
 export const create_mcp_srv = (tenant?: string) => {
@@ -632,25 +635,30 @@ export const create_mcp_srv = (tenant?: string) => {
         async ({ id, user_id, project_id }) => {
             const u = resolve_user_id(tenant, user_id);
             const proj = uid(project_id);
-            if (u || proj) {
-                const mem = await q.get_mem.get(id);
-                if (mem) {
-                    if (u && mem.user_id !== u)
-                        throw new Error(`Memory ${id} not found for user ${u}`);
-                    if (
-                        proj &&
-                        mem.project_id &&
-                        mem.project_id !== proj &&
-                        mem.project_id !== "system_global"
-                    ) {
-                        throw new Error(
-                            `Memory ${id} belongs to another project and cannot be deleted from ${proj}`,
-                        );
-                    }
-                }
+            const mem = await q.get_mem.get(id);
+            if (!mem || mem.user_id !== u) {
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: `Memory ${id} not found for user ${u}.`,
+                        },
+                    ],
+                    isError: true,
+                };
+            }
+            if (
+                proj &&
+                mem.project_id &&
+                mem.project_id !== proj &&
+                mem.project_id !== "system_global"
+            ) {
+                throw new Error(
+                    `Memory ${id} belongs to another project and cannot be deleted from ${proj}`,
+                );
             }
 
-            const success = await delete_memory(id);
+            const success = await delete_memory(id, u);
             if (!success) {
                 return {
                     content: [

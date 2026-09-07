@@ -365,6 +365,7 @@ export function dynroutes(app: any) {
                 const connected_waypoints_from_database =
                     await q.get_waypoints_by_src.all(
                         target_memory_id_from_request,
+                        tenant,
                     );
                 const linked_nodes_with_weights_array =
                     connected_waypoints_from_database

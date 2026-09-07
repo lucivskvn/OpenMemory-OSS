@@ -262,11 +262,15 @@ export const on_query_hit = async (
     mem_id: string,
     sector: string,
     reembed?: (text: string) => Promise<number[]>,
+    user_id?: string,
 ) => {
     if (!cfg.regeneration_enabled && !cfg.reinforce_on_query) return;
 
+    const active_user = user_id?.trim();
+    if (!active_user) return;
+
     const m = await q.get_mem.get(mem_id);
-    if (!m) return;
+    if (!m || m.user_id !== active_user) return;
 
     let updated = false;
 
@@ -274,7 +278,7 @@ export const on_query_hit = async (
         const vec_row = await vector_store.getVector(
             mem_id,
             sector,
-            m.user_id || undefined,
+            active_user,
         );
         if (vec_row && vec_row.vector) {
             const vec =
@@ -290,7 +294,7 @@ export const on_query_hit = async (
                         sector,
                         new_vec,
                         new_vec.length,
-                        m.user_id || undefined,
+                        active_user,
                         m.project_id || undefined,
                     );
                     updated = true;
@@ -301,11 +305,8 @@ export const on_query_hit = async (
 
     if (cfg.reinforce_on_query) {
         const new_sal = clamp_f((m.salience || 0.5) + 0.5, 0, 1);
-        await run_async(
-            `update ${memories_table} set salience=?,last_seen_at=? where id=?`,
-            [new_sal, now(), mem_id],
-        );
-        updated = true;
+        const affected = await q.upd_seen.run(now(), new_sal, now(), mem_id, active_user);
+        if (affected > 0) updated = true;
     }
 
     if (updated) {

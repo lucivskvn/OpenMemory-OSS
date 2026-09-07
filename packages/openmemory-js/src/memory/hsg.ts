@@ -649,8 +649,11 @@ export async function create_contextual_waypoints(
 }
 export async function expand_via_waypoints(
     init_res: string[],
+    user_id: string,
     max_exp: number = 10,
 ): Promise<Array<{ id: string; weight: number; path: string[] }>> {
+    const active_user = user_id?.trim();
+    if (!active_user) return [];
     const exp: Array<{ id: string; weight: number; path: string[] }> = [];
     const vis = new Set<string>();
     for (const id of init_res) {
@@ -661,7 +664,7 @@ export async function expand_via_waypoints(
     let exp_cnt = 0;
     while (q_arr.length > 0 && exp_cnt < max_exp) {
         const cur = q_arr.shift()!;
-        const neighs = await q.get_neighbors.all(cur.id);
+        const neighs = await q.get_neighbors.all(cur.id, active_user);
         for (const neigh of neighs) {
             if (vis.has(neigh.dst_id)) continue;
 
@@ -902,7 +905,7 @@ export async function hsg_query(
         for (const r of Object.values(sr)) for (const x of r) ids.add(x.id);
         const exp = high_conf
             ? []
-            : await expand_via_waypoints(Array.from(ids), k * 2);
+            : await expand_via_waypoints(Array.from(ids), query_user, k * 2);
         for (const e of exp) ids.add(e.id);
 
         let keyword_scores = new Map<string, number>();
@@ -1056,7 +1059,7 @@ export async function hsg_query(
             await q.upd_seen.run(Date.now(), rsal, Date.now(), r.id, query_user);
             if (r.path.length > 1) {
                 await reinforce_waypoints(r.path, query_user);
-                const wps = await q.get_waypoints_by_src.all(r.id);
+                const wps = await q.get_waypoints_by_src.all(r.id, query_user);
                 const lns = wps.map((wp: any) => ({
                     target_id: wp.dst_id,
                     weight: wp.weight,
@@ -1106,8 +1109,11 @@ export async function hsg_query(
         };
 
         await processBatched(top, 5, async (r) => {
-            await on_query_hit(r.id, r.primary_sector, (text) =>
-                embedForSector(text, r.primary_sector),
+            await on_query_hit(
+                r.id,
+                r.primary_sector,
+                (text) => embedForSector(text, r.primary_sector),
+                query_user,
             ).catch(() => {});
         });
 
@@ -1283,16 +1289,18 @@ export async function add_hsg_memory(
         throw error;
     }
 }
-export async function delete_memory(id: string, user_id?: string): Promise<boolean> {
+export async function delete_memory(id: string, user_id: string): Promise<boolean> {
+    const active_user = user_id?.trim();
+    if (!active_user) {
+        throw new Error("tenant_required: delete_memory requires an authenticated user_id");
+    }
     const mem = await q.get_mem.get(id);
-    if (!mem) return false;
-    const active_user = user_id?.trim() || mem.user_id;
-    if (mem.user_id && mem.user_id !== active_user) return false;
+    if (!mem || mem.user_id !== active_user) return false;
     await transaction.begin();
     try {
         await q.del_mem.run(id, active_user);
         await q.del_waypoints.run(id, id, active_user);
-        await vector_store.deleteVectors(id, active_user || undefined);
+        await vector_store.deleteVectors(id, active_user);
         await transaction.commit();
         return true;
     } catch (error) {
@@ -1329,14 +1337,22 @@ export async function update_memory(
     content?: string,
     tags?: string[],
     metadata?: any,
+    user_id?: string,
 ): Promise<{ id: string; updated: boolean }> {
+    const active_user = user_id?.trim();
+    if (!active_user) {
+        throw new Error("tenant_required: update_memory requires an authenticated user_id");
+    }
     const mem = await q.get_mem.get(id);
-    if (!mem) throw new Error(`Memory ${id} not found`);
+    if (!mem || mem.user_id !== active_user) {
+        throw new Error(`Memory ${id} not found`);
+    }
     const new_content = content !== undefined ? content : mem.content;
     const new_tags = tags !== undefined ? j(tags) : mem.tags || "[]";
     const new_meta = metadata !== undefined ? j(metadata) : mem.meta || "{}";
     await transaction.begin();
     try {
+        let affected = 0;
         if (content !== undefined && content !== mem.content) {
             const chunks = chunk_text(new_content);
             const use_chunking = chunks.length > 1;
@@ -1345,7 +1361,7 @@ export async function update_memory(
                 classification.primary,
                 ...classification.additional,
             ];
-            await vector_store.deleteVectors(id, mem.user_id || undefined);
+            await vector_store.deleteVectors(id, active_user);
             const emb_res = await embedMultiSector(
                 id,
                 new_content,
@@ -1358,7 +1374,7 @@ export async function update_memory(
                     result.sector,
                     result.vector,
                     result.dim,
-                    mem.user_id || "anonymous",
+                    active_user,
                 );
             }
             const mean_vec = calc_mean_vec(emb_res, all_sectors);
@@ -1371,6 +1387,7 @@ export async function update_memory(
                 new_meta,
                 Date.now(),
                 id,
+                active_user,
             );
         } else {
             await q.upd_mem.run(
@@ -1379,6 +1396,7 @@ export async function update_memory(
                 new_meta,
                 Date.now(),
                 id,
+                active_user,
             );
         }
         await transaction.commit();

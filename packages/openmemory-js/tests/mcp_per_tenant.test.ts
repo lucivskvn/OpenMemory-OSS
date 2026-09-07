@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { create_mcp_srv, start_mcp_stdio, derive_mcp_tenant_id } from "../src/ai/mcp";
-import { reinforce_memory, add_hsg_memory, hsg_query } from "../src/memory/hsg";
+import { reinforce_memory, add_hsg_memory, hsg_query, update_memory, delete_memory, expand_via_waypoints } from "../src/memory/hsg";
 import { run_reflection } from "../src/memory/reflect";
 import { run_async, q } from "../src/core/db";
 
@@ -176,28 +176,112 @@ describe("MCP per-tenant scoping", () => {
         expect(text).toMatch(/tenant_mismatch/);
     });
 
-    it("stdio-style server without tenant fails closed on unauthenticated writes and queries", async () => {
-        // Unbound server session without a tenant context must fail closed rather than writing as "anonymous"
+    it("stdio-style server without tenant fails closed on ALL tool calls regardless of input user_id", async () => {
         const { client } = await connect_client(undefined);
-        const stored: any = await client.callTool({
-            name: "openmemory_store",
-            arguments: { content: "stdio-mode memory with no tenant binding" },
-        });
-        expect(stored.isError).toBe(true);
-        const store_text = (stored.content ?? []).map((b: any) => b.text).join("\n");
-        expect(store_text).toMatch(/tenant_required/);
 
-        // Explicit user_id on unbound server allows write
-        const stored_with_uid = await client.callTool({
+        // 1. openmemory_store
+        const store_res: any = await client.callTool({
             name: "openmemory_store",
-            arguments: { content: "stdio-mode memory with explicit user_id", user_id: T_ALICE },
+            arguments: { content: "unbound store content", user_id: T_ALICE },
         });
-        const { id } = parse_store(stored_with_uid);
-        expect(id).toBeTruthy();
+        expect(store_res.isError).toBe(true);
 
-        const row = await q.get_mem.get(id!);
-        expect(row.user_id).toBe(T_ALICE);
+        // 2. openmemory_query
+        const query_res: any = await client.callTool({
+            name: "openmemory_query",
+            arguments: { query: "unbound query", user_id: T_ALICE },
+        });
+        expect(query_res.isError).toBe(true);
+
+        // 3. openmemory_list
+        const list_res: any = await client.callTool({
+            name: "openmemory_list",
+            arguments: { limit: 10, user_id: T_ALICE },
+        });
+        expect(list_res.isError).toBe(true);
+
+        // 4. openmemory_get
+        const get_res: any = await client.callTool({
+            name: "openmemory_get",
+            arguments: { id: "some-id", user_id: T_ALICE },
+        });
+        expect(get_res.isError).toBe(true);
+
+        // 5. openmemory_delete
+        const del_res: any = await client.callTool({
+            name: "openmemory_delete",
+            arguments: { id: "some-id", user_id: T_ALICE },
+        });
+        expect(del_res.isError).toBe(true);
+
+        // 6. openmemory_reinforce
+        const reinf_res: any = await client.callTool({
+            name: "openmemory_reinforce",
+            arguments: { id: "some-id", boost: 0.1, user_id: T_ALICE },
+        });
+        expect(reinf_res.isError).toBe(true);
     });
+
+    it("verifies update_memory and delete_memory tenant boundaries across all branches", async () => {
+        // 1. Setup Alice memory
+        const mem_alice = await add_hsg_memory("Initial Alice memory content", ["v1"], { rev: 1 }, T_ALICE);
+
+        // 2. update_memory metadata-only branch (tags/metadata)
+        const meta_upd = await update_memory(mem_alice.id, undefined, ["v2"], { rev: 2 }, T_ALICE);
+        expect(meta_upd.updated).toBe(true);
+        const row_v2 = await q.get_mem.get(mem_alice.id);
+        expect(row_v2.tags).toMatch(/v2/);
+
+        // 3. update_memory content-change branch (sector/embedding re-index)
+        const content_upd = await update_memory(mem_alice.id, "Updated Alice memory content with new text", ["v3"], { rev: 3 }, T_ALICE);
+        expect(content_upd.updated).toBe(true);
+        const row_v3 = await q.get_mem.get(mem_alice.id);
+        expect(row_v3.content).toBe("Updated Alice memory content with new text");
+
+        // 4. update_memory fails closed on missing user_id or mismatched user_id
+        await expect(update_memory(mem_alice.id, "Hacked text", undefined, undefined, "")).rejects.toThrow(/tenant_required/);
+        await expect(update_memory(mem_alice.id, "Hacked text", undefined, undefined, T_BOB)).rejects.toThrow(/not found/);
+
+        // 5. delete_memory failure boundaries
+        await expect(delete_memory(mem_alice.id, "")).rejects.toThrow(/tenant_required/);
+        expect(await delete_memory(mem_alice.id, T_BOB)).toBe(false);
+
+        // Verify Alice record is intact after failed deletion attempt by Bob
+        const row_still_exists = await q.get_mem.get(mem_alice.id);
+        expect(row_still_exists).toBeTruthy();
+
+        // Ownerless (NULL) record deletion fails closed
+        const null_id = "null-owner-del-test";
+        await run_async(
+            "insert into memories(id, user_id, primary_sector, content, created_at, updated_at, last_seen_at, salience) values(?, ?, ?, ?, ?, ?, ?, ?)",
+            [null_id, null, "semantic", "Null owner delete content", Date.now(), Date.now(), Date.now(), 0.4],
+        );
+        expect(await delete_memory(null_id, T_ALICE)).toBe(false);
+
+        // 6. Authorized delete_memory by Alice succeeds
+        expect(await delete_memory(mem_alice.id, T_ALICE)).toBe(true);
+        expect(await q.get_mem.get(mem_alice.id)).toBeUndefined();
+    });
+
+    it("isolates cross-tenant waypoints and path expansion in expand_via_waypoints", async () => {
+        const mem_alice_src = await add_hsg_memory("Alice source node", undefined, undefined, T_ALICE);
+        const mem_alice_dst = await add_hsg_memory("Alice target node", undefined, undefined, T_ALICE);
+        await q.ins_waypoint.run(mem_alice_src.id, mem_alice_dst.id, T_ALICE, null, 0.9, Date.now(), Date.now());
+
+        const mem_bob_src = await add_hsg_memory("Bob source node", undefined, undefined, T_BOB);
+        const mem_bob_dst = await add_hsg_memory("Bob target node", undefined, undefined, T_BOB);
+        await q.ins_waypoint.run(mem_bob_src.id, mem_bob_dst.id, T_BOB, null, 0.9, Date.now(), Date.now());
+
+        // Alice expanding via waypoints must NOT see Bob's waypoints or nodes
+        const alice_exp = await expand_via_waypoints([mem_alice_src.id], T_ALICE, 5);
+        expect(alice_exp.some((item) => item.id === mem_alice_dst.id)).toBe(true);
+        expect(alice_exp.some((item) => item.id === mem_bob_src.id || item.id === mem_bob_dst.id)).toBe(false);
+
+        // Bob expanding via waypoints must NOT see Alice's waypoints or nodes
+        const bob_exp = await expand_via_waypoints([mem_bob_src.id], T_BOB, 5);
+        expect(bob_exp.some((item) => item.id === mem_bob_dst.id)).toBe(true);
+        expect(bob_exp.some((item) => item.id === mem_alice_src.id || item.id === mem_alice_dst.id)).toBe(false);
+    }, 20000);
 
     it("requires tenant identity across exported contract boundaries and DB query helpers", async () => {
         // 1. add_hsg_memory fails closed on missing/blank user_id
