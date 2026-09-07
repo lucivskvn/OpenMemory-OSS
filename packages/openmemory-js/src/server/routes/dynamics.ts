@@ -37,6 +37,18 @@ const resonance_schema: schema = {
     user_id: { type: "string", max_length: 256 },
 };
 
+const energy_schema: schema = {
+    query: { type: "string", required: true, min_length: 1, max_length: 8192 },
+    sector: { type: "string", max_length: 64 },
+    min_energy: { type: "number", min: 0, max: 1 },
+    user_id: { type: "string", max_length: 256 },
+};
+
+const trace_schema: schema = {
+    memory_id: { type: "string", required: true, min_length: 1, max_length: 256 },
+    user_id: { type: "string", max_length: 256 },
+};
+
 const spreading_schema: schema = {
     initial_memory_ids: {
         type: "array",
@@ -46,13 +58,6 @@ const spreading_schema: schema = {
         items: { type: "string", min_length: 1, max_length: 256 },
     },
     max_iterations: { type: "integer", min: 1, max: 20 },
-    user_id: { type: "string", max_length: 256 },
-};
-
-const energy_schema: schema = {
-    query: { type: "string", required: true, min_length: 1, max_length: 8192 },
-    sector: { type: "string", max_length: 64 },
-    min_energy: { type: "number", min: 0, max: 1 },
     user_id: { type: "string", max_length: 256 },
 };
 
@@ -317,26 +322,26 @@ export function dynroutes(app: any) {
                 outgoing_http_response,
             );
             if (!tenant) return;
-            try {
-                const incoming_request_body_payload =
-                    incoming_http_request.body;
-                const target_memory_id_from_request =
-                    incoming_request_body_payload.memory_id;
-
-                if (
-                    reject_tenant_mismatch(
-                        outgoing_http_response,
-                        tenant,
-                        incoming_request_body_payload.user_id,
-                    )
+            const b = parse_or_400<{
+                memory_id: string;
+                user_id?: string;
+            }>(
+                outgoing_http_response,
+                incoming_http_request.body,
+                trace_schema,
+            );
+            if (!b) return;
+            if (
+                reject_tenant_mismatch(
+                    outgoing_http_response,
+                    tenant,
+                    b.user_id,
                 )
-                    return;
+            )
+                return;
 
-                if (!target_memory_id_from_request) {
-                    return outgoing_http_response
-                        .status(400)
-                        .json({ err: "memory_id_required" });
-                }
+            try {
+                const target_memory_id_from_request = b.memory_id;
 
                 const memory_record_from_database = await q.get_mem.get(
                     target_memory_id_from_request,
