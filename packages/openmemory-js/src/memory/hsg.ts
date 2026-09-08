@@ -1256,21 +1256,19 @@ export async function add_hsg_memory(
         throw error;
     }
 }
-export async function delete_memory(id: string): Promise<boolean> {
+export async function delete_memory(
+    id: string,
+    user_id?: string,
+): Promise<boolean> {
     const mem = await q.get_mem.get(id);
     if (!mem) return false;
-    await transaction.begin();
-    try {
-        const user_id = mem.user_id || "anonymous";
-        await q.del_mem.run(id, user_id);
-        await q.del_waypoints.run(id, id, user_id);
-        await vector_store.deleteVectors(id, mem.user_id || undefined);
-        await transaction.commit();
-        return true;
-    } catch (error) {
-        await transaction.rollback();
-        throw error;
-    }
+    const mem_user = mem.user_id || "anonymous";
+    if (user_id && mem_user !== user_id) return false;
+    const uid = user_id || mem.user_id || "anonymous";
+    await q.del_waypoints.run(id, id, uid);
+    await vector_store.deleteVectors(id, mem.user_id || undefined);
+    await q.del_mem.run(id, uid);
+    return true;
 }
 export async function reinforce_memory(
     id: string,

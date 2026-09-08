@@ -9,17 +9,11 @@ def setup_db(tmp_path, monkeypatch):
     db_file = tmp_path / "test.db"
     monkeypatch.setenv("OM_DATABASE_URL", f"sqlite:///{db_file}")
     from openmemory.core.config import env
-    orig_url = env.database_url
-    env.database_url = f"sqlite:///{db_file}"
+    monkeypatch.setattr(env, "database_url", f"sqlite:///{db_file}")
     if db.conn:
         db.conn.close()
     db.conn = None
     db.connect()
-    yield
-    if db.conn:
-        db.conn.close()
-    db.conn = None
-    env.database_url = orig_url
 
 @pytest.mark.asyncio
 async def test_mcp_tenant_get_and_delete_scenarios(monkeypatch):
@@ -68,7 +62,6 @@ async def test_mcp_tenant_get_and_delete_scenarios(monkeypatch):
     assert "not found for user" in err_ownerless
 
 from openmemory.ai.mcp import run_mcp_server, TextContent
-from mcp.server import Server
 
 @pytest.mark.asyncio
 async def test_mcp_list_boundary_handler_cases(monkeypatch):
@@ -93,9 +86,8 @@ async def test_mcp_list_boundary_handler_cases(monkeypatch):
                 return fn
             return decorator
 
-    monkeypatch.setattr("openmemory.ai.mcp.Server", MockServer)
-
     import openmemory.ai.mcp as mcp_module
+    monkeypatch.setattr(mcp_module, "Server", MockServer)
 
     # Pre-populate database with test records
     mem_alice = Memory(user="alice")
@@ -108,16 +100,14 @@ async def test_mcp_list_boundary_handler_cases(monkeypatch):
     # Capture the registered call_tool handler for mem_alice
     monkeypatch.setattr(mcp_module, "mem", mem_alice)
 
-    # Define dummy stdio_server context manager to allow run_mcp_server to execute call_tool registration
     class DummyStdio:
         async def __aenter__(self):
             return (None, None)
         async def __aexit__(self, exc_type, exc, tb):
             pass
 
-    monkeypatch.setattr("openmemory.ai.mcp.stdio_server", DummyStdio)
+    monkeypatch.setattr(mcp_module, "stdio_server", DummyStdio)
 
-    # Executing run_mcp_server will register call_tool_handler
     try:
         await run_mcp_server()
     except Exception:

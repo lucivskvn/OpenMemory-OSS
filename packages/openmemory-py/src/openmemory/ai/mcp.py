@@ -53,14 +53,6 @@ async def _get_verified_memory(mem_inst: Memory, args: dict) -> tuple[dict | Non
 
     return m_dict, tenant, None
 
-async def _handle_mcp_list(mem_inst: Memory, args: dict) -> list[TextContent]:
-    limit = args.get("limit", 20)
-    tenant, err = _resolve_mcp_tenant(mem_inst, args)
-    if err:
-        return [TextContent(type="text", text=err)]
-    res = mem_inst.history(user_id=tenant, limit=limit)
-    return [TextContent(type="text", text=json.dumps([dict(r) for r in res], default=str, indent=2))]
-
 async def run_mcp_server():
     if not Server:
         print("Error: 'mcp' package not found. Install it via 'pip install mcp'", file=sys.stderr)
@@ -324,7 +316,12 @@ async def run_mcp_server():
                 return [TextContent(type="text", text=f"Memory {m_dict['id']} deleted")]
 
             elif name == "openmemory_list":
-                return await _handle_mcp_list(mem, args)
+                limit = args.get("limit", 20)
+                tenant, err = _resolve_mcp_tenant(mem, args)
+                if err:
+                    return [TextContent(type="text", text=err)]
+                res = mem.history(user_id=tenant, limit=limit)
+                return [TextContent(type="text", text=json.dumps([dict(r) for r in res], default=str, indent=2))]
 
             else:
                 raise ValueError(f"Unknown tool: {name}")

@@ -84,16 +84,7 @@ def test_notion_webhook_rejects_missing_header():
 # ==============================================================================
 
 @pytest.fixture
-def webhook_client(tmp_path, monkeypatch):
-    db_file = tmp_path / "test_webhook.db"
-    monkeypatch.setenv("OM_DATABASE_URL", f"sqlite:///{db_file}")
-    orig_url = env.database_url
-    env.database_url = f"sqlite:///{db_file}"
-    if db.conn:
-        db.conn.close()
-    db.conn = None
-    db.connect()
-
+def webhook_client(monkeypatch):
     monkeypatch.setattr(env, "api_key", "test-api-key-123456")
 
     app = create_app()
@@ -101,17 +92,10 @@ def webhook_client(tmp_path, monkeypatch):
 
     yield client
 
-    if db.conn:
-        db.conn.close()
-    db.conn = None
-    env.database_url = orig_url
-
 def test_github_webhook_isolates_tenant(webhook_client, monkeypatch):
     monkeypatch.setenv("OM_GITHUB_WEBHOOK_SECRET", SECRET)
 
-    # Clean up child tables first to avoid foreign key violations, then memories
-    db.execute("DELETE FROM waypoints")
-    db.execute("DELETE FROM vectors")
+    # Clean up memories first
     db.execute("DELETE FROM memories")
     db.commit()
 
@@ -179,9 +163,7 @@ def test_github_webhook_secure_error_response(webhook_client, monkeypatch):
 def test_notion_webhook_isolates_tenant(webhook_client, monkeypatch):
     monkeypatch.setenv("OM_NOTION_WEBHOOK_SECRET", SECRET)
 
-    # Clean up child tables first to avoid foreign key violations, then memories
-    db.execute("DELETE FROM waypoints")
-    db.execute("DELETE FROM vectors")
+    # Clean up memories first
     db.execute("DELETE FROM memories")
     db.commit()
 
