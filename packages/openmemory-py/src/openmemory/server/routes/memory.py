@@ -3,6 +3,8 @@ from typing import List, Dict, Any, Optional
 import logging
 from pydantic import BaseModel
 from ...main import Memory
+from ...core.db import q, db
+from ...memory.user_summary import update_user_summary
 
 logger = logging.getLogger("server.memory")
 mem = Memory()
@@ -110,3 +112,63 @@ async def get_history(user_id: str, request: Request, limit: int = 20, offset: i
     except Exception:
         logger.exception("Error fetching memory history")
         raise HTTPException(status_code=500, detail="Failed to fetch memory history") from None
+
+@router.get("/users/{user_id}/summary", responses={
+    400: {"description": "Bad Request"},
+    403: {"description": "Forbidden"},
+    404: {"description": "Not Found"},
+    500: {"description": "Internal Server Error"}
+})
+async def get_user_summary(user_id: str, request: Request):
+    if len(user_id) > 256:
+        raise HTTPException(status_code=400, detail="invalid_user_id_length")
+
+    tenant = getattr(request.state, "tenant", "anonymous")
+    if user_id != tenant:
+        raise HTTPException(status_code=403, detail="tenant_mismatch")
+
+    try:
+        user_row = db.fetchone("SELECT * FROM users WHERE user_id=?", (tenant,))
+        if not user_row:
+            raise HTTPException(status_code=404, detail="user_not_found")
+        u_dict = dict(user_row)
+        return {
+            "user_id": u_dict.get("user_id"),
+            "summary": u_dict.get("summary"),
+            "reflection_count": u_dict.get("reflection_count"),
+            "updated_at": u_dict.get("updated_at"),
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Error fetching user summary")
+        raise HTTPException(status_code=500, detail="Failed to fetch user summary") from None
+
+@router.post("/users/{user_id}/summary/regenerate", responses={
+    400: {"description": "Bad Request"},
+    403: {"description": "Forbidden"},
+    500: {"description": "Internal Server Error"}
+})
+async def regenerate_user_summary(user_id: str, request: Request):
+    if len(user_id) > 256:
+        raise HTTPException(status_code=400, detail="invalid_user_id_length")
+
+    tenant = getattr(request.state, "tenant", "anonymous")
+    if user_id != tenant:
+        raise HTTPException(status_code=403, detail="tenant_mismatch")
+
+    try:
+        await update_user_summary(tenant)
+        user_row = db.fetchone("SELECT * FROM users WHERE user_id=?", (tenant,))
+        u_dict = dict(user_row) if user_row else {}
+        return {
+            "ok": True,
+            "user_id": tenant,
+            "summary": u_dict.get("summary"),
+            "reflection_count": u_dict.get("reflection_count"),
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Error regenerating user summary")
+        raise HTTPException(status_code=500, detail="Failed to regenerate user summary") from None
