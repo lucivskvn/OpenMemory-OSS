@@ -133,7 +133,7 @@ def test_github_webhook_isolates_tenant(webhook_client, monkeypatch):
 
     # Retrieve memory from DB and verify it belongs to alice-tenant
     memory_id = response.json()["memory_id"]
-    mem = db.fetchone("SELECT * FROM memories WHERE id=?", (memory_id,))
+    mem = q.get_mem(memory_id)
     assert mem is not None
     assert mem["user_id"] == "alice-tenant"
 
@@ -202,7 +202,7 @@ def test_notion_webhook_isolates_tenant(webhook_client, monkeypatch):
 
     # Retrieve memory from DB and verify it belongs to bob-tenant
     memory_id = response.json()["memory_id"]
-    mem = db.fetchone("SELECT * FROM memories WHERE id=?", (memory_id,))
+    mem = q.get_mem(memory_id)
     assert mem is not None
     assert mem["user_id"] == "bob-tenant"
 

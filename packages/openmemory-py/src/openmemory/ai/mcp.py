@@ -53,19 +53,13 @@ async def _get_verified_memory(mem_inst: Memory, args: dict) -> tuple[dict | Non
 
     return m_dict, tenant, None
 
-class DummyTextContent:
-    def __init__(self, type: str, text: str):
-        self.type = type
-        self.text = text
-
-async def _handle_mcp_list(mem_inst: Memory, args: dict) -> list[Any]:
+async def _handle_mcp_list(mem_inst: Memory, args: dict) -> list[TextContent]:
     limit = args.get("limit", 20)
     tenant, err = _resolve_mcp_tenant(mem_inst, args)
-    text_cls = TextContent if 'TextContent' in globals() and TextContent is not None else DummyTextContent
     if err:
-        return [text_cls(type="text", text=err)]
+        return [TextContent(type="text", text=err)]
     res = mem_inst.history(user_id=tenant, limit=limit)
-    return [text_cls(type="text", text=json.dumps([dict(r) for r in res], default=str, indent=2))]
+    return [TextContent(type="text", text=json.dumps([dict(r) for r in res], default=str, indent=2))]
 
 async def run_mcp_server():
     if not Server:

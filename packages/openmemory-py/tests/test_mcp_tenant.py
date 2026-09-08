@@ -67,45 +67,93 @@ async def test_mcp_tenant_get_and_delete_scenarios(monkeypatch):
     assert res_ownerless is None
     assert "not found for user" in err_ownerless
 
-from openmemory.ai.mcp import _handle_mcp_list
+from openmemory.ai.mcp import run_mcp_server, TextContent
+from mcp.server import Server
 
 @pytest.mark.asyncio
 async def test_mcp_list_boundary_handler_cases(monkeypatch):
     monkeypatch.delenv("OM_TENANT", raising=False)
     monkeypatch.delenv("OM_USER_ID", raising=False)
 
+    call_tool_handler = None
+
+    class MockServer:
+        def __init__(self, name):
+            self.name = name
+
+        def list_tools(self):
+            def decorator(fn):
+                return fn
+            return decorator
+
+        def call_tool(self):
+            def decorator(fn):
+                nonlocal call_tool_handler
+                call_tool_handler = fn
+                return fn
+            return decorator
+
+    monkeypatch.setattr("openmemory.ai.mcp.Server", MockServer)
+
+    import openmemory.ai.mcp as mcp_module
+
+    # Pre-populate database with test records
     mem_alice = Memory(user="alice")
     mem_bob = Memory(user="bob")
-
     await mem_alice.add("Alice secret memory", user_id="alice")
     await mem_bob.add("Bob secret memory", user_id="bob")
     db.execute("INSERT INTO memories (id, user_id, content, primary_sector, created_at, salience, decay_lambda, version) VALUES (?, NULL, ?, ?, ?, 1.0, 0.02, 1)", ("m-ownerless-list", "Ownerless content", "semantic", 1000000000))
     db.commit()
 
-    # 1. Matching authenticated tenant returns only that tenant's records
-    res_alice = await _handle_mcp_list(mem_alice, {"user_id": "alice"})
+    # Capture the registered call_tool handler for mem_alice
+    monkeypatch.setattr(mcp_module, "mem", mem_alice)
+
+    # Define dummy stdio_server context manager to allow run_mcp_server to execute call_tool registration
+    class DummyStdio:
+        async def __aenter__(self):
+            return (None, None)
+        async def __aexit__(self, exc_type, exc, tb):
+            pass
+
+    monkeypatch.setattr("openmemory.ai.mcp.stdio_server", DummyStdio)
+
+    # Executing run_mcp_server will register call_tool_handler
+    try:
+        await run_mcp_server()
+    except Exception:
+        pass
+
+    assert call_tool_handler is not None, "call_tool_handler should be registered"
+
+    # 1. Matching authenticated tenant returns only that tenant's records as real TextContent
+    res_alice = await call_tool_handler("openmemory_list", {"user_id": "alice"})
+    assert isinstance(res_alice[0], TextContent)
     parsed_alice = json.loads(res_alice[0].text)
     assert len(parsed_alice) >= 1
     assert all(m["user_id"] == "alice" for m in parsed_alice)
 
     # 2. Omitted and whitespace-only user_id remain bound to authenticated tenant
-    res_omitted = await _handle_mcp_list(mem_alice, {})
+    res_omitted = await call_tool_handler("openmemory_list", {})
+    assert isinstance(res_omitted[0], TextContent)
     parsed_omitted = json.loads(res_omitted[0].text)
     assert len(parsed_omitted) >= 1
     assert all(m["user_id"] == "alice" for m in parsed_omitted)
 
-    res_ws = await _handle_mcp_list(mem_alice, {"user_id": "   "})
+    res_ws = await call_tool_handler("openmemory_list", {"user_id": "   "})
+    assert isinstance(res_ws[0], TextContent)
     parsed_ws = json.loads(res_ws[0].text)
     assert len(parsed_ws) >= 1
     assert all(m["user_id"] == "alice" for m in parsed_ws)
 
     # 3. Wrong-tenant value is rejected
-    res_wrong = await _handle_mcp_list(mem_alice, {"user_id": "bob"})
+    res_wrong = await call_tool_handler("openmemory_list", {"user_id": "bob"})
+    assert isinstance(res_wrong[0], TextContent)
     assert "tenant_mismatch" in res_wrong[0].text
 
     # 4. Unbound session fails closed even when caller supplies a non-empty identity
-    mem_unbound = Memory(user=None)
-    res_unbound = await _handle_mcp_list(mem_unbound, {"user_id": "alice"})
+    monkeypatch.setattr(mcp_module, "mem", Memory(user=None))
+    res_unbound = await call_tool_handler("openmemory_list", {"user_id": "alice"})
+    assert isinstance(res_unbound[0], TextContent)
     assert "Unauthenticated MCP session" in res_unbound[0].text
 
     # 5. Ownerless records are never returned to any tenant
