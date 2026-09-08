@@ -43,19 +43,16 @@ async def gen_user_summary_async(user_id: str) -> str:
     return gen_user_summary(rows)
 
 async def update_user_summary(user_id: str):
-    try:
-        summary = await gen_user_summary_async(user_id)
-        now = int(time.time()*1000)
+    summary = await gen_user_summary_async(user_id)
+    now = int(time.time()*1000)
 
-        existing = db.fetchone("SELECT * FROM users WHERE user_id=?", (user_id,))
-        if not existing:
-             db.execute("INSERT INTO users(user_id,summary,reflection_count,created_at,updated_at) VALUES (?,?,?,?,?)",
-                        (user_id, summary, 0, now, now))
-        else:
-             db.execute("UPDATE users SET summary=?, updated_at=? WHERE user_id=?", (summary, now, user_id))
-        db.commit()
-    except Exception as e:
-        print(f"[USER_SUMMARY] Error for {user_id}: {e}")
+    existing = db.fetchone("SELECT * FROM users WHERE user_id=?", (user_id,))
+    if not existing:
+         db.execute("INSERT INTO users(user_id,summary,reflection_count,created_at,updated_at) VALUES (?,?,?,?,?)",
+                    (user_id, summary, 0, now, now))
+    else:
+         db.execute("UPDATE users SET summary=?, updated_at=? WHERE user_id=?", (summary, now, user_id))
+    db.commit()
 
 async def auto_update_user_summaries():
     all_mems = db.fetchall("SELECT user_id FROM memories LIMIT 10000")

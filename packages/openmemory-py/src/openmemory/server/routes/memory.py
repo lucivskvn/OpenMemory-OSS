@@ -113,19 +113,30 @@ async def get_history(user_id: str, request: Request, limit: int = 20, offset: i
         logger.exception("Error fetching memory history")
         raise HTTPException(status_code=500, detail="Failed to fetch memory history") from None
 
+def _require_valid_tenant(request: Request, user_id: str) -> str:
+    if not user_id or not isinstance(user_id, str):
+        raise HTTPException(status_code=400, detail="invalid_user_id")
+    if len(user_id) > 256:
+        raise HTTPException(status_code=400, detail="invalid_user_id_length")
+
+    tenant = getattr(request.state, "tenant", None)
+    if not tenant or not isinstance(tenant, str) or not tenant.strip():
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+    if user_id != tenant:
+        raise HTTPException(status_code=403, detail="tenant_mismatch")
+
+    return tenant
+
 @router.get("/users/{user_id}/summary", responses={
     400: {"description": "Bad Request"},
+    401: {"description": "Unauthorized"},
     403: {"description": "Forbidden"},
     404: {"description": "Not Found"},
     500: {"description": "Internal Server Error"}
 })
 async def get_user_summary(user_id: str, request: Request):
-    if len(user_id) > 256:
-        raise HTTPException(status_code=400, detail="invalid_user_id_length")
-
-    tenant = getattr(request.state, "tenant", "anonymous")
-    if user_id != tenant:
-        raise HTTPException(status_code=403, detail="tenant_mismatch")
+    tenant = _require_valid_tenant(request, user_id)
 
     try:
         user_row = db.fetchone("SELECT * FROM users WHERE user_id=?", (tenant,))
@@ -146,16 +157,12 @@ async def get_user_summary(user_id: str, request: Request):
 
 @router.post("/users/{user_id}/summary/regenerate", responses={
     400: {"description": "Bad Request"},
+    401: {"description": "Unauthorized"},
     403: {"description": "Forbidden"},
     500: {"description": "Internal Server Error"}
 })
 async def regenerate_user_summary(user_id: str, request: Request):
-    if len(user_id) > 256:
-        raise HTTPException(status_code=400, detail="invalid_user_id_length")
-
-    tenant = getattr(request.state, "tenant", "anonymous")
-    if user_id != tenant:
-        raise HTTPException(status_code=403, detail="tenant_mismatch")
+    tenant = _require_valid_tenant(request, user_id)
 
     try:
         await update_user_summary(tenant)

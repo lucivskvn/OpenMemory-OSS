@@ -51,6 +51,28 @@ def test_user_summary_tenant_isolation_and_length_validation(summary_client):
     assert resp_mismatch_regen.status_code == 403, f"Failed: {resp_mismatch_regen.text}"
     assert "tenant_mismatch" in resp_mismatch_regen.json()["detail"]
 
+def test_user_summary_unauthorized_absent_and_blank_tenant():
+    app = create_app()
+    client = TestClient(app)
+
+    # 1. Absent API Key / Tenant -> 401
+    resp_absent = client.get("/memory/users/anonymous/summary")
+    assert resp_absent.status_code == 401, f"Failed: {resp_absent.text}"
+
+    resp_absent_regen = client.post("/memory/users/anonymous/summary/regenerate")
+    assert resp_absent_regen.status_code == 401, f"Failed: {resp_absent_regen.text}"
+
+def test_user_summary_failed_regeneration_propagation(summary_client):
+    test_key = "test-api-key-123456"
+    tenant_id = hashlib.sha256(test_key.encode("utf-8")).hexdigest()[:16]
+    headers = {"X-API-Key": test_key}
+
+    with patch("openmemory.server.routes.memory.update_user_summary", side_effect=RuntimeError("DB write failure")):
+        resp = summary_client.post(f"/memory/users/{tenant_id}/summary/regenerate", headers=headers)
+        assert resp.status_code == 500, f"Failed: {resp.text}"
+        assert "Failed to regenerate user summary" in resp.json()["detail"]
+        assert "DB write failure" not in resp.text
+
 def test_user_summary_get_and_regenerate_flow(summary_client):
     test_key = "test-api-key-123456"
     tenant_id = hashlib.sha256(test_key.encode("utf-8")).hexdigest()[:16]
