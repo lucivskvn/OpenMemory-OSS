@@ -645,6 +645,7 @@ export async function create_contextual_waypoints(
 export async function expand_via_waypoints(
     init_res: string[],
     max_exp: number = 10,
+    user_id?: string,
 ): Promise<Array<{ id: string; weight: number; path: string[] }>> {
     const exp: Array<{ id: string; weight: number; path: string[] }> = [];
     const vis = new Set<string>();
@@ -656,7 +657,7 @@ export async function expand_via_waypoints(
     let exp_cnt = 0;
     while (q_arr.length > 0 && exp_cnt < max_exp) {
         const cur = q_arr.shift()!;
-        const neighs = await q.get_neighbors.all(cur.id);
+        const neighs = await q.get_neighbors.all(cur.id, user_id);
         for (const neigh of neighs) {
             if (vis.has(neigh.dst_id)) continue;
 
@@ -885,7 +886,7 @@ export async function hsg_query(
         for (const r of Object.values(sr)) for (const x of r) ids.add(x.id);
         const exp = high_conf
             ? []
-            : await expand_via_waypoints(Array.from(ids), k * 2);
+            : await expand_via_waypoints(Array.from(ids), k * 2, f?.user_id);
         for (const e of exp) ids.add(e.id);
 
         let keyword_scores = new Map<string, number>();

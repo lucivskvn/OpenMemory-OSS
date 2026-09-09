@@ -276,7 +276,7 @@ def clear_cache(user_id: str = None):
         for k in keys_to_delete:
             del cache[k]
 
-async def expand_via_waypoints(ids: List[str], max_exp: int = 10):
+async def expand_via_waypoints(ids: List[str], max_exp: int = 10, user_id: Optional[str] = None):
     exp = []
     vis = set(ids)
     q_arr = [{"id": i, "weight": 1.0, "path": [i]} for i in ids]
@@ -284,7 +284,10 @@ async def expand_via_waypoints(ids: List[str], max_exp: int = 10):
 
     while q_arr and cnt < max_exp:
         cur = q_arr.pop(0)
-        neighs = db.fetchall("SELECT dst_id, weight FROM waypoints WHERE src_id=? ORDER BY weight DESC", (cur["id"],))
+        if user_id:
+            neighs = db.fetchall("SELECT dst_id, weight FROM waypoints WHERE src_id=? AND user_id=? ORDER BY weight DESC", (cur["id"], user_id))
+        else:
+            neighs = db.fetchall("SELECT dst_id, weight FROM waypoints WHERE src_id=? ORDER BY weight DESC", (cur["id"],))
         for n in neighs:
             dst = n["dst_id"]
             if dst in vis:
@@ -351,7 +354,7 @@ async def hsg_query(qt: str, k: int = 10, f: Dict[str, Any] = None) -> List[Dict
 
         exp = []
         if not high_conf:
-            exp = await expand_via_waypoints(list(ids), k*2)
+            exp = await expand_via_waypoints(list(ids), k*2, user_id=f.get("user_id"))
             for e in exp:
                 ids.add(e["id"])
 
