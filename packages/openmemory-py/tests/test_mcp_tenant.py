@@ -13,6 +13,10 @@ def setup_db(tmp_path, monkeypatch):
         db.conn.close()
         db.conn = None
     db.connect()
+    yield
+    if db.conn:
+        db.conn.close()
+        db.conn = None
 
 @pytest.mark.asyncio
 async def test_mcp_tenant_get_and_delete_scenarios(monkeypatch):
