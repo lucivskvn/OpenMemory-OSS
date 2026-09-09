@@ -107,9 +107,9 @@ describe("temporal_graph per-tenant isolation", () => {
         });
 
         // Fail-closed checks on empty or whitespace user_id
-        expect(update_fact(factId, "", 0.1)).rejects.toThrow();
-        expect(invalidate_fact(factId, "")).rejects.toThrow();
-        expect(delete_fact(factId, "")).rejects.toThrow();
+        await expect(update_fact(factId, "", 0.1)).rejects.toThrow();
+        await expect(invalidate_fact(factId, "")).rejects.toThrow();
+        await expect(delete_fact(factId, "")).rejects.toThrow();
 
         // 1. Bob attempts to update Alice's fact with tenant-scoping
         await update_fact(factId, TM_BOB, 0.1, { hacked: true });
