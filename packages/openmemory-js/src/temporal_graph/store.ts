@@ -142,6 +142,7 @@ export const update_fact = async (
     id: string,
     confidence?: number,
     metadata?: Record<string, any>,
+    user_id?: string,
 ): Promise<void> => {
     const updates: string[] = [];
     const params: any[] = [];
@@ -161,9 +162,15 @@ export const update_fact = async (
 
     params.push(id);
 
+    let where_clause = "WHERE id = ?";
+    if (user_id) {
+        where_clause += " AND user_id = ?";
+        params.push(user_id);
+    }
+
     if (updates.length > 0) {
         await run_async(
-            `UPDATE temporal_facts SET ${updates.join(", ")} WHERE id = ?`,
+            `UPDATE temporal_facts SET ${updates.join(", ")} ${where_clause}`,
             params,
         );
     }
@@ -172,15 +179,28 @@ export const update_fact = async (
 export const invalidate_fact = async (
     id: string,
     valid_to: Date = new Date(),
+    user_id?: string,
 ): Promise<void> => {
-    await run_async(
-        `UPDATE temporal_facts SET valid_to = ?, last_updated = ? WHERE id = ?`,
-        [valid_to.getTime(), Date.now(), id],
-    );
+    let sql = `UPDATE temporal_facts SET valid_to = ?, last_updated = ? WHERE id = ?`;
+    const params: any[] = [valid_to.getTime(), Date.now(), id];
+    if (user_id) {
+        sql += " AND user_id = ?";
+        params.push(user_id);
+    }
+    await run_async(sql, params);
 };
 
-export const delete_fact = async (id: string): Promise<void> => {
-    await run_async(`DELETE FROM temporal_facts WHERE id = ?`, [id]);
+export const delete_fact = async (
+    id: string,
+    user_id?: string,
+): Promise<void> => {
+    let sql = `DELETE FROM temporal_facts WHERE id = ?`;
+    const params: any[] = [id];
+    if (user_id) {
+        sql += " AND user_id = ?";
+        params.push(user_id);
+    }
+    await run_async(sql, params);
 };
 
 export const insert_edge = async (
