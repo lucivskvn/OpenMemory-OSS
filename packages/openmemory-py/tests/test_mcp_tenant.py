@@ -3,12 +3,15 @@ import asyncio
 import json
 from openmemory.ai.mcp import _get_verified_memory, _resolve_mcp_tenant, Memory
 from openmemory.core.db import db, q
+from openmemory.core.config import env
 
 @pytest.fixture(autouse=True)
 def setup_db(tmp_path, monkeypatch):
     db_file = tmp_path / "test.db"
-    monkeypatch.setenv("OM_DATABASE_URL", f"sqlite:///{db_file}")
-    db.conn = None
+    monkeypatch.setattr(env, "database_url", f"sqlite:///{db_file}")
+    if db.conn:
+        db.conn.close()
+        db.conn = None
     db.connect()
 
 @pytest.mark.asyncio
