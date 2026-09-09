@@ -33,7 +33,10 @@ async def insert_fact(subject: str, predicate: str, subject_object: str, valid_f
     db.commit()
     return fact_id
 
-async def update_fact(fact_id: str, confidence: Optional[float] = None, metadata: Optional[Dict[str, Any]] = None):
+async def update_fact(fact_id: str, user_id: str, confidence: Optional[float] = None, metadata: Optional[Dict[str, Any]] = None):
+    if not user_id or not user_id.strip():
+        raise ValueError("[SECURITY ALERT] Enforced multi-tenancy rules require a valid user_id context for update_fact.")
+
     updates = []
     params = []
 
@@ -49,19 +52,29 @@ async def update_fact(fact_id: str, confidence: Optional[float] = None, metadata
 
     updates.append("last_updated=?")
     params.append(int(time.time() * 1000))
-    params.append(fact_id)
+    params.extend([fact_id, user_id.strip()])
 
-    sql = f"UPDATE temporal_facts SET {', '.join(updates)} WHERE id=?"
+    sql = f"UPDATE temporal_facts SET {', '.join(updates)} WHERE id=? AND user_id=?"
     db.execute(sql, tuple(params))
     db.commit()
 
-async def invalidate_fact(fact_id: str, valid_to: int = None):
+async def invalidate_fact(fact_id: str, user_id: str, valid_to: int = None):
+    if not user_id or not user_id.strip():
+        raise ValueError("[SECURITY ALERT] Enforced multi-tenancy rules require a valid user_id context for invalidate_fact.")
+
     ts = valid_to if valid_to is not None else int(time.time() * 1000)
-    db.execute("UPDATE temporal_facts SET valid_to=?, last_updated=? WHERE id=?", (ts, int(time.time() * 1000), fact_id))
+    sql = "UPDATE temporal_facts SET valid_to=?, last_updated=? WHERE id=? AND user_id=?"
+    params = [ts, int(time.time() * 1000), fact_id, user_id.strip()]
+    db.execute(sql, tuple(params))
     db.commit()
 
-async def delete_fact(fact_id: str):
-    db.execute("DELETE FROM temporal_facts WHERE id=?", (fact_id,))
+async def delete_fact(fact_id: str, user_id: str):
+    if not user_id or not user_id.strip():
+        raise ValueError("[SECURITY ALERT] Enforced multi-tenancy rules require a valid user_id context for delete_fact.")
+
+    sql = "DELETE FROM temporal_facts WHERE id=? AND user_id=?"
+    params = [fact_id, user_id.strip()]
+    db.execute(sql, tuple(params))
     db.commit()
 
 async def insert_edge(source_id: str, target_id: str, relation_type: str, valid_from: int = None, weight: float = 1.0, metadata: Dict[str, Any] = None) -> str:

@@ -6,6 +6,9 @@ import { describe, it, expect, beforeAll } from "bun:test";
 import { run_async } from "../src/core/db";
 import {
     insert_fact,
+    update_fact,
+    invalidate_fact,
+    delete_fact,
     get_fact_by_id_for_user,
 } from "../src/temporal_graph/store";
 import {
@@ -89,6 +92,56 @@ describe("temporal_graph per-tenant isolation", () => {
         const bobCannot = await get_fact_by_id_for_user(id, T_BOB);
         expect(aliceCanSee).not.toBeNull();
         expect(bobCannot).toBeNull();
+    });
+
+    it("enforces multi-tenant isolation on temporal fact mutations (update_fact, invalidate_fact, delete_fact)", async () => {
+        const TM_ALICE = "tenant-mut-alice";
+        const TM_BOB = "tenant-mut-bob";
+
+        const factId = await insert_fact({
+            subject: "AliceSubject",
+            predicate: "AlicePred",
+            object: "AliceObj",
+            user_id: TM_ALICE,
+            confidence: 0.8,
+        });
+
+        // Fail-closed checks on empty or whitespace user_id
+        await expect(update_fact(factId, "", 0.1)).rejects.toThrow();
+        await expect(invalidate_fact(factId, "")).rejects.toThrow();
+        await expect(delete_fact(factId, "")).rejects.toThrow();
+
+        // 1. Bob attempts to update Alice's fact with tenant-scoping
+        await update_fact(factId, TM_BOB, 0.1, { hacked: true });
+        let aliceFact = await get_fact_by_id_for_user(factId, TM_ALICE);
+        expect(aliceFact?.confidence).toBe(0.8);
+        expect(aliceFact?.metadata?.hacked).toBeUndefined();
+
+        // 2. Alice updates her own fact with tenant-scoping
+        await update_fact(factId, TM_ALICE, 0.9, { updated: true });
+        aliceFact = await get_fact_by_id_for_user(factId, TM_ALICE);
+        expect(aliceFact?.confidence).toBe(0.9);
+        expect(aliceFact?.metadata?.updated).toBe(true);
+
+        // 3. Bob attempts to invalidate Alice's fact with tenant-scoping
+        await invalidate_fact(factId, TM_BOB, new Date());
+        aliceFact = await get_fact_by_id_for_user(factId, TM_ALICE);
+        expect(aliceFact?.valid_to).toBeNull();
+
+        // 4. Alice invalidates her own fact with tenant-scoping
+        await invalidate_fact(factId, TM_ALICE, new Date());
+        aliceFact = await get_fact_by_id_for_user(factId, TM_ALICE);
+        expect(aliceFact?.valid_to).not.toBeNull();
+
+        // 5. Bob attempts to delete Alice's fact with tenant-scoping
+        await delete_fact(factId, TM_BOB);
+        aliceFact = await get_fact_by_id_for_user(factId, TM_ALICE);
+        expect(aliceFact).not.toBeNull();
+
+        // 6. Alice deletes her own fact with tenant-scoping
+        await delete_fact(factId, TM_ALICE);
+        aliceFact = await get_fact_by_id_for_user(factId, TM_ALICE);
+        expect(aliceFact).toBeNull();
     });
 
     it("project_id filter narrows to the requested project, system_global, and untagged", async () => {
