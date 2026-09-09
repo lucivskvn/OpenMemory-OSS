@@ -140,10 +140,16 @@ const _insert_fact_impl = async (
 
 export const update_fact = async (
     id: string,
+    user_id: string,
     confidence?: number,
     metadata?: Record<string, any>,
-    user_id?: string,
 ): Promise<void> => {
+    if (!user_id || !user_id.trim()) {
+        throw new Error(
+            "[SECURITY ALERT] Enforced multi-tenancy rules require a valid user_id context for update_fact.",
+        );
+    }
+
     const updates: string[] = [];
     const params: any[] = [];
 
@@ -160,17 +166,11 @@ export const update_fact = async (
     updates.push("last_updated = ?");
     params.push(Date.now());
 
-    params.push(id);
-
-    let where_clause = "WHERE id = ?";
-    if (user_id) {
-        where_clause += " AND user_id = ?";
-        params.push(user_id);
-    }
+    params.push(id, user_id.trim());
 
     if (updates.length > 0) {
         await run_async(
-            `UPDATE temporal_facts SET ${updates.join(", ")} ${where_clause}`,
+            `UPDATE temporal_facts SET ${updates.join(", ")} WHERE id = ? AND user_id = ?`,
             params,
         );
     }
@@ -178,28 +178,32 @@ export const update_fact = async (
 
 export const invalidate_fact = async (
     id: string,
+    user_id: string,
     valid_to: Date = new Date(),
-    user_id?: string,
 ): Promise<void> => {
-    let sql = `UPDATE temporal_facts SET valid_to = ?, last_updated = ? WHERE id = ?`;
-    const params: any[] = [valid_to.getTime(), Date.now(), id];
-    if (user_id) {
-        sql += " AND user_id = ?";
-        params.push(user_id);
+    if (!user_id || !user_id.trim()) {
+        throw new Error(
+            "[SECURITY ALERT] Enforced multi-tenancy rules require a valid user_id context for invalidate_fact.",
+        );
     }
+
+    const sql = `UPDATE temporal_facts SET valid_to = ?, last_updated = ? WHERE id = ? AND user_id = ?`;
+    const params: any[] = [valid_to.getTime(), Date.now(), id, user_id.trim()];
     await run_async(sql, params);
 };
 
 export const delete_fact = async (
     id: string,
-    user_id?: string,
+    user_id: string,
 ): Promise<void> => {
-    let sql = `DELETE FROM temporal_facts WHERE id = ?`;
-    const params: any[] = [id];
-    if (user_id) {
-        sql += " AND user_id = ?";
-        params.push(user_id);
+    if (!user_id || !user_id.trim()) {
+        throw new Error(
+            "[SECURITY ALERT] Enforced multi-tenancy rules require a valid user_id context for delete_fact.",
+        );
     }
+
+    const sql = `DELETE FROM temporal_facts WHERE id = ? AND user_id = ?`;
+    const params: any[] = [id, user_id.trim()];
     await run_async(sql, params);
 };
 

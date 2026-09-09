@@ -63,3 +63,49 @@ async def test_mcp_tenant_get_and_delete_scenarios(monkeypatch):
     res_ownerless, tenant_o, err_ownerless = await _get_verified_memory(mem, {"id": "m-ownerless"})
     assert res_ownerless is None
     assert "not found for user" in err_ownerless
+
+@pytest.mark.asyncio
+async def test_temporal_fact_mutation_tenant_isolation(monkeypatch):
+    from openmemory.temporal_graph.store import insert_fact, update_fact, invalidate_fact, delete_fact
+
+    fact_id = await insert_fact("AliceSubj", "AlicePred", "AliceObj", user_id="alice", confidence=0.8)
+
+    # Fail closed on empty/whitespace user_id
+    with pytest.raises(ValueError):
+        await update_fact(fact_id, "", confidence=0.1)
+    with pytest.raises(ValueError):
+        await invalidate_fact(fact_id, "")
+    with pytest.raises(ValueError):
+        await delete_fact(fact_id, "")
+
+    # 1. Bob attempts update with user_id="bob" -> no effect on Alice's fact
+    await update_fact(fact_id, "bob", confidence=0.1, metadata={"hacked": True})
+    fact_row = db.fetchone("SELECT confidence, metadata FROM temporal_facts WHERE id=?", (fact_id,))
+    assert fact_row["confidence"] == 0.8
+    assert fact_row["metadata"] is None
+
+    # 2. Alice updates with user_id="alice" -> succeeds
+    await update_fact(fact_id, "alice", confidence=0.9, metadata={"updated": True})
+    fact_row = db.fetchone("SELECT confidence, metadata FROM temporal_facts WHERE id=?", (fact_id,))
+    assert fact_row["confidence"] == 0.9
+    assert json.loads(fact_row["metadata"]) == {"updated": True}
+
+    # 3. Bob attempts invalidate with user_id="bob" -> no effect
+    await invalidate_fact(fact_id, "bob", valid_to=2000000000)
+    fact_row = db.fetchone("SELECT valid_to FROM temporal_facts WHERE id=?", (fact_id,))
+    assert fact_row["valid_to"] is None
+
+    # 4. Alice invalidates with user_id="alice" -> succeeds
+    await invalidate_fact(fact_id, "alice", valid_to=2000000000)
+    fact_row = db.fetchone("SELECT valid_to FROM temporal_facts WHERE id=?", (fact_id,))
+    assert fact_row["valid_to"] == 2000000000
+
+    # 5. Bob attempts delete with user_id="bob" -> no effect
+    await delete_fact(fact_id, "bob")
+    fact_row = db.fetchone("SELECT id FROM temporal_facts WHERE id=?", (fact_id,))
+    assert fact_row is not None
+
+    # 6. Alice deletes with user_id="alice" -> succeeds
+    await delete_fact(fact_id, "alice")
+    fact_row = db.fetchone("SELECT id FROM temporal_facts WHERE id=?", (fact_id,))
+    assert fact_row is None
