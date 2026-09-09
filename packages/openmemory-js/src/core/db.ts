@@ -518,16 +518,15 @@ export const q: q_type = {
             ),
     },
     get_neighbors: {
-        all: (src, user_id) =>
-            user_id
-                ? all_async(
-                      "select dst_id,weight from waypoints where src_id=? and user_id=? order by weight desc",
-                      [src, user_id],
-                  )
-                : all_async(
-                      "select dst_id,weight from waypoints where src_id=? order by weight desc",
-                      [src],
-                  ),
+        all: (src, user_id) => {
+            if (!user_id || typeof user_id !== "string" || !user_id.trim()) {
+                return Promise.resolve([]);
+            }
+            return all_async(
+                "select dst_id,weight from waypoints where src_id=? and user_id=? order by weight desc",
+                [src, user_id],
+            );
+        },
     },
     get_waypoints_by_src: {
         all: (src) =>

@@ -647,6 +647,9 @@ export async function expand_via_waypoints(
     max_exp: number = 10,
     user_id?: string,
 ): Promise<Array<{ id: string; weight: number; path: string[] }>> {
+    if (!user_id || typeof user_id !== "string" || !user_id.trim()) {
+        return [];
+    }
     const exp: Array<{ id: string; weight: number; path: string[] }> = [];
     const vis = new Set<string>();
     for (const id of init_res) {

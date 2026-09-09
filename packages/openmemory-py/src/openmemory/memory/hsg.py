@@ -277,6 +277,8 @@ def clear_cache(user_id: str = None):
             del cache[k]
 
 async def expand_via_waypoints(ids: List[str], max_exp: int = 10, user_id: Optional[str] = None):
+    if not user_id or not isinstance(user_id, str) or not user_id.strip():
+        return []
     exp = []
     vis = set(ids)
     q_arr = [{"id": i, "weight": 1.0, "path": [i]} for i in ids]
@@ -284,10 +286,7 @@ async def expand_via_waypoints(ids: List[str], max_exp: int = 10, user_id: Optio
 
     while q_arr and cnt < max_exp:
         cur = q_arr.pop(0)
-        if user_id:
-            neighs = db.fetchall("SELECT dst_id, weight FROM waypoints WHERE src_id=? AND user_id=? ORDER BY weight DESC", (cur["id"], user_id))
-        else:
-            neighs = db.fetchall("SELECT dst_id, weight FROM waypoints WHERE src_id=? ORDER BY weight DESC", (cur["id"],))
+        neighs = db.fetchall("SELECT dst_id, weight FROM waypoints WHERE src_id=? AND user_id=? ORDER BY weight DESC", (cur["id"], user_id))
         for n in neighs:
             dst = n["dst_id"]
             if dst in vis:

@@ -62,4 +62,28 @@ describe("Waypoints per-tenant scoping", () => {
         expect(ids).toContain("dst-alice");
         expect(ids).not.toContain("dst-bob");
     });
+
+    it("fails closed when user_id is missing, empty, or wrong tenant", async () => {
+        const mem_id = "node-2";
+        const now = Date.now();
+
+        await q.ins_waypoint.run(mem_id, "dst-alice", T_ALICE, null, 0.8, now, now);
+
+        // Missing/undefined user_id fails closed (returns empty)
+        expect(await q.get_neighbors.all(mem_id, undefined as any)).toEqual([]);
+        expect(await expand_via_waypoints([mem_id], 10, undefined)).toEqual([]);
+
+        // Empty string fails closed
+        expect(await q.get_neighbors.all(mem_id, "")).toEqual([]);
+        expect(await expand_via_waypoints([mem_id], 10, "")).toEqual([]);
+
+        // Whitespace-only string fails closed
+        expect(await q.get_neighbors.all(mem_id, "   ")).toEqual([]);
+        expect(await expand_via_waypoints([mem_id], 10, "   ")).toEqual([]);
+
+        // Non-matching/wrong tenant returns no expanded neighbor waypoints
+        expect(await q.get_neighbors.all(mem_id, T_BOB)).toEqual([]);
+        const bob_exp = await expand_via_waypoints([mem_id], 10, T_BOB);
+        expect(bob_exp.map((e) => e.id)).not.toContain("dst-alice");
+    });
 });
