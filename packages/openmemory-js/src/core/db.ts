@@ -367,12 +367,15 @@ export const init_db = async () => {
                         args: [],
                     });
 
+                    const valid_statuses = new Set(["pending", "processing", "completed", "failed", "dead_letter"]);
+
                     for (const r of oldRows) {
                         const valid_id = r.id && typeof r.id === "string" && r.id.trim();
                         const valid_user = r.user_id && typeof r.user_id === "string" && r.user_id.trim();
                         const valid_action = r.action === "create" || r.action === "delete" || r.action === "reindex";
+                        const valid_status = typeof r.status === "string" && valid_statuses.has(r.status);
 
-                        if (!valid_id || !valid_user || !valid_action) {
+                        if (!valid_id || !valid_user || !valid_action || !valid_status) {
                             const q_job_id = r.job_id || crypto.randomUUID();
                             migrationStmts.push({
                                 sql: "insert or replace into vector_outbox_quarantine(job_id, id, user_id, action, sectors, status, attempts, last_error, created_at, updated_at) values(?, ?, ?, ?, ?, 'quarantined', ?, ?, ?, ?)",
@@ -396,7 +399,7 @@ export const init_db = async () => {
                         const user_id = valid_user;
                         const action = r.action;
                         const sectors = r.sectors || null;
-                        const status = r.status || "pending";
+                        const status = r.status;
                         const attempts = typeof r.attempts === "number" ? r.attempts : 0;
                         const version = typeof r.version === "number" ? r.version : 1;
                         const owner_token = r.owner_token || null;
@@ -414,7 +417,12 @@ export const init_db = async () => {
                     migrationStmts.push({ sql: "drop table vector_outbox", args: [] });
                     migrationStmts.push({ sql: "alter table vector_outbox_new rename to vector_outbox", args: [] });
 
-                    await client.batch(migrationStmts, "write");
+                    // Execute migration statements in chunks of 50 to prevent unbounded single client.batch payloads
+                    const CHUNK_SIZE = 50;
+                    for (let i = 0; i < migrationStmts.length; i += CHUNK_SIZE) {
+                        const chunk = migrationStmts.slice(i, i + CHUNK_SIZE);
+                        await client.batch(chunk, "write");
+                    }
                     console.log("[DB] vector_outbox migration completed successfully");
                 } catch (migrationError: any) {
                     console.error("[DB] vector_outbox migration failed:", migrationError.message);

@@ -1167,7 +1167,7 @@ export async function run_decay_process_all_tenants(): Promise<{
                 p += res.processed;
                 d += res.decayed;
             } catch (err) {
-                console.error(`[DECAY] Maintenance failed for tenant ${row.user_id}:`, err);
+                console.error("[DECAY] Maintenance failed for tenant during loop execution", err);
             }
         }
     }

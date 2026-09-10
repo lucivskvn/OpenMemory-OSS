@@ -173,7 +173,7 @@ export const run_reflection_all_tenants = async (min_override?: number) => {
                 const res = await run_reflection(row.user_id.trim(), min_override);
                 total_created += res.created || 0;
             } catch (err) {
-                console.error(`[REFLECT] Maintenance failed for tenant ${row.user_id}:`, err);
+                console.error("[REFLECT] Maintenance failed for tenant during loop execution", err);
             }
         }
     }
