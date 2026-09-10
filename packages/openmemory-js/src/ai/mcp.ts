@@ -949,10 +949,10 @@ export const mcp = (app: any) => {
 };
 
 export function derive_mcp_tenant_id(): string | undefined {
-    const direct = process.env.OM_TENANT || process.env.OM_USER_ID;
-    if (direct && direct.trim()) {
-        return direct.trim();
-    }
+    const tenant_env = process.env.OM_TENANT && process.env.OM_TENANT.trim();
+    if (tenant_env) return tenant_env;
+    const user_env = process.env.OM_USER_ID && process.env.OM_USER_ID.trim();
+    if (user_env) return user_env;
     return undefined;
 }
 

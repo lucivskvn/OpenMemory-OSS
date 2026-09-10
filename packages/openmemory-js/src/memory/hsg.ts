@@ -1162,9 +1162,13 @@ export async function run_decay_process_all_tenants(): Promise<{
         d = 0;
     for (const row of tenant_rows) {
         if (row.user_id?.trim()) {
-            const res = await run_decay_process(row.user_id.trim());
-            p += res.processed;
-            d += res.decayed;
+            try {
+                const res = await run_decay_process(row.user_id.trim());
+                p += res.processed;
+                d += res.decayed;
+            } catch (err) {
+                console.error(`[DECAY] Maintenance failed for tenant ${row.user_id}:`, err);
+            }
         }
     }
     return { processed: p, decayed: d };
