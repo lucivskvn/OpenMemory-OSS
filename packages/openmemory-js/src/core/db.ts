@@ -351,23 +351,57 @@ export const init_db = async () => {
                         },
                     ];
 
+                    migrationStmts.push({
+                        sql: `create table if not exists vector_outbox_quarantine(
+                            job_id text primary key,
+                            id text,
+                            user_id text,
+                            action text,
+                            sectors text,
+                            status text,
+                            attempts integer,
+                            last_error text,
+                            created_at integer,
+                            updated_at integer
+                        )`,
+                        args: [],
+                    });
+
                     for (const r of oldRows) {
-                        const job_id = r.job_id || crypto.randomUUID();
-                        const id = r.id || "unassigned";
+                        const valid_id = r.id && typeof r.id === "string" && r.id.trim();
                         const valid_user = r.user_id && typeof r.user_id === "string" && r.user_id.trim();
-                        const user_id = valid_user ? r.user_id.trim() : "unassigned";
-                        const is_valid_action = r.action === "create" || r.action === "delete" || r.action === "reindex";
-                        const action = is_valid_action ? r.action : "reindex";
+                        const valid_action = r.action === "create" || r.action === "delete" || r.action === "reindex";
 
-                        const is_invalid = !r.id || !valid_user || !is_valid_action;
-                        const status = is_invalid ? "dead_letter" : (r.status || "pending");
-                        const last_error = is_invalid ? "quarantined_invalid_schema_migration" : (r.last_error || null);
+                        if (!valid_id || !valid_user || !valid_action) {
+                            const q_job_id = r.job_id || crypto.randomUUID();
+                            migrationStmts.push({
+                                sql: "insert or replace into vector_outbox_quarantine(job_id, id, user_id, action, sectors, status, attempts, last_error, created_at, updated_at) values(?, ?, ?, ?, ?, 'quarantined', ?, ?, ?, ?)",
+                                args: [
+                                    q_job_id,
+                                    r.id || null,
+                                    r.user_id || null,
+                                    r.action || null,
+                                    r.sectors || null,
+                                    typeof r.attempts === "number" ? r.attempts : 0,
+                                    "invalid_schema_migration_row",
+                                    r.created_at || Date.now(),
+                                    Date.now(),
+                                ],
+                            });
+                            continue;
+                        }
 
+                        const job_id = r.job_id || crypto.randomUUID();
+                        const id = valid_id;
+                        const user_id = valid_user;
+                        const action = r.action;
                         const sectors = r.sectors || null;
-                        const attempts = typeof r.attempts === "number" ? r.attempts : (is_invalid ? 5 : 0);
+                        const status = r.status || "pending";
+                        const attempts = typeof r.attempts === "number" ? r.attempts : 0;
                         const version = typeof r.version === "number" ? r.version : 1;
                         const owner_token = r.owner_token || null;
                         const lease_expires_at = typeof r.lease_expires_at === "number" ? r.lease_expires_at : 0;
+                        const last_error = r.last_error || null;
                         const created_at = r.created_at || Date.now();
                         const updated_at = r.updated_at || Date.now();
 
