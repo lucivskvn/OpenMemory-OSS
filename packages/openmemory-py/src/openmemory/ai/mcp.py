@@ -5,18 +5,29 @@ import json
 import traceback
 import sys
 from typing import Any, Optional, Dict, List
+class _FallbackContent:
+    def __init__(self, type: str = "text", text: str = "", **kwargs: Any):
+        self.type = type
+        self.text = text
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+class _FallbackNotificationOptions:
+    def __init__(self, *args: Any, **kwargs: Any):
+        pass
+
 try:
     from mcp.server import Server, NotificationOptions
     from mcp.server.stdio import stdio_server
     from mcp.types import Tool, TextContent, ImageContent, EmbeddedResource
 except ImportError:
     Server = None
-    NotificationOptions = Any
-    stdio_server = Any
-    Tool = Any
-    TextContent = Any
-    ImageContent = Any
-    EmbeddedResource = Any
+    NotificationOptions = _FallbackNotificationOptions
+    stdio_server = None
+    Tool = _FallbackContent
+    TextContent = _FallbackContent
+    ImageContent = _FallbackContent
+    EmbeddedResource = _FallbackContent
 
 from ..main import Memory
 from ..core.config import env

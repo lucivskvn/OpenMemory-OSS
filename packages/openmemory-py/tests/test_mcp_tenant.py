@@ -5,15 +5,26 @@ from openmemory.ai.mcp import _get_verified_memory, _resolve_mcp_tenant, _execut
 from openmemory.core.db import db, q
 
 @pytest.fixture(autouse=True)
-def setup_db():
+def setup_db(tmp_path, monkeypatch):
+    db_file = tmp_path / "test.db"
+    monkeypatch.setenv("OM_DATABASE_URL", f"sqlite:///{db_file}")
+    db.conn = None
     db.connect()
-    db.execute("DELETE FROM memories")
+    db.execute("PRAGMA foreign_keys = OFF")
     db.execute("DELETE FROM waypoints")
+    db.execute("DELETE FROM temporal_facts")
+    db.execute("DELETE FROM memories")
+    db.execute("PRAGMA foreign_keys = ON")
     db.commit()
     yield
-    db.execute("DELETE FROM memories")
+    db.execute("PRAGMA foreign_keys = OFF")
     db.execute("DELETE FROM waypoints")
+    db.execute("DELETE FROM temporal_facts")
+    db.execute("DELETE FROM memories")
+    db.execute("PRAGMA foreign_keys = ON")
     db.commit()
+    db.conn = None
+    db.connect()
 
 @pytest.mark.asyncio
 async def test_mcp_tenant_get_and_delete_scenarios(monkeypatch):
