@@ -352,21 +352,22 @@ export const init_db = async () => {
                     ];
 
                     for (const r of oldRows) {
-                        if (!r.id || !r.user_id || typeof r.user_id !== "string" || !r.user_id.trim()) {
-                            console.warn(`[DB] Quarantining invalid vector_outbox row during migration: job_id=${r.job_id || "missing"}`);
-                            continue;
-                        }
                         const job_id = r.job_id || crypto.randomUUID();
-                        const id = r.id;
-                        const user_id = r.user_id.trim();
-                        const action = r.action || "delete";
+                        const id = r.id || "unassigned";
+                        const valid_user = r.user_id && typeof r.user_id === "string" && r.user_id.trim();
+                        const user_id = valid_user ? r.user_id.trim() : "unassigned";
+                        const is_valid_action = r.action === "create" || r.action === "delete" || r.action === "reindex";
+                        const action = is_valid_action ? r.action : "reindex";
+
+                        const is_invalid = !r.id || !valid_user || !is_valid_action;
+                        const status = is_invalid ? "dead_letter" : (r.status || "pending");
+                        const last_error = is_invalid ? "quarantined_invalid_schema_migration" : (r.last_error || null);
+
                         const sectors = r.sectors || null;
-                        const status = r.status || "pending";
-                        const attempts = typeof r.attempts === "number" ? r.attempts : 0;
+                        const attempts = typeof r.attempts === "number" ? r.attempts : (is_invalid ? 5 : 0);
                         const version = typeof r.version === "number" ? r.version : 1;
                         const owner_token = r.owner_token || null;
                         const lease_expires_at = typeof r.lease_expires_at === "number" ? r.lease_expires_at : 0;
-                        const last_error = r.last_error || null;
                         const created_at = r.created_at || Date.now();
                         const updated_at = r.updated_at || Date.now();
 
