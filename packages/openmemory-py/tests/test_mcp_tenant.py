@@ -1,7 +1,7 @@
 import pytest
 import asyncio
 import json
-from openmemory.ai.mcp import _get_verified_memory, _resolve_mcp_tenant, Memory
+from openmemory.ai.mcp import _get_verified_memory, _resolve_mcp_tenant, _execute_mcp_tool, Memory
 from openmemory.core.db import db, q
 
 @pytest.fixture(autouse=True)
@@ -87,3 +87,39 @@ async def test_mcp_tenant_query_store_list_scenarios(monkeypatch):
     t5, err5 = _resolve_mcp_tenant(mem_unbound, {})
     assert t5 is None
     assert "Unauthenticated MCP session" in err5
+
+@pytest.mark.asyncio
+async def test_mcp_tool_handler_boundary_coverage(monkeypatch):
+    monkeypatch.delenv("OM_TENANT", raising=False)
+    monkeypatch.delenv("OM_USER_ID", raising=False)
+
+    mem_alice = Memory(user="alice")
+    mem_unbound = Memory(user=None)
+
+    tools = ["openmemory_query", "openmemory_store", "openmemory_list"]
+
+    for tool_name in tools:
+        args_mismatch = {"query": "test", "content": "test", "user_id": "bob"}
+        res_unbound = await _execute_mcp_tool(mem_unbound, tool_name, args_mismatch)
+        assert len(res_unbound) == 1
+        assert "Unauthenticated MCP session" in res_unbound[0].text
+
+        res_mismatch = await _execute_mcp_tool(mem_alice, tool_name, args_mismatch)
+        assert len(res_mismatch) == 1
+        assert "tenant_mismatch" in res_mismatch[0].text
+
+    # Store a memory for Alice using matching, omitted, empty, and whitespace user_id
+    for uid_variant in ["alice", None, "", "   "]:
+        store_args = {"content": f"Secret for variant {uid_variant}", "type": "contextual"}
+        if uid_variant is not None:
+            store_args["user_id"] = uid_variant
+        res_store = await _execute_mcp_tool(mem_alice, "openmemory_store", store_args)
+        assert "Stored memory" in res_store[0].text
+
+    # Query Alice's memories with whitespace user_id
+    res_query = await _execute_mcp_tool(mem_alice, "openmemory_query", {"query": "Secret", "user_id": "  alice  "})
+    assert "Found" in res_query[0].text
+
+    # List Alice's memories with omitted user_id
+    res_list = await _execute_mcp_tool(mem_alice, "openmemory_list", {})
+    assert "Secret for variant" in res_list[0].text
