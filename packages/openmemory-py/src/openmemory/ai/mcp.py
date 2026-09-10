@@ -1,4 +1,5 @@
 
+from __future__ import annotations
 import asyncio
 import json
 import traceback
@@ -10,6 +11,12 @@ try:
     from mcp.types import Tool, TextContent, ImageContent, EmbeddedResource
 except ImportError:
     Server = None
+    NotificationOptions = Any
+    stdio_server = Any
+    Tool = Any
+    TextContent = Any
+    ImageContent = Any
+    EmbeddedResource = Any
 
 from ..main import Memory
 from ..core.config import env
@@ -158,6 +165,9 @@ async def run_mcp_server():
     @server.call_tool()
     async def handle_call_tool(name: str, arguments: dict | None) -> list[TextContent | ImageContent | EmbeddedResource]:
         return await _execute_mcp_tool(mem, name, arguments)
+
+    async with stdio_server() as (read, write):
+        await server.run(read, write, NotificationOptions(), raise_exceptions=False)
 
 async def _execute_mcp_tool(mem_inst: Memory, name: str, arguments: dict | None) -> list[TextContent | ImageContent | EmbeddedResource]:
     args = arguments or {}
@@ -339,6 +349,3 @@ async def _execute_mcp_tool(mem_inst: Memory, name: str, arguments: dict | None)
     except Exception as e:
         traceback.print_exc(file=sys.stderr)
         return [TextContent(type="text", text=f"Error: {str(e)}")]
-
-    async with stdio_server() as (read, write):
-        await server.run(read, write, NotificationOptions(), raise_exceptions=False)

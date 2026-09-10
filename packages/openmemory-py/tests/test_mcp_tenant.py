@@ -5,11 +5,15 @@ from openmemory.ai.mcp import _get_verified_memory, _resolve_mcp_tenant, _execut
 from openmemory.core.db import db, q
 
 @pytest.fixture(autouse=True)
-def setup_db(tmp_path, monkeypatch):
-    db_file = tmp_path / "test.db"
-    monkeypatch.setenv("OM_DATABASE_URL", f"sqlite:///{db_file}")
-    db.conn = None
+def setup_db():
     db.connect()
+    db.execute("DELETE FROM memories")
+    db.execute("DELETE FROM waypoints")
+    db.commit()
+    yield
+    db.execute("DELETE FROM memories")
+    db.execute("DELETE FROM waypoints")
+    db.commit()
 
 @pytest.mark.asyncio
 async def test_mcp_tenant_get_and_delete_scenarios(monkeypatch):
@@ -123,3 +127,59 @@ async def test_mcp_tool_handler_boundary_coverage(monkeypatch):
     # List Alice's memories with omitted user_id
     res_list = await _execute_mcp_tool(mem_alice, "openmemory_list", {})
     assert "Secret for variant" in res_list[0].text
+
+@pytest.mark.asyncio
+async def test_run_mcp_server_invokes_run(monkeypatch):
+    from unittest.mock import AsyncMock
+    from openmemory.ai import mcp
+
+    server_run_called = False
+
+    class DummyServer:
+        def __init__(self, name):
+            self.name = name
+        def list_tools(self):
+            def decorator(fn):
+                return fn
+            return decorator
+        def call_tool(self):
+            def decorator(fn):
+                return fn
+            return decorator
+        async def run(self, read, write, options, raise_exceptions=False):
+            nonlocal server_run_called
+            server_run_called = True
+
+    class DummyStdio:
+        async def __aenter__(self):
+            return (AsyncMock(), AsyncMock())
+        async def __aexit__(self, *args):
+            pass
+
+    monkeypatch.setattr(mcp, "Server", DummyServer)
+    monkeypatch.setattr(mcp, "stdio_server", lambda: DummyStdio())
+
+    await mcp.run_mcp_server()
+    assert server_run_called is True
+
+def test_mcp_import_without_mcp_package(monkeypatch):
+    import sys
+    import importlib
+
+    for mod_name in list(sys.modules.keys()):
+        if mod_name == "mcp" or mod_name.startswith("mcp."):
+            monkeypatch.delitem(sys.modules, mod_name, raising=False)
+
+    orig_import = __builtins__["__import__"] if isinstance(__builtins__, dict) else __builtins__.__import__
+    def mock_import(name, *args, **kwargs):
+        if name == "mcp" or name.startswith("mcp."):
+            raise ImportError("No module named 'mcp'")
+        return orig_import(name, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.__import__", mock_import)
+
+    if "openmemory.ai.mcp" in sys.modules:
+        monkeypatch.delitem(sys.modules, "openmemory.ai.mcp", raising=False)
+
+    mcp_mod = importlib.import_module("openmemory.ai.mcp")
+    assert mcp_mod.Server is None
