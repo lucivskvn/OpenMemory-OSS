@@ -61,6 +61,22 @@ const spreading_schema: schema = {
     user_id: { type: "string", max_length: 256 },
 };
 
+const weight_schema: schema = {
+    source_memory_id: {
+        type: "string",
+        required: true,
+        min_length: 1,
+        max_length: 256,
+    },
+    target_memory_id: {
+        type: "string",
+        required: true,
+        min_length: 1,
+        max_length: 256,
+    },
+    user_id: { type: "string", max_length: 256 },
+};
+
 export function dynroutes(app: any) {
     app.get(
         "/dynamics/constants",
@@ -607,31 +623,29 @@ export function dynroutes(app: any) {
                 outgoing_http_response,
             );
             if (!tenant) return;
-            try {
-                const incoming_request_body_payload =
-                    incoming_http_request.body;
-                const source_memory_id_from_request =
-                    incoming_request_body_payload.source_memory_id;
-                const target_memory_id_from_request =
-                    incoming_request_body_payload.target_memory_id;
+            const b = parse_or_400<{
+                source_memory_id: string;
+                target_memory_id: string;
+                user_id?: string;
+            }>(
+                outgoing_http_response,
+                incoming_http_request.body,
+                weight_schema,
+            );
+            if (!b) return;
 
-                if (
-                    reject_tenant_mismatch(
-                        outgoing_http_response,
-                        tenant,
-                        incoming_request_body_payload.user_id,
-                    )
+            if (
+                reject_tenant_mismatch(
+                    outgoing_http_response,
+                    tenant,
+                    b.user_id,
                 )
-                    return;
+            )
+                return;
 
-                if (
-                    !source_memory_id_from_request ||
-                    !target_memory_id_from_request
-                ) {
-                    return outgoing_http_response
-                        .status(400)
-                        .json({ err: "both_memory_ids_required" });
-                }
+            try {
+                const source_memory_id_from_request = b.source_memory_id;
+                const target_memory_id_from_request = b.target_memory_id;
 
                 const source_memory_record = await q.get_mem.get(
                     source_memory_id_from_request,
