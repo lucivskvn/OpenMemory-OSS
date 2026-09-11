@@ -179,10 +179,9 @@ export function sys(app: any) {
             try {
                 const parsed = TrainSchema.safeParse(req.body);
                 if (!parsed.success) {
-                    const isProd = process.env.NODE_ENV === "production";
                     return res.status(400).json({
                         error: "Invalid payload format",
-                        details: isProd ? "Validation failed" : parsed.error,
+                        details: "Validation failed",
                     });
                 }
 

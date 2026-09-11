@@ -1338,6 +1338,7 @@ export async function add_hsg_memory(
         chunks: chunks.length,
     };
 }
+
 export async function process_pending_vector_outbox(): Promise<number> {
     const now_ts = Date.now();
     const pending = await all_async(
@@ -1422,6 +1423,7 @@ export async function delete_memory(id: string, user_id: string): Promise<boolea
 
     return true;
 }
+
 export async function reinforce_memory(
     id: string,
     boost: number = 0.1,

@@ -1,0 +1,107 @@
+name: PR monitor CI wake-up
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  wake-pr-monitor:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    concurrency:
+      group: pr-monitor-ci-wakeup-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+      cancel-in-progress: false
+    permissions:
+      issues: write
+      pull-requests: read
+    steps:
+      - name: Post idempotent monitor wake-up
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ff56c8c3b21c29 # v7.0.1
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            const allowedConclusions = new Set([
+              "success",
+              "failure",
+              "cancelled",
+              "skipped",
+              "timed_out",
+              "action_required",
+              "neutral",
+              "startup_failure",
+            ]);
+
+            if (
+              run?.event !== "pull_request" ||
+              !/^[0-9a-f]{40}$/i.test(run.head_sha ?? "") ||
+              !allowedConclusions.has(run.conclusion)
+            ) {
+              core.notice("Ignoring an incomplete or unsupported workflow_run payload.");
+              return;
+            }
+
+            const pullRequests = Array.isArray(run.pull_requests) ? run.pull_requests : [];
+            if (pullRequests.length !== 1 || !Number.isInteger(Number(pullRequests[0]?.number))) {
+              core.notice("No unambiguous pull request is associated with this CI run.");
+              return;
+            }
+
+            const prNumber = Number(pullRequests[0].number);
+            const params = {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            };
+            const { data: before } = await github.rest.pulls.get(params);
+
+            if (
+              before.state !== "open" ||
+              before.draft ||
+              before.head.sha !== run.head_sha ||
+              !/^[0-9a-f]{40}$/i.test(before.base.sha ?? "")
+            ) {
+              core.notice("The associated PR is stale, closed, draft, or no longer at the tested head.");
+              return;
+            }
+
+            const attempt = Number.isInteger(run.run_attempt) ? run.run_attempt : 1;
+            const marker = `<!-- openmemory-monitor:v1;pr=${prNumber};head=${run.head_sha};target=${before.base.sha};kind=ci-complete;key=workflow-run-${run.id}-attempt-${attempt} -->`;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              per_page: 100,
+            });
+
+            if (comments.some((comment) => comment.body?.includes(marker))) {
+              core.notice("The CI wake-up comment already exists for this run attempt.");
+              return;
+            }
+
+            const { data: current } = await github.rest.pulls.get(params);
+            if (
+              current.state !== "open" ||
+              current.draft ||
+              current.head.sha !== run.head_sha ||
+              current.base.sha !== before.base.sha
+            ) {
+              core.notice("The PR changed while preparing the wake-up comment.");
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: [
+                marker,
+                "",
+                `CI completed for the current PR head with conclusion: \`${run.conclusion}\`. This is an automated wake-up only; it does not approve the PR, resolve threads, or authorize a merge.`,
+              ].join("\n"),
+            });
