@@ -33,7 +33,7 @@ async def insert_fact(subject: str, predicate: str, subject_object: str, valid_f
     db.commit()
     return fact_id
 
-async def update_fact(fact_id: str, confidence: Optional[float] = None, metadata: Optional[Dict[str, Any]] = None):
+async def update_fact(fact_id: str, confidence: Optional[float] = None, metadata: Optional[Dict[str, Any]] = None, user_id: Optional[str] = None):
     updates = []
     params = []
 
@@ -52,16 +52,29 @@ async def update_fact(fact_id: str, confidence: Optional[float] = None, metadata
     params.append(fact_id)
 
     sql = f"UPDATE temporal_facts SET {', '.join(updates)} WHERE id=?"
+    if user_id:
+        sql += " AND user_id=?"
+        params.append(user_id)
     db.execute(sql, tuple(params))
     db.commit()
 
-async def invalidate_fact(fact_id: str, valid_to: int = None):
+async def invalidate_fact(fact_id: str, valid_to: int = None, user_id: Optional[str] = None):
     ts = valid_to if valid_to is not None else int(time.time() * 1000)
-    db.execute("UPDATE temporal_facts SET valid_to=?, last_updated=? WHERE id=?", (ts, int(time.time() * 1000), fact_id))
+    sql = "UPDATE temporal_facts SET valid_to=?, last_updated=? WHERE id=?"
+    params = [ts, int(time.time() * 1000), fact_id]
+    if user_id:
+        sql += " AND user_id=?"
+        params.append(user_id)
+    db.execute(sql, tuple(params))
     db.commit()
 
-async def delete_fact(fact_id: str):
-    db.execute("DELETE FROM temporal_facts WHERE id=?", (fact_id,))
+async def delete_fact(fact_id: str, user_id: Optional[str] = None):
+    sql = "DELETE FROM temporal_facts WHERE id=?"
+    params = [fact_id]
+    if user_id:
+        sql += " AND user_id=?"
+        params.append(user_id)
+    db.execute(sql, tuple(params))
     db.commit()
 
 async def insert_edge(source_id: str, target_id: str, relation_type: str, valid_from: int = None, weight: float = 1.0, metadata: Dict[str, Any] = None) -> str:

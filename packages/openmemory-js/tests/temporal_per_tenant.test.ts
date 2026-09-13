@@ -6,6 +6,9 @@ import { describe, it, expect, beforeAll } from "bun:test";
 import { run_async } from "../src/core/db";
 import {
     insert_fact,
+    update_fact,
+    invalidate_fact,
+    delete_fact,
     get_fact_by_id_for_user,
 } from "../src/temporal_graph/store";
 import {
@@ -350,6 +353,48 @@ describe("temporal_graph per-tenant isolation", () => {
         expect(res_admin_local.get_status()).toBe(200);
         expect(res_admin_local.get_json().scope).toBe("tenant");
         expect(res_admin_local.get_json().total_facts).toBe(0); // admin tenant itself has no facts
+    });
+
+    it("enforces multi-tenant isolation on fact mutations (update, invalidate, delete)", async () => {
+        const id_alice = await insert_fact({
+            subject: "MutSubj",
+            predicate: "MutPred",
+            object: "AliceObj",
+            user_id: T_ALICE,
+            confidence: 0.8,
+        });
+
+        // Bob attempts to update Alice's fact
+        await update_fact(id_alice, 0.1, { hacked: true }, T_BOB);
+        let fact = await get_fact_by_id_for_user(id_alice, T_ALICE);
+        expect(fact?.confidence).toBe(0.8);
+        expect(fact?.metadata?.hacked).toBeUndefined();
+
+        // Alice updates her own fact
+        await update_fact(id_alice, 0.9, { valid: true }, T_ALICE);
+        fact = await get_fact_by_id_for_user(id_alice, T_ALICE);
+        expect(fact?.confidence).toBe(0.9);
+        expect(fact?.metadata?.valid).toBe(true);
+
+        // Bob attempts to invalidate Alice's fact
+        await invalidate_fact(id_alice, new Date(), T_BOB);
+        fact = await get_fact_by_id_for_user(id_alice, T_ALICE);
+        expect(fact?.valid_to).toBeNull();
+
+        // Alice invalidates her own fact
+        await invalidate_fact(id_alice, new Date(), T_ALICE);
+        fact = await get_fact_by_id_for_user(id_alice, T_ALICE);
+        expect(fact?.valid_to).not.toBeNull();
+
+        // Bob attempts to delete Alice's fact
+        await delete_fact(id_alice, T_BOB);
+        fact = await get_fact_by_id_for_user(id_alice, T_ALICE);
+        expect(fact).not.toBeNull();
+
+        // Alice deletes her own fact
+        await delete_fact(id_alice, T_ALICE);
+        fact = await get_fact_by_id_for_user(id_alice, T_ALICE);
+        expect(fact).toBeNull();
     });
 
     it("enforces multi-tenant isolation on get_most_volatile", async () => {
