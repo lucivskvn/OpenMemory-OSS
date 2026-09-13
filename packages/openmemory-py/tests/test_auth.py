@@ -58,3 +58,40 @@ def test_protected_endpoint_rejects_tenant_mismatch(auth_client):
     response = auth_client.get("/memory/history?user_id=someone_else", headers={"x-api-key": "test-api-key-123456"})
     assert response.status_code == 403
     assert "tenant_mismatch" in response.json()["detail"]
+
+@pytest.mark.asyncio
+async def test_temporal_fact_mutations_tenant_isolation():
+    from openmemory.temporal_graph.store import insert_fact, update_fact, invalidate_fact, delete_fact
+    from openmemory.core.db import db
+
+    fid = await insert_fact("S", "P", "O", user_id="alice")
+
+    # Bob attempts update
+    await update_fact(fid, confidence=0.2, metadata={"hacked": True}, user_id="bob")
+    row = db.fetchone("SELECT confidence, metadata, valid_to FROM temporal_facts WHERE id=?", (fid,))
+    assert row["confidence"] == 1.0
+
+    # Alice updates
+    await update_fact(fid, confidence=0.8, metadata={"ok": True}, user_id="alice")
+    row = db.fetchone("SELECT confidence, metadata, valid_to FROM temporal_facts WHERE id=?", (fid,))
+    assert row["confidence"] == 0.8
+
+    # Bob attempts invalidation
+    await invalidate_fact(fid, user_id="bob")
+    row = db.fetchone("SELECT valid_to FROM temporal_facts WHERE id=?", (fid,))
+    assert row["valid_to"] is None
+
+    # Alice invalidates
+    await invalidate_fact(fid, user_id="alice")
+    row = db.fetchone("SELECT valid_to FROM temporal_facts WHERE id=?", (fid,))
+    assert row["valid_to"] is not None
+
+    # Bob attempts delete
+    await delete_fact(fid, user_id="bob")
+    row = db.fetchone("SELECT id FROM temporal_facts WHERE id=?", (fid,))
+    assert row is not None
+
+    # Alice deletes
+    await delete_fact(fid, user_id="alice")
+    row = db.fetchone("SELECT id FROM temporal_facts WHERE id=?", (fid,))
+    assert row is None

@@ -336,7 +336,7 @@ export const update_temporal_fact = async (req: any, res: any) => {
             b.confidence !== undefined
                 ? Math.max(0, Math.min(1, b.confidence))
                 : undefined;
-        await update_fact(id, conf, b.metadata);
+        await update_fact(id, conf, b.metadata, tenant);
         res.json({
             id,
             confidence: conf,
@@ -369,7 +369,7 @@ export const invalidate_temporal_fact = async (req: any, res: any) => {
         if (!fact) {
             return res.status(404).json({ error: "fact_not_found" });
         }
-        await invalidate_fact(id, valid_to_date);
+        await invalidate_fact(id, valid_to_date, tenant);
         res.json({
             id,
             valid_to: valid_to_date.toISOString(),
