@@ -56,3 +56,33 @@ async def test_mcp_tenant_get_and_delete_scenarios(monkeypatch):
     res_ownerless, tenant_o, err_ownerless = await _get_verified_memory(mem, {"id": "m-ownerless"})
     assert res_ownerless is None
     assert "not found for user" in err_ownerless
+
+@pytest.mark.asyncio
+async def test_expand_via_waypoints_tenant_isolation():
+    from openmemory.memory.hsg import expand_via_waypoints
+
+    now = 1000000000
+    # Seed waypoints for Alice and Bob
+    db.execute("INSERT INTO waypoints (src_id, dst_id, user_id, weight, created_at, updated_at) VALUES (?, ?, ?, 0.9, ?, ?)", ("m1", "m2_alice", "alice", now, now))
+    db.execute("INSERT INTO waypoints (src_id, dst_id, user_id, weight, created_at, updated_at) VALUES (?, ?, ?, 0.9, ?, ?)", ("m1", "m2_bob", "bob", now, now))
+    db.commit()
+
+    # 1. Missing user_id fails closed (returns [])
+    res_none = await expand_via_waypoints(["m1"], user_id=None)
+    assert res_none == []
+
+    # 2. Empty/whitespace user_id fails closed (returns [])
+    res_empty = await expand_via_waypoints(["m1"], user_id="   ")
+    assert res_empty == []
+
+    # 3. Alice query only returns Alice's destination waypoint
+    res_alice = await expand_via_waypoints(["m1"], user_id="alice")
+    alice_ids = [item["id"] for item in res_alice]
+    assert "m2_alice" in alice_ids
+    assert "m2_bob" not in alice_ids
+
+    # 4. Bob query only returns Bob's destination waypoint
+    res_bob = await expand_via_waypoints(["m1"], user_id="bob")
+    bob_ids = [item["id"] for item in res_bob]
+    assert "m2_bob" in bob_ids
+    assert "m2_alice" not in bob_ids
