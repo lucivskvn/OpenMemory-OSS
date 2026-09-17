@@ -1285,9 +1285,14 @@ export async function update_memory(
     content?: string,
     tags?: string[],
     metadata?: any,
+    user_id?: string,
 ): Promise<{ id: string; updated: boolean }> {
     const mem = await q.get_mem.get(id);
     if (!mem) throw new Error(`Memory ${id} not found`);
+    const target_uid = mem.user_id || user_id;
+    if (user_id && mem.user_id && mem.user_id !== user_id) {
+        throw new Error(`Unauthorized: Memory ${id} belongs to another tenant`);
+    }
     const new_content = content !== undefined ? content : mem.content;
     const new_tags = tags !== undefined ? j(tags) : mem.tags || "[]";
     const new_meta = metadata !== undefined ? j(metadata) : mem.meta || "{}";
@@ -1301,7 +1306,7 @@ export async function update_memory(
                 classification.primary,
                 ...classification.additional,
             ];
-            await vector_store.deleteVectors(id, mem.user_id || undefined);
+            await vector_store.deleteVectors(id, target_uid || undefined);
             const emb_res = await embedMultiSector(
                 id,
                 new_content,
@@ -1314,7 +1319,7 @@ export async function update_memory(
                     result.sector,
                     result.vector,
                     result.dim,
-                    mem.user_id || "anonymous",
+                    target_uid || undefined,
                 );
             }
             const mean_vec = calc_mean_vec(emb_res, all_sectors);

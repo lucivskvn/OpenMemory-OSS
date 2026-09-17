@@ -742,4 +742,103 @@ describe("Authentication Middleware", () => {
             expect.objectContaining({ error: "tenant_mismatch" }),
         );
     });
+
+    it("enforces tenant isolation on update_memory and PATCH /memory/:id", async () => {
+        const hsgModule = await import("../src/memory/hsg");
+        const dbModule = await import("../src/core/db");
+
+        // 1. Direct call to update_memory with mismatched tenant
+        const mockMem = {
+            id: "mem-tenant-A",
+            content: "original content",
+            primary_sector: "semantic",
+            user_id: "tenant-A",
+            tags: "[]",
+            meta: "{}",
+        };
+        const getMemSpy = spyOn(dbModule.q.get_mem, "get").mockImplementation(() =>
+            Promise.resolve(mockMem),
+        );
+
+        try {
+            await expect(
+                hsgModule.update_memory(
+                    "mem-tenant-A",
+                    "updated content",
+                    [],
+                    {},
+                    "tenant-B",
+                ),
+            ).rejects.toThrow("Unauthorized: Memory mem-tenant-A belongs to another tenant");
+        } finally {
+            getMemSpy.mockRestore();
+        }
+
+        // 2. HTTP route PATCH /memory/:id with mismatched tenant in path/body
+        let routeHandler: any;
+        const mockApp = {
+            get: () => {},
+            post: () => {},
+            patch: (_path: string, handler: any) => {
+                routeHandler = handler;
+            },
+            delete: () => {},
+        };
+        const memoryRouteModule = await import("../src/server/routes/memory");
+        memoryRouteModule.mem(mockApp);
+
+        const reqMismatch = {
+            headers: { "x-api-key": "test-secret-api-key-999" },
+            tenant: "tenant-B",
+            params: { id: "mem-tenant-A" },
+            body: { content: "unauthorized edit", user_id: "tenant-A" },
+        };
+
+        let status = 0;
+        let json: any = null;
+        const res = {
+            status: (code: number) => {
+                status = code;
+                return res;
+            },
+            json: (data: any) => {
+                json = data;
+            },
+        };
+
+        await routeHandler(reqMismatch, res);
+        expect(status).toBe(403);
+        expect(json?.error).toBe("tenant_mismatch");
+
+        // 3. HTTP route PATCH /memory/:id where memory belongs to tenant-A in DB, caller is tenant-B
+        const getMemSpy2 = spyOn(dbModule.q.get_mem, "get").mockImplementation(() =>
+            Promise.resolve(mockMem),
+        );
+        const reqDbMismatch = {
+            headers: { "x-api-key": "test-secret-api-key-999" },
+            tenant: "tenant-B",
+            params: { id: "mem-tenant-A" },
+            body: { content: "unauthorized edit" },
+        };
+        let statusDb = 0;
+        let jsonDb: any = null;
+        const resDb = {
+            status: (code: number) => {
+                statusDb = code;
+                return resDb;
+            },
+            json: (data: any) => {
+                jsonDb = data;
+            },
+        };
+
+        try {
+            await routeHandler(reqDbMismatch, resDb);
+        } finally {
+            getMemSpy2.mockRestore();
+        }
+
+        expect(statusDb).toBe(403);
+        expect(jsonDb?.err).toBe("forbidden");
+    });
 });
