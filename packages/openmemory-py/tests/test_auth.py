@@ -58,3 +58,37 @@ def test_protected_endpoint_rejects_tenant_mismatch(auth_client):
     response = auth_client.get("/memory/history?user_id=someone_else", headers={"x-api-key": "test-api-key-123456"})
     assert response.status_code == 403
     assert "tenant_mismatch" in response.json()["detail"]
+
+def test_user_summary_get_and_regenerate_scenarios(auth_client):
+    tenant_id = hashlib.sha256("test-api-key-123456".encode("utf-8")).hexdigest()[:16]
+    headers = {"x-api-key": "test-api-key-123456"}
+
+    # 1. Reject invalid_user_id_length (> 256 chars)
+    long_user_id = "a" * 257
+    resp = auth_client.get(f"/memory/users/{long_user_id}/summary", headers=headers)
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "invalid_user_id_length"
+
+    # 2. Reject tenant mismatch
+    resp = auth_client.get("/memory/users/other_tenant/summary", headers=headers)
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "tenant_mismatch"
+
+    resp = auth_client.post("/memory/users/other_tenant/summary/regenerate", headers=headers)
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "tenant_mismatch"
+
+    # 3. Regenerate summary for tenant
+    resp = auth_client.post(f"/memory/users/{tenant_id}/summary/regenerate", headers=headers)
+    assert resp.status_code == 200
+    res_data = resp.json()
+    assert res_data["ok"] is True
+    assert res_data["user_id"] == tenant_id
+    assert "summary" in res_data
+
+    # 4. Get user summary after creation (200)
+    resp = auth_client.get(f"/memory/users/{tenant_id}/summary", headers=headers)
+    assert resp.status_code == 200
+    res_get = resp.json()
+    assert res_get["user_id"] == tenant_id
+    assert res_get["summary"] == res_data["summary"]
