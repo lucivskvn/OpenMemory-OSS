@@ -1,4 +1,5 @@
 import os
+import sys
 import pytest
 import hashlib
 from fastapi.testclient import TestClient
@@ -7,15 +8,21 @@ from openmemory.core.config import env
 
 @pytest.fixture
 def auth_client():
-    orig_api_key = env.api_key
-    env.api_key = "test-api-key-123456"
+    orig_keys = {}
+    for name, mod in list(sys.modules.items()):
+        if mod and hasattr(mod, "env") and type(mod.env).__name__ == "EnvConfig":
+            orig_keys[name] = getattr(mod.env, "api_key", "")
+            setattr(mod.env, "api_key", "test-api-key-123456")
 
     app = create_app()
     client = TestClient(app)
 
     yield client
 
-    env.api_key = orig_api_key
+    for name, key_val in orig_keys.items():
+        mod = sys.modules.get(name)
+        if mod and hasattr(mod, "env") and type(mod.env).__name__ == "EnvConfig":
+            setattr(mod.env, "api_key", key_val)
 
 def test_public_endpoint_always_accessible(auth_client):
     response = auth_client.get("/health")
