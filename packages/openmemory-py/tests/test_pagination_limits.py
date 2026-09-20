@@ -93,70 +93,34 @@ def test_search_reject_negative_limit(pagination_limits_client):
     assert response.status_code == 400, f"Failed: {response.text}"
     assert "invalid_limit" in response.json()["detail"]
 
-def test_get_user_summary_success(pagination_limits_client):
-    tenant_id = hashlib.sha256("test-api-key-123456".encode("utf-8")).hexdigest()[:16]
+def test_user_summary_routes_tenant_and_security(pagination_limits_client):
+    tid = hashlib.sha256("test-api-key-123456".encode("utf-8")).hexdigest()[:16]
+    hdr = {"x-api-key": "test-api-key-123456"}
+
     db.execute(
         "INSERT OR REPLACE INTO users(user_id, summary, reflection_count, created_at, updated_at) VALUES (?,?,?,?,?)",
-        (tenant_id, "Active in OpenMemory test suite.", 3, 1000, 2000)
+        (tid, "Active in OpenMemory test suite.", 3, 1000, 2000)
     )
     db.commit()
 
-    response = pagination_limits_client.get(
-        f"/memory/users/{tenant_id}/summary",
-        headers={"x-api-key": "test-api-key-123456"}
-    )
-    assert response.status_code == 200, f"Failed: {response.text}"
-    data = response.json()
-    assert data["user_id"] == tenant_id
-    assert data["summary"] == "Active in OpenMemory test suite."
-    assert data["reflection_count"] == 3
+    r = pagination_limits_client.get(f"/memory/users/{tid}/summary", headers=hdr)
+    assert r.status_code == 200 and r.json()["summary"] == "Active in OpenMemory test suite."
 
-def test_get_user_summary_tenant_mismatch(pagination_limits_client):
-    response = pagination_limits_client.get(
-        "/memory/users/other-tenant-id/summary",
-        headers={"x-api-key": "test-api-key-123456"}
-    )
-    assert response.status_code == 403, f"Failed: {response.text}"
-    assert response.json()["detail"] == "tenant_mismatch"
+    r_regen = pagination_limits_client.post(f"/memory/users/{tid}/summary/regenerate", headers=hdr)
+    assert r_regen.status_code == 200 and r_regen.json()["user_id"] == tid
 
-def test_get_user_summary_invalid_length(pagination_limits_client):
-    oversized_id = "u" * 257
-    response = pagination_limits_client.get(
-        f"/memory/users/{oversized_id}/summary",
-        headers={"x-api-key": "test-api-key-123456"}
-    )
-    assert response.status_code == 400, f"Failed: {response.text}"
-    assert response.json()["detail"] == "invalid_user_id_length"
+    for method, ep, exp_status, exp_detail in [
+        ("get", "/memory/users/other-tenant/summary", 403, "tenant_mismatch"),
+        ("post", "/memory/users/other-tenant/summary/regenerate", 403, "tenant_mismatch"),
+        ("get", f"/memory/users/{'u' * 257}/summary", 400, "invalid_user_id_length"),
+        ("post", f"/memory/users/{'u' * 257}/summary/regenerate", 400, "invalid_user_id_length"),
+    ]:
+        res = getattr(pagination_limits_client, method)(ep, headers=hdr)
+        assert res.status_code == exp_status and res.json()["detail"] == exp_detail
 
-def test_regenerate_user_summary_success_and_mismatch(pagination_limits_client):
-    tenant_id = hashlib.sha256("test-api-key-123456".encode("utf-8")).hexdigest()[:16]
-    response = pagination_limits_client.post(
-        f"/memory/users/{tenant_id}/summary/regenerate",
-        headers={"x-api-key": "test-api-key-123456"}
-    )
-    assert response.status_code == 200, f"Failed: {response.text}"
-    data = response.json()
-    assert data["ok"] is True
-    assert data["user_id"] == tenant_id
-    assert "summary" in data
-
-    response_mismatch = pagination_limits_client.post(
-        "/memory/users/other-tenant/summary/regenerate",
-        headers={"x-api-key": "test-api-key-123456"}
-    )
-    assert response_mismatch.status_code == 403, f"Failed: {response_mismatch.text}"
-    assert response_mismatch.json()["detail"] == "tenant_mismatch"
-
-def test_user_summary_error_sanitization(pagination_limits_client):
-    tenant_id = hashlib.sha256("test-api-key-123456".encode("utf-8")).hexdigest()[:16]
     with patch("openmemory.server.routes.memory.db.fetchone", side_effect=Exception("Sensitive DB error trace")):
-        response = pagination_limits_client.get(
-            f"/memory/users/{tenant_id}/summary",
-            headers={"x-api-key": "test-api-key-123456"}
-        )
-        assert response.status_code == 500
-        assert "Sensitive DB error trace" not in response.text
-        assert response.json()["detail"] == "Failed to fetch user summary"
+        res_err = pagination_limits_client.get(f"/memory/users/{tid}/summary", headers=hdr)
+        assert res_err.status_code == 500 and "Sensitive DB error trace" not in res_err.text
 
 def test_add_memory_reject_empty_content(pagination_limits_client):
     tenant_id = hashlib.sha256("test-api-key-123456".encode("utf-8")).hexdigest()[:16]

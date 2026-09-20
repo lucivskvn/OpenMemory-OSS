@@ -113,6 +113,14 @@ async def get_history(user_id: str, request: Request, limit: int = 20, offset: i
         logger.exception("Error fetching memory history")
         raise HTTPException(status_code=500, detail="Failed to fetch memory history") from None
 
+def _verify_user_tenant(user_id: str, request: Request) -> str:
+    if len(user_id) > 256:
+        raise HTTPException(status_code=400, detail="invalid_user_id_length")
+    tenant = getattr(request.state, "tenant", "anonymous")
+    if user_id != tenant:
+        raise HTTPException(status_code=403, detail="tenant_mismatch")
+    return tenant
+
 @router.get("/users/{user_id}/summary", responses={
     400: {"description": "Bad Request"},
     403: {"description": "Forbidden"},
@@ -120,18 +128,11 @@ async def get_history(user_id: str, request: Request, limit: int = 20, offset: i
     500: {"description": "Internal Server Error"}
 })
 async def get_user_summary(user_id: str, request: Request):
-    if len(user_id) > 256:
-        raise HTTPException(status_code=400, detail="invalid_user_id_length")
-
-    tenant = getattr(request.state, "tenant", "anonymous")
-    if user_id != tenant:
-        raise HTTPException(status_code=403, detail="tenant_mismatch")
-
+    tenant = _verify_user_tenant(user_id, request)
     try:
         user = db.fetchone("SELECT user_id, summary, reflection_count, updated_at FROM users WHERE user_id=?", (tenant,))
         if not user:
             raise HTTPException(status_code=404, detail="user_not_found")
-
         u_dict = dict(user)
         return {
             "user_id": u_dict["user_id"],
@@ -151,13 +152,7 @@ async def get_user_summary(user_id: str, request: Request):
     500: {"description": "Internal Server Error"}
 })
 async def regenerate_user_summary(user_id: str, request: Request):
-    if len(user_id) > 256:
-        raise HTTPException(status_code=400, detail="invalid_user_id_length")
-
-    tenant = getattr(request.state, "tenant", "anonymous")
-    if user_id != tenant:
-        raise HTTPException(status_code=403, detail="tenant_mismatch")
-
+    tenant = _verify_user_tenant(user_id, request)
     try:
         await update_user_summary(tenant)
         user = db.fetchone("SELECT summary, reflection_count FROM users WHERE user_id=?", (tenant,))
