@@ -8,6 +8,11 @@ from openmemory.core.db import db, q
 def setup_db(tmp_path, monkeypatch):
     db_file = tmp_path / "test.db"
     monkeypatch.setenv("OM_DATABASE_URL", f"sqlite:///{db_file}")
+    if db.conn:
+        try:
+            db.conn.close()
+        except Exception:
+            pass
     db.conn = None
     db.connect()
 
@@ -56,3 +61,36 @@ async def test_mcp_tenant_get_and_delete_scenarios(monkeypatch):
     res_ownerless, tenant_o, err_ownerless = await _get_verified_memory(mem, {"id": "m-ownerless"})
     assert res_ownerless is None
     assert "not found for user" in err_ownerless
+
+@pytest.mark.asyncio
+async def test_mcp_resolve_tenant_for_query_store_list_tools(monkeypatch):
+    monkeypatch.delenv("OM_TENANT", raising=False)
+    monkeypatch.delenv("OM_USER_ID", raising=False)
+
+    mem_alice = Memory(user="alice")
+
+    # 1. Matching user_id in args succeeds and returns bound tenant
+    tenant, err = _resolve_mcp_tenant(mem_alice, {"query": "hello", "user_id": "alice"})
+    assert err is None
+    assert tenant == "alice"
+
+    # 2. Omitted user_id in args succeeds and defaults to bound tenant
+    tenant, err = _resolve_mcp_tenant(mem_alice, {"query": "hello"})
+    assert err is None
+    assert tenant == "alice"
+
+    # 3. Mismatching user_id in args fails closed with tenant_mismatch error
+    tenant, err = _resolve_mcp_tenant(mem_alice, {"query": "hello", "user_id": "bob"})
+    assert tenant is None
+    assert "tenant_mismatch" in err
+
+    # 4. Unbound session without user_id fails closed as Unauthenticated
+    mem_unbound = Memory(user=None)
+    tenant, err = _resolve_mcp_tenant(mem_unbound, {"query": "hello"})
+    assert tenant is None
+    assert "Unauthenticated MCP session" in err
+
+    # 5. Unbound session with claimed user_id STILL fails closed (prevents identity spoofing)
+    tenant, err = _resolve_mcp_tenant(mem_unbound, {"query": "hello", "user_id": "alice"})
+    assert tenant is None
+    assert "Unauthenticated MCP session" in err
