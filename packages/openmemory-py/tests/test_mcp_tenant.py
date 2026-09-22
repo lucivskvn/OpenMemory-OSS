@@ -8,8 +8,17 @@ from openmemory.core.db import db, q
 def setup_db(tmp_path, monkeypatch):
     db_file = tmp_path / "test.db"
     monkeypatch.setenv("OM_DATABASE_URL", f"sqlite:///{db_file}")
-    db.conn = None
+    if db.conn:
+        try:
+            db.conn.close()
+        except Exception:
+            pass
+        db.conn = None
     db.connect()
+    db.execute("DELETE FROM memories")
+    db.execute("DELETE FROM vectors")
+    db.execute("DELETE FROM waypoints")
+    db.commit()
 
 @pytest.mark.asyncio
 async def test_mcp_tenant_get_and_delete_scenarios(monkeypatch):
@@ -56,3 +65,35 @@ async def test_mcp_tenant_get_and_delete_scenarios(monkeypatch):
     res_ownerless, tenant_o, err_ownerless = await _get_verified_memory(mem, {"id": "m-ownerless"})
     assert res_ownerless is None
     assert "not found for user" in err_ownerless
+
+
+@pytest.mark.asyncio
+async def test_mcp_tenant_query_store_list_scenarios(monkeypatch):
+    monkeypatch.delenv("OM_TENANT", raising=False)
+    monkeypatch.delenv("OM_USER_ID", raising=False)
+
+    mem_alice = Memory(user="alice")
+    mem_unbound = Memory(user=None)
+
+    # 1. _resolve_mcp_tenant rejects unbound session for query/store/list
+    tenant_u, err_u = _resolve_mcp_tenant(mem_unbound, {"query": "test"})
+    assert tenant_u is None
+    assert "Unauthenticated MCP session" in err_u
+
+    tenant_u2, err_u2 = _resolve_mcp_tenant(mem_unbound, {"user_id": "alice", "content": "hello"})
+    assert tenant_u2 is None
+    assert "Unauthenticated MCP session" in err_u2
+
+    # 2. _resolve_mcp_tenant rejects tenant mismatch for bound session
+    tenant_m, err_m = _resolve_mcp_tenant(mem_alice, {"user_id": "bob"})
+    assert tenant_m is None
+    assert "tenant_mismatch" in err_m
+
+    # 3. _resolve_mcp_tenant returns bound tenant when matching or omitted
+    tenant_ok1, err_ok1 = _resolve_mcp_tenant(mem_alice, {"user_id": "alice"})
+    assert err_ok1 is None
+    assert tenant_ok1 == "alice"
+
+    tenant_ok2, err_ok2 = _resolve_mcp_tenant(mem_alice, {})
+    assert err_ok2 is None
+    assert tenant_ok2 == "alice"
