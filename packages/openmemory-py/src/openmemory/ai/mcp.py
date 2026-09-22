@@ -161,10 +161,12 @@ async def run_mcp_server():
 
         try:
             if name == "openmemory_query":
+                uid, err = _resolve_mcp_tenant(mem, args)
+                if err:
+                    return [TextContent(type="text", text=err)]
                 q = args.get("query")
                 qtype = args.get("type", "contextual")
                 limit = args.get("k", 10)
-                uid = args.get("user_id")
                 sector = args.get("sector")
                 fact_pattern = args.get("fact_pattern", {})
                 at_str = args.get("at")
@@ -230,9 +232,11 @@ async def run_mcp_server():
                 ]
 
             elif name == "openmemory_store":
+                uid, err = _resolve_mcp_tenant(mem, args)
+                if err:
+                    return [TextContent(type="text", text=err)]
                 content = args.get("content")
                 stype = args.get("type", "contextual")
-                uid = args.get("user_id")
                 tags = args.get("tags", [])
                 meta = args.get("metadata", {})
                 facts_data = args.get("facts", [])
@@ -316,8 +320,10 @@ async def run_mcp_server():
                 return [TextContent(type="text", text=f"Memory {m_dict['id']} deleted")]
 
             elif name == "openmemory_list":
+                uid, err = _resolve_mcp_tenant(mem, args)
+                if err:
+                    return [TextContent(type="text", text=err)]
                 limit = args.get("limit", 20)
-                uid = args.get("user_id")
                 res = mem.history(user_id=uid, limit=limit)
                 return [TextContent(type="text", text=json.dumps([dict(r) for r in res], default=str, indent=2))]
 
