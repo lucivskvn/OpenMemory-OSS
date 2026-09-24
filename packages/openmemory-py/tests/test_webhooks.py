@@ -140,6 +140,15 @@ def test_github_webhook_rejects_invalid_user_id(webhook_client, monkeypatch):
     assert response.status_code == 400
     assert "invalid_user_id" in response.text
 
+def test_source_ingest_rejects_invalid_user_id_length(webhook_client):
+    response = webhook_client.post(
+        "/sources/github/ingest",
+        json={"user_id": "a" * 300, "creds": {}},
+        headers={"Authorization": "Bearer test-api-key-123456"}
+    )
+    assert response.status_code == 400
+    assert "invalid_user_id_length" in response.text
+
 def test_github_webhook_secure_error_response(webhook_client, monkeypatch):
     monkeypatch.setenv("OM_GITHUB_WEBHOOK_SECRET", SECRET)
 
@@ -163,7 +172,8 @@ def test_github_webhook_secure_error_response(webhook_client, monkeypatch):
 def test_notion_webhook_isolates_tenant(webhook_client, monkeypatch):
     monkeypatch.setenv("OM_NOTION_WEBHOOK_SECRET", SECRET)
 
-    # Clean up memories first
+    # Clean up foreign key tables first
+    db.execute("DELETE FROM waypoints")
     db.execute("DELETE FROM memories")
     db.commit()
 
