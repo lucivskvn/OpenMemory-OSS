@@ -4,6 +4,8 @@ import { env } from "../src/core/config";
 import { dash } from "../src/server/routes/dashboard";
 import { mem } from "../src/server/routes/memory";
 import { dynroutes } from "../src/server/routes/dynamics";
+import { usr } from "../src/server/routes/users";
+import * as userSummaryModule from "../src/memory/user_summary";
 import * as hsgModule from "../src/memory/hsg";
 
 describe("Authentication Middleware", () => {
@@ -741,5 +743,80 @@ describe("Authentication Middleware", () => {
         expect(json_ownerless).toEqual(
             expect.objectContaining({ error: "tenant_mismatch" }),
         );
+    });
+
+    it("restricts multi-tenant summary regeneration to administrative tenants", async () => {
+        const handlers: Record<string, any> = {};
+        const app_mock = {
+            post: (path: string, handler: any) => {
+                handlers[path] = handler;
+            },
+            get: () => {},
+            delete: () => {},
+        };
+
+        usr(app_mock);
+        expect(handlers["/users/summaries/regenerate-all"]).toBeTruthy();
+
+        const auto_spy = spyOn(
+            userSummaryModule,
+            "auto_update_user_summaries",
+        ).mockImplementation(() => Promise.resolve({ updated: 10 }));
+        const single_spy = spyOn(
+            userSummaryModule,
+            "update_user_summary",
+        ).mockImplementation(() => Promise.resolve());
+
+        const orig_env = process.env.OM_ADMIN_REGENERATE_ALL;
+        process.env.OM_ADMIN_REGENERATE_ALL = "true";
+
+        try {
+            // 1. Non-admin tenant calling regenerate-all when OM_ADMIN_REGENERATE_ALL="true"
+            let non_admin_json: any = null;
+            const res_non_admin = {
+                json: (data: any) => {
+                    non_admin_json = data;
+                },
+            };
+            const req_non_admin = { tenant: "tenant-alice" };
+
+            await handlers["/users/summaries/regenerate-all"](
+                req_non_admin,
+                res_non_admin,
+            );
+
+            expect(auto_spy).not.toHaveBeenCalled();
+            expect(single_spy).toHaveBeenCalledWith("tenant-alice");
+            expect(non_admin_json).toEqual({
+                ok: true,
+                updated: 1,
+                scope: "self",
+            });
+
+            // 2. Admin tenant calling regenerate-all when OM_ADMIN_REGENERATE_ALL="true"
+            let admin_json: any = null;
+            const res_admin = {
+                json: (data: any) => {
+                    admin_json = data;
+                },
+            };
+            const req_admin = { tenant: "admin" };
+
+            await handlers["/users/summaries/regenerate-all"](
+                req_admin,
+                res_admin,
+            );
+
+            expect(auto_spy).toHaveBeenCalledTimes(1);
+            expect(admin_json).toEqual({
+                ok: true,
+                updated: 10,
+                scope: "all",
+            });
+        } finally {
+            process.env.OM_ADMIN_REGENERATE_ALL = orig_env;
+            auto_spy.mockRestore();
+            single_spy.mockRestore();
+        }
     });
 });

@@ -58,19 +58,22 @@ export const usr = (app: any) => {
 
     /**
      * Bulk regenerate. This is an admin-style endpoint — keep it
-     * tenant-scoped (regenerate only the caller's summary). If a future
-     * deployment needs a global admin to regenerate all tenants, gate
-     * that behind an explicit OM_ADMIN_KEY check; do NOT re-open this
-     * route to all callers.
+     * tenant-scoped (regenerate only the caller's summary). Multi-tenant
+     * fan-out via OM_ADMIN_REGENERATE_ALL=true is strictly restricted to
+     * administrative tenants.
      */
     app.post("/users/summaries/regenerate-all", async (req: any, res: any) => {
         const tenant = require_tenant(req, res);
         if (!tenant) return;
         try {
-            // Backwards-compat shape: kept the route name, but it now only
-            // updates the authenticated tenant. Multi-tenant fan-out is
-            // explicitly opt-in via OM_ADMIN_REGENERATE_ALL=true.
-            if (process.env.OM_ADMIN_REGENERATE_ALL === "true") {
+            const is_admin =
+                tenant === "admin" ||
+                tenant === "system" ||
+                tenant === "dev-no-auth";
+
+            // Multi-tenant fan-out is explicitly opt-in via OM_ADMIN_REGENERATE_ALL=true
+            // AND restricted exclusively to administrative tenants.
+            if (process.env.OM_ADMIN_REGENERATE_ALL === "true" && is_admin) {
                 const result = await auto_update_user_summaries();
                 return res.json({
                     ok: true,
