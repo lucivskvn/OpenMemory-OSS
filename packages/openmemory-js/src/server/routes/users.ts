@@ -70,7 +70,11 @@ export const usr = (app: any) => {
             // Backwards-compat shape: kept the route name, but it now only
             // updates the authenticated tenant. Multi-tenant fan-out is
             // explicitly opt-in via OM_ADMIN_REGENERATE_ALL=true.
-            if (process.env.OM_ADMIN_REGENERATE_ALL === "true") {
+            const is_admin =
+                tenant === "admin" ||
+                tenant === "system" ||
+                tenant === "dev-no-auth";
+            if (process.env.OM_ADMIN_REGENERATE_ALL === "true" && is_admin) {
                 const result = await auto_update_user_summaries();
                 return res.json({
                     ok: true,
