@@ -402,4 +402,58 @@ describe("temporal_graph per-tenant isolation", () => {
             ["SubjA_unique", "SubjB_unique"].sort()
         );
     });
+
+    it("enforces admin authorization on apply_decay", async () => {
+        const { apply_decay } = await import("../src/server/routes/temporal");
+
+        const create_res_mock = () => {
+            let status_code = 200;
+            let res_json: any = null;
+            return {
+                status: function (code: number) {
+                    status_code = code;
+                    return this;
+                },
+                json: function (data: any) {
+                    res_json = data;
+                    return this;
+                },
+                get_status: () => status_code,
+                get_json: () => res_json,
+            };
+        };
+
+        const prev_decay_env = process.env.OM_ADMIN_DECAY;
+        process.env.OM_ADMIN_DECAY = "true";
+
+        try {
+            // Non-admin tenant attempting global decay
+            const req_alice = {
+                tenant: T_ALICE,
+                body: { decay_rate: 0.05 },
+            };
+            const res_alice = create_res_mock();
+            await apply_decay(req_alice, res_alice);
+
+            expect(res_alice.get_status()).toBe(403);
+            expect(res_alice.get_json().error).toBe("forbidden");
+
+            // Admin tenant executing global decay
+            const req_admin = {
+                tenant: "admin",
+                body: { decay_rate: 0.05 },
+            };
+            const res_admin = create_res_mock();
+            await apply_decay(req_admin, res_admin);
+
+            expect(res_admin.get_status()).toBe(200);
+            expect(res_admin.get_json().message).toBe("Confidence decay applied successfully");
+        } finally {
+            if (prev_decay_env !== undefined) {
+                process.env.OM_ADMIN_DECAY = prev_decay_env;
+            } else {
+                delete process.env.OM_ADMIN_DECAY;
+            }
+        }
+    });
 });
