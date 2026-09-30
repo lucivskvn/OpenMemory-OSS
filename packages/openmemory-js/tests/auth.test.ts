@@ -539,6 +539,7 @@ describe("Authentication Middleware", () => {
         expect(handlers["/dynamics/resonance/calculate"]).toBeTruthy();
         expect(handlers["/dynamics/activation/spreading"]).toBeTruthy();
         expect(handlers["/dynamics/retrieval/energy-based"]).toBeTruthy();
+        expect(handlers["/dynamics/waypoints/calculate-weight"]).toBeTruthy();
 
         // 1. Unauthenticated request to /dynamics/salience/calculate
         let status1 = 0;
@@ -643,6 +644,35 @@ describe("Authentication Middleware", () => {
         await handlers["/dynamics/retrieval/energy-based"](req5, res5);
         expect(status5).toBe(403);
         expect(json5?.error).toBe("tenant_mismatch");
+
+        // 6. Authenticated request to /dynamics/waypoints/calculate-weight with missing required fields -> 400
+        let status6 = 0;
+        const res6 = {
+            status: (s: number) => {
+                status6 = s;
+                return res6;
+            },
+            json: () => res6,
+            set: () => res6,
+        };
+        await handlers["/dynamics/waypoints/calculate-weight"]({ tenant: "test-tenant", body: {} }, res6);
+        expect(status6).toBe(400);
+
+        // 7. Authenticated request to /dynamics/waypoints/calculate-weight with overly long source_memory_id (>256) -> 400
+        let status7 = 0;
+        const res7 = {
+            status: (s: number) => {
+                status7 = s;
+                return res7;
+            },
+            json: () => res7,
+            set: () => res7,
+        };
+        await handlers["/dynamics/waypoints/calculate-weight"]({
+            tenant: "test-tenant",
+            body: { source_memory_id: "a".repeat(300), target_memory_id: "b_id" }
+        }, res7);
+        expect(status7).toBe(400);
     });
 
     it("rejects tenant mismatch on /memory/reinforce", async () => {
