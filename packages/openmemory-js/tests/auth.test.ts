@@ -539,6 +539,7 @@ describe("Authentication Middleware", () => {
         expect(handlers["/dynamics/resonance/calculate"]).toBeTruthy();
         expect(handlers["/dynamics/activation/spreading"]).toBeTruthy();
         expect(handlers["/dynamics/retrieval/energy-based"]).toBeTruthy();
+        expect(handlers["/dynamics/waypoints/calculate-weight"]).toBeTruthy();
 
         // 1. Unauthenticated request to /dynamics/salience/calculate
         let status1 = 0;
@@ -643,6 +644,54 @@ describe("Authentication Middleware", () => {
         await handlers["/dynamics/retrieval/energy-based"](req5, res5);
         expect(status5).toBe(403);
         expect(json5?.error).toBe("tenant_mismatch");
+
+        // 6. Authenticated request to /dynamics/waypoints/calculate-weight with missing payload fields
+        let status6 = 0;
+        let json6: any = null;
+        const res6 = {
+            status: (s: number) => {
+                status6 = s;
+                return res6;
+            },
+            json: (j: any) => {
+                json6 = j;
+                return res6;
+            },
+            set: () => res6,
+        };
+        const req6 = {
+            tenant: "test-tenant",
+            body: {},
+        };
+        await handlers["/dynamics/waypoints/calculate-weight"](req6, res6);
+        expect(status6).toBe(400);
+        expect(json6?.title).toBe("Invalid Input");
+
+        // 7. Authenticated request to /dynamics/waypoints/calculate-weight with valid payload but tenant mismatch
+        let status7 = 0;
+        let json7: any = null;
+        const res7 = {
+            status: (s: number) => {
+                status7 = s;
+                return res7;
+            },
+            json: (j: any) => {
+                json7 = j;
+                return res7;
+            },
+            set: () => res7,
+        };
+        const req7 = {
+            tenant: "test-tenant",
+            body: {
+                source_memory_id: "mem-1",
+                target_memory_id: "mem-2",
+                user_id: "other-tenant",
+            },
+        };
+        await handlers["/dynamics/waypoints/calculate-weight"](req7, res7);
+        expect(status7).toBe(403);
+        expect(json7?.error).toBe("tenant_mismatch");
     });
 
     it("rejects tenant mismatch on /memory/reinforce", async () => {
