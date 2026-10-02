@@ -182,4 +182,45 @@ describe("IDE routes per-tenant isolation & input validation", () => {
         expect(resB.data.pattern_count).toBe(0);
         expect(resB.data.patterns).toEqual([]);
     });
+
+    test("POST /api/ide/context validates user_id and rejects tenant mismatch", async () => {
+        const keyA = "key-tenant-a-12345678901234567890";
+        const tenantA = crypto.createHash("sha256").update(keyA).digest("hex").slice(0, 16);
+
+        // 1. Mismatched user_id in body should be rejected with 403
+        const resMismatch = await runRoute(
+            "POST",
+            "/api/ide/context",
+            {},
+            {},
+            { query: "authentication", user_id: "other_tenant_id" },
+            keyA,
+        );
+        expect(resMismatch.status).toBe(403);
+        expect(resMismatch.data.error).toBe("tenant_mismatch");
+
+        // 2. Matching user_id in body should succeed
+        const resMatching = await runRoute(
+            "POST",
+            "/api/ide/context",
+            {},
+            {},
+            { query: "authentication", user_id: tenantA },
+            keyA,
+        );
+        expect(resMatching.status).toBe(200);
+        expect(resMatching.data.success).toBe(true);
+
+        // 3. Omitted user_id should succeed
+        const resOmitted = await runRoute(
+            "POST",
+            "/api/ide/context",
+            {},
+            {},
+            { query: "authentication" },
+            keyA,
+        );
+        expect(resOmitted.status).toBe(200);
+        expect(resOmitted.data.success).toBe(true);
+    });
 });
