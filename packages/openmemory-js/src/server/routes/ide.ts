@@ -21,6 +21,7 @@ const context_schema: schema = {
     limit: { type: "integer", min: 1, max: 200 },
     session_id: { type: "string", max_length: 256 },
     file_path: { type: "string", max_length: 4096 },
+    user_id: { type: "string", max_length: 256 },
 };
 
 const session_start_schema: schema = {
@@ -111,8 +112,10 @@ export function ide(app: any) {
             limit?: number;
             session_id?: string;
             file_path?: string;
+            user_id?: string;
         }>(res, req.body, context_schema);
         if (!b) return;
+        if (reject_tenant_mismatch(res, tenant, b.user_id)) return;
 
         try {
             const k = b.k || b.limit || 5;
