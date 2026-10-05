@@ -4,6 +4,7 @@ import { env } from "../src/core/config";
 import { dash } from "../src/server/routes/dashboard";
 import { mem } from "../src/server/routes/memory";
 import { dynroutes } from "../src/server/routes/dynamics";
+import { usr } from "../src/server/routes/users";
 import * as hsgModule from "../src/memory/hsg";
 
 describe("Authentication Middleware", () => {
@@ -741,5 +742,53 @@ describe("Authentication Middleware", () => {
         expect(json_ownerless).toEqual(
             expect.objectContaining({ error: "tenant_mismatch" }),
         );
+    });
+
+    it("restricts multi-tenant summary regeneration on POST /users/summaries/regenerate-all", async () => {
+        let handler: any = null;
+        const app_mock = {
+            post: (path: string, h: any) => {
+                if (path === "/users/summaries/regenerate-all") handler = h;
+            },
+            get: () => {},
+            delete: () => {},
+        };
+
+        usr(app_mock);
+        expect(handler).toBeTruthy();
+
+        const old_env = process.env.OM_ADMIN_REGENERATE_ALL;
+        process.env.OM_ADMIN_REGENERATE_ALL = "true";
+
+        try {
+            // Non-admin tenant call should be restricted to self scope
+            let non_admin_json: any = null;
+            const res_non_admin = {
+                status: () => res_non_admin,
+                json: (d: any) => {
+                    non_admin_json = d;
+                },
+            };
+            await handler({ tenant: "tenant-alice" }, res_non_admin);
+            expect(non_admin_json).toEqual({ ok: true, updated: 1, scope: "self" });
+
+            // Admin tenant call should trigger global regeneration (scope: "all")
+            let admin_json: any = null;
+            const res_admin = {
+                status: () => res_admin,
+                json: (d: any) => {
+                    admin_json = d;
+                },
+            };
+            await handler({ tenant: "admin" }, res_admin);
+            expect(admin_json.ok).toBe(true);
+            expect(admin_json.scope).toBe("all");
+        } finally {
+            if (old_env === undefined) {
+                delete process.env.OM_ADMIN_REGENERATE_ALL;
+            } else {
+                process.env.OM_ADMIN_REGENERATE_ALL = old_env;
+            }
+        }
     });
 });
