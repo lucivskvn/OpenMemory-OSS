@@ -145,6 +145,35 @@ function parse_hours_query(hours_raw: unknown): number {
     return parsed;
 }
 
+function parse_limit_query(limit_raw: unknown, default_val: number): number {
+    if (limit_raw === undefined || limit_raw === null || limit_raw === "") {
+        return default_val;
+    }
+    if (typeof limit_raw !== "string" && typeof limit_raw !== "number") {
+        throw new LimitValidationError(
+            "Limit must be a positive integer.",
+        );
+    }
+    const str_val = String(limit_raw);
+    if (!/^\d+$/.test(str_val)) {
+        throw new LimitValidationError(
+            "Limit must consist only of decimal digits.",
+        );
+    }
+    const parsed = Number.parseInt(str_val, 10);
+    if (
+        !Number.isFinite(parsed) ||
+        !Number.isInteger(parsed) ||
+        parsed <= 0 ||
+        parsed > 100
+    ) {
+        throw new LimitValidationError(
+            "Limit must be a positive integer between 1 and 100.",
+        );
+    }
+    return parsed;
+}
+
 const is_admin_tenant = (tenant: string) => {
     return (
         tenant === "admin" || tenant === "system" || tenant === "dev-no-auth"
@@ -426,8 +455,7 @@ export function dash(app: any) {
         const tenant = require_tenant(req, res);
         if (!tenant) return;
         try {
-            const lim =
-                req.query.limit !== undefined ? Number(req.query.limit) : 50;
+            const lim = parse_limit_query(req.query.limit, 50);
             const project_id = req.query.project_id;
 
             const recmem = await fetch_dashboard_memories(
@@ -519,8 +547,7 @@ export function dash(app: any) {
         const tenant = require_tenant(req, res);
         if (!tenant) return;
         try {
-            const lim =
-                req.query.limit !== undefined ? Number(req.query.limit) : 10;
+            const lim = parse_limit_query(req.query.limit, 10);
             const project_id = req.query.project_id;
 
             const topm = await fetch_dashboard_memories(

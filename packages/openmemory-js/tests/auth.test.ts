@@ -742,4 +742,60 @@ describe("Authentication Middleware", () => {
             expect.objectContaining({ error: "tenant_mismatch" }),
         );
     });
+
+    it("validates and bounds limit query parameters on dashboard routes", async () => {
+        const handlers: Record<string, any> = {};
+        const app_mock = {
+            get: (path: string, handler: any) => {
+                handlers[path] = handler;
+            },
+            post: () => {},
+        };
+
+        dash(app_mock);
+        expect(handlers["/dashboard/activity"]).toBeTruthy();
+        expect(handlers["/dashboard/top-memories"]).toBeTruthy();
+
+        const invalid_limits = ["-1", "0", "101", "99999", "abc", "1.5", "-50"];
+
+        for (const bad_lim of invalid_limits) {
+            // Test /dashboard/activity
+            let act_status = 0;
+            let act_json: any = null;
+            const res_act = {
+                status: (code: number) => {
+                    act_status = code;
+                    return res_act;
+                },
+                json: (data: any) => {
+                    act_json = data;
+                },
+            };
+            await handlers["/dashboard/activity"](
+                { tenant: "test-tenant", query: { limit: bad_lim } },
+                res_act,
+            );
+            expect(act_status).toBe(400);
+            expect(act_json?.error).toBe("invalid_limit");
+
+            // Test /dashboard/top-memories
+            let top_status = 0;
+            let top_json: any = null;
+            const res_top = {
+                status: (code: number) => {
+                    top_status = code;
+                    return res_top;
+                },
+                json: (data: any) => {
+                    top_json = data;
+                },
+            };
+            await handlers["/dashboard/top-memories"](
+                { tenant: "test-tenant", query: { limit: bad_lim } },
+                res_top,
+            );
+            expect(top_status).toBe(400);
+            expect(top_json?.error).toBe("invalid_limit");
+        }
+    });
 });
