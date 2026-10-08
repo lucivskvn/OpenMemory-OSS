@@ -499,6 +499,16 @@ export const get_temporal_stats = async (req: any, res: any) => {
 export const apply_decay = async (req: any, res: any) => {
     const tenant = require_tenant(req, res);
     if (!tenant) return;
+    const is_admin =
+        tenant === "admin" ||
+        tenant === "system" ||
+        tenant === "dev-no-auth";
+    if (!is_admin) {
+        return res.status(403).json({
+            error: "forbidden",
+            message: "Only administrators can apply global confidence decay",
+        });
+    }
     // Decay is a global maintenance action; require an explicit admin flag.
     if (process.env.OM_ADMIN_DECAY !== "true") {
         return res.status(403).json({
