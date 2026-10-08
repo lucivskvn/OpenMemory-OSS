@@ -1150,7 +1150,8 @@ export async function add_hsg_memory(
     deduplicated?: boolean;
 }> {
     const simhash = compute_simhash(content);
-    const existing = await q.get_mem_by_simhash.get(simhash);
+    const effective_user = user_id || "anonymous";
+    const existing = await q.get_mem_by_simhash.get(simhash, effective_user);
     if (existing && hamming_dist(simhash, existing.simhash) <= 3) {
         const now = Date.now();
         const boosted_sal = Math.min(1, existing.salience + 0.15);
