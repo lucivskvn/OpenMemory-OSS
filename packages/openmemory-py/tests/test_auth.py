@@ -58,3 +58,32 @@ def test_protected_endpoint_rejects_tenant_mismatch(auth_client):
     response = auth_client.get("/memory/history?user_id=someone_else", headers={"x-api-key": "test-api-key-123456"})
     assert response.status_code == 403
     assert "tenant_mismatch" in response.json()["detail"]
+
+def test_unconfigured_api_key_returns_503(monkeypatch):
+    orig_api_key = env.api_key
+    env.api_key = None
+    monkeypatch.delenv("OM_DEV_ALLOW_NO_AUTH", raising=False)
+    monkeypatch.delenv("OM_REQUIRE_AUTH", raising=False)
+
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.get("/memory/history?user_id=test_user")
+    assert response.status_code == 503
+    assert "Server has no OM_API_KEY configured" in response.json()["detail"]
+
+    env.api_key = orig_api_key
+
+def test_unconfigured_api_key_allows_dev_no_auth(monkeypatch):
+    orig_api_key = env.api_key
+    env.api_key = None
+    monkeypatch.setenv("OM_DEV_ALLOW_NO_AUTH", "true")
+    monkeypatch.delenv("NODE_ENV", raising=False)
+
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.get("/memory/history?user_id=dev-no-auth")
+    assert response.status_code == 200
+
+    env.api_key = orig_api_key

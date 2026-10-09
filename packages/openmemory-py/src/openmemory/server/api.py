@@ -109,7 +109,7 @@ async def authenticate_api_request(request: Request, call_next):
     require_auth, dev_allow_no_auth = _should_require_auth()
 
     if not api_key_configured:
-        if not require_auth or dev_allow_no_auth:
+        if dev_allow_no_auth:
             request.state.tenant = "dev-no-auth"
             return await call_next(request)
         return JSONResponse(
