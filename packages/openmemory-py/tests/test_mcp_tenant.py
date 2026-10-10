@@ -56,3 +56,35 @@ async def test_mcp_tenant_get_and_delete_scenarios(monkeypatch):
     res_ownerless, tenant_o, err_ownerless = await _get_verified_memory(mem, {"id": "m-ownerless"})
     assert res_ownerless is None
     assert "not found for user" in err_ownerless
+
+@pytest.mark.asyncio
+async def test_mcp_query_store_list_tenant_isolation(monkeypatch):
+    monkeypatch.delenv("OM_TENANT", raising=False)
+    monkeypatch.delenv("OM_USER_ID", raising=False)
+
+    # 1. Unbound session returns unauthenticated error
+    mem_unbound = Memory(user=None)
+    tenant_u, err_u = _resolve_mcp_tenant(mem_unbound, {"user_id": "alice"})
+    assert tenant_u is None
+    assert "Unauthenticated MCP session" in err_u
+
+    # 2. Bound session resolves tenant correctly
+    mem_alice = Memory(user="alice")
+    tenant_a, err_a = _resolve_mcp_tenant(mem_alice, {})
+    assert err_a is None
+    assert tenant_a == "alice"
+
+    # 3. Mismatched user_id returns tenant_mismatch error
+    tenant_m, err_m = _resolve_mcp_tenant(mem_alice, {"user_id": "bob"})
+    assert tenant_m is None
+    assert "tenant_mismatch" in err_m
+
+    # 4. Store memory for alice and ensure bob cannot query or list it
+    await mem_alice.add("Alice confidential note", user_id="alice")
+    mem_bob = Memory(user="bob")
+    res_bob_query = await mem_bob.search("confidential", user_id="bob")
+    assert len(res_bob_query) == 0
+
+    res_alice_query = await mem_alice.search("confidential", user_id="alice")
+    assert len(res_alice_query) >= 1
+    assert any("Alice confidential note" in m["content"] for m in res_alice_query)
