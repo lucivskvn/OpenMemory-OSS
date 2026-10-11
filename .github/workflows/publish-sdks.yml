@@ -16,9 +16,10 @@ jobs:
     outputs:
       js_changed: ${{ steps.filter.outputs.js }}
       py_changed: ${{ steps.filter.outputs.py }}
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
         id: filter
         with:
           filters: |
@@ -31,13 +32,19 @@ jobs:
     needs: detect-changes
     runs-on: ubuntu-latest
     if: needs.detect-changes.outputs.js_changed == 'true' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
+
+      - name: Set up Bun Runtime
+        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.1
+        with:
+          bun-version: '1.2.14'
 
       - name: get version
         id: version
@@ -47,13 +54,32 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Publishing openmemory-js@$VERSION"
 
+      - name: check registry
+        id: check
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if npm view "openmemory-js@${VERSION}" version >/dev/null 2>&1; then
+            echo "::notice::openmemory-js@${VERSION} is already on npm; skipping publish."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "::error::NPM_TOKEN secret is not set; cannot publish openmemory-js@${VERSION}."
+            exit 1
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: install deps
+        if: steps.check.outputs.skip != 'true'
         run: cd packages/openmemory-js && npm ci
 
       - name: build
+        if: steps.check.outputs.skip != 'true'
         run: cd packages/openmemory-js && npm run build
 
       - name: publish
+        if: steps.check.outputs.skip != 'true'
         run: cd packages/openmemory-js && npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -66,10 +92,11 @@ jobs:
     needs: detect-changes
     runs-on: ubuntu-latest
     if: needs.detect-changes.outputs.py_changed == 'true' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38
         with:
           python-version: '3.11'
 
@@ -81,13 +108,32 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Publishing openmemory-py@$VERSION"
 
+      - name: check registry
+        id: check
+        env:
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if curl -fsS -o /dev/null "https://pypi.org/pypi/openmemory-py/${VERSION}/json"; then
+            echo "::notice::openmemory-py@${VERSION} is already on PyPI; skipping publish."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif [ -z "${PYPI_TOKEN}" ]; then
+            echo "::error::PYPI_TOKEN secret is not set; cannot publish openmemory-py@${VERSION}."
+            exit 1
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: install build tools
+        if: steps.check.outputs.skip != 'true'
         run: pip install build twine
 
       - name: build
+        if: steps.check.outputs.skip != 'true'
         run: cd packages/openmemory-py && python -m build
 
       - name: publish
+        if: steps.check.outputs.skip != 'true'
         run: cd packages/openmemory-py && python -m twine upload dist/* --skip-existing
         env:
           TWINE_USERNAME: __token__
