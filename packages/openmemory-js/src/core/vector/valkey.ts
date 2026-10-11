@@ -123,7 +123,8 @@ export class ValkeyVectorStore implements VectorStore {
             return results;
         } catch (e) {
             console.warn(
-                `[Valkey] FT.SEARCH failed for ${sector}, falling back to scan:`,
+                "[Valkey] FT.SEARCH failed for %s, falling back to scan:",
+                sector,
                 e,
             );
             let cursor = "0";

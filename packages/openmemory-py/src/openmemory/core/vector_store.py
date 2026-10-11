@@ -46,6 +46,7 @@ class SQLiteVectorStore(VectorStore):
     async def storeVector(self, id: str, sector: str, vector: List[float], dim: int, user_id: Optional[str] = None):
         blob = struct.pack(f"{len(vector)}f", *vector)
         sql = f"INSERT OR REPLACE INTO {self.table}(id, sector, user_id, v, dim) VALUES (?, ?, ?, ?, ?)"
+        # nosemgrep: formatted-sql-query, asyncpg-sqli, sqlalchemy-execute-raw-query -- table name validated in __init__; values bound as ? params
         db.conn.execute(sql, (id, sector, user_id, blob, dim))
         db.commit()
 
@@ -55,6 +56,7 @@ class SQLiteVectorStore(VectorStore):
         if user_id:
             sql += USER_ID_CONDITION
             params.append(user_id)
+        # nosemgrep: formatted-sql-query, asyncpg-sqli, sqlalchemy-execute-raw-query -- table name validated in __init__; values bound as ? params
         rows = db.conn.execute(sql, tuple(params)).fetchall()
         res = []
         for r in rows:
@@ -69,6 +71,7 @@ class SQLiteVectorStore(VectorStore):
         if user_id:
             sql += USER_ID_CONDITION
             params.append(user_id)
+        # nosemgrep: formatted-sql-query, asyncpg-sqli, sqlalchemy-execute-raw-query -- table name validated in __init__; values bound as ? params
         r = db.conn.execute(sql, tuple(params)).fetchone()
         if not r: return None
         cnt = len(r["v"]) // 4
@@ -81,6 +84,7 @@ class SQLiteVectorStore(VectorStore):
         if user_id:
             sql += USER_ID_CONDITION
             params.append(user_id)
+        # nosemgrep: formatted-sql-query, asyncpg-sqli, sqlalchemy-execute-raw-query -- table name validated in __init__; values bound as ? params
         db.conn.execute(sql, tuple(params))
         db.commit()
 
@@ -92,6 +96,7 @@ class SQLiteVectorStore(VectorStore):
             params.append(filter["user_id"])
 
         sql = f"SELECT id, v FROM {self.table} WHERE sector=? {filter_sql}"
+        # nosemgrep: formatted-sql-query, asyncpg-sqli, sqlalchemy-execute-raw-query -- table name validated in __init__; values bound as ? params
         rows = db.conn.execute(sql, tuple(params)).fetchall()
         results = []
         import numpy as np

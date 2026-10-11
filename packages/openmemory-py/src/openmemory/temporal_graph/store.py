@@ -55,6 +55,7 @@ async def update_fact(fact_id: str, confidence: Optional[float] = None, metadata
     if user_id:
         sql += " AND user_id=?"
         params.append(user_id)
+    # nosemgrep: formatted-sql-query, asyncpg-sqli, sqlalchemy-execute-raw-query -- column list built from fixed field names; values bound as ? params
     db.execute(sql, tuple(params))
     db.commit()
 

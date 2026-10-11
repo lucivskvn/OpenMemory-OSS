@@ -60,6 +60,7 @@ app.use((req: any, res: any, next: any) => {
         env.ide_allowed_origins.includes(origin);
 
     if (isIdeRoute && allowIdeOrigin) {
+        // nosemgrep: cors-misconfiguration -- origin is checked against env.ide_allowed_origins
         res.setHeader("Access-Control-Allow-Origin", origin);
         res.setHeader("Vary", "Origin");
     } else {

@@ -41,6 +41,7 @@ export function resolvePgSsl(
             );
             warnedRequire = true;
         }
+        // nosemgrep: bypass-tls-verification -- explicit OM_PG_SSL=require opt-in, warned above
         return { rejectUnauthorized: false };
     }
 

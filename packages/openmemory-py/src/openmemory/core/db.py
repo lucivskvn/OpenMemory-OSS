@@ -37,7 +37,7 @@ class DB:
         c.execute("CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, applied_at INTEGER)")
         files = []
         try:
-            from importlib import resources
+            from importlib import resources  # nosemgrep: python37-compatibility-importlib2 -- requires Python >= 3.11
             files = [p.name for p in resources.files('openmemory.migrations').iterdir() if p.name.endswith(".sql")]
         except (ImportError, TypeError, AttributeError):
             import os
@@ -53,7 +53,7 @@ class DB:
                 try:
                     sql = None
                     try:
-                        from importlib import resources
+                        from importlib import resources  # nosemgrep: python37-compatibility-importlib2 -- requires Python >= 3.11
                         sql = resources.files('openmemory.migrations').joinpath(f).read_text(encoding='utf-8')
                     except:
                         pass

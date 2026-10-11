@@ -33,7 +33,8 @@ export function broadcastMemory(memoryState: import("../types").mem_row): void {
             })
             .catch((e) => {
                 console.error(
-                    `[CLUSTER] Failed to sync with peer ${peer}:`,
+                    "[CLUSTER] Failed to sync with peer %s:",
+                    peer,
                     e.message,
                 );
             });

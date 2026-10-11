@@ -128,6 +128,7 @@ export async function extractAudio(
 
     const tempDir = os.tmpdir();
     const ext = getAudioExtension(mimeType);
+    // nosemgrep: path-join-resolve-traversal -- ext comes from a fixed MIME allowlist
     const tempFilePath = path.join(tempDir, `audio-${Date.now()}${ext}`);
 
     try {

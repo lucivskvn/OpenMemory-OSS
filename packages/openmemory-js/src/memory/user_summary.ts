@@ -74,7 +74,7 @@ export const update_user_summary = async (user_id: string): Promise<void> => {
             await q.upd_user_summary.run(user_id, summary, now);
         }
     } catch (e) {
-        console.error(`[USER_SUMMARY] Fatal error for ${user_id}:`, e);
+        console.error("[USER_SUMMARY] Fatal error for %s:", user_id, e);
     }
 };
 
@@ -90,7 +90,7 @@ export const auto_update_user_summaries = async (): Promise<{
             await update_user_summary(uid as string);
             updated++;
         } catch (e) {
-            console.error(`[USER_SUMMARY] Failed for ${uid}:`, e);
+            console.error("[USER_SUMMARY] Failed for %s:", uid, e);
         }
     }
 

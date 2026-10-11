@@ -1,13 +1,18 @@
 from typing import List, Optional, Dict, Any
 import json
 import logging
+import re
 from ..types import MemRow
 from ..vector_store import VectorStore, VectorRow
 
 logger = logging.getLogger("vector_store.postgres")
 
+_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+
 class PostgresVectorStore(VectorStore):
     def __init__(self, dsn: str, table_name: str = "openmemory_vectors"):
+        if not _IDENT_RE.match(table_name):
+            raise ValueError(f"Invalid Postgres table name: {table_name!r}")
         self.dsn = dsn
         self.table = table_name
         self.pool = None
@@ -20,6 +25,7 @@ class PostgresVectorStore(VectorStore):
                 await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
                 logger.info("pgvector extension enabled")
                 
+                # nosemgrep: formatted-sql-query, asyncpg-sqli, sqlalchemy-execute-raw-query -- table name validated by _IDENT_RE; values bound as $n params
                 await conn.execute(f"""
                     CREATE TABLE IF NOT EXISTS {self.table} (
                         id TEXT NOT NULL,
@@ -32,8 +38,10 @@ class PostgresVectorStore(VectorStore):
                     )
                 """)
                 
+                # nosemgrep: formatted-sql-query, asyncpg-sqli, sqlalchemy-execute-raw-query -- table name validated by _IDENT_RE; values bound as $n params
                 await conn.execute(f"CREATE INDEX IF NOT EXISTS {self.table}_user_idx ON {self.table} (user_id)")
 
+                # nosemgrep: formatted-sql-query, asyncpg-sqli, sqlalchemy-execute-raw-query -- table name validated by _IDENT_RE; values bound as $n params
                 await conn.execute(f"""
                     CREATE INDEX IF NOT EXISTS {self.table}_hnsw_idx
                     ON {self.table} USING hnsw (v vector_cosine_ops)
@@ -55,6 +63,7 @@ class PostgresVectorStore(VectorStore):
                 dim = EXCLUDED.dim
         """
         async with pool.acquire() as conn:
+            # nosemgrep: formatted-sql-query, asyncpg-sqli, sqlalchemy-execute-raw-query -- table name validated by _IDENT_RE; values bound as $n params
             await conn.execute(sql, id, sector, uid, vec_str, dim)
 
     async def getVectorsById(self, id: str, user_id: Optional[str] = None) -> List[VectorRow]:
@@ -66,6 +75,7 @@ class PostgresVectorStore(VectorStore):
             params.append(user_id)
 
         async with pool.acquire() as conn:
+            # nosemgrep: formatted-sql-query, asyncpg-sqli, sqlalchemy-execute-raw-query -- table name validated by _IDENT_RE; values bound as $n params
             rows = await conn.fetch(sql, *params)
 
         res = []
@@ -83,6 +93,7 @@ class PostgresVectorStore(VectorStore):
             params.append(user_id)
 
         async with pool.acquire() as conn:
+            # nosemgrep: formatted-sql-query, asyncpg-sqli, sqlalchemy-execute-raw-query -- table name validated by _IDENT_RE; values bound as $n params
             r = await conn.fetchrow(sql, *params)
 
         if not r: return None
@@ -98,6 +109,7 @@ class PostgresVectorStore(VectorStore):
             params.append(user_id)
 
         async with pool.acquire() as conn:
+            # nosemgrep: formatted-sql-query, asyncpg-sqli, sqlalchemy-execute-raw-query -- table name validated by _IDENT_RE; values bound as $n params
             await conn.execute(sql, *params)
 
     async def search(self, vector: List[float], sector: str, k: int, filter: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
@@ -118,10 +130,11 @@ class PostgresVectorStore(VectorStore):
             FROM {self.table}
             WHERE 1=1 {filter_sql}
             ORDER BY v <=> $1::vector
-            LIMIT {k}
+            LIMIT {int(k)}
         """
 
         async with pool.acquire() as conn:
+            # nosemgrep: formatted-sql-query, asyncpg-sqli, sqlalchemy-execute-raw-query -- table name validated by _IDENT_RE; values bound as $n params
             rows = await conn.fetch(sql, *args)
 
         return [{"id": r["id"], "similarity": float(r["similarity"])} for r in rows]
