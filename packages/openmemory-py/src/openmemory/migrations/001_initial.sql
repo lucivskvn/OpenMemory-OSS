@@ -68,14 +68,12 @@ CREATE TABLE IF NOT EXISTS waypoints (
 
 CREATE TABLE IF NOT EXISTS temporal_facts (
     id TEXT PRIMARY KEY,
-    user_id TEXT,
     subject TEXT NOT NULL,
     predicate TEXT NOT NULL,
-    object TEXT NOT NULL,
+    obj TEXT NOT NULL,
     valid_from INTEGER NOT NULL,
     valid_to INTEGER,
     confidence REAL,
-    last_updated INTEGER,
     metadata TEXT
 );
 
