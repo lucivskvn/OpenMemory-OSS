@@ -38,7 +38,9 @@ async def list_sources():
 async def ingest_source(source: str, req: ingest_req, request: Request):
     tenant = getattr(request.state, "tenant", "anonymous")
     user_id = req.user_id
-    if user_id:
+    if user_id is not None:
+        if len(user_id) > 256:
+            raise HTTPException(status_code=400, detail="invalid_user_id_length")
         if user_id != tenant:
             raise HTTPException(status_code=403, detail="tenant_mismatch")
     else:

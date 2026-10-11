@@ -25,7 +25,7 @@ type q_type = {
     upd_mem_with_sector: { run: (...p: any[]) => Promise<void> };
     del_mem: { run: (...p: any[]) => Promise<void> };
     get_mem: { get: (id: string) => Promise<any> };
-    get_mem_by_simhash: { get: (simhash: string) => Promise<any> };
+    get_mem_by_simhash: { get: (simhash: string, user_id?: string) => Promise<any> };
     all_mem: { all: (limit: number, offset: number) => Promise<any[]> };
     all_mem_by_sector: {
         all: (sector: string, limit: number, offset: number) => Promise<any[]>;
@@ -72,7 +72,9 @@ type q_type = {
     };
 
     ins_waypoint: { run: (...p: any[]) => Promise<void> };
-    get_neighbors: { all: (src: string) => Promise<any[]> };
+    get_neighbors: {
+        all: (src: string, user_id?: string) => Promise<any[]>;
+    };
     get_waypoints_by_src: { all: (src: string) => Promise<any[]> };
     get_waypoint: { get: (src: string, dst: string) => Promise<any> };
     upd_waypoint: { run: (...p: any[]) => Promise<void> };
@@ -413,11 +415,18 @@ export const q: q_type = {
         get: (id) => get_async("select * from memories where id=?", [id]),
     },
     get_mem_by_simhash: {
-        get: (simhash) =>
-            get_async(
+        get: (simhash, user_id) => {
+            if (user_id) {
+                return get_async(
+                    "select * from memories where simhash=? and user_id=? order by salience desc limit 1",
+                    [simhash, user_id],
+                );
+            }
+            return get_async(
                 "select * from memories where simhash=? order by salience desc limit 1",
                 [simhash],
-            ),
+            );
+        },
     },
     all_mem: {
         all: (limit, offset) =>
@@ -516,11 +525,15 @@ export const q: q_type = {
             ),
     },
     get_neighbors: {
-        all: (src) =>
-            all_async(
-                "select dst_id,weight from waypoints where src_id=? order by weight desc",
-                [src],
-            ),
+        all: (src, user_id) => {
+            if (!user_id || typeof user_id !== "string" || !user_id.trim()) {
+                return Promise.resolve([]);
+            }
+            return all_async(
+                "select dst_id,weight from waypoints where src_id=? and user_id=? order by weight desc",
+                [src, user_id],
+            );
+        },
     },
     get_waypoints_by_src: {
         all: (src) =>

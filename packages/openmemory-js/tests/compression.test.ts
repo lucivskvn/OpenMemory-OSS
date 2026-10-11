@@ -373,4 +373,36 @@ describe("Compression routes tenant scoping and admin check", () => {
             }
         }
     });
+
+    it("enforces tenant isolation during simhash memory deduplication", async () => {
+        await dbModule.init_db();
+        await dbModule.q.clear_all.run();
+        const { compute_simhash, add_hsg_memory } = await import("../src/memory/hsg");
+        const content = "Unique security test content for simhash deduplication isolation " + Date.now();
+        const computed_simhash = compute_simhash(content);
+
+        // 1. Store memory under tenant-a using add_hsg_memory so its computed simhash is saved
+        const memA = await add_hsg_memory(content, "[]", {}, "tenant-a");
+        expect(memA.id).toBeTruthy();
+        expect(memA.deduplicated).toBeUndefined();
+
+        // 2. Direct simhash query for tenant-b -> should NOT return tenant-a's memory
+        const resB = await dbModule.q.get_mem_by_simhash.get(computed_simhash, "tenant-b");
+        expect(resB).toBeUndefined();
+
+        // 3. Direct simhash query for tenant-a -> SHOULD return tenant-a's memory
+        const resA = await dbModule.q.get_mem_by_simhash.get(computed_simhash, "tenant-a");
+        expect(resA).toBeDefined();
+        expect(resA.id).toBe(memA.id);
+
+        // 4. Add identical content under tenant-b -> should create a new memory for tenant-b without deduplicating to tenant-a
+        const memB = await add_hsg_memory(content, "[]", {}, "tenant-b");
+        expect(memB.id).not.toBe(memA.id);
+        expect(memB.deduplicated).toBeUndefined();
+
+        // 5. Add identical content again under tenant-a -> SHOULD trigger deduplication to memA.id
+        const memA2 = await add_hsg_memory(content, "[]", {}, "tenant-a");
+        expect(memA2.id).toBe(memA.id);
+        expect(memA2.deduplicated).toBe(true);
+    }, 20000);
 });
