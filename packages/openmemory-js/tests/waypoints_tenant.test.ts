@@ -86,4 +86,30 @@ describe("Waypoints per-tenant scoping", () => {
         const bob_exp = await expand_via_waypoints([mem_id], 10, T_BOB);
         expect(bob_exp.map((e) => e.id)).not.toContain("dst-alice");
     });
+
+    it("q.get_waypoints_by_src includes user_id and isolates waypoints by user_id", async () => {
+        const mem_id = "node-src";
+        const now = Date.now();
+
+        await q.ins_waypoint.run(mem_id, "dst-alice", T_ALICE, null, 0.8, now, now);
+        await q.ins_waypoint.run(mem_id, "dst-bob", T_BOB, null, 0.9, now, now);
+
+        // Filtered by user_id
+        const alice_wps = await q.get_waypoints_by_src.all(mem_id, T_ALICE);
+        expect(alice_wps).toHaveLength(1);
+        expect(alice_wps[0].user_id).toBe(T_ALICE);
+        expect(alice_wps[0].dst_id).toBe("dst-alice");
+
+        const bob_wps = await q.get_waypoints_by_src.all(mem_id, T_BOB);
+        expect(bob_wps).toHaveLength(1);
+        expect(bob_wps[0].user_id).toBe(T_BOB);
+        expect(bob_wps[0].dst_id).toBe("dst-bob");
+
+        // Unfiltered includes user_id property on returned records
+        const all_wps = await q.get_waypoints_by_src.all(mem_id);
+        expect(all_wps).toHaveLength(2);
+        for (const wp of all_wps) {
+            expect(wp.user_id).toBeDefined();
+        }
+    });
 });

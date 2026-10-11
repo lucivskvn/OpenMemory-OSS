@@ -75,7 +75,9 @@ type q_type = {
     get_neighbors: {
         all: (src: string, user_id?: string) => Promise<any[]>;
     };
-    get_waypoints_by_src: { all: (src: string) => Promise<any[]> };
+    get_waypoints_by_src: {
+        all: (src: string, user_id?: string) => Promise<any[]>;
+    };
     get_waypoint: { get: (src: string, dst: string) => Promise<any> };
     upd_waypoint: { run: (...p: any[]) => Promise<void> };
     del_waypoints: { run: (...p: any[]) => Promise<void> };
@@ -536,11 +538,18 @@ export const q: q_type = {
         },
     },
     get_waypoints_by_src: {
-        all: (src) =>
-            all_async(
-                "select src_id,dst_id,weight,created_at,updated_at from waypoints where src_id=?",
+        all: (src, user_id) => {
+            if (user_id) {
+                return all_async(
+                    "select src_id,dst_id,user_id,weight,created_at,updated_at from waypoints where src_id=? and user_id=?",
+                    [src, user_id],
+                );
+            }
+            return all_async(
+                "select src_id,dst_id,user_id,weight,created_at,updated_at from waypoints where src_id=?",
                 [src],
-            ),
+            );
+        },
     },
     get_waypoint: {
         get: (src, dst) =>

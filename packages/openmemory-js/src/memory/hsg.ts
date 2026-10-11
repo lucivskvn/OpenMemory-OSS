@@ -1042,7 +1042,7 @@ export async function hsg_query(
             await q.upd_seen.run(r.id, Date.now(), rsal, Date.now());
             if (r.path.length > 1) {
                 await reinforce_waypoints(r.path);
-                const wps = await q.get_waypoints_by_src.all(r.id);
+                const wps = await q.get_waypoints_by_src.all(r.id, f?.user_id);
                 const lns = wps.map((wp: any) => ({
                     target_id: wp.dst_id,
                     weight: wp.weight,
