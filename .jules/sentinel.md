@@ -96,6 +96,11 @@ Always enforce a standard "defense-in-depth" rule where *all* user-interactive e
 **Learning:** Returning `(e as Error).message` in generic catch blocks without checking exception types leaks sensitive internal implementation details (e.g. database traces, file paths, or third-party service errors) and misrepresents internal failures as client-side input errors.
 **Prevention:** Always differentiate input validation errors (`z.ZodError`, returning HTTP 400 with generic `"Validation failed"`) from internal server exceptions (returning HTTP 500 with generic `"internal"` messages), while logging full error details server-side (`console.error`).
 
+## 2026-08-04 - [Fail-Open Authentication Bypass on Unconfigured API Key in Python SDK]
+**Vulnerability:** In `packages/openmemory-py/src/openmemory/server/api.py`, `authenticate_api_request` allowed requests to proceed with `request.state.tenant = "dev-no-auth"` whenever `OM_API_KEY` was unconfigured in non-production environments, even if `OM_DEV_ALLOW_NO_AUTH` was not set. This resulted in an unauthenticated access risk to protected routes.
+**Learning:** Defaulting to permissive fallback logic (`if not require_auth or dev_allow_no_auth`) when authentication credentials are not configured creates a fail-open security bypass.
+**Prevention:** Always fail closed with HTTP 503 Service Unavailable when required API credentials are unconfigured, requiring explicit configuration flags (e.g., `OM_DEV_ALLOW_NO_AUTH=true`) for developer overrides.
+
 ## 2026-08-04 - [Cross-Tenant Data Exposure via Unscoped Simhash Deduplication]
 **Vulnerability:** In `add_hsg_memory`, checking for pre-existing content via simhash similarity used `q.get_mem_by_simhash.get(simhash)`, which queried `SELECT * FROM memories WHERE simhash=? ORDER BY salience DESC LIMIT 1` without filtering by `user_id`. When Tenant B posted text with a simhash matching Tenant A's existing memory, `add_hsg_memory` returned Tenant A's memory record ID (`existing.id`), allowing Tenant B to discover and link to Tenant A's private memory records.
 **Learning:** Content-based indexing and deduplication utilities (such as simhashes or content hash lookups) must never operate globally across a multi-tenant database unless tenant scoping is explicitly passed down to the underlying SQL query.
