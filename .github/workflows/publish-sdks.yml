@@ -54,13 +54,32 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Publishing openmemory-js@$VERSION"
 
+      - name: check registry
+        id: check
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if npm view "openmemory-js@${VERSION}" version >/dev/null 2>&1; then
+            echo "::notice::openmemory-js@${VERSION} is already on npm; skipping publish."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "::error::NPM_TOKEN secret is not set; cannot publish openmemory-js@${VERSION}."
+            exit 1
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: install deps
+        if: steps.check.outputs.skip != 'true'
         run: cd packages/openmemory-js && npm ci
 
       - name: build
+        if: steps.check.outputs.skip != 'true'
         run: cd packages/openmemory-js && npm run build
 
       - name: publish
+        if: steps.check.outputs.skip != 'true'
         run: cd packages/openmemory-js && npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -89,13 +108,32 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Publishing openmemory-py@$VERSION"
 
+      - name: check registry
+        id: check
+        env:
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if curl -fsS -o /dev/null "https://pypi.org/pypi/openmemory-py/${VERSION}/json"; then
+            echo "::notice::openmemory-py@${VERSION} is already on PyPI; skipping publish."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif [ -z "${PYPI_TOKEN}" ]; then
+            echo "::error::PYPI_TOKEN secret is not set; cannot publish openmemory-py@${VERSION}."
+            exit 1
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: install build tools
+        if: steps.check.outputs.skip != 'true'
         run: pip install build twine
 
       - name: build
+        if: steps.check.outputs.skip != 'true'
         run: cd packages/openmemory-py && python -m build
 
       - name: publish
+        if: steps.check.outputs.skip != 'true'
         run: cd packages/openmemory-py && python -m twine upload dist/* --skip-existing
         env:
           TWINE_USERNAME: __token__
