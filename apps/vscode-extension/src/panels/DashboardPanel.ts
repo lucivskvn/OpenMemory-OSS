@@ -23,6 +23,7 @@ export class DashboardPanel {
             column || vscode.ViewColumn.One,
             {
                 enableScripts: true,
+                // nosemgrep: path-join-resolve-traversal -- constant subdirectory of the extension root
                 localResourceRoots: [vscode.Uri.file(path.join(extensionUri.fsPath, 'media'))]
             }
         );

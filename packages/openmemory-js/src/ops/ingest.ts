@@ -180,7 +180,9 @@ export async function ingestDocument(
                 );
             } catch (e) {
                 console.error(
-                    `[INGEST] Section ${i + 1}/${secs.length} failed:`,
+                    "[INGEST] Section %d/%d failed:",
+                    i + 1,
+                    secs.length,
                     e,
                 );
                 throw e;
@@ -261,7 +263,9 @@ export async function ingestURL(
                 );
             } catch (e) {
                 console.error(
-                    `[INGEST] URL section ${i + 1}/${secs.length} failed:`,
+                    "[INGEST] URL section %d/%d failed:",
+                    i + 1,
+                    secs.length,
                     e,
                 );
                 throw e;

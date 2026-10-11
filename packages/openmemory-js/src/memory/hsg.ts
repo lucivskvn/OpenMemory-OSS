@@ -1136,7 +1136,7 @@ async function ensure_user_exists(user_id: string): Promise<void> {
             );
         }
     } catch (error) {
-        console.error(`[HSG] Failed to ensure user ${user_id} exists:`, error);
+        console.error("[HSG] Failed to ensure user %s exists:", user_id, error);
     }
 }
 

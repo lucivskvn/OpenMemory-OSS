@@ -169,7 +169,7 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=["*"],  # nosemgrep: wildcard-cors -- API-key header auth, no credentialed cookies
         allow_methods=["*"],
         allow_headers=["*"],
     )

@@ -271,6 +271,7 @@ export function server(config: ServerConfig = {}): App {
         }, {});
 
     const serverStatic = (endpoint: string, dir: string): Middleware => {
+        // nosemgrep: path-join-resolve-traversal -- `dir` is a server-configured static root
         const a = path.resolve(dir);
         if (!fs.existsSync(a) || !fs.statSync(a).isDirectory()) {
             console.error(
@@ -320,6 +321,7 @@ export function server(config: ServerConfig = {}): App {
             if (req.method !== "GET" && req.method !== "HEAD") return next();
             const reqPath = req.path || "";
             if (!reqPath.startsWith(b)) return next();
+            // nosemgrep: path-join-resolve-traversal -- result is confined to `a` by the path.relative check below
             const c = path.join(a, reqPath.substring(b.length));
             const d = path.relative(a, c);
             if (!(d && !d.startsWith("..") && !path.isAbsolute(d)))

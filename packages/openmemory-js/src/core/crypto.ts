@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { env } from "./config";
 
 const ALGORITHM = "aes-256-gcm";
+const AUTH_TAG_LENGTH = 16;
 const PREFIX = "enc:";
 
 function getEncryptionKey(): Buffer | null {
@@ -28,7 +29,9 @@ export function encrypt(text: string): string {
         return text;
     }
     const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
+    const cipher = crypto.createCipheriv(ALGORITHM, key, iv, {
+        authTagLength: AUTH_TAG_LENGTH,
+    });
     let encrypted = cipher.update(text, "utf8", "hex");
     encrypted += cipher.final("hex");
     const authTag = cipher.getAuthTag().toString("hex");
@@ -51,7 +54,9 @@ export function decrypt(ciphertext: string): string {
         const authTag = Buffer.from(parts[1], "hex");
         const encryptedText = parts[2];
 
-        const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+        const decipher = crypto.createDecipheriv(ALGORITHM, key, iv, {
+            authTagLength: AUTH_TAG_LENGTH,
+        });
         decipher.setAuthTag(authTag);
 
         let decrypted = decipher.update(encryptedText, "hex", "utf8");
