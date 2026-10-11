@@ -4,6 +4,7 @@ import { env } from "../src/core/config";
 import { dash } from "../src/server/routes/dashboard";
 import { mem } from "../src/server/routes/memory";
 import { dynroutes } from "../src/server/routes/dynamics";
+import { usr } from "../src/server/routes/users";
 import * as hsgModule from "../src/memory/hsg";
 
 describe("Authentication Middleware", () => {
@@ -539,6 +540,7 @@ describe("Authentication Middleware", () => {
         expect(handlers["/dynamics/resonance/calculate"]).toBeTruthy();
         expect(handlers["/dynamics/activation/spreading"]).toBeTruthy();
         expect(handlers["/dynamics/retrieval/energy-based"]).toBeTruthy();
+        expect(handlers["/dynamics/waypoints/calculate-weight"]).toBeTruthy();
 
         // 1. Unauthenticated request to /dynamics/salience/calculate
         let status1 = 0;
@@ -643,6 +645,53 @@ describe("Authentication Middleware", () => {
         await handlers["/dynamics/retrieval/energy-based"](req5, res5);
         expect(status5).toBe(403);
         expect(json5?.error).toBe("tenant_mismatch");
+
+        // 6. Authenticated request to /dynamics/waypoints/calculate-weight with missing body fields (returns 400)
+        let status6 = 0;
+        let json6: any = null;
+        const res6 = {
+            status: (s: number) => {
+                status6 = s;
+                return res6;
+            },
+            json: (j: any) => {
+                json6 = j;
+                return res6;
+            },
+            set: () => res6,
+        };
+        const req6 = {
+            tenant: "test-tenant",
+            body: {},
+        };
+        await handlers["/dynamics/waypoints/calculate-weight"](req6, res6);
+        expect(status6).toBe(400);
+
+        // 7. Authenticated request to /dynamics/waypoints/calculate-weight with tenant mismatch (returns 403)
+        let status7 = 0;
+        let json7: any = null;
+        const res7 = {
+            status: (s: number) => {
+                status7 = s;
+                return res7;
+            },
+            json: (j: any) => {
+                json7 = j;
+                return res7;
+            },
+            set: () => res7,
+        };
+        const req7 = {
+            tenant: "test-tenant",
+            body: {
+                source_memory_id: "mem-a",
+                target_memory_id: "mem-b",
+                user_id: "other-tenant",
+            },
+        };
+        await handlers["/dynamics/waypoints/calculate-weight"](req7, res7);
+        expect(status7).toBe(403);
+        expect(json7?.error).toBe("tenant_mismatch");
     });
 
     it("rejects tenant mismatch on /memory/reinforce", async () => {
@@ -741,5 +790,208 @@ describe("Authentication Middleware", () => {
         expect(json_ownerless).toEqual(
             expect.objectContaining({ error: "tenant_mismatch" }),
         );
+    });
+
+    it("restricts multi-tenant summary regeneration on POST /users/summaries/regenerate-all", async () => {
+        let handler: any = null;
+        const app_mock = {
+            post: (path: string, h: any) => {
+                if (path === "/users/summaries/regenerate-all") handler = h;
+            },
+            get: () => {},
+            delete: () => {},
+        };
+
+        usr(app_mock);
+        expect(handler).toBeTruthy();
+
+        const old_env = process.env.OM_ADMIN_REGENERATE_ALL;
+        process.env.OM_ADMIN_REGENERATE_ALL = "true";
+
+        try {
+            // Non-admin tenant call should be restricted to self scope
+            let non_admin_json: any = null;
+            const res_non_admin = {
+                status: () => res_non_admin,
+                json: (d: any) => {
+                    non_admin_json = d;
+                },
+            };
+            await handler({ tenant: "tenant-alice" }, res_non_admin);
+            expect(non_admin_json).toEqual({ ok: true, updated: 1, scope: "self" });
+
+            // Admin tenant call should trigger global regeneration (scope: "all")
+            let admin_json: any = null;
+            const res_admin = {
+                status: () => res_admin,
+                json: (d: any) => {
+                    admin_json = d;
+                },
+            };
+            await handler({ tenant: "admin" }, res_admin);
+            expect(admin_json.ok).toBe(true);
+            expect(admin_json.scope).toBe("all");
+        } finally {
+            if (old_env === undefined) {
+                delete process.env.OM_ADMIN_REGENERATE_ALL;
+            } else {
+                process.env.OM_ADMIN_REGENERATE_ALL = old_env;
+            }
+        }
+    });
+
+    it("enforces tenant isolation on update_memory and PATCH /memory/:id", async () => {
+        const hsgModule = await import("../src/memory/hsg");
+        const dbModule = await import("../src/core/db");
+
+        // 1. Direct call to update_memory with mismatched tenant
+        const mockMem = {
+            id: "mem-tenant-A",
+            content: "original content",
+            primary_sector: "semantic",
+            user_id: "tenant-A",
+            tags: "[]",
+            meta: "{}",
+        };
+        const getMemSpy = spyOn(dbModule.q.get_mem, "get").mockImplementation(() =>
+            Promise.resolve(mockMem),
+        );
+
+        try {
+            await expect(
+                hsgModule.update_memory(
+                    "mem-tenant-A",
+                    "updated content",
+                    [],
+                    {},
+                    "tenant-B",
+                ),
+            ).rejects.toThrow("Unauthorized: Memory mem-tenant-A belongs to another tenant");
+        } finally {
+            getMemSpy.mockRestore();
+        }
+
+        // 2. HTTP route PATCH /memory/:id with mismatched tenant in path/body
+        let routeHandler: any;
+        const mockApp = {
+            get: () => {},
+            post: () => {},
+            patch: (_path: string, handler: any) => {
+                routeHandler = handler;
+            },
+            delete: () => {},
+        };
+        const memoryRouteModule = await import("../src/server/routes/memory");
+        memoryRouteModule.mem(mockApp);
+
+        const reqMismatch = {
+            headers: { "x-api-key": "test-secret-api-key-999" },
+            tenant: "tenant-B",
+            params: { id: "mem-tenant-A" },
+            body: { content: "unauthorized edit", user_id: "tenant-A" },
+        };
+
+        let status = 0;
+        let json: any = null;
+        const res = {
+            status: (code: number) => {
+                status = code;
+                return res;
+            },
+            json: (data: any) => {
+                json = data;
+            },
+        };
+
+        await routeHandler(reqMismatch, res);
+        expect(status).toBe(403);
+        expect(json?.error).toBe("tenant_mismatch");
+
+        // 3. HTTP route PATCH /memory/:id where memory belongs to tenant-A in DB, caller is tenant-B
+        const getMemSpy2 = spyOn(dbModule.q.get_mem, "get").mockImplementation(() =>
+            Promise.resolve(mockMem),
+        );
+        const reqDbMismatch = {
+            headers: { "x-api-key": "test-secret-api-key-999" },
+            tenant: "tenant-B",
+            params: { id: "mem-tenant-A" },
+            body: { content: "unauthorized edit" },
+        };
+        let statusDb = 0;
+        let jsonDb: any = null;
+        const resDb = {
+            status: (code: number) => {
+                statusDb = code;
+                return resDb;
+            },
+            json: (data: any) => {
+                jsonDb = data;
+            },
+        };
+
+        try {
+            await routeHandler(reqDbMismatch, resDb);
+        } finally {
+            getMemSpy2.mockRestore();
+        }
+
+        expect(statusDb).toBe(403);
+        expect(jsonDb?.err).toBe("forbidden");
+    });
+
+    it("validates and bounds limit query parameters on dashboard routes", async () => {
+        const handlers: Record<string, any> = {};
+        const app_mock = {
+            get: (path: string, handler: any) => {
+                handlers[path] = handler;
+            },
+            post: () => {},
+        };
+
+        dash(app_mock);
+        expect(handlers["/dashboard/activity"]).toBeTruthy();
+        expect(handlers["/dashboard/top-memories"]).toBeTruthy();
+
+        const invalid_limits = ["-1", "0", "101", "99999", "abc", "1.5", "-50"];
+
+        for (const bad_lim of invalid_limits) {
+            // Test /dashboard/activity
+            let act_status = 0;
+            let act_json: any = null;
+            const res_act = {
+                status: (code: number) => {
+                    act_status = code;
+                    return res_act;
+                },
+                json: (data: any) => {
+                    act_json = data;
+                },
+            };
+            await handlers["/dashboard/activity"](
+                { tenant: "test-tenant", query: { limit: bad_lim } },
+                res_act,
+            );
+            expect(act_status).toBe(400);
+            expect(act_json?.error).toBe("invalid_limit");
+
+            // Test /dashboard/top-memories
+            let top_status = 0;
+            let top_json: any = null;
+            const res_top = {
+                status: (code: number) => {
+                    top_status = code;
+                    return res_top;
+                },
+                json: (data: any) => {
+                    top_json = data;
+                },
+            };
+            await handlers["/dashboard/top-memories"](
+                { tenant: "test-tenant", query: { limit: bad_lim } },
+                res_top,
+            );
+            expect(top_status).toBe(400);
+            expect(top_json?.error).toBe("invalid_limit");
+        }
     });
 });

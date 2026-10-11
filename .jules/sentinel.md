@@ -100,3 +100,18 @@ Always enforce a standard "defense-in-depth" rule where *all* user-interactive e
 **Vulnerability:** In `packages/openmemory-py/src/openmemory/server/api.py`, `authenticate_api_request` allowed requests to proceed with `request.state.tenant = "dev-no-auth"` whenever `OM_API_KEY` was unconfigured in non-production environments, even if `OM_DEV_ALLOW_NO_AUTH` was not set. This resulted in an unauthenticated access risk to protected routes.
 **Learning:** Defaulting to permissive fallback logic (`if not require_auth or dev_allow_no_auth`) when authentication credentials are not configured creates a fail-open security bypass.
 **Prevention:** Always fail closed with HTTP 503 Service Unavailable when required API credentials are unconfigured, requiring explicit configuration flags (e.g., `OM_DEV_ALLOW_NO_AUTH=true`) for developer overrides.
+
+## 2026-08-04 - [Cross-Tenant Data Exposure via Unscoped Simhash Deduplication]
+**Vulnerability:** In `add_hsg_memory`, checking for pre-existing content via simhash similarity used `q.get_mem_by_simhash.get(simhash)`, which queried `SELECT * FROM memories WHERE simhash=? ORDER BY salience DESC LIMIT 1` without filtering by `user_id`. When Tenant B posted text with a simhash matching Tenant A's existing memory, `add_hsg_memory` returned Tenant A's memory record ID (`existing.id`), allowing Tenant B to discover and link to Tenant A's private memory records.
+**Learning:** Content-based indexing and deduplication utilities (such as simhashes or content hash lookups) must never operate globally across a multi-tenant database unless tenant scoping is explicitly passed down to the underlying SQL query.
+**Prevention:** Always accept an optional `user_id` parameter on hash/simhash lookup query helpers and restrict deduplication matches exclusively to memories belonging to the authenticated tenant (`user_id = ?`).
+
+## 2026-08-04 - [Administrative Authorization Bypass in Temporal Decay Endpoint]
+**Vulnerability:** The `/api/temporal/decay` endpoint (`apply_decay`) allowed any authenticated non-admin tenant to trigger global confidence decay across all tenants' temporal facts whenever `OM_ADMIN_DECAY=true` was enabled on the server, bypassing multi-tenant administrative authorization.
+**Learning:** Checking a server-wide environment flag (`process.env.OM_ADMIN_DECAY === "true"`) without verifying that the requesting session identity is an administrator (`admin`, `system`, or `dev-no-auth`) allows standard tenants to invoke global maintenance operations.
+**Prevention:** Always verify caller administrative authority (`is_admin`) in route handlers before executing global maintenance, system-wide mutations, or cross-tenant operations.
+
+## 2026-08-04 - [Multi-Tenant Authorization Bypass in Python MCP Tool Handlers]
+**Vulnerability:** In `packages/openmemory-py/src/openmemory/ai/mcp.py`, the Model Context Protocol (MCP) tool handlers (`openmemory_query`, `openmemory_store`, and `openmemory_list`) read user arguments directly (`args.get("user_id")`) without invoking tenant resolution (`_resolve_mcp_tenant`). Unbound MCP sessions could store or retrieve memories under arbitrary claimed tenant identities, and bound sessions could pass mismatched `user_id` values to access or mutate other tenants' data.
+**Learning:** Tool handlers in protocol adapters (such as MCP) must resolve and validate tenant identity on every tool execution. Simply relying on caller-provided `user_id` arguments without verifying them against the session tenant creates a complete multi-tenant authorization bypass.
+**Prevention:** Always invoke `_resolve_mcp_tenant(mem, args)` at the entry point of every MCP tool handler to enforce bound tenant matching and ensure unbound sessions fail closed.

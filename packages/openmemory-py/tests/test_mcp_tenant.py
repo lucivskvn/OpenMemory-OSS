@@ -51,8 +51,32 @@ async def test_mcp_tenant_get_and_delete_scenarios(monkeypatch):
     assert "Unauthenticated MCP session" in err_unbound2
 
     # 6. Ownerless memory record (user_id is None) is rejected for any bound tenant
-    db.execute("INSERT INTO memories (id, user_id, content, primary_sector, created_at, salience, decay_lambda, version) VALUES (?, NULL, ?, ?, ?, 1.0, 0.02, 1)", ("m-ownerless", "Ownerless memory content", "semantic", 1000000000))
+    db.execute("INSERT OR REPLACE INTO memories (id, user_id, content, primary_sector, created_at, salience, decay_lambda, version) VALUES (?, NULL, ?, ?, ?, 1.0, 0.02, 1)", ("m-ownerless", "Ownerless memory content", "semantic", 1000000000))
     db.commit()
     res_ownerless, tenant_o, err_ownerless = await _get_verified_memory(mem, {"id": "m-ownerless"})
     assert res_ownerless is None
     assert "not found for user" in err_ownerless
+
+
+@pytest.mark.asyncio
+async def test_mcp_tenant_resolution_for_all_tools(monkeypatch):
+    monkeypatch.delenv("OM_TENANT", raising=False)
+    monkeypatch.delenv("OM_USER_ID", raising=False)
+
+    mem_alice = Memory(user="alice")
+
+    # Bound session matching user_id passes
+    t, err = _resolve_mcp_tenant(mem_alice, {"user_id": "alice"})
+    assert err is None
+    assert t == "alice"
+
+    # Bound session mismatching user_id is rejected
+    t_m, err_m = _resolve_mcp_tenant(mem_alice, {"user_id": "bob"})
+    assert t_m is None
+    assert "tenant_mismatch" in err_m
+
+    # Unbound session is rejected regardless of claimed user_id
+    mem_unbound = Memory(user=None)
+    t_u, err_u = _resolve_mcp_tenant(mem_unbound, {"user_id": "alice"})
+    assert t_u is None
+    assert "Unauthenticated MCP session" in err_u
