@@ -124,6 +124,14 @@ const update_db_version = async (ver: string) => {
     ]);
 };
 
+const table_exists = async (table: string): Promise<boolean> => {
+    const res = await client.execute({
+        sql: "select 1 from sqlite_master where type='table' and name=?",
+        args: [table],
+    });
+    return res.rows.length > 0;
+};
+
 const check_column_exists = async (
     table: string,
     column: string,
@@ -136,6 +144,12 @@ const check_column_exists = async (
         return false;
     }
 };
+
+export const column_satisfied = async (
+    table: string,
+    column: string,
+): Promise<boolean> =>
+    !(await table_exists(table)) || (await check_column_exists(table, column));
 
 const quarantine_orphan_temporal_facts = async (): Promise<number> => {
     const orphanQuery = await client.execute({
@@ -187,11 +201,14 @@ const apply_migration = async (m: Migration, current_version: string) => {
         const added_column = sql.match(
             /^alter\s+table\s+([\w]+)\s+add\s+column\s+([\w]+)/i,
         );
-        if (
-            added_column &&
-            (await check_column_exists(added_column[1], added_column[2]))
-        ) {
-            continue;
+        if (added_column) {
+            const [, table, column] = added_column;
+            if (
+                !(await table_exists(table)) ||
+                (await check_column_exists(table, column))
+            ) {
+                continue;
+            }
         }
         pending_stmts.push({ sql, args: [] });
     }
@@ -239,7 +256,7 @@ export const run_migrations = async () => {
             ? (
                   await Promise.all(
                       m.completion_columns.map(({ table, column }) =>
-                          check_column_exists(table, column),
+                          column_satisfied(table, column),
                       ),
                   )
               ).every(Boolean)
