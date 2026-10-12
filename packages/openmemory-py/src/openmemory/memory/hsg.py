@@ -439,7 +439,7 @@ async def hsg_query(qt: str, k: int = 10, f: Dict[str, Any] = None) -> List[Dict
              now = int(time.time()*1000)
              db.execute("UPDATE memories SET salience=?, last_seen_at=? WHERE id=?", (rsal, now, r["id"]))
              if len(r["path"]) > 1:
-                 wps_rows = db.fetchall("SELECT dst_id, weight FROM waypoints WHERE src_id=?", (r["id"],))
+                 wps_rows = q.get_waypoints_by_src(r["id"], r.get("user_id"))
                  wps = [{"target_id": row["dst_id"], "weight": row["weight"]} for row in wps_rows]
 
                  pru = await propagateAssociativeReinforcementToLinkedNodes(r["id"], rsal, wps)

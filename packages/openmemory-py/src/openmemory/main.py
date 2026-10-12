@@ -30,8 +30,9 @@ class Memory:
         filters["user_id"] = uid
         return await hsg_query(query, limit, filters)
 
-    async def get(self, memory_id: str):
-        return q.get_mem(memory_id)
+    async def get(self, memory_id: str, user_id: str = None):
+        uid = user_id or self.default_user
+        return q.get_mem(memory_id, uid)
 
     async def delete(self, memory_id: str, user_id: str = None):
         uid = user_id or self.default_user
