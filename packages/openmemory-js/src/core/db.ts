@@ -48,6 +48,11 @@ type q_type = {
             project_id?: string,
         ) => Promise<any>;
     };
+    get_total_mem_count: { get: () => Promise<any> };
+    get_total_mem_count_by_user: {
+        get: (user_id: string) => Promise<any>;
+    };
+    get_all_tenants: { all: () => Promise<any[]> };
     get_max_segment: {
         get: (
             user_id?: string,
@@ -458,6 +463,22 @@ export const q: q_type = {
             }
             return get_async(sql, params);
         },
+    },
+    get_total_mem_count: {
+        get: () => get_async("select count(*) as c from memories", []),
+    },
+    get_total_mem_count_by_user: {
+        get: (user_id) =>
+            get_async("select count(*) as c from memories where user_id=?", [
+                user_id,
+            ]),
+    },
+    get_all_tenants: {
+        all: () =>
+            all_async(
+                "select distinct user_id from memories where user_id is not null",
+                [],
+            ),
     },
     get_max_segment: {
         get: (user_id?: string, project_id?: string, is_system?: boolean) => {

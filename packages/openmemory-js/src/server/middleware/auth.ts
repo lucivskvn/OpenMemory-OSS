@@ -1,5 +1,6 @@
 import { env } from "../../core/config";
 import crypto from "crypto";
+import { LRUCache } from "lru-cache";
 
 /**
  * SECURITY: Authentication is fail-closed by default.
@@ -24,10 +25,13 @@ import crypto from "crypto";
  *    with a lookup — route handlers don't need to change.
  */
 
-const rate_limit_store = new Map<
+const rate_limit_store = new LRUCache<
     string,
     { count: number; reset_time: number }
->();
+>({
+    max: 10000,
+    ttl: env.rate_limit_window_ms || 60000,
+});
 
 const REQUIRE_AUTH =
     process.env.NODE_ENV === "production" ||
@@ -197,12 +201,3 @@ export function log_authenticated_request(req: any, res: any, next: any) {
     if (tenant) console.log(`[AUTH] ${req.method} ${req.path} [${tenant}]`);
     next();
 }
-
-setInterval(
-    () => {
-        const now = Date.now();
-        for (const [id, data] of rate_limit_store.entries())
-            if (now >= data.reset_time) rate_limit_store.delete(id);
-    },
-    5 * 60 * 1000,
-);

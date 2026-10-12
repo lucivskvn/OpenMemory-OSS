@@ -1,5 +1,5 @@
 import { env } from "./config";
-import { client } from "./db";
+import { client, run_async, transaction } from "./db";
 import {
     assertSafeIdentifier,
     DEFAULT_VECTOR_TABLE,
@@ -17,6 +17,7 @@ const resolved_vector_table = assertSafeIdentifier(
 interface Migration {
     version: string;
     desc: string;
+    completion_columns?: Array<{ table: string; column: string }>;
     sqlite: (vectorTable: string) => string[];
 }
 
@@ -24,6 +25,7 @@ const migrations: Migration[] = [
     {
         version: "1.2.0",
         desc: "Add version column to memories",
+        completion_columns: [{ table: "memories", column: "version" }],
         sqlite: () => [
             "ALTER TABLE memories ADD COLUMN version integer default 1;",
         ],
@@ -31,6 +33,11 @@ const migrations: Migration[] = [
     {
         version: "1.3.0",
         desc: "Add project_id column to core tables",
+        completion_columns: [
+            { table: "memories", column: "project_id" },
+            { table: resolved_vector_table, column: "project_id" },
+            { table: "waypoints", column: "project_id" },
+        ],
         sqlite: (vectorTable: string) => [
             "ALTER TABLE memories ADD COLUMN project_id text;",
             `ALTER TABLE ${vectorTable} ADD COLUMN project_id text;`,
@@ -40,11 +47,17 @@ const migrations: Migration[] = [
     {
         version: "1.3.1",
         desc: "Add tags column to memories",
+        completion_columns: [{ table: "memories", column: "tags" }],
         sqlite: () => ["ALTER TABLE memories ADD COLUMN tags text;"],
     },
     {
         version: "1.4.0",
         desc: "Add temporal graph tables and stats",
+        completion_columns: [
+            { table: "temporal_facts", column: "object" },
+            { table: "temporal_edges", column: "source_id" },
+            { table: "stats", column: "ts" },
+        ],
         sqlite: () => [
             `create table if not exists temporal_facts(id text primary key,user_id text,project_id text,subject text not null,predicate text not null,object text not null,valid_from integer not null,valid_to integer,confidence real not null check(confidence >= 0 and confidence <= 1),last_updated integer not null,metadata text,unique(subject,predicate,object,valid_from));`,
             "create index if not exists idx_temporal_user on temporal_facts(user_id);",
@@ -64,6 +77,10 @@ const migrations: Migration[] = [
     {
         version: "1.4.1",
         desc: "Add missing project_id to temporal graph tables",
+        completion_columns: [
+            { table: "temporal_facts", column: "project_id" },
+            { table: "temporal_edges", column: "project_id" },
+        ],
         sqlite: () => [
             "ALTER TABLE temporal_facts ADD COLUMN project_id text;",
             "ALTER TABLE temporal_edges ADD COLUMN project_id text;",
@@ -72,6 +89,7 @@ const migrations: Migration[] = [
     {
         version: "1.4.2",
         desc: "Add summary column to memories for decay caching",
+        completion_columns: [{ table: "memories", column: "summary" }],
         sqlite: () => ["ALTER TABLE memories ADD COLUMN summary text;"],
     },
     {
@@ -101,10 +119,9 @@ const get_db_version = async (): Promise<string> => {
 };
 
 const update_db_version = async (ver: string) => {
-    await client.execute({
-        sql: "INSERT INTO openmemory_schema (version) VALUES (?)",
-        args: [ver],
-    });
+    await run_async("INSERT INTO openmemory_schema (version) VALUES (?)", [
+        ver,
+    ]);
 };
 
 const check_column_exists = async (
@@ -155,31 +172,43 @@ const compare_versions = (v1: string, v2: string) => {
     return 0;
 };
 
-const apply_migration = async (m: Migration) => {
+export const migration_is_pending = (
+    migration_version: string,
+    current_version: string,
+    is_complete: boolean,
+) =>
+    compare_versions(migration_version, current_version) > 0 || !is_complete;
+
+const apply_migration = async (m: Migration, current_version: string) => {
     log(`Applying ${m.version}: ${m.desc}`);
-    try {
-        const sql_stmts = m.sqlite(resolved_vector_table);
-        if (sql_stmts.length > 0) {
-            await client.batch(
-                sql_stmts.map((sql) => ({ sql, args: [] })),
-                "write",
-            );
-        }
-        await update_db_version(m.version);
-    } catch (e: any) {
+    const sql_stmts = m.sqlite(resolved_vector_table);
+    const pending_stmts = [];
+    for (const sql of sql_stmts) {
+        const added_column = sql.match(
+            /^alter\s+table\s+([\w]+)\s+add\s+column\s+([\w]+)/i,
+        );
         if (
-            e.message &&
-            (e.message.includes("duplicate column name") ||
-                e.message.includes("already exists"))
+            added_column &&
+            (await check_column_exists(added_column[1], added_column[2]))
         ) {
-            log(
-                `[WARN] ${m.desc} already applied partially, updating schema version.`,
-            );
-            await update_db_version(m.version);
-        } else {
-            log(`[FATAL] Migration ${m.version} failed: ${e.message}`);
-            throw e;
+            continue;
         }
+        pending_stmts.push({ sql, args: [] });
+    }
+    await transaction.begin();
+    try {
+        for (const { sql, args } of pending_stmts) {
+            await run_async(sql, args);
+        }
+        const stored_version =
+            compare_versions(m.version, current_version) > 0
+                ? m.version
+                : current_version;
+        await update_db_version(stored_version);
+        await transaction.commit();
+    } catch (error) {
+        await transaction.rollback();
+        throw error;
     }
 };
 
@@ -206,8 +235,17 @@ export const run_migrations = async () => {
     log(`Current schema version: ${current_version}`);
 
     for (const m of migrations) {
-        if (compare_versions(m.version, current_version) > 0) {
-            await apply_migration(m);
+        const is_complete = m.completion_columns
+            ? (
+                  await Promise.all(
+                      m.completion_columns.map(({ table, column }) =>
+                          check_column_exists(table, column),
+                      ),
+                  )
+              ).every(Boolean)
+            : true;
+        if (migration_is_pending(m.version, current_version, is_complete)) {
+            await apply_migration(m, current_version);
         }
     }
 

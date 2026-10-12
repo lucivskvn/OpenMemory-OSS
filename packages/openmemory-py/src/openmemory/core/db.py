@@ -9,9 +9,12 @@ from .types import MemRow
 logger = logging.getLogger("db")
 logger.setLevel(logging.INFO)
 
+import threading
+
 class DB:
     def __init__(self):
         self.conn: Optional[sqlite3.Connection] = None
+        self.lock = threading.Lock()
 
     def connect(self):
         if self.conn: return
@@ -70,18 +73,23 @@ class DB:
 
     def execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
         self.connect()
-        return self.conn.execute(sql, params)
+        with self.lock:
+            return self.conn.execute(sql, params)
 
     def fetchall(self, sql: str, params: tuple = ()) -> List[sqlite3.Row]:
         self.connect()
-        return self.conn.execute(sql, params).fetchall()
+        with self.lock:
+            return self.conn.execute(sql, params).fetchall()
 
     def fetchone(self, sql: str, params: tuple = ()) -> Optional[sqlite3.Row]:
         self.connect()
-        return self.conn.execute(sql, params).fetchone()
+        with self.lock:
+            return self.conn.execute(sql, params).fetchone()
 
     def commit(self):
-        if self.conn: self.conn.commit()
+        if self.conn:
+            with self.lock:
+                self.conn.commit()
 db = DB()
 class Queries:
     def ins_mem(self, **k):

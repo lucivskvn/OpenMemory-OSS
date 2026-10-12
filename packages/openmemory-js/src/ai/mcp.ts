@@ -350,6 +350,7 @@ export const create_mcp_srv = (tenant?: string) => {
                     }),
                 )
                 .optional()
+                .default([])
                 .describe(
                     "Array of facts to store in temporal graph. Required when type is 'factual' or 'both'",
                 ),
@@ -388,7 +389,7 @@ export const create_mcp_srv = (tenant?: string) => {
                 (!facts || facts.length === 0)
             ) {
                 throw new Error(
-                    `Facts array is required when type is '${type}'. Please provide at least one fact.`,
+                    "Facts array cannot be empty when type is 'factual' or 'both'",
                 );
             }
 
@@ -481,7 +482,8 @@ export const create_mcp_srv = (tenant?: string) => {
                         valid_from: z.string().optional(),
                     }),
                 )
-                .optional(),
+                .optional()
+                .default([]),
             tags: z.array(z.string()).optional(),
             metadata: z.record(z.any()).optional(),
             user_id: z.string().trim().min(1).optional(),
@@ -497,6 +499,15 @@ export const create_mcp_srv = (tenant?: string) => {
             const u = resolve_user_id(tenant, user_id);
             const proj = "system_global";
             const results: any = { type };
+
+            if (
+                (type === "factual" || type === "both") &&
+                (!facts || facts.length === 0)
+            ) {
+                throw new Error(
+                    "Facts array cannot be empty when type is 'factual' or 'both'",
+                );
+            }
 
             if (type === "contextual" || type === "both") {
                 const res = await add_hsg_memory(
@@ -575,13 +586,36 @@ export const create_mcp_srv = (tenant?: string) => {
                 .max(1)
                 .default(0.1)
                 .describe("Salience boost amount (default 0.1)"),
+            user_id: z
+                .string()
+                .trim()
+                .min(1)
+                .optional()
+                .describe("Validate ownership"),
+            project_id: z
+                .string()
+                .trim()
+                .min(1)
+                .optional()
+                .describe("Validate project identifier"),
         },
-        async ({ id, boost }) => {
-            if (tenant) {
+        async ({ id, boost, user_id, project_id }) => {
+            const u = resolve_user_id(tenant, user_id);
+            const proj = uid(project_id);
+            if (u) {
                 const mem = await q.get_mem.get(id);
-                if (!mem || mem.user_id !== tenant) {
+                if (!mem || mem.user_id !== u) {
                     throw new Error(
-                        `Memory ${id} not found for user ${tenant}`,
+                        `Memory ${id} not found for user ${u}`,
+                    );
+                }
+                if (
+                    mem.project_id &&
+                    mem.project_id !== "system_global" &&
+                    mem.project_id !== proj
+                ) {
+                    throw new Error(
+                        `Memory ${id} not found for project ${proj}`,
                     );
                 }
             }
@@ -756,9 +790,16 @@ export const create_mcp_srv = (tenant?: string) => {
                 .describe(
                     "Validate ownership against a specific user identifier",
                 ),
+            project_id: z
+                .string()
+                .trim()
+                .min(1)
+                .optional()
+                .describe("Validate project identifier"),
         },
-        async ({ id, include_vectors, user_id }) => {
+        async ({ id, include_vectors, user_id, project_id }) => {
             const u = resolve_user_id(tenant, user_id);
+            const proj = uid(project_id);
             const mem = await q.get_mem.get(id);
             if (!mem)
                 return {
@@ -772,6 +813,20 @@ export const create_mcp_srv = (tenant?: string) => {
                         {
                             type: "text",
                             text: `Memory ${id} not found for user ${u}.`,
+                        },
+                    ],
+                };
+            if (
+                u &&
+                mem.project_id &&
+                mem.project_id !== "system_global" &&
+                mem.project_id !== proj
+            )
+                return {
+                    content: [
+                        {
+                            type: "text",
+                            text: `Memory ${id} not found for project ${proj}.`,
                         },
                     ],
                 };
