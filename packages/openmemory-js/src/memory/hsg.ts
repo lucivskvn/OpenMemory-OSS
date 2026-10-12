@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { LRUCache } from "lru-cache";
 import { canonical_token_set, stable_text_fallback_hash } from "../utils/text";
 import { inc_q, dec_q, on_query_hit } from "./decay";
 import { env, tier } from "../core/config";
@@ -59,6 +60,10 @@ export const sector_configs: Record<string, sector_cfg> = {
             /\b(at\s+\d{1,2}:\d{2}|on\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b/i,
             /\b(event|moment|experience|incident|occurrence|happened)\b/i,
             /\bI\s+'?m\s+going\s+to\b/i,
+            /(?:今天|昨天|明天|前天|后天|本周|上周|下周|上个月|下个月|去年|明年|刚才|当时|那天|这次)/,
+            /(?:我|我们).{0,12}(?:去了|看到|见到|遇到|参加|经历|发生|做了|完成了)/,
+            /(?:\d{4}年)?\d{1,2}月\d{1,2}日/,
+            /(?:周|星期)[一二三四五六日天]/,
         ],
     },
     semantic: {
@@ -72,6 +77,10 @@ export const sector_configs: Record<string, sector_cfg> = {
             /\b(capital|population|distance|weight|height|width|depth)\b/i,
             /\b(history|science|geography|math|physics|biology|chemistry)\b/i,
             /\b(know|understand|learn|read|write|speak)\b/i,
+            /(?:是|指的是|意味着|代表|定义为|属于)/,
+            /(?:概念|理论|原理|定律|假设|定义|知识)/,
+            /(?:事实|数据|证据|研究|报告)/,
+            /(?:历史|科学|地理|数学|物理|生物|化学)/,
         ],
     },
     procedural: {
@@ -85,6 +94,10 @@ export const sector_configs: Record<string, sector_cfg> = {
             /\b(click|press|type|enter|select|drag|drop|scroll)\b/i,
             /\b(method|function|class|algorithm|routine|recipie)\b/i,
             /\b(to\s+do|to\s+make|to\s+build|to\s+create)\b/i,
+            /(?:怎么|如何|怎样).{0,12}(?:做|操作|安装|运行|配置|部署|创建|实现)/,
+            /(?:第一步|第二步|然后|接着|下一步|最后|依次)/,
+            /(?:安装|运行|执行|编译|构建|部署|配置|设置|点击|输入|选择|按下)/,
+            /(?:步骤|教程|指南|操作方法|流程|做法)/,
         ],
     },
     emotional: {
@@ -99,6 +112,9 @@ export const sector_configs: Record<string, sector_cfg> = {
             /\b(frustrated|confused|overwhelmed|stressed|relaxed|calm)\b/i,
             /\b(wow|omg|yay|nooo|ugh|sigh)\b/i,
             /[!]{2,}/,
+            /(?:感觉|感到|心情|情绪)/,
+            /(?:开心|高兴|难过|伤心|生气|愤怒|兴奋|害怕|焦虑|紧张|沮丧|郁闷|烦躁|压力|放松|平静)/,
+            /(?:喜欢|讨厌|热爱|厌恶|满意|失望|尴尬|痛苦|幸福)/,
         ],
     },
     reflective: {
@@ -113,6 +129,11 @@ export const sector_configs: Record<string, sector_cfg> = {
             /\b(lesson|moral|takeaway|conclusion|summary|implication)\b/i,
             /\b(feedback|review|analysis|evaluation|assessment)\b/i,
             /\b(improve|grow|change|adapt|evolve)\b/i,
+            /(?:意识到|明白了|想通了|发现|领悟|反思|复盘)/,
+            /(?:我觉得|我认为|在我看来|回头看|仔细想想)/,
+            /(?:规律|趋势|联系|关系|相关性|模式)/,
+            /(?:教训|启发|心得|体会|收获|总结|结论|反省)/,
+            /(?:改进|成长|改变|适应|优化)/,
         ],
     },
 };
@@ -658,8 +679,9 @@ export async function expand_via_waypoints(
     }
     const q_arr = [...exp];
     let exp_cnt = 0;
-    while (q_arr.length > 0 && exp_cnt < max_exp) {
-        const cur = q_arr.shift()!;
+    let head = 0;
+    while (head < q_arr.length && exp_cnt < max_exp) {
+        const cur = q_arr[head++];
         const neighs = await q.get_neighbors.all(cur.id, user_id);
         for (const neigh of neighs) {
             if (vis.has(neigh.dst_id)) continue;
@@ -751,8 +773,14 @@ export async function calc_multi_vec_fusion_score(
     }
     return tot > 0 ? sum / tot : 0;
 }
-const cache = new Map<string, { r: hsg_q_result[]; t: number }>();
-const sal_cache = new Map<string, { s: number; t: number }>();
+const cache = new LRUCache<string, { r: hsg_q_result[]; t: number }>({
+    max: 5000,
+    ttl: 60000,
+});
+const sal_cache = new LRUCache<string, { s: number; t: number }>({
+    max: 50000,
+    ttl: 300000,
+});
 
 const seg_cache = new Map<number, any[]>();
 const coact_buf: Array<[string, string]> = [];
