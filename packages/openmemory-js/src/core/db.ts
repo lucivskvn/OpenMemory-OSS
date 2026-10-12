@@ -539,7 +539,10 @@ export const q: q_type = {
     },
     get_waypoints_by_src: {
         all: (src, user_id) => {
-            if (user_id) {
+            if (user_id !== undefined) {
+                if (typeof user_id !== "string" || !user_id.trim()) {
+                    return Promise.resolve([]);
+                }
                 return all_async(
                     "select src_id,dst_id,user_id,weight,created_at,updated_at from waypoints where src_id=? and user_id=?",
                     [src, user_id],

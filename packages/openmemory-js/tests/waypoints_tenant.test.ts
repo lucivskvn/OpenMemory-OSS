@@ -112,4 +112,13 @@ describe("Waypoints per-tenant scoping", () => {
             expect(wp.user_id).toBeDefined();
         }
     });
+
+    it("q.get_waypoints_by_src fails closed for an empty user_id", async () => {
+        const mem_id = "node-src-empty";
+        const now = Date.now();
+        await q.ins_waypoint.run(mem_id, "dst-alice", T_ALICE, null, 0.8, now, now);
+
+        expect(await q.get_waypoints_by_src.all(mem_id, "")).toHaveLength(0);
+        expect(await q.get_waypoints_by_src.all(mem_id, "   ")).toHaveLength(0);
+    });
 });
