@@ -58,8 +58,6 @@ const auth_config = {
     },
     public_endpoints: [
         "/health",
-        "/api/system/health",
-        "/api/system/stats",
         "/sources/webhook",
     ],
 };
