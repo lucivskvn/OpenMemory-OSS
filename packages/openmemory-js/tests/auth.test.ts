@@ -316,6 +316,29 @@ describe("Authentication Middleware", () => {
         expect(status_val).toBe(401); // Requires API key
     });
 
+    it("rejects unauthenticated access to /api/system/health and /api/system/stats", () => {
+        const protected_system_paths = ["/api/system/health", "/api/system/stats"];
+        for (const p of protected_system_paths) {
+            const req: any = { path: p, headers: {} };
+            let next_called = false;
+            let status_val = 0;
+            const res: any = {
+                status: (s: number) => {
+                    status_val = s;
+                    return res;
+                },
+                json: () => res,
+            };
+
+            authenticate_api_request(req, res, () => {
+                next_called = true;
+            });
+
+            expect(next_called).toBe(false);
+            expect(status_val).toBe(401);
+        }
+    });
+
     it("enforces require_tenant and is_admin_tenant on /dashboard/health route", async () => {
         let health_handler: any = null;
         const app_mock = {
