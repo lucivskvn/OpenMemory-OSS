@@ -158,3 +158,17 @@ def test_user_summary_get_and_regenerate_scenarios(auth_client):
     res_get = resp.json()
     assert res_get["user_id"] == tenant_id
     assert res_get["summary"] == res_data["summary"]
+
+def test_limit_request_body_size_across_endpoints(auth_client, monkeypatch):
+    monkeypatch.setenv("OM_MAX_BODY_SIZE", "100")
+    headers = {"x-api-key": "test-api-key-123456", "content-length": "500"}
+
+    # Oversized payload on /memory/add is rejected with 413
+    resp1 = auth_client.post("/memory/add", json={"content": "x" * 200}, headers=headers)
+    assert resp1.status_code == 413
+    assert resp1.json()["title"] == "Payload Too Large"
+
+    # Oversized payload on /memory/search is also rejected with 413
+    resp2 = auth_client.post("/memory/search", json={"query": "x" * 200}, headers=headers)
+    assert resp2.status_code == 413
+    assert resp2.json()["title"] == "Payload Too Large"
