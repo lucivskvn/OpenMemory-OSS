@@ -365,13 +365,13 @@ async def hsg_query(qt: str, k: int = 10, f: Dict[str, Any] = None) -> List[Dict
         res_list = []
         kw_scores = {}
         for mid in ids:
-            mem = q.get_mem(mid)
+            mem = q.get_mem(mid, f.get("user_id"))
             if mem:
                 overlap = compute_keyword_overlap(qt, mem["content"])
                 kw_scores[mid] = overlap * 0.15
 
         for mid in ids:
-            m = q.get_mem(mid)
+            m = q.get_mem(mid, f.get("user_id"))
             if not m:
                 continue
             if f and f.get("minSalience") and m["salience"] < f["minSalience"]:
@@ -439,12 +439,12 @@ async def hsg_query(qt: str, k: int = 10, f: Dict[str, Any] = None) -> List[Dict
              now = int(time.time()*1000)
              db.execute("UPDATE memories SET salience=?, last_seen_at=? WHERE id=?", (rsal, now, r["id"]))
              if len(r["path"]) > 1:
-                 wps_rows = db.fetchall("SELECT dst_id, weight FROM waypoints WHERE src_id=?", (r["id"],))
+                 wps_rows = q.get_waypoints_by_src(r["id"], f.get("user_id"))
                  wps = [{"target_id": row["dst_id"], "weight": row["weight"]} for row in wps_rows]
 
                  pru = await propagateAssociativeReinforcementToLinkedNodes(r["id"], rsal, wps)
                  for u in pru:
-                     linked_mem = q.get_mem(u["node_id"])
+                     linked_mem = q.get_mem(u["node_id"], f.get("user_id"))
                      if linked_mem:
                          time_diff = (now - linked_mem["last_seen_at"]) / 86400000.0
                          decay_fact = math.exp(-0.02 * time_diff)

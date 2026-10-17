@@ -43,9 +43,9 @@ async def _get_verified_memory(mem_inst: Memory, args: dict) -> tuple[dict | Non
     if err:
         return None, None, err
 
-    m = await mem_inst.get(mid)
+    m = await mem_inst.get(mid, user_id=tenant)
     if not m:
-        return None, tenant, f"Memory {mid} not found"
+        return None, tenant, f"Memory {mid} not found for user {tenant}"
 
     m_dict = dict(m)
     if m_dict.get("user_id") != tenant:
