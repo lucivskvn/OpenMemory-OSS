@@ -111,7 +111,9 @@ class Queries:
         db.execute(sql, vals)
         db.commit()
 
-    def get_mem(self, mid: str):
+    def get_mem(self, mid: str, user_id: Optional[str] = None):
+        if user_id:
+            return db.fetchone("SELECT * FROM memories WHERE id=? AND user_id=?", (mid, user_id))
         return db.fetchone("SELECT * FROM memories WHERE id=?", (mid,))
 
     def all_mem(self, limit=10, offset=0):
@@ -127,7 +129,9 @@ class Queries:
     def all_mem_by_user(self, user_id: str, limit=10, offset=0):
         return db.fetchall("SELECT * FROM memories WHERE user_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?", (user_id, limit, offset))
 
-    def get_waypoints_by_src(self, src_id: str):
+    def get_waypoints_by_src(self, src_id: str, user_id: Optional[str] = None):
+        if user_id:
+            return db.fetchall("SELECT * FROM waypoints WHERE src_id=? AND user_id=?", (src_id, user_id))
         return db.fetchall("SELECT * FROM waypoints WHERE src_id=?", (src_id,))
 
     def del_mem(self, mid: str, user_id: Optional[str] = None):
