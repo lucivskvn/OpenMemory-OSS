@@ -79,7 +79,7 @@ async def generic_exception_handler(request: Request, exc: Exception):
 
 async def limit_request_body_size(request: Request, call_next):
     import os
-    if request.method == "POST" and request.url.path == "/memory/add":
+    if request.method in ("POST", "PUT", "PATCH"):
         content_length = request.headers.get("content-length")
         max_size = int(os.getenv("OM_MAX_BODY_SIZE", "1048576"))
         if content_length:

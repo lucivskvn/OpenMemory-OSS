@@ -51,7 +51,17 @@ class Memory:
     def history(self, user_id: str = None, limit: int = 20, offset: int = 0) -> List[Dict[str, Any]]:
         uid = user_id or self.default_user
         rows = q.all_mem_by_user(uid, limit, offset)
-        return [dict(r) for r in rows]
+        cleaned = []
+        for r in rows:
+            row_dict = dict(r)
+            for k, v in row_dict.items():
+                if isinstance(v, bytes):
+                    try:
+                        row_dict[k] = v.decode("utf-8")
+                    except UnicodeDecodeError:
+                        row_dict[k] = v.hex()
+            cleaned.append(row_dict)
+        return cleaned
 
     def source(self, name: str):
         """
