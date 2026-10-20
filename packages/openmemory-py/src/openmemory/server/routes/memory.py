@@ -113,6 +113,7 @@ async def get_history(user_id: str, request: Request, limit: int = 20, offset: i
 
 @router.get("/users/{user_id}/summary", responses={
     400: {"description": "Bad Request"},
+    401: {"description": "Unauthorized"},
     403: {"description": "Forbidden"},
     404: {"description": "Not Found"},
     500: {"description": "Internal Server Error"}
@@ -121,7 +122,9 @@ async def get_user_summary(user_id: str, request: Request):
     if len(user_id) > 256:
         raise HTTPException(status_code=400, detail="invalid_user_id_length")
 
-    tenant = getattr(request.state, "tenant", "anonymous")
+    tenant = getattr(request.state, "tenant", None)
+    if not tenant:
+        raise HTTPException(status_code=401, detail="unauthorized")
     if user_id != tenant:
         raise HTTPException(status_code=403, detail="tenant_mismatch")
 
@@ -144,6 +147,7 @@ async def get_user_summary(user_id: str, request: Request):
 
 @router.post("/users/{user_id}/summary/regenerate", responses={
     400: {"description": "Bad Request"},
+    401: {"description": "Unauthorized"},
     403: {"description": "Forbidden"},
     500: {"description": "Internal Server Error"}
 })
@@ -151,7 +155,9 @@ async def regenerate_user_summary(user_id: str, request: Request):
     if len(user_id) > 256:
         raise HTTPException(status_code=400, detail="invalid_user_id_length")
 
-    tenant = getattr(request.state, "tenant", "anonymous")
+    tenant = getattr(request.state, "tenant", None)
+    if not tenant:
+        raise HTTPException(status_code=401, detail="unauthorized")
     if user_id != tenant:
         raise HTTPException(status_code=403, detail="tenant_mismatch")
 
@@ -171,3 +177,89 @@ async def regenerate_user_summary(user_id: str, request: Request):
     except Exception:
         logger.exception("Error regenerating user summary")
         raise HTTPException(status_code=500, detail="Failed to regenerate user summary") from None
+
+@router.get("/users/{user_id}/memories", responses={
+    400: {"description": "Bad Request"},
+    401: {"description": "Unauthorized"},
+    403: {"description": "Forbidden"},
+    500: {"description": "Internal Server Error"}
+})
+async def get_user_memories(user_id: str, request: Request, limit: int = 100, offset: int = 0):
+    if len(user_id) > 256:
+        raise HTTPException(status_code=400, detail="invalid_user_id_length")
+
+    if limit < 0 or offset < 0 or limit > 10000:
+        raise HTTPException(status_code=400, detail="invalid_pagination")
+
+    tenant = getattr(request.state, "tenant", None)
+    if not tenant:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    if user_id != tenant:
+        raise HTTPException(status_code=403, detail="tenant_mismatch")
+
+    try:
+        from ...core.db import q
+        import json
+        rows = q.all_mem_by_user(tenant, limit, offset)
+        items = []
+        for x in rows:
+            tags = None
+            meta = None
+            try:
+                tags = json.loads(x["tags"]) if x["tags"] else None
+            except Exception:
+                tags = x["tags"]
+            try:
+                meta = json.loads(x["meta"]) if x["meta"] else None
+            except Exception:
+                meta = x["meta"]
+
+            items.append({
+                "id": x["id"],
+                "content": x["content"],
+                "tags": tags,
+                "metadata": meta,
+                "created_at": x["created_at"],
+                "updated_at": x["updated_at"],
+                "last_seen_at": x["last_seen_at"],
+                "salience": x["salience"],
+                "decay_lambda": x["decay_lambda"],
+                "primary_sector": x["primary_sector"],
+                "version": x["version"],
+            })
+        return {"user_id": tenant, "items": items}
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Error fetching user memories")
+        raise HTTPException(status_code=500, detail="Failed to fetch user memories") from None
+
+@router.delete("/users/{user_id}/memories", responses={
+    400: {"description": "Bad Request"},
+    401: {"description": "Unauthorized"},
+    403: {"description": "Forbidden"},
+    500: {"description": "Internal Server Error"}
+})
+async def delete_user_memories(user_id: str, request: Request):
+    if len(user_id) > 256:
+        raise HTTPException(status_code=400, detail="invalid_user_id_length")
+
+    tenant = getattr(request.state, "tenant", None)
+    if not tenant:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    if user_id != tenant:
+        raise HTTPException(status_code=403, detail="tenant_mismatch")
+
+    try:
+        from ...core.db import q
+        from ...memory.hsg import clear_cache
+        mems = q.all_mem_by_user(tenant, 10000, 0)
+        deleted_count = len(mems)
+        q.del_mem_by_user(tenant)
+        clear_cache(tenant)
+        return {"ok": True, "deleted": deleted_count}
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Error deleting user memories")
+        raise HTTPException(status_code=500, detail="Failed to delete user memories") from None
