@@ -158,3 +158,55 @@ def test_user_summary_get_and_regenerate_scenarios(auth_client):
     res_get = resp.json()
     assert res_get["user_id"] == tenant_id
     assert res_get["summary"] == res_data["summary"]
+
+def test_user_memories_get_and_delete_scenarios(auth_client):
+    tenant_id = hashlib.sha256("test-api-key-123456".encode("utf-8")).hexdigest()[:16]
+    headers = {"x-api-key": "test-api-key-123456"}
+
+    # 1. Reject invalid_user_id_length (> 256 chars)
+    long_user_id = "a" * 257
+    resp = auth_client.get(f"/memory/users/{long_user_id}/memories", headers=headers)
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "invalid_user_id_length"
+
+    resp = auth_client.delete(f"/memory/users/{long_user_id}/memories", headers=headers)
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "invalid_user_id_length"
+
+    # 2. Reject tenant mismatch
+    resp = auth_client.get("/memory/users/other_tenant/memories", headers=headers)
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "tenant_mismatch"
+
+    resp = auth_client.delete("/memory/users/other_tenant/memories", headers=headers)
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "tenant_mismatch"
+
+    # 3. Reject invalid pagination parameters
+    resp = auth_client.get(f"/memory/users/{tenant_id}/memories?limit=-1", headers=headers)
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "invalid_pagination"
+
+    resp = auth_client.get(f"/memory/users/{tenant_id}/memories?limit=20000", headers=headers)
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "invalid_pagination"
+
+    # 4. Add memory and fetch user memories
+    auth_client.post("/memory/add", json={"content": "Secure user memory text", "user_id": tenant_id}, headers=headers)
+    resp = auth_client.get(f"/memory/users/{tenant_id}/memories", headers=headers)
+    assert resp.status_code == 200
+    mem_data = resp.json()
+    assert mem_data["user_id"] == tenant_id
+    assert len(mem_data["items"]) >= 1
+    assert mem_data["items"][0]["content"] == "Secure user memory text"
+
+    # 5. Delete user memories
+    del_resp = auth_client.delete(f"/memory/users/{tenant_id}/memories", headers=headers)
+    assert del_resp.status_code == 200
+    assert del_resp.json()["ok"] is True
+    assert del_resp.json()["deleted"] >= 1
+
+    # Verify list is now empty for tenant
+    resp_empty = auth_client.get(f"/memory/users/{tenant_id}/memories", headers=headers)
+    assert resp_empty.status_code == 200
+    assert len(resp_empty.json()["items"]) == 0
