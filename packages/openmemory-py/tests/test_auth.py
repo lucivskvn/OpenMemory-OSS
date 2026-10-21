@@ -158,3 +158,9 @@ def test_user_summary_get_and_regenerate_scenarios(auth_client):
     res_get = resp.json()
     assert res_get["user_id"] == tenant_id
     assert res_get["summary"] == res_data["summary"]
+
+def test_request_body_size_limit_on_mutating_endpoints(auth_client, monkeypatch):
+    headers = {"x-api-key": "test-api-key-123456", "content-length": "2000000"}
+    resp = auth_client.post("/memory/search", headers=headers, json={"query": "test"})
+    assert resp.status_code == 413
+    assert resp.json()["detail"] == "Request body exceeds limit of 1048576 bytes."
