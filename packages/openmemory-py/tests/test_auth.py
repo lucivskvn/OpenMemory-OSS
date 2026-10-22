@@ -158,3 +158,25 @@ def test_user_summary_get_and_regenerate_scenarios(auth_client):
     res_get = resp.json()
     assert res_get["user_id"] == tenant_id
     assert res_get["summary"] == res_data["summary"]
+
+def test_limit_request_body_size_across_mutating_routes(monkeypatch):
+    monkeypatch.setenv("OM_MAX_BODY_SIZE", "100")
+    orig_api_key = env.api_key
+    env.api_key = "test-api-key-123456"
+
+    app = create_app()
+    client = TestClient(app)
+
+    headers = {"x-api-key": "test-api-key-123456", "content-length": "101"}
+
+    # Reject POST /memory/add with 413
+    resp_add = client.post("/memory/add", json={"content": "test"}, headers=headers)
+    assert resp_add.status_code == 413
+    assert resp_add.json()["status"] == 413
+
+    # Reject POST /memory/search with 413
+    resp_search = client.post("/memory/search", json={"query": "test"}, headers=headers)
+    assert resp_search.status_code == 413
+    assert resp_search.json()["status"] == 413
+
+    env.api_key = orig_api_key
