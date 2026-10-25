@@ -158,3 +158,14 @@ def test_user_summary_get_and_regenerate_scenarios(auth_client):
     res_get = resp.json()
     assert res_get["user_id"] == tenant_id
     assert res_get["summary"] == res_data["summary"]
+
+def test_limit_request_body_size_on_mutating_endpoints(auth_client, monkeypatch):
+    monkeypatch.setenv("OM_MAX_BODY_SIZE", "100")
+    app = create_app()
+    client = TestClient(app)
+    headers = {"x-api-key": "test-api-key-123456", "content-length": "200"}
+
+    # POST request to /memory/search with content-length exceeding OM_MAX_BODY_SIZE returns 413
+    resp = client.post("/memory/search", json={"query": "test"}, headers=headers)
+    assert resp.status_code == 413
+    assert resp.json()["status"] == 413
