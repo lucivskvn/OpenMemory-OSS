@@ -88,10 +88,12 @@ describe("Authentication Middleware", () => {
         expect(next_called2).toBe(true);
     });
 
-    it("does NOT exempt partial prefix paths from API key checks (prevents authentication bypass)", () => {
+    it("does NOT exempt partial prefix paths or non-existent system paths from API key checks (prevents authentication bypass)", () => {
         const paths = [
             "/health-secrets",
             "/api/system/health-secrets",
+            "/api/system/health",
+            "/api/system/stats",
             "/dashboard/health-secrets",
         ];
 
