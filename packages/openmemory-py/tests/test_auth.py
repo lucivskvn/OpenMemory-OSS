@@ -90,7 +90,7 @@ def test_unconfigured_api_key_allows_dev_no_auth(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_temporal_fact_mutations_tenant_isolation():
-    from openmemory.temporal_graph.store import insert_fact, update_fact, invalidate_fact, delete_fact
+    from openmemory.temporal_graph.store import insert_fact, update_fact, invalidate_fact, delete_fact, batch_insert_facts
     from openmemory.core.db import db
 
     fid = await insert_fact("S", "P", "O", user_id="alice")
@@ -104,6 +104,13 @@ async def test_temporal_fact_mutations_tenant_isolation():
     await update_fact(fid, confidence=0.8, metadata={"ok": True}, user_id="alice")
     row = db.fetchone("SELECT confidence, metadata, valid_to FROM temporal_facts WHERE id=?", (fid,))
     assert row["confidence"] == 0.8
+
+    # Bob batch inserts same subject/predicate - must not invalidate Alice's active fact or strip user_id
+    batch_ids = await batch_insert_facts([{"subject": "S", "predicate": "P", "object": "BobVal"}], user_id="bob")
+    row_alice = db.fetchone("SELECT valid_to FROM temporal_facts WHERE id=?", (fid,))
+    assert row_alice["valid_to"] is None
+    row_bob = db.fetchone("SELECT user_id FROM temporal_facts WHERE id=?", (batch_ids[0],))
+    assert row_bob["user_id"] == "bob"
 
     # Bob attempts invalidation
     await invalidate_fact(fid, user_id="bob")
