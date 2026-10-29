@@ -94,7 +94,7 @@ async def invalidate_edge(edge_id: str, valid_to: int = None):
     db.execute("UPDATE temporal_edges SET valid_to=? WHERE id=?", (ts, edge_id))
     db.commit()
 
-async def batch_insert_facts(facts: List[Dict[str, Any]]) -> List[str]:
+async def batch_insert_facts(facts: List[Dict[str, Any]], user_id: Optional[str] = None) -> List[str]:
     ids = []
     try:
         db.execute("BEGIN")
@@ -107,13 +107,20 @@ async def batch_insert_facts(facts: List[Dict[str, Any]]) -> List[str]:
             vf = f.get("valid_from", now)
             conf = f.get("confidence", 1.0)
             meta = f.get("metadata")
-            existing = db.conn.execute("SELECT id, valid_from FROM temporal_facts WHERE subject=? AND predicate=? AND valid_to IS NULL", (sub, pred)).fetchall()
+            # SECURITY: Enforce multi-tenant isolation on batch insertions and fact invalidations.
+            uid = f.get("user_id") or user_id
+
+            if uid:
+                existing = db.conn.execute("SELECT id, valid_from FROM temporal_facts WHERE subject=? AND predicate=? AND valid_to IS NULL AND user_id=?", (sub, pred, uid)).fetchall()
+            else:
+                existing = db.conn.execute("SELECT id, valid_from FROM temporal_facts WHERE subject=? AND predicate=? AND valid_to IS NULL AND user_id IS NULL", (sub, pred)).fetchall()
+
             for old in existing:
                  if old["valid_from"] < vf:
                      db.conn.execute("UPDATE temporal_facts SET valid_to=? WHERE id=?", (vf - 1, old["id"]))
 
-            db.conn.execute("INSERT INTO temporal_facts(id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata) VALUES (?,?,?,?,?,NULL,?,?,?)",
-               (fid, sub, pred, obj, vf, conf, now, json.dumps(meta) if meta else None))
+            db.conn.execute("INSERT INTO temporal_facts(id, user_id, subject, predicate, object, valid_from, valid_to, confidence, last_updated, metadata) VALUES (?,?,?,?,?,?,NULL,?,?,?)",
+               (fid, uid, sub, pred, obj, vf, conf, now, json.dumps(meta) if meta else None))
             ids.append(fid)
 
         db.execute("COMMIT")
