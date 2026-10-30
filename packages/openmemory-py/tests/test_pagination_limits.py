@@ -254,6 +254,20 @@ def test_add_memory_reject_oversized_body(pagination_limits_client, monkeypatch)
     )
     assert response.status_code == 413, f"Failed: {response.text}"
 
+def test_search_memory_reject_oversized_body(pagination_limits_client, monkeypatch):
+    monkeypatch.setenv("OM_MAX_BODY_SIZE", "100")
+    tenant_id = hashlib.sha256("test-api-key-123456".encode("utf-8")).hexdigest()[:16]
+    payload = {
+        "query": "Q" * 200,
+        "user_id": tenant_id
+    }
+    response = pagination_limits_client.post(
+        "/memory/search",
+        json=payload,
+        headers={"x-api-key": "test-api-key-123456"}
+    )
+    assert response.status_code == 413, f"Failed: {response.text}"
+
 def test_search_reject_oversized_limit(pagination_limits_client):
     tenant_id = hashlib.sha256("test-api-key-123456".encode("utf-8")).hexdigest()[:16]
     payload = {
